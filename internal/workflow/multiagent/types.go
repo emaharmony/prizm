@@ -106,7 +106,7 @@ func (s RunStatus) Terminal() bool {
 	}
 }
 
-// TransitionOutcome is the typed result a role returns to Prizm for routing.
+// TransitionOutcome is the typed result a role returns to Prism for routing.
 // Agents return outcomes; they do not choose arbitrary destination roles.
 type TransitionOutcome string
 

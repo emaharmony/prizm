@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prizm/internal/retry"
+	"github.com/emaharmony/prism/internal/retry"
 )
 
 func TestDefinitionValidate(t *testing.T) {
@@ -165,13 +165,11 @@ func validDefinition() Definition {
 				RoleTester:    6,
 				RoleReviewer:  4,
 			},
-			MaxLocalIterations:          20,
-			MaxRetries:                  8,
-			MaxTokens:                   100_000,
-			MaxRepeatedFailure:          3,
-			MaxTesterToDeveloperLoops:   3,
-			MaxReviewerToDeveloperLoops: 2,
-			MaxDuration:                 time.Hour,
+			MaxLocalIterations: 20,
+			MaxRetries:         8,
+			MaxTokens:          100_000,
+			MaxRepeatedFailure: 3,
+			MaxDuration:        time.Hour,
 		},
 	}
 }

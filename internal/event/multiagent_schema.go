@@ -18,36 +18,11 @@ func init() {
 	}
 	Schemas[EventMultiAgentRoleIterationDone] = Schema{
 		Required: []string{"run_id", "workflow_id", "role", "status", "iteration"},
-		Optional: []string{
-			"outcome",
-			"token_usage",
-			"error",
-			"artifact_uris",
-			"agent_ref",
-			"provider",
-			"model",
-			"duration_ms",
-			"tool_calls",
-			"denied_tool_calls",
-			"validation_status",
-			"approval_status",
-		},
+		Optional: []string{"outcome", "token_usage", "error", "artifact_uris"},
 	}
 	Schemas[EventMultiAgentRoleCompleted] = Schema{
 		Required: []string{"run_id", "workflow_id", "role", "status", "outcome"},
-		Optional: []string{
-			"token_usage",
-			"error",
-			"artifact_uris",
-			"agent_ref",
-			"provider",
-			"model",
-			"duration_ms",
-			"tool_calls",
-			"denied_tool_calls",
-			"validation_status",
-			"approval_status",
-		},
+		Optional: []string{"token_usage", "error", "artifact_uris"},
 	}
 	Schemas[EventMultiAgentHandoffCreated] = Schema{
 		Required: []string{
@@ -93,17 +68,5 @@ func init() {
 	}
 	Schemas[EventMultiAgentRunCancelled] = Schema{
 		Required: []string{"run_id", "workflow_id", "status", "terminal_condition", "reason"},
-	}
-	Schemas[EventMultiAgentRecoveryStarted] = Schema{
-		Required: []string{"run_id", "workflow_id", "status"},
-		Optional: []string{"reason"},
-	}
-	Schemas[EventMultiAgentRecoveryCompleted] = Schema{
-		Required: []string{"run_id", "workflow_id", "status"},
-		Optional: []string{"reason", "terminal_condition"},
-	}
-	Schemas[EventMultiAgentRecoveryFailed] = Schema{
-		Required: []string{"run_id", "workflow_id", "status", "reason"},
-		Optional: []string{"terminal_condition"},
 	}
 }

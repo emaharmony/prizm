@@ -1,27 +1,24 @@
 package event
 
-// Multi-agent workflow event types extend Prizm's canonical event vocabulary.
+// Multi-agent workflow event types extend Prism's canonical event vocabulary.
 // They use the existing Event envelope and event store.
 const (
-	EventMultiAgentRunCreated         = "prizm.workflow.multi_agent.run.created"
-	EventMultiAgentRunStarted         = "prizm.workflow.multi_agent.run.started"
-	EventMultiAgentRoleEntered        = "prizm.workflow.multi_agent.role.entered"
-	EventMultiAgentRoleIterationStart = "prizm.workflow.multi_agent.role.iteration.started"
-	EventMultiAgentRoleIterationDone  = "prizm.workflow.multi_agent.role.iteration.completed"
-	EventMultiAgentRoleCompleted      = "prizm.workflow.multi_agent.role.completed"
-	EventMultiAgentHandoffCreated     = "prizm.workflow.multi_agent.handoff.created"
-	EventMultiAgentTransitionSelected = "prizm.workflow.multi_agent.transition.selected"
-	EventMultiAgentLoopTraversal      = "prizm.workflow.multi_agent.loop.traversal.recorded"
-	EventMultiAgentBudgetWarning      = "prizm.workflow.multi_agent.budget.warning"
-	EventMultiAgentBudgetExhausted    = "prizm.workflow.multi_agent.budget.exhausted"
-	EventMultiAgentRunPaused          = "prizm.workflow.multi_agent.run.paused"
-	EventMultiAgentRunResumed         = "prizm.workflow.multi_agent.run.resumed"
-	EventMultiAgentRunCompleted       = "prizm.workflow.multi_agent.run.completed"
-	EventMultiAgentRunFailed          = "prizm.workflow.multi_agent.run.failed"
-	EventMultiAgentRunCancelled       = "prizm.workflow.multi_agent.run.cancelled"
-	EventMultiAgentRecoveryStarted    = "prizm.workflow.multi_agent.recovery.started"
-	EventMultiAgentRecoveryCompleted  = "prizm.workflow.multi_agent.recovery.completed"
-	EventMultiAgentRecoveryFailed     = "prizm.workflow.multi_agent.recovery.failed"
+	EventMultiAgentRunCreated         = "prism.workflow.multi_agent.run.created"
+	EventMultiAgentRunStarted         = "prism.workflow.multi_agent.run.started"
+	EventMultiAgentRoleEntered        = "prism.workflow.multi_agent.role.entered"
+	EventMultiAgentRoleIterationStart = "prism.workflow.multi_agent.role.iteration.started"
+	EventMultiAgentRoleIterationDone  = "prism.workflow.multi_agent.role.iteration.completed"
+	EventMultiAgentRoleCompleted      = "prism.workflow.multi_agent.role.completed"
+	EventMultiAgentHandoffCreated     = "prism.workflow.multi_agent.handoff.created"
+	EventMultiAgentTransitionSelected = "prism.workflow.multi_agent.transition.selected"
+	EventMultiAgentLoopTraversal      = "prism.workflow.multi_agent.loop.traversal.recorded"
+	EventMultiAgentBudgetWarning      = "prism.workflow.multi_agent.budget.warning"
+	EventMultiAgentBudgetExhausted    = "prism.workflow.multi_agent.budget.exhausted"
+	EventMultiAgentRunPaused          = "prism.workflow.multi_agent.run.paused"
+	EventMultiAgentRunResumed         = "prism.workflow.multi_agent.run.resumed"
+	EventMultiAgentRunCompleted       = "prism.workflow.multi_agent.run.completed"
+	EventMultiAgentRunFailed          = "prism.workflow.multi_agent.run.failed"
+	EventMultiAgentRunCancelled       = "prism.workflow.multi_agent.run.cancelled"
 )
 
 // MultiAgentRunEventPayload is shared by run lifecycle events.
@@ -35,24 +32,16 @@ type MultiAgentRunEventPayload struct {
 
 // MultiAgentRoleEventPayload describes role lifecycle and iteration events.
 type MultiAgentRoleEventPayload struct {
-	RunID            string      `json:"run_id"`
-	WorkflowID       string      `json:"workflow_id"`
-	Role             string      `json:"role"`
-	Status           string      `json:"status"`
-	Visit            int         `json:"visit,omitempty"`
-	Iteration        int         `json:"iteration,omitempty"`
-	Outcome          string      `json:"outcome,omitempty"`
-	TokenUsage       *TokenUsage `json:"token_usage,omitempty"`
-	Error            string      `json:"error,omitempty"`
-	ArtifactURIs     []string    `json:"artifact_uris,omitempty"`
-	AgentRef         string      `json:"agent_ref,omitempty"`
-	Provider         string      `json:"provider,omitempty"`
-	Model            string      `json:"model,omitempty"`
-	DurationMs       int64       `json:"duration_ms,omitempty"`
-	ToolCalls        int         `json:"tool_calls,omitempty"`
-	DeniedToolCalls  int         `json:"denied_tool_calls,omitempty"`
-	ValidationStatus string      `json:"validation_status,omitempty"`
-	ApprovalStatus   string      `json:"approval_status,omitempty"`
+	RunID        string      `json:"run_id"`
+	WorkflowID   string      `json:"workflow_id"`
+	Role         string      `json:"role"`
+	Status       string      `json:"status"`
+	Visit        int         `json:"visit,omitempty"`
+	Iteration    int         `json:"iteration,omitempty"`
+	Outcome      string      `json:"outcome,omitempty"`
+	TokenUsage   *TokenUsage `json:"token_usage,omitempty"`
+	Error        string      `json:"error,omitempty"`
+	ArtifactURIs []string    `json:"artifact_uris,omitempty"`
 }
 
 // MultiAgentHandoffEventPayload identifies a structured role handoff.

@@ -5,13 +5,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prizm/internal/cost"
+	"github.com/emaharmony/prism/internal/cost"
 )
 
 // RunStateSchemaVersion is the current serialized multi-agent state version.
 const RunStateSchemaVersion = 1
 
-// TaskReference identifies the current Prizm task without embedding persistence
+// TaskReference identifies the current Prism task without embedding persistence
 // implementation details in the workflow contract.
 type TaskReference struct {
 	ID          string `json:"id"`
@@ -20,23 +20,16 @@ type TaskReference struct {
 
 // RoleState tracks the explicit lifecycle and accounting for one logical role.
 type RoleState struct {
-	Role             Role                `json:"role"`
-	Status           RoleExecutionStatus `json:"status"`
-	Visits           int                 `json:"visits"`
-	LocalIterations  int                 `json:"local_iterations"`
-	Retries          int                 `json:"retries"`
-	TokenUsage       cost.TokenUsage     `json:"token_usage"`
-	Elapsed          time.Duration       `json:"elapsed"`
-	LastOutcome      TransitionOutcome   `json:"last_outcome,omitempty"`
-	EnteredAt        *time.Time          `json:"entered_at,omitempty"`
-	UpdatedAt        time.Time           `json:"updated_at"`
-	CompletedAt      *time.Time          `json:"completed_at,omitempty"`
-	LastError        string              `json:"last_error,omitempty"`
-	LastExecutionKey string              `json:"last_execution_key,omitempty"`
-	WorkspaceID      string              `json:"workspace_id,omitempty"`
-	Artifacts        []ArtifactRef       `json:"artifacts,omitempty"`
-	ValidationStatus string              `json:"validation_status,omitempty"`
-	ApprovalStatus   string              `json:"approval_status,omitempty"`
+	Role            Role                `json:"role"`
+	Status          RoleExecutionStatus `json:"status"`
+	Visits          int                 `json:"visits"`
+	LocalIterations int                 `json:"local_iterations"`
+	Retries         int                 `json:"retries"`
+	LastOutcome     TransitionOutcome   `json:"last_outcome,omitempty"`
+	EnteredAt       *time.Time          `json:"entered_at,omitempty"`
+	UpdatedAt       time.Time           `json:"updated_at"`
+	CompletedAt     *time.Time          `json:"completed_at,omitempty"`
+	LastError       string              `json:"last_error,omitempty"`
 }
 
 // BudgetUsage is the accumulated, persisted usage against BudgetLimits.
@@ -59,25 +52,21 @@ type TerminalOutcome struct {
 // multi-agent run. PR2 defines the contract; persistence mechanics arrive in
 // the recovery phase.
 type RunState struct {
-	SchemaVersion       int                 `json:"schema_version"`
-	RunID               string              `json:"run_id"`
-	WorkflowID          string              `json:"workflow_id"`
-	WorkflowVersion     int                 `json:"workflow_version"`
-	CurrentRole         Role                `json:"current_role"`
-	CurrentTask         TaskReference       `json:"current_task"`
-	WorkspaceID         string              `json:"workspace_id,omitempty"`
-	Status              RunStatus           `json:"status"`
-	RoleStates          map[Role]RoleState  `json:"role_states"`
-	TransitionCount     int                 `json:"transition_count"`
-	LoopTraversals      LoopTraversalCounts `json:"loop_traversals"`
-	BudgetUsage         BudgetUsage         `json:"budget_usage"`
-	CreatedAt           time.Time           `json:"created_at"`
-	UpdatedAt           time.Time           `json:"updated_at"`
-	CompletedAt         *time.Time          `json:"completed_at,omitempty"`
-	LatestHandoff       *Handoff            `json:"latest_handoff,omitempty"`
-	LatestCompletedRole Role                `json:"latest_completed_role,omitempty"`
-	CancellationReason  string              `json:"cancellation_reason,omitempty"`
-	TerminalOutcome     *TerminalOutcome    `json:"terminal_outcome,omitempty"`
+	SchemaVersion   int                `json:"schema_version"`
+	RunID           string             `json:"run_id"`
+	WorkflowID      string             `json:"workflow_id"`
+	WorkflowVersion int                `json:"workflow_version"`
+	CurrentRole     Role               `json:"current_role"`
+	CurrentTask     TaskReference      `json:"current_task"`
+	Status          RunStatus          `json:"status"`
+	RoleStates      map[Role]RoleState `json:"role_states"`
+	TransitionCount int                `json:"transition_count"`
+	BudgetUsage     BudgetUsage        `json:"budget_usage"`
+	CreatedAt       time.Time          `json:"created_at"`
+	UpdatedAt       time.Time          `json:"updated_at"`
+	CompletedAt     *time.Time         `json:"completed_at,omitempty"`
+	LatestHandoff   *Handoff           `json:"latest_handoff,omitempty"`
+	TerminalOutcome *TerminalOutcome   `json:"terminal_outcome,omitempty"`
 }
 
 // Validate enforces serialized-state invariants against the workflow
@@ -127,7 +116,7 @@ func (s RunState) Validate(definition Definition) error {
 			problems = append(problems, fmt.Sprintf("state has no role state for %q", cfg.Role))
 			continue
 		}
-		validateRoleState(cfg.Role, roleState, s.WorkspaceID, &problems)
+		validateRoleState(cfg.Role, roleState, &problems)
 	}
 	for role := range s.RoleStates {
 		if _, exists := definition.RoleConfig(role); !exists {
@@ -136,11 +125,6 @@ func (s RunState) Validate(definition Definition) error {
 	}
 
 	validateBudgetUsage(s.BudgetUsage, &problems)
-	if s.LatestCompletedRole != "" && !s.LatestCompletedRole.Valid() {
-		problems = append(problems, fmt.Sprintf("state has unknown latest_completed_role %q", s.LatestCompletedRole))
-	}
-
-	validateLoopTraversalCounts(s.LoopTraversals, &problems)
 
 	if s.LatestHandoff != nil {
 		if s.LatestHandoff.RunID != s.RunID {
@@ -169,19 +153,13 @@ func (s RunState) Validate(definition Definition) error {
 		}
 	}
 
-	if s.Status == RunStatusCancelled && strings.TrimSpace(s.CancellationReason) == "" {
-		problems = append(problems, "cancelled state requires cancellation_reason")
-	}
-	if s.Status != RunStatusCancelled && s.CancellationReason != "" {
-		problems = append(problems, "non-cancelled state must not have cancellation_reason")
-	}
 	if len(problems) > 0 {
 		return &ContractError{Problems: problems}
 	}
 	return nil
 }
 
-func validateRoleState(role Role, state RoleState, runWorkspaceID string, problems *[]string) {
+func validateRoleState(role Role, state RoleState, problems *[]string) {
 	if state.Role != role {
 		*problems = append(*problems, fmt.Sprintf("role state key %q does not match role field %q", role, state.Role))
 	}
@@ -197,48 +175,10 @@ func validateRoleState(role Role, state RoleState, runWorkspaceID string, proble
 	if state.Retries < 0 {
 		*problems = append(*problems, fmt.Sprintf("role %q retries must be non-negative", role))
 	}
-	if state.TokenUsage.PromptTokens < 0 ||
-		state.TokenUsage.CompletionTokens < 0 ||
-		state.TokenUsage.TotalTokens < 0 ||
-		state.TokenUsage.EstimatedCostUsd < 0 {
-		*problems = append(*problems, fmt.Sprintf("role %q token usage must be non-negative", role))
-	}
-	if state.Elapsed < 0 {
-		*problems = append(*problems, fmt.Sprintf("role %q elapsed must be non-negative", role))
-	}
 	if state.LastOutcome != "" && !state.LastOutcome.Valid() {
 		*problems = append(*problems, fmt.Sprintf("role %q has unsupported last_outcome %q", role, state.LastOutcome))
 	}
-	if state.WorkspaceID != "" {
-		switch {
-		case runWorkspaceID == "":
-			*problems = append(*problems, fmt.Sprintf("role %q workspace_id requires state workspace_id", role))
-		case state.WorkspaceID != runWorkspaceID:
-			*problems = append(*problems, fmt.Sprintf(
-				"role %q workspace_id %q does not match state workspace_id %q",
-				role, state.WorkspaceID, runWorkspaceID,
-			))
-		}
-	}
 	if state.UpdatedAt.IsZero() {
-		for i, artifact := range state.Artifacts {
-			if !artifact.Kind.Valid() || strings.TrimSpace(artifact.URI) == "" {
-				*problems = append(*problems, fmt.Sprintf("role %q artifact[%d] is invalid", role, i))
-			}
-		}
-		switch state.ValidationStatus {
-		case "", "not_required", "passed", "failed", "unavailable":
-		default:
-			*problems = append(*problems, fmt.Sprintf(
-				"role %q has unknown validation_status %q", role, state.ValidationStatus))
-		}
-		switch state.ApprovalStatus {
-		case "", string(ApprovalNotRequired), string(ApprovalPending),
-			string(ApprovalApproved), string(ApprovalDenied):
-		default:
-			*problems = append(*problems, fmt.Sprintf(
-				"role %q has unknown approval_status %q", role, state.ApprovalStatus))
-		}
 		*problems = append(*problems, fmt.Sprintf("role %q updated_at is required", role))
 	}
 }

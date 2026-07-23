@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prizm/internal/validation"
+	"github.com/emaharmony/prism/internal/validation"
 )
 
 func TestHandoffValidate(t *testing.T) {

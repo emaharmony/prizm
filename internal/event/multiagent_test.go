@@ -10,7 +10,7 @@ func TestMultiAgentEventTypesAreUniqueAndNamespaced(t *testing.T) {
 	eventTypes := multiAgentEventTypes()
 	seen := make(map[string]struct{}, len(eventTypes))
 	for _, eventType := range eventTypes {
-		if !strings.HasPrefix(eventType, "prizm.workflow.multi_agent.") {
+		if !strings.HasPrefix(eventType, "prism.workflow.multi_agent.") {
 			t.Errorf("event type %q is outside the multi-agent workflow namespace", eventType)
 		}
 		if _, exists := seen[eventType]; exists {
