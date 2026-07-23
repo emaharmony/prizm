@@ -25,6 +25,8 @@ type RoleState struct {
 	Visits          int                 `json:"visits"`
 	LocalIterations int                 `json:"local_iterations"`
 	Retries         int                 `json:"retries"`
+	TokenUsage      cost.TokenUsage     `json:"token_usage"`
+	Elapsed         time.Duration       `json:"elapsed"`
 	LastOutcome     TransitionOutcome   `json:"last_outcome,omitempty"`
 	EnteredAt       *time.Time          `json:"entered_at,omitempty"`
 	UpdatedAt       time.Time           `json:"updated_at"`
@@ -52,21 +54,22 @@ type TerminalOutcome struct {
 // multi-agent run. PR2 defines the contract; persistence mechanics arrive in
 // the recovery phase.
 type RunState struct {
-	SchemaVersion   int                `json:"schema_version"`
-	RunID           string             `json:"run_id"`
-	WorkflowID      string             `json:"workflow_id"`
-	WorkflowVersion int                `json:"workflow_version"`
-	CurrentRole     Role               `json:"current_role"`
-	CurrentTask     TaskReference      `json:"current_task"`
-	Status          RunStatus          `json:"status"`
-	RoleStates      map[Role]RoleState `json:"role_states"`
-	TransitionCount int                `json:"transition_count"`
-	BudgetUsage     BudgetUsage        `json:"budget_usage"`
-	CreatedAt       time.Time          `json:"created_at"`
-	UpdatedAt       time.Time          `json:"updated_at"`
-	CompletedAt     *time.Time         `json:"completed_at,omitempty"`
-	LatestHandoff   *Handoff           `json:"latest_handoff,omitempty"`
-	TerminalOutcome *TerminalOutcome   `json:"terminal_outcome,omitempty"`
+	SchemaVersion   int                 `json:"schema_version"`
+	RunID           string              `json:"run_id"`
+	WorkflowID      string              `json:"workflow_id"`
+	WorkflowVersion int                 `json:"workflow_version"`
+	CurrentRole     Role                `json:"current_role"`
+	CurrentTask     TaskReference       `json:"current_task"`
+	Status          RunStatus           `json:"status"`
+	RoleStates      map[Role]RoleState  `json:"role_states"`
+	TransitionCount int                 `json:"transition_count"`
+	LoopTraversals  LoopTraversalCounts `json:"loop_traversals"`
+	BudgetUsage     BudgetUsage         `json:"budget_usage"`
+	CreatedAt       time.Time           `json:"created_at"`
+	UpdatedAt       time.Time           `json:"updated_at"`
+	CompletedAt     *time.Time          `json:"completed_at,omitempty"`
+	LatestHandoff   *Handoff            `json:"latest_handoff,omitempty"`
+	TerminalOutcome *TerminalOutcome    `json:"terminal_outcome,omitempty"`
 }
 
 // Validate enforces serialized-state invariants against the workflow
@@ -125,6 +128,7 @@ func (s RunState) Validate(definition Definition) error {
 	}
 
 	validateBudgetUsage(s.BudgetUsage, &problems)
+	validateLoopTraversalCounts(s.LoopTraversals, &problems)
 
 	if s.LatestHandoff != nil {
 		if s.LatestHandoff.RunID != s.RunID {
@@ -174,6 +178,15 @@ func validateRoleState(role Role, state RoleState, problems *[]string) {
 	}
 	if state.Retries < 0 {
 		*problems = append(*problems, fmt.Sprintf("role %q retries must be non-negative", role))
+	}
+	if state.TokenUsage.PromptTokens < 0 ||
+		state.TokenUsage.CompletionTokens < 0 ||
+		state.TokenUsage.TotalTokens < 0 ||
+		state.TokenUsage.EstimatedCostUsd < 0 {
+		*problems = append(*problems, fmt.Sprintf("role %q token usage must be non-negative", role))
+	}
+	if state.Elapsed < 0 {
+		*problems = append(*problems, fmt.Sprintf("role %q elapsed must be non-negative", role))
 	}
 	if state.LastOutcome != "" && !state.LastOutcome.Valid() {
 		*problems = append(*problems, fmt.Sprintf("role %q has unsupported last_outcome %q", role, state.LastOutcome))

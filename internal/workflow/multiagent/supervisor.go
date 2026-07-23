@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prizm/internal/cost"
-	"github.com/emaharmony/prizm/internal/event"
-	"github.com/emaharmony/prizm/internal/validation"
+	"github.com/emaharmony/prism/internal/cost"
+	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prism/internal/validation"
 )
 
-const supervisorEventSource = "prizm-multi-agent-supervisor"
+const supervisorEventSource = "prism-multi-agent-supervisor"
 
 // SupervisorOptions contains deterministic seams for tests and embedding.
 type SupervisorOptions struct {
@@ -252,18 +252,6 @@ func (s *Supervisor) completeRole(
 		roleState.Elapsed += elapsed
 	}
 	roleState.LastOutcome = result.Outcome
-	roleState.WorkspaceID = result.Metadata.WorkspaceID
-	if workspaceID := strings.TrimSpace(result.Metadata.WorkspaceID); workspaceID != "" && state.WorkspaceID == "" {
-		state.WorkspaceID = workspaceID
-	}
-	roleState.ValidationStatus = result.Metadata.ValidationStatus
-	roleState.ApprovalStatus = result.Metadata.ApprovalStatus
-	if result.OutgoingHandoff != nil {
-		roleState.Artifacts = append(
-			cloneArtifactRefs(result.OutgoingHandoff.Artifacts),
-			cloneArtifactRefs(result.OutgoingHandoff.Evidence)...,
-		)
-	}
 	roleState.UpdatedAt = finishedAt
 	roleState.CompletedAt = timePointer(finishedAt)
 	state.RoleStates[role] = roleState
@@ -278,7 +266,6 @@ func (s *Supervisor) completeRole(
 		state.BudgetUsage.Elapsed = elapsed
 	}
 	state.UpdatedAt = finishedAt
-	state.LatestCompletedRole = role
 
 	s.emitRole(event.EventMultiAgentRoleCompleted, *state, roleState, result.Outcome, &result)
 }
@@ -479,7 +466,6 @@ func (s *Supervisor) cancelRun(state RunState, err error) (RunState, error) {
 	}
 	now := s.now().UTC()
 	state.Status = RunStatusCancelled
-	state.CancellationReason = err.Error()
 	state.TerminalOutcome = &TerminalOutcome{
 		Condition: TerminalConditionCancelled,
 		Reason:    err.Error(),
@@ -521,9 +507,7 @@ func (s *Supervisor) runView(state RunState) RunView {
 		RunID:           state.RunID,
 		WorkflowID:      state.WorkflowID,
 		Task:            state.CurrentTask,
-		WorkspaceID:     state.WorkspaceID,
 		CurrentRole:     state.CurrentRole,
-		ExecutionKey:    state.RoleStates[state.CurrentRole].LastExecutionKey,
 		Visit:           state.RoleStates[state.CurrentRole].Visits,
 		TransitionCount: state.TransitionCount,
 		LoopTraversals:  state.LoopTraversals,
@@ -570,32 +554,6 @@ func (s *Supervisor) emitRole(
 			CompletionTokens: result.TokenUsage.CompletionTokens,
 			TotalTokens:      result.TokenUsage.TotalTokens,
 			EstimatedCostUsd: result.TokenUsage.EstimatedCostUsd,
-		}
-		if result.Metadata.AgentRef != "" {
-			payload["agent_ref"] = result.Metadata.AgentRef
-		}
-		if result.Metadata.Provider != "" {
-			payload["provider"] = result.Metadata.Provider
-		}
-		if result.Metadata.Model != "" {
-			payload["model"] = result.Metadata.Model
-		}
-		if !result.Metadata.StartedAt.IsZero() &&
-			!result.Metadata.FinishedAt.IsZero() {
-			payload["duration_ms"] = result.Metadata.FinishedAt.
-				Sub(result.Metadata.StartedAt).Milliseconds()
-		}
-		if result.Metadata.ToolCalls > 0 {
-			payload["tool_calls"] = result.Metadata.ToolCalls
-		}
-		if result.Metadata.DeniedToolCalls > 0 {
-			payload["denied_tool_calls"] = result.Metadata.DeniedToolCalls
-		}
-		if result.Metadata.ValidationStatus != "" {
-			payload["validation_status"] = result.Metadata.ValidationStatus
-		}
-		if result.Metadata.ApprovalStatus != "" {
-			payload["approval_status"] = result.Metadata.ApprovalStatus
 		}
 		if result.OutgoingHandoff != nil {
 			payload["artifact_uris"] = artifactURIs(result.OutgoingHandoff.Artifacts)

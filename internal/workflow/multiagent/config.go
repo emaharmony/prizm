@@ -45,13 +45,15 @@ type ApprovalRequirement struct {
 // BudgetLimits bounds the whole run. Per-role limits in RoleConfig may be
 // stricter; neither layer may widen the other at execution time.
 type BudgetLimits struct {
-	MaxTransitions     Limit          `json:"max_transitions"`
-	MaxVisitsPerRole   map[Role]Limit `json:"max_visits_per_role"`
-	MaxLocalIterations Limit          `json:"max_local_iterations"`
-	MaxRetries         Limit          `json:"max_retries"`
-	MaxTokens          Limit          `json:"max_tokens"`
-	MaxRepeatedFailure Limit          `json:"max_repeated_failures"`
-	MaxDuration        time.Duration  `json:"max_duration"`
+	MaxTransitions              Limit          `json:"max_transitions"`
+	MaxVisitsPerRole            map[Role]Limit `json:"max_visits_per_role"`
+	MaxLocalIterations          Limit          `json:"max_local_iterations"`
+	MaxRetries                  Limit          `json:"max_retries"`
+	MaxTokens                   Limit          `json:"max_tokens"`
+	MaxRepeatedFailure          Limit          `json:"max_repeated_failures"`
+	MaxTesterToDeveloperLoops   Limit          `json:"max_tester_to_developer_loops"`
+	MaxReviewerToDeveloperLoops Limit          `json:"max_reviewer_to_developer_loops"`
+	MaxDuration                 time.Duration  `json:"max_duration"`
 }
 
 // TransitionRule maps a typed role outcome to either another role or a
@@ -201,6 +203,8 @@ func validateBudgets(b BudgetLimits, roles map[Role]RoleConfig, problems *[]stri
 	validateLimit("budgets.max_retries", b.MaxRetries, problems)
 	validateLimit("budgets.max_tokens", b.MaxTokens, problems)
 	validateLimit("budgets.max_repeated_failures", b.MaxRepeatedFailure, problems)
+	validateLimit("budgets.max_tester_to_developer_loops", b.MaxTesterToDeveloperLoops, problems)
+	validateLimit("budgets.max_reviewer_to_developer_loops", b.MaxReviewerToDeveloperLoops, problems)
 	if !validDuration(b.MaxDuration) {
 		*problems = append(*problems, "budgets.max_duration must be positive or -1 (unlimited)")
 	}

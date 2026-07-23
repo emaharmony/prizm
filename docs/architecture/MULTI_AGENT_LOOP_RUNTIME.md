@@ -1,11 +1,11 @@
 # Multi-Agent Loop Runtime Contracts
 
-Status: Phase 1 contract baseline
+Status: Phase 1 deterministic supervisor baseline
 
 This document defines the canonical vocabulary and ownership boundaries for
-Prism's bounded multi-agent loop runtime. It accompanies the contract-only
-second PR of the initiative. The supervisor, real agent integration,
-persistence, recovery, and end-to-end product flow are later stages.
+Prism's bounded multi-agent loop runtime. The contract baseline arrived in PR2;
+PR3 adds deterministic in-memory supervision. Real agent integration,
+persistence, recovery, and the end-to-end product flow remain later stages.
 
 The contracts follow [Package Boundaries](PACKAGE_BOUNDARIES.md) and preserve
 the authority model in
@@ -34,8 +34,8 @@ outcomes, budget semantics, or event payloads.
 
 Package: `internal/workflow/multiagent`
 
-Domain statement: defines the canonical state, transition, budget, and handoff
-contracts for bounded multi-agent workflows.
+Domain statement: owns the canonical contracts and deterministic in-memory
+supervision semantics for bounded multi-agent workflows.
 
 Invariants owned:
 
@@ -44,28 +44,29 @@ Invariants owned:
 - deterministic transition-rule shape;
 - structured handoff validity;
 - explicit run and role state validity;
-- terminal-condition consistency; and
-- fail-closed budget configuration.
+- terminal-condition consistency;
+- fail-closed budget configuration;
+- deterministic transition selection; and
+- bounded correction-loop traversal.
 
 Primary callers:
 
-- the deterministic supervisor introduced in PR3;
-- the real Prism agent adapter introduced in PR4; and
-- the persistence and recovery boundary introduced in PR5.
+- the real Prism agent adapter introduced in PR4;
+- the persistence and recovery boundary introduced in PR5; and
+- composition roots that start a multi-agent run.
 
 Allowed dependencies:
 
 - the Go standard library;
 - `internal/cost` for the existing token-usage contract;
-- `internal/retry` for the existing retry policy; and
-- `internal/validation` for existing validation results.
+- `internal/retry` for the existing retry policy;
+- `internal/validation` for existing validation results; and
+- `internal/event` for the canonical Prism event envelope and vocabulary.
 
 Responsibilities explicitly excluded:
 
-- executing or selecting agents;
-- selecting a transition;
+- invoking or selecting real agents;
 - persisting state;
-- publishing events;
 - evaluating policy;
 - recording approvals;
 - running validation commands;
@@ -83,7 +84,7 @@ Those packages do not own this contract domain. `workflow` is the generic
 ordered workflow engine. `workflow/v2` owns the current Natural Gates runtime.
 `delegation` owns capability-gated task routing. `subagent` owns bounded agent
 execution. Putting the new contracts into one of those packages would either
-couple the future supervisor to an existing execution engine or make an
+couple the supervisor to an existing execution engine or make an
 execution/transport package the owner of workflow semantics.
 
 Test boundary: contract validation and JSON round trips are tested without
@@ -104,7 +105,7 @@ flowchart LR
 ```
 
 `internal/workflow/multiagent` owns the definition, state, and handoff
-contracts. The future supervisor owns orchestration. `internal/event` owns
+contracts. The supervisor owns orchestration. `internal/event` owns
 event names and payload schemas. Existing governance packages retain authority.
 
 ## Terminology
@@ -226,7 +227,7 @@ A valid handoff must:
 ## Transition outcomes
 
 Agents report typed outcomes. They do not name arbitrary destinations. The
-future supervisor matches an outcome to a validated transition rule.
+supervisor matches an outcome to a validated transition rule.
 
 | Source role | Outcome | Phase 1 meaning | Reference result |
 | --- | --- | --- | --- |
@@ -250,11 +251,11 @@ Contract validation rejects:
 - non-terminal outcomes used as terminal outcomes; and
 - self-transitions unless explicitly allowed.
 
-Transition selection itself belongs to PR3.
+Transition selection is owned by the PR3 supervisor and uses typed outcomes only.
 
 ## State ownership
 
-The future supervisor is the single logical writer of multi-agent run state.
+The supervisor is the single logical writer of multi-agent run state.
 Agents return role results and handoffs; they do not mutate global state.
 
 `RunState` records:
@@ -263,8 +264,9 @@ Agents return role results and handoffs; they do not mutate global state.
 - run and workflow definition identity;
 - current role and task;
 - run status;
-- per-role status, visits, local iterations, retries, and latest outcome;
-- total transition count;
+- per-role status, visits, local iterations, retries, token usage, elapsed time,
+  and latest outcome;
+- total transition and correction-loop traversal counts;
 - accumulated token, iteration, retry, failure, and elapsed-time usage;
 - creation, update, and completion timestamps;
 - the latest structured handoff; and
@@ -290,6 +292,8 @@ Budgets exist at run and role levels.
 | Maximum retries | Whole run; role retry policy may be stricter |
 | Maximum tokens | Whole run and per role |
 | Maximum repeated failures | Whole run |
+| Maximum tester-to-developer traversals | Tester correction loop |
+| Maximum reviewer-to-developer traversals | Reviewer correction loop |
 | Maximum duration | Whole run and per role |
 
 Count and token limits use a fail-closed convention:
@@ -309,8 +313,9 @@ canonical event.
 ## Event model
 
 Multi-agent events use the existing `event.Event` envelope, metadata,
-correlation IDs, parent IDs, event store, and opt-in payload validation. PR2
-does not introduce another event bus or envelope.
+correlation IDs, parent IDs, event store, and opt-in payload validation. The
+supervisor emits this vocabulary through an injected sink; it does not
+introduce another event bus or envelope.
 
 The namespace is `prism.workflow.multi_agent.*`.
 
@@ -336,6 +341,70 @@ The namespace is `prism.workflow.multi_agent.*`.
 The full canonical names and typed payload structs live in `internal/event`.
 Their required fields are registered with the existing `event.Schemas` map.
 
+## Deterministic supervisor
+
+`Supervisor` executes the validated Phase 1 definition in memory. A
+`TransitionResolver` maps only the pair `(current role, typed outcome)` to one
+declared destination or terminal condition. Free-form role output never
+participates in route selection.
+
+```mermaid
+flowchart LR
+  state["Supervisor-owned RunState"] --> request["Limited RunView"]
+  request --> runner["Injected RoleRunner"]
+  runner --> result["Typed RoleRunResult"]
+  result --> resolver["Deterministic resolver"]
+  resolver --> state
+  state --> events["Canonical Prism events"]
+```
+
+### Role runner boundary
+
+A role runner receives:
+
+- a copy-only `RunView` with identity, task, counters, usage, and the incoming
+  handoff;
+- the current `RoleConfig`; and
+- the execution context.
+
+It returns a typed outcome, a routing-free handoff draft, token and iteration
+usage, retry accounting, execution metadata, and an error. The handoff draft
+contains artifacts and evidence but no source or destination role. The
+supervisor resolves the edge and constructs the canonical `Handoff`.
+
+### Supervisor invariants
+
+For every run:
+
+- only the supervisor mutates `RunState`;
+- exactly one declared transition is selected for a valid role outcome;
+- a runner cannot name or mutate the next role;
+- visit, transition, loop, iteration, retry, token, and elapsed-time accounting
+  is explicit;
+- every configured limit is checked before another role can execute;
+- terminal state, condition, timestamp, and event agree;
+- cancellation is checked between role executions and after runner return; and
+- no role executes after completion, failure, cancellation, or budget
+  exhaustion.
+
+### Event ordering
+
+A successful non-terminal visit emits:
+
+```text
+role.entered
+role.completed
+handoff.created
+transition.selected
+loop.traversal.recorded  # correction edges only
+```
+
+A run begins with `run.started`. Its final event is `run.completed`,
+`run.failed`, `run.cancelled`, or `budget.exhausted`, according to the typed
+terminal state. Runner errors and invalid outcomes fail deterministically;
+budget exhaustion records the attempted usage and does not select the
+over-budget transition.
+
 ## Workflow-engine relationship
 
 The multi-agent runtime is workflow-first. It will be composed as a workflow
@@ -343,12 +412,13 @@ capability rather than replacing either existing workflow engine.
 
 - `internal/workflow` continues to own generic named-step execution.
 - `internal/workflow/v2` continues to own Natural Gates behavior and state.
-- `internal/workflow/multiagent` owns only the new stable contracts.
-- PR3 supplies an in-memory supervisor that consumes those contracts.
+- `internal/workflow/multiagent` owns the stable contracts and deterministic
+  in-memory supervision.
+- PR3 supplies the tested supervisor and narrow role-runner boundary.
 - Later integration may adapt an existing workflow step or runtime entry point
   to the supervisor without moving current packages.
 
-No current production workflow is wired to the contract package in PR2.
+No current production workflow is wired to the supervisor in PR3.
 
 ## Delegation graph and execution graph
 
@@ -405,11 +475,9 @@ related but never interchangeable.
 
 ## Explicit non-goals
 
-PR2 does not:
+PR3 does not:
 
-- implement a supervisor;
 - invoke real agents;
-- select or execute transitions;
 - wire production workflows;
 - persist or resume multi-agent state;
 - modify the dashboard;
@@ -423,12 +491,12 @@ PR2 does not:
 
 ## Follow-up PRs
 
-### PR3: deterministic supervisor skeleton
+### Completed foundation: PR3 deterministic supervisor
 
-Consume these contracts in an in-memory supervisor with an injected role runner,
-deterministic transition resolution, budget enforcement, event ordering,
-cancellation, state accounting, and focused loop tests. Do not invoke real
-agents or add persistence.
+PR3 consumes the contracts through an injected role runner, deterministic
+transition resolution, fail-closed budget enforcement, canonical event
+ordering, cancellation checks, explicit state accounting, and bounded loop
+tests. It invokes no real agents and adds no persistence.
 
 ### PR4: real Prism agent integration
 
@@ -451,6 +519,7 @@ review.
 
 - Only the four Phase 1 roles and eight Phase 1 outcomes are recognized.
 - Role and profile references are not resolved until the real agent adapter.
-- PR2 validates declared transitions but does not select them.
+- The supervisor is in-memory and accepts injected runners; PR4 supplies the
+  first real Prism agent adapter.
 - State is serializable but not yet persisted.
-- Event payload contracts exist, but no supervisor emits them yet.
+- Events are emitted to an injected sink; production transport wiring is later.

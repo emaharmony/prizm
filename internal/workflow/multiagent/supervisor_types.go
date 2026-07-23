@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/emaharmony/prizm/internal/cost"
-	"github.com/emaharmony/prizm/internal/event"
-	"github.com/emaharmony/prizm/internal/validation"
+	"github.com/emaharmony/prism/internal/cost"
+	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prism/internal/validation"
 )
 
 // LoopKind identifies a bounded correction edge in the Phase 1 flow.
@@ -51,9 +51,7 @@ type RunView struct {
 	RunID           string
 	WorkflowID      string
 	Task            TaskReference
-	WorkspaceID     string
 	CurrentRole     Role
-	ExecutionKey    string
 	Visit           int
 	TransitionCount int
 	LoopTraversals  LoopTraversalCounts
@@ -83,17 +81,10 @@ type HandoffDraft struct {
 
 // ExecutionMetadata is observational data returned by a runner.
 type ExecutionMetadata struct {
-	AgentRef         string
-	Provider         string
-	Model            string
-	WorkspaceID      string
-	ToolCalls        int
-	DeniedToolCalls  int
-	ValidationStatus string
-	ApprovalStatus   string
-	Attempt          int
-	StartedAt        time.Time
-	FinishedAt       time.Time
+	AgentRef   string
+	Attempt    int
+	StartedAt  time.Time
+	FinishedAt time.Time
 }
 
 // RoleRunResult is the bounded result of one role visit.
@@ -112,7 +103,7 @@ type RoleRunner interface {
 	RunRole(context.Context, RoleRunRequest) (RoleRunResult, error)
 }
 
-// EventSink consumes canonical Prizm events emitted by the supervisor.
+// EventSink consumes canonical Prism events emitted by the supervisor.
 type EventSink interface {
 	Emit(event.Event)
 }
@@ -135,10 +126,10 @@ type RunRequest struct {
 
 // ResolvedTransition is a supervisor-selected edge or terminal result.
 type ResolvedTransition struct {
-	From     Role              `json:"from"`
-	Outcome  TransitionOutcome `json:"outcome"`
-	To       Role              `json:"to,omitempty"`
-	Terminal TerminalCondition `json:"terminal,omitempty"`
+	From     Role
+	Outcome  TransitionOutcome
+	To       Role
+	Terminal TerminalCondition
 }
 
 // InvalidTransitionError reports a role/outcome pair with no declared route.

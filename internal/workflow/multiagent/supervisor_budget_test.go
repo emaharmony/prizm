@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prism/internal/event"
 )
 
 func TestSupervisorBudgetEnforcement(t *testing.T) {
