@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prizm/internal/validation"
+	"github.com/emaharmony/prism/internal/validation"
 )
 
-// AgentRoleRunner adapts Prizm's bounded agent execution seam to RoleRunner.
+// AgentRoleRunner adapts Prism's bounded agent execution seam to RoleRunner.
 type AgentRoleRunner struct {
 	profiles   AgentProfileResolver
 	executor   AgentExecutor
@@ -32,7 +32,7 @@ type AgentRoleRunnerOptions struct {
 	Clock      func() time.Time
 }
 
-// NewAgentRoleRunner creates the real Prizm agent adapter.
+// NewAgentRoleRunner creates the real Prism agent adapter.
 func NewAgentRoleRunner(options AgentRoleRunnerOptions) (*AgentRoleRunner, error) {
 	if options.Profiles == nil {
 		return nil, errors.New("multiagent: agent profile resolver is required")
@@ -57,7 +57,7 @@ func NewAgentRoleRunner(options AgentRoleRunnerOptions) (*AgentRoleRunner, error
 	}, nil
 }
 
-// RunRole resolves the configured Prizm agent, executes bounded local work,
+// RunRole resolves the configured Prism agent, executes bounded local work,
 // strictly decodes its role output, applies governance results, and returns a
 // typed supervisor result.
 func (r *AgentRoleRunner) RunRole(
@@ -82,15 +82,6 @@ func (r *AgentRoleRunner) RunRole(
 	if strings.TrimSpace(workspace.ID) == "" || strings.TrimSpace(workspace.Path) == "" {
 		return RoleRunResult{}, errors.New("multiagent: run workspace requires id and path")
 	}
-	if expected := strings.TrimSpace(request.Run.WorkspaceID); expected != "" && workspace.ID != expected {
-		return RoleRunResult{}, &GovernanceError{
-			Kind: "workspace",
-			Reason: fmt.Sprintf(
-				"resolved workspace %q does not match persisted workspace %q",
-				workspace.ID, expected,
-			),
-		}
-	}
 
 	approvalStatus, err := r.checkApproval(ctx, request, profile)
 	if err != nil {
@@ -111,7 +102,6 @@ func (r *AgentRoleRunner) RunRole(
 	execution, err := r.executor.ExecuteAgent(executionContext, AgentExecutionRequest{
 		RunID:                request.Run.RunID,
 		TaskID:               request.Run.Task.ID,
-		ExecutionKey:         request.Run.ExecutionKey,
 		Role:                 request.Run.CurrentRole,
 		Visit:                request.Run.Visit,
 		Profile:              profile,

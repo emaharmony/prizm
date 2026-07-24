@@ -18,11 +18,36 @@ func init() {
 	}
 	Schemas[EventMultiAgentRoleIterationDone] = Schema{
 		Required: []string{"run_id", "workflow_id", "role", "status", "iteration"},
-		Optional: []string{"outcome", "token_usage", "error", "artifact_uris"},
+		Optional: []string{
+			"outcome",
+			"token_usage",
+			"error",
+			"artifact_uris",
+			"agent_ref",
+			"provider",
+			"model",
+			"duration_ms",
+			"tool_calls",
+			"denied_tool_calls",
+			"validation_status",
+			"approval_status",
+		},
 	}
 	Schemas[EventMultiAgentRoleCompleted] = Schema{
 		Required: []string{"run_id", "workflow_id", "role", "status", "outcome"},
-		Optional: []string{"token_usage", "error", "artifact_uris"},
+		Optional: []string{
+			"token_usage",
+			"error",
+			"artifact_uris",
+			"agent_ref",
+			"provider",
+			"model",
+			"duration_ms",
+			"tool_calls",
+			"denied_tool_calls",
+			"validation_status",
+			"approval_status",
+		},
 	}
 	Schemas[EventMultiAgentHandoffCreated] = Schema{
 		Required: []string{

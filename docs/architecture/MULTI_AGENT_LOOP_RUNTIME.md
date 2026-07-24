@@ -1,11 +1,13 @@
 # Multi-Agent Loop Runtime Contracts
 
-Status: Phase 1 deterministic supervisor baseline
+Status: Phase 1 real-agent adapter baseline
 
 This document defines the canonical vocabulary and ownership boundaries for
 Prism's bounded multi-agent loop runtime. The contract baseline arrived in PR2;
-PR3 adds deterministic in-memory supervision. Real agent integration,
-persistence, recovery, and the end-to-end product flow remain later stages.
+PR3 adds deterministic in-memory supervision; PR4 connects configured Prism
+agents to that supervisor through the existing bounded sub-agent execution
+domain. Persistence, recovery, and the end-to-end product flow remain later
+stages.
 
 The contracts follow [Package Boundaries](PACKAGE_BOUNDARIES.md) and preserve
 the authority model in
@@ -60,18 +62,22 @@ Allowed dependencies:
 - the Go standard library;
 - `internal/cost` for the existing token-usage contract;
 - `internal/retry` for the existing retry policy;
-- `internal/validation` for existing validation results; and
-- `internal/event` for the canonical Prism event envelope and vocabulary.
+- `internal/validation` for existing validation results;
+- `internal/event` for the canonical Prism event envelope and vocabulary;
+- `internal/agent` for configured agent identity;
+- `internal/subagent` for bounded agent execution; and
+- `internal/workflow/v2` for the existing delegated-task execution contract.
 
 Responsibilities explicitly excluded:
 
-- invoking or selecting real agents;
+- selecting agents independently of role configuration;
+- implementing model-provider clients or tool execution;
 - persisting state;
 - evaluating policy;
 - recording approvals;
 - running validation commands;
 - managing worktrees; and
-- transporting delegated work.
+- transporting delegated work outside the existing sub-agent boundary.
 
 Existing packages considered:
 
@@ -169,9 +175,11 @@ Each role configuration records:
 - validation-profile references.
 
 Tool names, capabilities, agent references, and validation profiles remain
-references. PR4 resolves them against the actual configured Prism registries.
-The PR2 contract validates their shape without importing orchestration or
-execution implementations.
+references. The PR4 adapter resolves configured agents against Prism's agent
+registry and supplies the references to their existing authority domains. The
+contract validates shape; the adapter validates that the resolved agent has
+every required capability and preserves tool and validation references for
+enforcement by their owners.
 
 Approval requirements name approver roles. A role cannot name itself as an
 approver. The configuration only expresses workflow routing; the approval
@@ -445,6 +453,104 @@ underlying assignment. Permission does not imply that the edge executed, and
 an executed edge does not grant new delegation authority. The graphs are
 related but never interchangeable.
 
+
+## Real Prism agent adapter
+
+`AgentRoleRunner` is the Phase 1 integration boundary between deterministic
+supervision and real Prism agent execution. It remains in
+`internal/workflow/multiagent` because it translates this domain's role,
+handoff, outcome, and budget contracts. It does not establish a new package or
+a second agent runtime.
+
+The adapter delegates bounded execution to `internal/subagent.TaskRunner`.
+Production composition uses the existing `subagent.LoopRunner`, worker, and
+tool executor path. This seam was selected because it already owns local agent
+iterations, provider invocation, tool dispatch, cancellation, and execution
+telemetry. Calling a provider directly would bypass Prism's tool, policy, and
+approval path; adding another runner would duplicate an existing domain.
+
+The ownership chain is:
+
+```text
+Supervisor
+    |
+    | typed RoleRunRequest
+    v
+AgentRoleRunner
+    | resolve configured profile, workspace, and governed prerequisites
+    | construct role-scoped prompt and strict output contract
+    v
+SubagentExecutor
+    | TaskPacket + AgentRuntime
+    v
+subagent.TaskRunner
+    | bounded model/tool loop
+    v
+tool.Executor.ExecuteWithPolicy
+    | policy decision, approval path, audited tool execution
+    v
+typed RoleRunResult
+```
+
+### Structured role outputs
+
+Each logical role has a versioned JSON output schema. The adapter rejects
+unknown fields, trailing values, missing required evidence, invalid status
+combinations, and handoffs that contradict a terminal result.
+
+- Planner output carries understanding, an implementation plan, task
+  breakdown, acceptance criteria, and a developer handoff.
+- Developer output carries a summary, changed artifact references, and a
+  tester handoff.
+- Tester output carries executed checks and exactly one result. A failed result
+  requires a developer handoff; a passed result requires a reviewer handoff.
+- Reviewer output carries a decision, findings, required corrections, and
+  evidence. Approval is terminal and cannot include a handoff. Requested
+  changes require a developer handoff.
+
+Agents describe work and evidence; they do not choose arbitrary destinations.
+The decoder maps valid role output to one of the canonical outcomes, and the
+supervisor's transition table remains the only routing authority.
+
+### Governance and workspace behavior
+
+The adapter fails closed at every authority boundary:
+
+- the configured agent must exist and possess every capability required by the
+  role;
+- the run must resolve to an existing workspace ID and path;
+- roles that require approval cannot execute while approval is pending, denied,
+  unavailable, or malformed;
+- configured validation profiles require the existing validation runner;
+- the sub-agent runtime receives explicit role iteration and token bounds;
+- the adapter enforces the role time budget through context cancellation;
+- the sub-agent runtime receives an explicit role tool allowlist and rejects
+  tools outside it before capability checks; and
+- the production tool callback continues through
+  `tool.Executor.ExecuteWithPolicy`, retaining policy decisions, approval
+  handling, and tool audit events.
+
+The supervisor owns one logical workspace reference per run. The adapter
+resolves that workspace for each role visit and passes it through unchanged.
+It neither creates nor destroys worktrees. Workspace lifecycle and durable
+reacquisition belong to PR5 composition.
+
+Validation failures from the tester produce the typed `tests_failed` outcome,
+even if an agent reports success. Other validation failures are governance
+errors because no role may override Prism's validation authority.
+
+### Accounting and observability
+
+The adapter propagates prompt, completion, and total token usage; local
+iteration counts; tool calls and denied tool calls; produced artifacts; agent,
+provider, model, and workspace identity; approval status; validation status;
+and execution timestamps. Role-completion events expose the safe operational
+subset needed to inspect execution without embedding prompts or model output in
+events.
+
+This telemetry is accounting, not durable recovery state. PR5 must checkpoint
+the canonical run state and the external references needed to resume it
+atomically.
 ## Security and governance invariants
 
 - Agents perform bounded local work.
@@ -461,13 +567,13 @@ related but never interchangeable.
 ## Compatibility decisions
 
 - Logical roles are separate from current agent IDs and role strings.
-- Agent and profile references remain strings until PR4 resolves them against
-  live registries.
+- Agent and profile references remain stable strings in persisted contracts;
+  the adapter resolves them at each governed execution boundary.
 - Existing `retry.RetryConfig`, `validation.Result`, and `cost.TokenUsage`
   contracts are reused.
 - Existing Natural Gates state is not embedded in multi-agent state.
-- Existing delegated-task artifacts can be translated into typed artifact
-  references without coupling the contract package to `workflow/v2`.
+- Existing delegated-task artifacts and accounting are translated into typed
+  role results at one explicit adapter boundary.
 - Multi-agent events extend the canonical event schema and do not reuse
   unprefixed `workflow.*` engine-internal event names.
 - Schema version `1` gives PR5 a migration boundary without selecting a
@@ -475,9 +581,8 @@ related but never interchangeable.
 
 ## Explicit non-goals
 
-PR3 does not:
+PR4 does not:
 
-- invoke real agents;
 - wire production workflows;
 - persist or resume multi-agent state;
 - modify the dashboard;
@@ -486,8 +591,10 @@ PR3 does not:
 - execute roles in parallel;
 - distribute execution;
 - create agents dynamically;
-- permit unbounded loops; or
-- restructure existing packages.
+- permit unbounded loops;
+- restructure existing packages;
+- create a second provider or tool runtime; or
+- grant agents routing, policy, approval, or validation authority.
 
 ## Follow-up PRs
 
@@ -498,16 +605,20 @@ transition resolution, fail-closed budget enforcement, canonical event
 ordering, cancellation checks, explicit state accounting, and bounded loop
 tests. It invokes no real agents and adds no persistence.
 
-### PR4: real Prism agent integration
+### Completed foundation: PR4 real Prism agent integration
 
-Adapt configured Prism agents and profiles to the PR3 role-runner boundary.
-Resolve tool and capability scopes, structured outputs, governance, and
-workspaces without moving routing authority into agents.
+PR4 adapts configured Prism agents to the PR3 role-runner boundary through the
+existing bounded sub-agent runtime. It adds strict role outputs, deterministic
+outcome mapping, capability and tool-scope enforcement, approval and validation
+checks, run-workspace propagation, cancellation, and execution telemetry
+without moving routing authority into agents.
 
 ### PR5: persistence, recovery, and resume
 
 Persist the versioned state contract, define atomic checkpoints, leases or
-claims, idempotency, recovery APIs, and deterministic resume behavior.
+claims, idempotency, recovery APIs, and deterministic resume behavior. PR5 must
+also define how a resumed run reacquires its workspace and how pending
+approvals resume without repeating a completed role or effect.
 
 ### PR6: first end-to-end demo flow
 
@@ -518,8 +629,11 @@ review.
 ## Known limitations
 
 - Only the four Phase 1 roles and eight Phase 1 outcomes are recognized.
-- Role and profile references are not resolved until the real agent adapter.
-- The supervisor is in-memory and accepts injected runners; PR4 supplies the
-  first real Prism agent adapter.
+- Profile resolution is registry-backed; role-to-profile selection remains
+  explicit configuration.
+- Approval checks can stop a role, but durable waiting and resume semantics
+  belong to PR5.
 - State is serializable but not yet persisted.
-- Events are emitted to an injected sink; production transport wiring is later.
+- Run workspace lifecycle and reacquisition are not yet durable.
+- The adapter is available for composition, but the product entry point and
+  first end-to-end reference flow belong to PR6.

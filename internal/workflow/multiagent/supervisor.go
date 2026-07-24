@@ -555,6 +555,32 @@ func (s *Supervisor) emitRole(
 			TotalTokens:      result.TokenUsage.TotalTokens,
 			EstimatedCostUsd: result.TokenUsage.EstimatedCostUsd,
 		}
+		if result.Metadata.AgentRef != "" {
+			payload["agent_ref"] = result.Metadata.AgentRef
+		}
+		if result.Metadata.Provider != "" {
+			payload["provider"] = result.Metadata.Provider
+		}
+		if result.Metadata.Model != "" {
+			payload["model"] = result.Metadata.Model
+		}
+		if !result.Metadata.StartedAt.IsZero() &&
+			!result.Metadata.FinishedAt.IsZero() {
+			payload["duration_ms"] = result.Metadata.FinishedAt.
+				Sub(result.Metadata.StartedAt).Milliseconds()
+		}
+		if result.Metadata.ToolCalls > 0 {
+			payload["tool_calls"] = result.Metadata.ToolCalls
+		}
+		if result.Metadata.DeniedToolCalls > 0 {
+			payload["denied_tool_calls"] = result.Metadata.DeniedToolCalls
+		}
+		if result.Metadata.ValidationStatus != "" {
+			payload["validation_status"] = result.Metadata.ValidationStatus
+		}
+		if result.Metadata.ApprovalStatus != "" {
+			payload["approval_status"] = result.Metadata.ApprovalStatus
+		}
 		if result.OutgoingHandoff != nil {
 			payload["artifact_uris"] = artifactURIs(result.OutgoingHandoff.Artifacts)
 		}

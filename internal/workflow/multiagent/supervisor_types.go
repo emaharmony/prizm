@@ -81,10 +81,17 @@ type HandoffDraft struct {
 
 // ExecutionMetadata is observational data returned by a runner.
 type ExecutionMetadata struct {
-	AgentRef   string
-	Attempt    int
-	StartedAt  time.Time
-	FinishedAt time.Time
+	AgentRef         string
+	Provider         string
+	Model            string
+	WorkspaceID      string
+	ToolCalls        int
+	DeniedToolCalls  int
+	ValidationStatus string
+	ApprovalStatus   string
+	Attempt          int
+	StartedAt        time.Time
+	FinishedAt       time.Time
 }
 
 // RoleRunResult is the bounded result of one role visit.

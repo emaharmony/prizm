@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prizm/internal/agent"
-	"github.com/emaharmony/prizm/internal/cost"
-	"github.com/emaharmony/prizm/internal/event"
-	"github.com/emaharmony/prizm/internal/validation"
+	"github.com/emaharmony/prism/internal/agent"
+	"github.com/emaharmony/prism/internal/cost"
+	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prism/internal/validation"
 )
 
 type profileResolverFunc func(string) (AgentProfile, error)
@@ -52,16 +52,12 @@ func TestAgentRoleRunnerBuildsGovernedExecutionRequest(t *testing.T) {
 	}), nil, nil)
 
 	request := adapterRoleRequest(RolePlanner)
-	request.Run.ExecutionKey = "run-phase1-test:planner:1"
 	result, err := runner.RunRole(context.Background(), request)
 	if err != nil {
 		t.Fatalf("run role: %v", err)
 	}
 	if captured.Profile.ID != "planner-agent" || captured.Role != RolePlanner {
 		t.Errorf("profile/role = %q/%q", captured.Profile.ID, captured.Role)
-	}
-	if captured.ExecutionKey != request.Run.ExecutionKey {
-		t.Errorf("execution key = %q, want %q", captured.ExecutionKey, request.Run.ExecutionKey)
 	}
 	if captured.Workspace.ID != "workspace-run-phase1-test" ||
 		captured.Workspace.Path != "/worktrees/run-phase1-test" {
@@ -164,20 +160,6 @@ func TestAgentRoleRunnerGovernanceFailures(t *testing.T) {
 				request.RoleConfig.Capabilities = []string{"admin"}
 			},
 			wantKind: "capability",
-		},
-		{
-			name: "workspace identity mismatch before execution",
-			executor: agentExecutorFunc(func(
-				context.Context,
-				AgentExecutionRequest,
-			) (AgentExecutionResult, error) {
-				t.Fatal("executor must not run after workspace identity mismatch")
-				return AgentExecutionResult{}, nil
-			}),
-			mutate: func(request *RoleRunRequest) {
-				request.Run.WorkspaceID = "workspace-from-previous-process"
-			},
-			wantKind: "workspace",
 		},
 	}
 

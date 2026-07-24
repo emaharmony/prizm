@@ -32,16 +32,24 @@ type MultiAgentRunEventPayload struct {
 
 // MultiAgentRoleEventPayload describes role lifecycle and iteration events.
 type MultiAgentRoleEventPayload struct {
-	RunID        string      `json:"run_id"`
-	WorkflowID   string      `json:"workflow_id"`
-	Role         string      `json:"role"`
-	Status       string      `json:"status"`
-	Visit        int         `json:"visit,omitempty"`
-	Iteration    int         `json:"iteration,omitempty"`
-	Outcome      string      `json:"outcome,omitempty"`
-	TokenUsage   *TokenUsage `json:"token_usage,omitempty"`
-	Error        string      `json:"error,omitempty"`
-	ArtifactURIs []string    `json:"artifact_uris,omitempty"`
+	RunID            string      `json:"run_id"`
+	WorkflowID       string      `json:"workflow_id"`
+	Role             string      `json:"role"`
+	Status           string      `json:"status"`
+	Visit            int         `json:"visit,omitempty"`
+	Iteration        int         `json:"iteration,omitempty"`
+	Outcome          string      `json:"outcome,omitempty"`
+	TokenUsage       *TokenUsage `json:"token_usage,omitempty"`
+	Error            string      `json:"error,omitempty"`
+	ArtifactURIs     []string    `json:"artifact_uris,omitempty"`
+	AgentRef         string      `json:"agent_ref,omitempty"`
+	Provider         string      `json:"provider,omitempty"`
+	Model            string      `json:"model,omitempty"`
+	DurationMs       int64       `json:"duration_ms,omitempty"`
+	ToolCalls        int         `json:"tool_calls,omitempty"`
+	DeniedToolCalls  int         `json:"denied_tool_calls,omitempty"`
+	ValidationStatus string      `json:"validation_status,omitempty"`
+	ApprovalStatus   string      `json:"approval_status,omitempty"`
 }
 
 // MultiAgentHandoffEventPayload identifies a structured role handoff.
