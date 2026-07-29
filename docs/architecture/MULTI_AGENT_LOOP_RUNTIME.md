@@ -1,13 +1,14 @@
 # Multi-Agent Loop Runtime Contracts
 
-Status: Phase 1 real-agent adapter baseline
+Status: Phase 1 durable runtime foundation
 
 This document defines the canonical vocabulary and ownership boundaries for
 Prism's bounded multi-agent loop runtime. The contract baseline arrived in PR2;
 PR3 adds deterministic in-memory supervision; PR4 connects configured Prism
 agents to that supervisor through the existing bounded sub-agent execution
-domain. Persistence, recovery, and the end-to-end product flow remain later
-stages.
+domain; and PR5 adds durable checkpoints, exclusive claims, idempotent event
+publication, recovery, and safe resume. The supported end-to-end product flow
+remains PR6 scope.
 
 The contracts follow [Package Boundaries](PACKAGE_BOUNDARIES.md) and preserve
 the authority model in
@@ -36,8 +37,8 @@ outcomes, budget semantics, or event payloads.
 
 Package: `internal/workflow/multiagent`
 
-Domain statement: owns the canonical contracts and deterministic in-memory
-supervision semantics for bounded multi-agent workflows.
+Domain statement: owns canonical contracts, deterministic supervision, and
+domain-specific persistence and recovery for bounded multi-agent workflows.
 
 Invariants owned:
 
@@ -48,8 +49,12 @@ Invariants owned:
 - explicit run and role state validity;
 - terminal-condition consistency;
 - fail-closed budget configuration;
-- deterministic transition selection; and
-- bounded correction-loop traversal.
+- deterministic transition selection;
+- bounded correction-loop traversal;
+- checkpoint and resume semantics;
+- run-level execution-key idempotency;
+- atomic state and outbox publication; and
+- single-owner execution claims.
 
 Primary callers:
 
@@ -65,14 +70,17 @@ Allowed dependencies:
 - `internal/validation` for existing validation results;
 - `internal/event` for the canonical Prism event envelope and vocabulary;
 - `internal/agent` for configured agent identity;
-- `internal/subagent` for bounded agent execution; and
-- `internal/workflow/v2` for the existing delegated-task execution contract.
+- `internal/subagent` for bounded agent execution;
+- `internal/workflow/v2` for the existing delegated-task execution contract;
+- `internal/run` for the existing single-host run lock; and
+- `internal/sqlite` for Prism's registered SQLite driver and connection policy.
 
 Responsibilities explicitly excluded:
 
 - selecting agents independently of role configuration;
 - implementing model-provider clients or tool execution;
-- persisting state;
+- owning generic database lifecycle or persistence for other domains;
+- inventing a second event store, lock implementation, or SQLite driver;
 - evaluating policy;
 - recording approvals;
 - running validation commands;
@@ -107,7 +115,7 @@ flowchart LR
   supervisor --> handoff["Structured handoffs"]
   supervisor --> events["Canonical Prism events"]
   supervisor --> governance["Policy / approval / validation"]
-  state -. "future persistence" .-> storage["Recovery boundary"]
+  state --> storage["Durable state and outbox"]
 ```
 
 `internal/workflow/multiagent` owns the definition, state, and handoff
@@ -135,7 +143,7 @@ event names and payload schemas. Existing governance packages retain authority.
 
 | Concern | Owner |
 | --- | --- |
-| Role, outcome, handoff, budget, and state invariants | `internal/workflow/multiagent` |
+| Role, outcome, handoff, budget, state, checkpoint, and recovery invariants | `internal/workflow/multiagent` |
 | Generic workflow execution | `internal/workflow` |
 | Natural Gates execution | `internal/workflow/v2` |
 | Agent identity and configured profiles | Existing agent and orchestrator domains |
@@ -145,10 +153,11 @@ event names and payload schemas. Existing governance packages retain authority.
 | Authorization decisions | `internal/policy` |
 | Human authorization records | `internal/approval` |
 | Allowlisted verification | `internal/validation` |
-| Persistence mechanics | A storage boundary introduced in PR5 |
+| Shared SQLite registration and connection policy | `internal/sqlite` |
+| Single-host execution exclusion | `internal/run` |
 
-The contract package coordinates none of these concerns. It gives their future
-composition a shared, validated language.
+The multi-agent package composes these existing boundaries without absorbing
+their authority or creating helper-category packages.
 
 ## Role contracts
 
@@ -270,14 +279,15 @@ Agents return role results and handoffs; they do not mutate global state.
 
 - a state schema version;
 - run and workflow definition identity;
-- current role and task;
+- current role, task, and stable workspace identity;
 - run status;
 - per-role status, visits, local iterations, retries, token usage, elapsed time,
-  and latest outcome;
+  latest outcome, execution key, workspace, validation, approval, and artifacts;
 - total transition and correction-loop traversal counts;
 - accumulated token, iteration, retry, failure, and elapsed-time usage;
 - creation, update, and completion timestamps;
-- the latest structured handoff; and
+- the latest structured handoff and latest completed role;
+- an optional cancellation reason; and
 - a typed terminal outcome.
 
 State validation requires every configured role to have an explicit role state.
@@ -285,8 +295,10 @@ Counters and usage cannot be negative. Terminal status, condition, completion
 timestamp, and reason must agree. Active states cannot carry a terminal
 outcome.
 
-PR2 proves JSON round-trip behavior. It does not choose a database, artifact
-path, checkpoint protocol, lease model, or atomic-write strategy.
+PR5 persists this state in a package-owned SQLite table. Persistence retains
+the domain contract while reusing Prism's SQLite registration, WAL policy, and
+single-host run lock rather than moving multi-agent invariants into a generic
+storage or helper package.
 
 ## Budget model
 
@@ -530,10 +542,12 @@ The adapter fails closed at every authority boundary:
   `tool.Executor.ExecuteWithPolicy`, retaining policy decisions, approval
   handling, and tool audit events.
 
-The supervisor owns one logical workspace reference per run. The adapter
-resolves that workspace for each role visit and passes it through unchanged.
-It neither creates nor destroys worktrees. Workspace lifecycle and durable
-reacquisition belong to PR5 composition.
+The supervisor persists one logical workspace identity per run. The adapter
+resolves the workspace for each role visit and rejects execution when the
+resolved identity differs from the persisted identity. This fail-closed check
+prevents a resumed process from silently continuing in another worktree. The
+adapter neither creates nor destroys worktrees; lifecycle remains owned by the
+existing workspace composition.
 
 Validation failures from the tester produce the typed `tests_failed` outcome,
 even if an agent reports success. Other validation failures are governance
@@ -548,9 +562,99 @@ and execution timestamps. Role-completion events expose the safe operational
 subset needed to inspect execution without embedding prompts or model output in
 events.
 
-This telemetry is accounting, not durable recovery state. PR5 must checkpoint
-the canonical run state and the external references needed to resume it
-atomically.
+Telemetry becomes durable only through the checkpoint transaction described
+below. Prompts and raw model output remain outside canonical run state and
+events.
+## Durable persistence and recovery
+
+### Ownership and storage
+
+`internal/workflow/multiagent` owns the `multiagent_runs` and
+`multiagent_outbox` schemas because their columns encode multi-agent phases,
+revisions, execution keys, and recovery invariants. The package uses
+`internal/sqlite` for driver registration and connection behavior; it does not
+create a generic repository abstraction.
+
+Each durable envelope contains the versioned `RunState`, a monotonically
+increasing revision, the checkpoint phase, the active execution key, the last
+completed execution key, and recovery diagnostics. Updates use compare-and-set
+revision checks so two stale processes cannot both advance one run.
+
+### Checkpoint protocol
+
+| Phase | Durable meaning | Safe resume action |
+| --- | --- | --- |
+| `pending_role` | The current role has not started for this visit. | Claim and start the role. |
+| `role_running` | Execution started, but no durable result exists. | Pause for reconciliation; do not guess or rerun. |
+| `transition_pending` | A role result is durable but its transition is not applied. | Apply the recorded transition without executing the role again. |
+| `waiting` | A governed prerequisite, such as approval, is unresolved. | Recheck the prerequisite for the same visit and execution key. |
+| `terminal` | The run completed, failed, exhausted a budget, or was cancelled. | Return the terminal state without further execution. |
+
+The runtime checkpoints before execution, after a completed role, after the
+selected transition, and at waiting or terminal boundaries. A state mutation
+and every canonical event caused by that mutation are inserted into the outbox
+in the same SQLite transaction. If either write fails, neither becomes visible.
+
+### Claims and compare-and-set
+
+`FileRunClaimer` adapts the existing `internal/run.RunLock`. A process must hold
+the run claim before starting or resuming work. A concurrent claim fails
+without executing a role. Safe takeover follows the existing lock's stale-owner
+rules and does not add distributed lease semantics.
+
+Claims prevent concurrent owners; revisions prevent stale owners. Both are
+required. A claim alone cannot detect a delayed stale write, and a revision
+alone cannot prevent duplicate external execution.
+
+### Execution and event idempotency
+
+Every role visit has a stable execution key derived from run, role, and visit.
+The key flows through the role view, agent adapter, sub-agent task, and tool
+correlation. A completed key is recorded before its transition is applied, so
+recovery can distinguish completed work from work whose outcome is unknown.
+
+Outbox rows use stable event IDs. Publishing may be retried until acknowledged;
+the canonical SQLite event store treats an existing event ID as success. This
+makes event re-emission idempotent without pretending arbitrary tool effects
+are idempotent. Tool-effect idempotency remains the responsibility of the
+governed tool boundary receiving the execution key.
+
+### Recovery matrix
+
+| Recovered condition | Required behavior |
+| --- | --- |
+| Terminal state | Return it unchanged and emit at most one recovery-completed event. |
+| Completed role with pending transition | Apply the recorded outcome and handoff; never rerun the role. |
+| Waiting approval | Recheck approval for the same visit; continue only after authorization. |
+| Interrupted correction loop | Restore exact visits, traversals, budgets, handoff, and execution key. |
+| Budget exhausted at a boundary | Preserve the terminal outcome and execute nothing else. |
+| Unknown in-flight execution | Persist a paused reconciliation state; never automatically rerun. |
+| Duplicate resume | Reject the second claimant before role execution. |
+| Unpublished outbox rows | Republish by stable event ID until acknowledged. |
+| Corrupt or future-version state | Reject loading, emit recovery failure when possible, and execute nothing. |
+| Workspace identity changed | Fail closed before agent or tool execution. |
+
+### Waiting, cancellation, and terminal states
+
+Approval waiting is not a completed role. It retains the same visit and
+execution key, allowing the adapter to recheck the external approval record
+without double-counting or fabricating a transition. Cancellation is persisted
+with its reason and observed before the next role execution. Completed, failed,
+budget-exhausted, and cancelled states are immutable to resume.
+
+### Schema compatibility and failure handling
+
+Run state and durable envelopes carry explicit schema versions. The current
+runtime accepts only the version it understands; it rejects corrupt payloads
+and future versions rather than partially decoding them. Schema changes require
+an explicit migration or compatibility decision in an architectural PR.
+
+Recovery errors contain bounded diagnostics and never include prompts, model
+output, credentials, approval contents, or workspace file contents. A failed
+checkpoint does not advance the in-memory recovery record. A failed outbox
+publication leaves the row pending for retry. Unknown external execution is
+treated as uncertain, not failed, because retrying it could repeat a mutation.
+
 ## Security and governance invariants
 
 - Agents perform bounded local work.
@@ -576,20 +680,21 @@ atomically.
   role results at one explicit adapter boundary.
 - Multi-agent events extend the canonical event schema and do not reuse
   unprefixed `workflow.*` engine-internal event names.
-- Schema version `1` gives PR5 a migration boundary without selecting a
-  persistence format now.
+- Schema version `1` is enforced for both state and durable envelopes.
+- Package-owned SQLite tables preserve domain ownership while shared driver,
+  event-store, and run-lock facilities remain in their established packages.
+- Future schema versions require explicit compatibility or migration handling.
 
 ## Explicit non-goals
 
-PR4 does not:
+The Phase 1 runtime does not:
 
 - wire production workflows;
-- persist or resume multi-agent state;
 - modify the dashboard;
 - build a graph editor;
 - support arbitrary user-authored graphs;
 - execute roles in parallel;
-- distribute execution;
+- provide distributed claims or execution;
 - create agents dynamically;
 - permit unbounded loops;
 - restructure existing packages;
@@ -613,12 +718,13 @@ outcome mapping, capability and tool-scope enforcement, approval and validation
 checks, run-workspace propagation, cancellation, and execution telemetry
 without moving routing authority into agents.
 
-### PR5: persistence, recovery, and resume
+### Completed foundation: PR5 persistence, recovery, and resume
 
-Persist the versioned state contract, define atomic checkpoints, leases or
-claims, idempotency, recovery APIs, and deterministic resume behavior. PR5 must
-also define how a resumed run reacquires its workspace and how pending
-approvals resume without repeating a completed role or effect.
+PR5 persists versioned state with atomic state-and-outbox checkpoints,
+compare-and-set revisions, single-host claims, stable execution keys,
+idempotent event publication, deterministic recovery, approval waiting,
+terminal immutability, and fail-closed workspace reacquisition. Unknown
+in-flight work pauses for reconciliation instead of being rerun unsafely.
 
 ### PR6: first end-to-end demo flow
 
@@ -631,9 +737,10 @@ review.
 - Only the four Phase 1 roles and eight Phase 1 outcomes are recognized.
 - Profile resolution is registry-backed; role-to-profile selection remains
   explicit configuration.
-- Approval checks can stop a role, but durable waiting and resume semantics
-  belong to PR5.
-- State is serializable but not yet persisted.
-- Run workspace lifecycle and reacquisition are not yet durable.
+- Execution claims are single-host file locks, not distributed leases.
+- Unknown in-flight execution requires operator reconciliation because the
+  runtime cannot prove whether an external mutation completed.
+- Workspace identity is durable, but workspace creation and cleanup remain
+  owned by the existing composition layer.
 - The adapter is available for composition, but the product entry point and
   first end-to-end reference flow belong to PR6.

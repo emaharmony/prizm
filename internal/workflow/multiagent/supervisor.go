@@ -252,6 +252,18 @@ func (s *Supervisor) completeRole(
 		roleState.Elapsed += elapsed
 	}
 	roleState.LastOutcome = result.Outcome
+	roleState.WorkspaceID = result.Metadata.WorkspaceID
+	if workspaceID := strings.TrimSpace(result.Metadata.WorkspaceID); workspaceID != "" && state.WorkspaceID == "" {
+		state.WorkspaceID = workspaceID
+	}
+	roleState.ValidationStatus = result.Metadata.ValidationStatus
+	roleState.ApprovalStatus = result.Metadata.ApprovalStatus
+	if result.OutgoingHandoff != nil {
+		roleState.Artifacts = append(
+			cloneArtifactRefs(result.OutgoingHandoff.Artifacts),
+			cloneArtifactRefs(result.OutgoingHandoff.Evidence)...,
+		)
+	}
 	roleState.UpdatedAt = finishedAt
 	roleState.CompletedAt = timePointer(finishedAt)
 	state.RoleStates[role] = roleState
@@ -266,6 +278,7 @@ func (s *Supervisor) completeRole(
 		state.BudgetUsage.Elapsed = elapsed
 	}
 	state.UpdatedAt = finishedAt
+	state.LatestCompletedRole = role
 
 	s.emitRole(event.EventMultiAgentRoleCompleted, *state, roleState, result.Outcome, &result)
 }
@@ -466,6 +479,7 @@ func (s *Supervisor) cancelRun(state RunState, err error) (RunState, error) {
 	}
 	now := s.now().UTC()
 	state.Status = RunStatusCancelled
+	state.CancellationReason = err.Error()
 	state.TerminalOutcome = &TerminalOutcome{
 		Condition: TerminalConditionCancelled,
 		Reason:    err.Error(),
@@ -507,7 +521,9 @@ func (s *Supervisor) runView(state RunState) RunView {
 		RunID:           state.RunID,
 		WorkflowID:      state.WorkflowID,
 		Task:            state.CurrentTask,
+		WorkspaceID:     state.WorkspaceID,
 		CurrentRole:     state.CurrentRole,
+		ExecutionKey:    state.RoleStates[state.CurrentRole].LastExecutionKey,
 		Visit:           state.RoleStates[state.CurrentRole].Visits,
 		TransitionCount: state.TransitionCount,
 		LoopTraversals:  state.LoopTraversals,

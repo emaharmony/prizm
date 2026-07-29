@@ -29,6 +29,7 @@ type AgentRuntime struct {
 	Capabilities        []string
 	RunID               string
 	TaskID              string
+	ExecutionKey        string
 	AllowedTools        []string
 	EnforceAllowedTools bool
 	MaxIterations       int

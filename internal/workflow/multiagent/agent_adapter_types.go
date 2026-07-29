@@ -134,6 +134,7 @@ func (f ValidationRunnerFunc) RunValidation(
 type AgentExecutionRequest struct {
 	RunID                string
 	TaskID               string
+	ExecutionKey         string
 	Role                 Role
 	Visit                int
 	Profile              AgentProfile

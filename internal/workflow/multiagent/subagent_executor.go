@@ -47,6 +47,7 @@ func (e SubagentExecutor) ExecuteAgent(
 		WorkDir:             request.Workspace.Path,
 		RunID:               request.RunID,
 		TaskID:              request.TaskID,
+		ExecutionKey:        request.ExecutionKey,
 		AllowedTools:        append([]string(nil), request.AllowedTools...),
 		EnforceAllowedTools: true,
 		MaxIterations:       int(request.MaxIterations),
@@ -71,6 +72,9 @@ func (e SubagentExecutor) ExecuteAgent(
 }
 
 func executionTaskID(request AgentExecutionRequest) string {
+	if request.ExecutionKey != "" {
+		return request.ExecutionKey
+	}
 	return fmt.Sprintf("%s-%s-%d", request.RunID, request.Role, request.Visit)
 }
 

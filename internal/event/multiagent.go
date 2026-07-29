@@ -19,6 +19,9 @@ const (
 	EventMultiAgentRunCompleted       = "prism.workflow.multi_agent.run.completed"
 	EventMultiAgentRunFailed          = "prism.workflow.multi_agent.run.failed"
 	EventMultiAgentRunCancelled       = "prism.workflow.multi_agent.run.cancelled"
+	EventMultiAgentRecoveryStarted    = "prism.workflow.multi_agent.recovery.started"
+	EventMultiAgentRecoveryCompleted  = "prism.workflow.multi_agent.recovery.completed"
+	EventMultiAgentRecoveryFailed     = "prism.workflow.multi_agent.recovery.failed"
 )
 
 // MultiAgentRunEventPayload is shared by run lifecycle events.

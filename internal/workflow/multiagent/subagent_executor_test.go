@@ -29,13 +29,14 @@ func TestSubagentExecutorMapsRuntimeAndResult(t *testing.T) {
 		runtime subagent.AgentRuntime,
 	) (subagent.RunResult, error) {
 		if packet.TargetAgent != "developer-agent" ||
-			packet.TaskID != "run-1-developer-2" {
+			packet.TaskID != "run-1:developer:2" {
 			t.Errorf("packet = %#v", packet)
 		}
 		if runtime.WorkDir != "/workspace/run-1" ||
 			!runtime.EnforceAllowedTools ||
 			len(runtime.AllowedTools) != 1 ||
-			runtime.MaxIterations != 4 {
+			runtime.MaxIterations != 4 ||
+			runtime.ExecutionKey != "run-1:developer:2" {
 			t.Errorf("runtime = %#v", runtime)
 		}
 		return subagent.RunResult{
@@ -54,10 +55,11 @@ func TestSubagentExecutorMapsRuntimeAndResult(t *testing.T) {
 	})}
 
 	result, err := executor.ExecuteAgent(context.Background(), AgentExecutionRequest{
-		RunID:  "run-1",
-		TaskID: "task-1",
-		Role:   RoleDeveloper,
-		Visit:  2,
+		RunID:        "run-1",
+		TaskID:       "task-1",
+		ExecutionKey: "run-1:developer:2",
+		Role:         RoleDeveloper,
+		Visit:        2,
 		Profile: AgentProfile{
 			ID:           "developer-agent",
 			Provider:     "mock",

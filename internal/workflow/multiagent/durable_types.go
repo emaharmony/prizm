@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prism/internal/event"
 )
 
 // DurableRunSchemaVersion is the serialized recovery-envelope version.
@@ -143,8 +143,6 @@ type DurableRunStore interface {
 	Checkpoint(context.Context, int64, DurableRun, []event.Event) (DurableRun, error)
 	PendingEvents(context.Context, string, int) ([]StoredEvent, error)
 	MarkEventsPublished(context.Context, []string) error
-	RequestCancellation(context.Context, string, string) error
-	CancellationRequest(context.Context, string) (string, bool, error)
 	Close() error
 }
 

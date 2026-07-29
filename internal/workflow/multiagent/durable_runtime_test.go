@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prism/internal/event"
 )
 
 func TestDurableRuntimeNormalRoundTripAndTerminalResume(t *testing.T) {
@@ -493,7 +493,7 @@ type durableTestEnvironment struct {
 
 func newDurableTestEnvironment(t *testing.T) durableTestEnvironment {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "prizm-runtime.db")
+	dbPath := filepath.Join(t.TempDir(), "prism-runtime.db")
 	events, err := event.NewSQLiteEventStore(dbPath)
 	if err != nil {
 		t.Fatalf("new event store: %v", err)

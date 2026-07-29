@@ -89,6 +89,15 @@ func TestRunStateRejectsInvariantViolations(t *testing.T) {
 			},
 			want: "latest_handoff.run_id does not match",
 		},
+		{
+			name: "mismatched role workspace",
+			mutate: func(s *RunState) {
+				role := s.RoleStates[RolePlanner]
+				role.WorkspaceID = "workspace-other"
+				s.RoleStates[RolePlanner] = role
+			},
+			want: "does not match state workspace_id",
+		},
 	}
 
 	for _, test := range tests {
@@ -118,6 +127,7 @@ func validRunState() RunState {
 		WorkflowID:      "phase1-reference",
 		WorkflowVersion: 1,
 		CurrentRole:     RoleDeveloper,
+		WorkspaceID:     "workspace-run-001",
 		CurrentTask: TaskReference{
 			ID:          "task-001",
 			Description: "Build the Phase 1 reference feature.",
@@ -130,6 +140,7 @@ func validRunState() RunState {
 				Visits:          1,
 				LocalIterations: 1,
 				LastOutcome:     OutcomePlanReady,
+				WorkspaceID:     "workspace-run-001",
 				EnteredAt:       &plannerEnteredAt,
 				UpdatedAt:       plannerCompletedAt,
 				CompletedAt:     &plannerCompletedAt,

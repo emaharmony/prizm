@@ -94,4 +94,16 @@ func init() {
 	Schemas[EventMultiAgentRunCancelled] = Schema{
 		Required: []string{"run_id", "workflow_id", "status", "terminal_condition", "reason"},
 	}
+	Schemas[EventMultiAgentRecoveryStarted] = Schema{
+		Required: []string{"run_id", "workflow_id", "status"},
+		Optional: []string{"reason"},
+	}
+	Schemas[EventMultiAgentRecoveryCompleted] = Schema{
+		Required: []string{"run_id", "workflow_id", "status"},
+		Optional: []string{"reason", "terminal_condition"},
+	}
+	Schemas[EventMultiAgentRecoveryFailed] = Schema{
+		Required: []string{"run_id", "workflow_id", "status", "reason"},
+		Optional: []string{"terminal_condition"},
+	}
 }

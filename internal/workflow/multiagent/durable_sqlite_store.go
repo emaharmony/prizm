@@ -10,12 +10,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/emaharmony/prizm/internal/event"
-	prizmsqlite "github.com/emaharmony/prizm/internal/sqlite"
+	"github.com/emaharmony/prism/internal/event"
+	prismsqlite "github.com/emaharmony/prism/internal/sqlite"
 )
 
-// SQLiteDurableRunStore persists multi-agent checkpoints in Prizm's existing
-// SQLite infrastructure. The caller should pass the normal Prizm database path;
+// SQLiteDurableRunStore persists multi-agent checkpoints in Prism's existing
+// SQLite infrastructure. The caller should pass the normal Prism database path;
 // this store creates only package-owned tables.
 type SQLiteDurableRunStore struct {
 	db *sql.DB
@@ -33,7 +33,7 @@ func NewSQLiteDurableRunStore(dbPath string) (*SQLiteDurableRunStore, error) {
 		}
 	}
 	db, err := sql.Open(
-		prizmsqlite.DriverName,
+		prismsqlite.DriverName,
 		dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)",
 	)
 	if err != nil {
@@ -62,11 +62,6 @@ CREATE TABLE IF NOT EXISTS multiagent_outbox (
 );
 CREATE INDEX IF NOT EXISTS idx_multiagent_outbox_pending
     ON multiagent_outbox(run_id, published_at, sequence);
-CREATE TABLE IF NOT EXISTS multiagent_cancellations (
-    run_id TEXT PRIMARY KEY,
-    reason TEXT NOT NULL,
-    requested_at TEXT NOT NULL
-);
 `
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
@@ -256,51 +251,6 @@ WHERE event_id = ? AND published_at IS NULL`, publishedAt, eventID); err != nil 
 		return fmt.Errorf("multiagent store: commit outbox ack: %w", err)
 	}
 	return nil
-}
-
-// RequestCancellation persists an operator request without taking the
-// execution claim. The active owner observes it before the next role.
-func (s *SQLiteDurableRunStore) RequestCancellation(
-	ctx context.Context,
-	runID string,
-	reason string,
-) error {
-	result, err := s.db.ExecContext(ctx, `
-INSERT INTO multiagent_cancellations(run_id, reason, requested_at)
-SELECT run_id, ?, ? FROM multiagent_runs WHERE run_id = ?
-ON CONFLICT(run_id) DO UPDATE SET
-    reason = excluded.reason,
-    requested_at = excluded.requested_at
-`, reason, time.Now().UTC().Format(time.RFC3339Nano), runID)
-	if err != nil {
-		return fmt.Errorf("multiagent store: request cancellation: %w", err)
-	}
-	count, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("multiagent store: cancellation rows affected: %w", err)
-	}
-	if count == 0 {
-		return fmt.Errorf("%w: %s", ErrRunNotFound, runID)
-	}
-	return nil
-}
-
-// CancellationRequest returns the latest persisted request, if any.
-func (s *SQLiteDurableRunStore) CancellationRequest(
-	ctx context.Context,
-	runID string,
-) (string, bool, error) {
-	var reason string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT reason FROM multiagent_cancellations WHERE run_id = ?`, runID,
-	).Scan(&reason)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("multiagent store: load cancellation request: %w", err)
-	}
-	return reason, true, nil
 }
 
 // Close releases the SQLite connection.

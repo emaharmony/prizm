@@ -51,7 +51,9 @@ type RunView struct {
 	RunID           string
 	WorkflowID      string
 	Task            TaskReference
+	WorkspaceID     string
 	CurrentRole     Role
+	ExecutionKey    string
 	Visit           int
 	TransitionCount int
 	LoopTraversals  LoopTraversalCounts
@@ -133,10 +135,10 @@ type RunRequest struct {
 
 // ResolvedTransition is a supervisor-selected edge or terminal result.
 type ResolvedTransition struct {
-	From     Role
-	Outcome  TransitionOutcome
-	To       Role
-	Terminal TerminalCondition
+	From     Role              `json:"from"`
+	Outcome  TransitionOutcome `json:"outcome"`
+	To       Role              `json:"to,omitempty"`
+	Terminal TerminalCondition `json:"terminal,omitempty"`
 }
 
 // InvalidTransitionError reports a role/outcome pair with no declared route.

@@ -161,6 +161,10 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 			project = "multiagent"
 			correlationID = rt.RunID
 		}
+		if rt.ExecutionKey != "" {
+			execInput["_execution_key"] = rt.ExecutionKey
+			correlationID = rt.ExecutionKey
+		}
 		res, xerr := ex.ExecuteWithPolicy(
 			ctx, toolName, rt.AgentID, project, correlationID, execInput)
 		if xerr != nil {
