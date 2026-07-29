@@ -146,6 +146,77 @@ func (r *DurableRuntime) Resume(
 	return r.drive(ctx, record, true)
 }
 
+// Inspect loads and validates the durable source of truth without advancing it.
+func (r *DurableRuntime) Inspect(ctx context.Context, runID string) (DurableRun, error) {
+	record, err := r.store.Load(ctx, runID)
+	if err != nil {
+		return DurableRun{}, err
+	}
+	if err := record.Validate(r.supervisor.definition); err != nil {
+		return record, &RecoveryFailedError{RunID: runID, Cause: err}
+	}
+	return record, nil
+}
+
+// Cancel persists an operator request before attempting the execution claim.
+// An active owner observes it at the next role boundary; an idle run becomes
+// terminal immediately. A terminal run is returned unchanged.
+func (r *DurableRuntime) Cancel(
+	ctx context.Context,
+	runID string,
+	reason string,
+) (RunState, error) {
+	if reason = strings.TrimSpace(reason); reason == "" {
+		reason = "cancelled by user"
+	}
+	reason = boundedDiagnostic(errors.New(reason))
+	if err := r.store.RequestCancellation(ctx, runID, reason); err != nil {
+		return RunState{}, err
+	}
+	claim, err := r.claimer.Acquire(ctx, runID)
+	if err != nil {
+		if errors.Is(err, ErrRunClaimed) {
+			record, loadErr := r.store.Load(ctx, runID)
+			if loadErr != nil {
+				return RunState{}, loadErr
+			}
+			return record.State, nil
+		}
+		return RunState{}, err
+	}
+	defer claim.Release()
+
+	record, err := r.store.Load(ctx, runID)
+	if err != nil {
+		return RunState{}, err
+	}
+	if err := record.Validate(r.supervisor.definition); err != nil {
+		return record.State, &RecoveryFailedError{RunID: runID, Cause: err}
+	}
+	if record.Phase == CheckpointTerminal {
+		return record.State, nil
+	}
+	now := r.now().UTC()
+	roleState := record.State.RoleStates[record.State.CurrentRole]
+	if roleState.Status == RoleStatusRunning {
+		roleState.Status = RoleStatusCancelled
+		roleState.UpdatedAt = now
+		roleState.CompletedAt = timePointer(now)
+		record.State.RoleStates[record.State.CurrentRole] = roleState
+	}
+	record.State, _ = r.supervisor.cancelRun(record.State, errors.New(reason))
+	record.Phase = CheckpointTerminal
+	record.PendingTransition = nil
+	record.ActiveExecutionKey = ""
+	record.Waiting = nil
+	record.Failure = nil
+	record, err = r.checkpoint(ctx, record)
+	if err != nil {
+		return record.State, err
+	}
+	return record.State, nil
+}
+
 func (r *DurableRuntime) drive(
 	ctx context.Context,
 	record DurableRun,
@@ -252,6 +323,24 @@ func (r *DurableRuntime) prepareRole(
 		record.Phase = CheckpointTerminal
 		record.Failure = persistedFailure("cancelled", cancelErr, r.now())
 		record, checkpointErr := r.checkpoint(context.WithoutCancel(ctx), record)
+		if checkpointErr != nil {
+			return record, checkpointErr
+		}
+		return record, cancelErr
+	}
+	reason, requested, err := r.store.CancellationRequest(ctx, record.State.RunID)
+	if err != nil {
+		return record, err
+	}
+	if requested {
+		state, cancelErr := r.supervisor.cancelRun(record.State, errors.New(reason))
+		record.State = state
+		record.Phase = CheckpointTerminal
+		record.PendingTransition = nil
+		record.ActiveExecutionKey = ""
+		record.Waiting = nil
+		record.Failure = nil
+		record, checkpointErr := r.checkpoint(ctx, record)
 		if checkpointErr != nil {
 			return record, checkpointErr
 		}

@@ -1,14 +1,15 @@
 # Multi-Agent Loop Runtime Contracts
 
-Status: Phase 1 durable runtime foundation
+Status: Phase 1 complete reference runtime
 
 This document defines the canonical vocabulary and ownership boundaries for
 Prism's bounded multi-agent loop runtime. The contract baseline arrived in PR2;
 PR3 adds deterministic in-memory supervision; PR4 connects configured Prism
 agents to that supervisor through the existing bounded sub-agent execution
 domain; and PR5 adds durable checkpoints, exclusive claims, idempotent event
-publication, recovery, and safe resume. The supported end-to-end product flow
-remains PR6 scope.
+publication, recovery, and safe resume. PR6 composes those foundations through
+the existing `prism workflow` control plane as the supported
+`multi-agent-software-task` reference flow.
 
 The contracts follow [Package Boundaries](PACKAGE_BOUNDARIES.md) and preserve
 the authority model in
@@ -427,18 +428,19 @@ over-budget transition.
 
 ## Workflow-engine relationship
 
-The multi-agent runtime is workflow-first. It will be composed as a workflow
-capability rather than replacing either existing workflow engine.
+The multi-agent runtime is workflow-first. It is composed as a workflow
+capability and does not replace either existing workflow engine.
 
 - `internal/workflow` continues to own generic named-step execution.
 - `internal/workflow/v2` continues to own Natural Gates behavior and state.
-- `internal/workflow/multiagent` owns the stable contracts and deterministic
-  in-memory supervision.
-- PR3 supplies the tested supervisor and narrow role-runner boundary.
-- Later integration may adapt an existing workflow step or runtime entry point
-  to the supervisor without moving current packages.
-
-No current production workflow is wired to the supervisor in PR3.
+- `internal/workflow/multiagent` owns stable contracts, deterministic
+  supervision, persistence, recovery, and the fixed Phase 1 workflow
+  definition.
+- `cmd/prism-cli` is the composition root. It wires configured agents,
+  providers, governed tools, approvals, validation, SQLite state, events, and
+  run claims without taking ownership of their domain rules.
+- `multi-agent-software-task` is the only supported Phase 1 product workflow.
+  Existing named-step and Natural Gates behavior is unchanged.
 
 ## Delegation graph and execution graph
 
@@ -689,7 +691,6 @@ treated as uncertain, not failed, because retrying it could repeat a mutation.
 
 The Phase 1 runtime does not:
 
-- wire production workflows;
 - modify the dashboard;
 - build a graph editor;
 - support arbitrary user-authored graphs;
@@ -726,11 +727,14 @@ idempotent event publication, deterministic recovery, approval waiting,
 terminal immutability, and fail-closed workspace reacquisition. Unknown
 in-flight work pauses for reconciliation instead of being rerun unsafely.
 
-### PR6: first end-to-end demo flow
+### Completed foundation: PR6 supported reference flow
 
-Expose one safe reference flow using the real supervisor and agents, with run
-inspection, cancellation, resume, final reporting, and Phase 1 completion
-review.
+PR6 exposes one safe reference flow through `prism workflow`, persists the
+effective input and definition before execution, scopes all tools to the
+selected workspace, requires a distinct reviewer, supports inspection,
+persisted cancellation, safe resume, and deterministic terminal reports, and
+retains all policy, approval, validation, and event authority in existing
+domains. See [Multi-Agent Software Task Workflow](../MULTI_AGENT_WORKFLOW.md).
 
 ## Known limitations
 
@@ -742,5 +746,6 @@ review.
   runtime cannot prove whether an external mutation completed.
 - Workspace identity is durable, but workspace creation and cleanup remain
   owned by the existing composition layer.
-- The adapter is available for composition, but the product entry point and
-  first end-to-end reference flow belong to PR6.
+- Phase 1 is sequential and single-host. It does not provide parallel role
+  execution, distributed leases, arbitrary graph authoring, or automatic
+  reconciliation of uncertain external mutations.

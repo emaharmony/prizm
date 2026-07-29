@@ -143,6 +143,8 @@ type DurableRunStore interface {
 	Checkpoint(context.Context, int64, DurableRun, []event.Event) (DurableRun, error)
 	PendingEvents(context.Context, string, int) ([]StoredEvent, error)
 	MarkEventsPublished(context.Context, []string) error
+	RequestCancellation(context.Context, string, string) error
+	CancellationRequest(context.Context, string) (string, bool, error)
 	Close() error
 }
 
