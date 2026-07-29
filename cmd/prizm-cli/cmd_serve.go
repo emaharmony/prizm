@@ -1,12 +1,12 @@
-// Package main implements the `prizm serve` subcommand — the persistent daemon
-// that runs Prizm as a live service.
+// Package main implements the `prism serve` subcommand — the persistent daemon
+// that runs Prism as a live service.
 //
 // Usage:
 //
-//	prizm serve [--config prizm.yaml] [--port 8321]
+//	prism serve [--config prism.yaml] [--port 8321]
 //
 // The serve command:
-//  1. Loads prizm.yaml configuration
+//  1. Loads prism.yaml configuration
 //  2. Starts the embedded NATS server
 //  3. Registers agents from config
 //  4. Starts the session manager
@@ -36,56 +36,51 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/emaharmony/prizm/internal/action"
-	"github.com/emaharmony/prizm/internal/adapter/builtin/discordbot"
-	"github.com/emaharmony/prizm/internal/adapter/builtin/slack"
-	"github.com/emaharmony/prizm/internal/adapter/builtin/telegram"
-	"github.com/emaharmony/prizm/internal/agent"
-	"github.com/emaharmony/prizm/internal/api"
-	"github.com/emaharmony/prizm/internal/approval"
-	"github.com/emaharmony/prizm/internal/autopatch"
-	"github.com/emaharmony/prizm/internal/bus"
-	"github.com/emaharmony/prizm/internal/claudecli"
-	"github.com/emaharmony/prizm/internal/claudeworker"
-	"github.com/emaharmony/prizm/internal/codesummary"
-	"github.com/emaharmony/prizm/internal/memory"
-	"github.com/emaharmony/prizm/internal/codexworker"
-	"github.com/emaharmony/prizm/internal/commitments"
-	"github.com/emaharmony/prizm/internal/tts"
-	"github.com/emaharmony/prizm/internal/context"
-	"github.com/emaharmony/prizm/internal/cost"
-	"github.com/emaharmony/prizm/internal/crossprizm"
-	"github.com/emaharmony/prizm/internal/mutation"
-	"github.com/emaharmony/prizm/internal/dashboard"
-	"github.com/emaharmony/prizm/internal/debounce"
-	"github.com/emaharmony/prizm/internal/delegation"
-	"github.com/emaharmony/prizm/internal/factory"
-	"github.com/emaharmony/prizm/internal/factorymonitor"
-	"github.com/emaharmony/prizm/internal/governance"
-	"github.com/emaharmony/prizm/internal/guard"
-	"github.com/emaharmony/prizm/internal/improve"
-	"github.com/emaharmony/prizm/internal/orchestrator"
-	"github.com/emaharmony/prizm/internal/plan"
-	"github.com/emaharmony/prizm/internal/provider"
-	"github.com/emaharmony/prizm/internal/provider/anthropic"
-	"github.com/emaharmony/prizm/internal/provider/claudecode"
-	"github.com/emaharmony/prizm/internal/provider/codexcli"
-	"github.com/emaharmony/prizm/internal/provider/gemini"
-	"github.com/emaharmony/prizm/internal/provider/ollama"
-	"github.com/emaharmony/prizm/internal/provider/openai"
-	"github.com/emaharmony/prizm/internal/remembrance"
-	"github.com/emaharmony/prizm/internal/router"
-	"github.com/emaharmony/prizm/internal/runtrack"
-	"github.com/emaharmony/prizm/internal/safety"
-	"github.com/emaharmony/prizm/internal/scheduler"
-	"github.com/emaharmony/prizm/internal/session"
-	"github.com/emaharmony/prizm/internal/skill"
-	"github.com/emaharmony/prizm/internal/stage"
-	"github.com/emaharmony/prizm/internal/state"
-	"github.com/emaharmony/prizm/internal/task"
-	"github.com/emaharmony/prizm/internal/tool"
-	"github.com/emaharmony/prizm/internal/tool/mcp"
-	"github.com/emaharmony/prizm/internal/usage"
+	"github.com/emaharmony/prism/internal/action"
+	"github.com/emaharmony/prism/internal/adapter/builtin/discordbot"
+	"github.com/emaharmony/prism/internal/agent"
+	"github.com/emaharmony/prism/internal/api"
+	"github.com/emaharmony/prism/internal/approval"
+	"github.com/emaharmony/prism/internal/autopatch"
+	"github.com/emaharmony/prism/internal/bus"
+	"github.com/emaharmony/prism/internal/claudecli"
+	"github.com/emaharmony/prism/internal/claudeworker"
+	"github.com/emaharmony/prism/internal/codesummary"
+	"github.com/emaharmony/prism/internal/codexworker"
+	"github.com/emaharmony/prism/internal/commitments"
+	"github.com/emaharmony/prism/internal/context"
+	"github.com/emaharmony/prism/internal/cost"
+	"github.com/emaharmony/prism/internal/crossprism"
+	"github.com/emaharmony/prism/internal/dashboard"
+	"github.com/emaharmony/prism/internal/debounce"
+	"github.com/emaharmony/prism/internal/delegation"
+	"github.com/emaharmony/prism/internal/factory"
+	"github.com/emaharmony/prism/internal/factorymonitor"
+	"github.com/emaharmony/prism/internal/governance"
+	"github.com/emaharmony/prism/internal/guard"
+	"github.com/emaharmony/prism/internal/improve"
+	"github.com/emaharmony/prism/internal/orchestrator"
+	"github.com/emaharmony/prism/internal/plan"
+	"github.com/emaharmony/prism/internal/provider"
+	"github.com/emaharmony/prism/internal/provider/anthropic"
+	"github.com/emaharmony/prism/internal/provider/claudecode"
+	"github.com/emaharmony/prism/internal/provider/codexcli"
+	"github.com/emaharmony/prism/internal/provider/gemini"
+	"github.com/emaharmony/prism/internal/provider/ollama"
+	"github.com/emaharmony/prism/internal/provider/openai"
+	"github.com/emaharmony/prism/internal/remembrance"
+	"github.com/emaharmony/prism/internal/router"
+	"github.com/emaharmony/prism/internal/runtrack"
+	"github.com/emaharmony/prism/internal/safety"
+	"github.com/emaharmony/prism/internal/scheduler"
+	"github.com/emaharmony/prism/internal/session"
+	"github.com/emaharmony/prism/internal/skill"
+	"github.com/emaharmony/prism/internal/stage"
+	"github.com/emaharmony/prism/internal/state"
+	"github.com/emaharmony/prism/internal/task"
+	"github.com/emaharmony/prism/internal/tool"
+	"github.com/emaharmony/prism/internal/tool/mcp"
+	"github.com/emaharmony/prism/internal/usage"
 
 	"github.com/nats-io/nats.go"
 )
@@ -108,7 +103,6 @@ type discordBotClient interface {
 	Typing(channelID string) error
 	Send(msg *discordbot.OutboundMessage) error
 	SendPlaceholder(channelID, content string) (string, error)
-	SendAudio(channelID string, audio []byte) error
 	EditMessage(channelID, messageID, content string) error
 	SelfID() string
 	GetRecentMessages(channelID string, limit int) []discordbot.RecentMessage
@@ -118,21 +112,12 @@ type discordBotClient interface {
 // Discord message through the full pipeline. It's closed over by the
 // OnMessage handler so each message has access to routing, sessions,
 // LLM providers, and the Discord bot for responses.
-// approvalOutcome is the result delivered to a blocked tool loop after a
-// human resolves a pending approval via Discord buttons.
-type approvalOutcome struct {
-	Approved bool
-	Message  string // tool output on approve (MutationResult.Message), or denial reason on deny
-}
-
 type conversationContext struct {
 	router        *router.Router
 	sessMgr       *session.Manager
 	cfg           *orchestrator.Config
 	providers     *provider.ProviderRegistry
 	bot           discordBotClient
-	sender        ChannelSender             // V78: Channel-agnostic message sender
-	platform     Platform                  // V78: Which channel platform this context serves
 	debounce      *debounce.Tracker
 	eventLog      *runtrack.EventLogger
 	cancelReg     *runtrack.CancelRegistry
@@ -146,7 +131,7 @@ type conversationContext struct {
 	summarySem    chan struct{}            // Long-running codebase summary concurrency guard
 	delegEngine   *delegation.Engine       // V22: Delegation engine for agent-to-agent task delegation
 	taskStore     *task.Store              // V22: Task store for delegation tracking
-	crossCoord    *crossprizm.Coordinator  // Cross-Prizm NATS delegation coordinator
+	crossCoord    *crossprism.Coordinator  // Cross-Prism NATS delegation coordinator
 	autopatcher   *autopatch.Service       // Diagnose-and-propose patch tasks
 	toolExec      *tool.Executor           // V27: Tool executor for file system access
 	stateMgr      *state.Manager           // V32: Working state manager for adaptive context
@@ -154,25 +139,11 @@ type conversationContext struct {
 	improveMgr    *improve.Manager         // V32: Self-improvement loop
 	guardian      *guard.Guard             // V32: Guard rail for plan enforcement
 	toolPolicy    *tool.PolicyConfig       // V27: Tool policy configuration (pointer so free mode can mutate it live)
-	gateMu        sync.Mutex               // V62: guards the free-mode/first-class-tools mutate-then-reset window on toolPolicy and the shared shell tool's Policy, since Discord dispatches messages (and thus handleDiscordMessage) concurrently per-message
 	rateLimiter   *safety.UserRateLimiter  // V28: Per-user rate limiting
 	toolGate      *stage.ToolRelevanceGate // P-008: Tool relevance gate
 	commitStore   *commitments.Store       // V61: Commitments store for promise tracking
-	ttsClient     *tts.Client               // V61: Voicebox TTS client
-	ttsConfig     tts.Config                // V61: TTS configuration
-	contextAgent     *agent.ContextAgent        // V76: Compress workspace identity into short context block
-	pendingWorkMu   sync.Mutex
-	pendingWork     map[string]pendingWorkStart
-	channelIDMu     sync.RWMutex                // Protects channelID for concurrent access
-	channelID       string                    // Current conversation channel ID for event routing
-	reviewStore     *reviewResultStore         // V77: Pending Mango review results for feedback injection
-	memoryStoreLocal *memory.MarkdownStore      // V77: Local memory store for automatic recall
-	memInjector     *MemoryInjector             // V79: Smart memory injection (search vs recent)
-	coreIdentity    *CoreIdentityBlock          // V83: Permanent identity block — always in system prompt
-
-	// V74: Interactive tool approval — blocking wait for Discord button responses
-	approvalWaitMu sync.Mutex
-	approvalWait   map[string]chan approvalOutcome
+	pendingWorkMu sync.Mutex
+	pendingWork   map[string]pendingWorkStart
 
 	// Cached static system content — built once, reused every message.
 	staticSystemText string // For text-based provider path
@@ -182,16 +153,13 @@ type conversationContext struct {
 
 func executeServe(args []string) {
 	serveCmd := flag.NewFlagSet("serve", flag.ExitOnError)
-	configPath := serveCmd.String("config", "prizm.yaml", "Path to prizm.yaml configuration file")
-	portFlag := serveCmd.Int("port", 0, "Health check server port (default: prizm.port from config, then 8321)")
+	configPath := serveCmd.String("config", "prism.yaml", "Path to prism.yaml configuration file")
+	portFlag := serveCmd.Int("port", 0, "Health check server port (default: prism.port from config, then 8321)")
 	busURL := serveCmd.String("bus-url", "", "NATS bus URL (empty = embedded)")
 
 	serveCmd.Parse(args)
 
-	fmt.Println("🔮 Starting Prizm...")
-
-	// V77: Global review store for Mango feedback injection
-	globalReviewStore := newReviewResultStore()
+	fmt.Println("🔮 Starting Prism...")
 
 	// 1. Load configuration
 	cfg, err := orchestrator.LoadConfig(*configPath)
@@ -203,11 +171,10 @@ func executeServe(args []string) {
 		orch        *orchestrator.Orchestrator
 		remClient   *remembrance.Client
 		codexWorker *codexworker.Worker
-		memoryStore *memory.MarkdownStore
 	)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "Error: config file %q not found. Create one with 'prizm init' or specify --config\n", *configPath)
+			fmt.Fprintf(os.Stderr, "Error: config file %q not found. Create one with 'prism init' or specify --config\n", *configPath)
 			os.Exit(1)
 		}
 		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
@@ -216,15 +183,15 @@ func executeServe(args []string) {
 
 	// Override NATS URL if provided
 	if *busURL != "" {
-		cfg.Prizm.NATSURL = *busURL
+		cfg.Prism.NATSURL = *busURL
 	}
 
-	// Port precedence: --port flag → prizm.port from config → 8321. Clients
-	// (prizm status/watch) build URLs from cfg.Prizm.Port, so the server must
+	// Port precedence: --port flag → prism.port from config → 8321. Clients
+	// (prism status/watch) build URLs from cfg.Prism.Port, so the server must
 	// honor the same knob or they point at the wrong port.
 	servePort := *portFlag
 	if servePort == 0 {
-		servePort = cfg.Prizm.Port
+		servePort = cfg.Prism.Port
 	}
 	if servePort == 0 {
 		servePort = 8321
@@ -239,7 +206,7 @@ func executeServe(args []string) {
 	)
 
 	// 2. Start embedded NATS
-	natsURL := cfg.Prizm.NATSURL
+	natsURL := cfg.Prism.NATSURL
 	var natsCleanup func()
 	if natsURL == "" {
 		url, cleanup, err := bus.StartEmbeddedBus(0)
@@ -287,7 +254,7 @@ func executeServe(args []string) {
 	fmt.Printf("  Providers: %d models registered\n", len(providerModelIDs(provReg)))
 
 	// 5. Start session manager
-	if err := os.MkdirAll(cfg.Prizm.DataDir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.Prism.DataDir, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
 		os.Exit(1)
 	}
@@ -297,7 +264,7 @@ func executeServe(args []string) {
 
 	// Token-usage tracker: persist every LLM call routed through the registry so
 	// the dashboard can graph usage over time and surface where tokens go.
-	usageStore, err := usage.NewStore(filepath.Join(cfg.Prizm.DataDir, "usage.db"))
+	usageStore, err := usage.NewStore(filepath.Join(cfg.Prism.DataDir, "usage.db"))
 	if err != nil {
 		fmt.Printf("  Warning: usage tracker failed: %v\n", err)
 		usageStore = nil
@@ -307,7 +274,7 @@ func executeServe(args []string) {
 		fmt.Println("  Usage tracker: ready")
 	}
 
-	dbPath := filepath.Join(cfg.Prizm.DataDir, "sessions.db")
+	dbPath := filepath.Join(cfg.Prism.DataDir, "sessions.db")
 	sessMgr, err := session.NewManager(
 		dbPath,
 		cfg.Sessions.MaxContextMessages,
@@ -325,7 +292,7 @@ func executeServe(args []string) {
 	defer sessMgr.Close()
 	fmt.Println("  Session manager: ready")
 
-	taskStore, err = task.NewStore(filepath.Join(cfg.Prizm.DataDir, "tasks.db"))
+	taskStore, err = task.NewStore(filepath.Join(cfg.Prism.DataDir, "tasks.db"))
 	if err != nil {
 		fmt.Printf("  Warning: task store failed: %v\n", err)
 	} else {
@@ -334,7 +301,7 @@ func executeServe(args []string) {
 	}
 
 	commitStore := func() *commitments.Store {
-		s, e := commitments.NewStoreFromPath(filepath.Join(cfg.Prizm.DataDir, "commitments.db"))
+		s, e := commitments.NewStoreFromPath(filepath.Join(cfg.Prism.DataDir, "commitments.db"))
 		if e != nil {
 			fmt.Printf("  Warning: commitments store failed: %v\n", e)
 			return nil
@@ -342,25 +309,6 @@ func executeServe(args []string) {
 		fmt.Println("  Commitments: ready")
 		return s
 	}()
-	// V61: TTS client — initialized independently of Codex
-	ttsConfig := tts.DefaultConfig()
-	if cfg.Prizm.TTS.Enabled {
-		ttsConfig.Enabled = cfg.Prizm.TTS.Enabled
-		ttsConfig.ProfileID = cfg.Prizm.TTS.ProfileID
-		ttsConfig.Engine = cfg.Prizm.TTS.Engine
-		ttsConfig.VoiceboxURL = cfg.Prizm.TTS.VoiceboxURL
-		ttsConfig.MaxChars = cfg.Prizm.TTS.MaxChars
-	}
-	var ttsClient *tts.Client
-	if ttsConfig.Enabled {
-		ttsClient = tts.NewClient(ttsConfig.VoiceboxURL)
-		profileDisplay := ttsConfig.ProfileID
-		if len(profileDisplay) > 8 {
-			profileDisplay = profileDisplay[:8]
-		}
-		fmt.Printf("  TTS: ready (engine=%s, profile=%s)\n", ttsConfig.Engine, profileDisplay)
-	}
-
 	if cfg.Codex.Enabled {
 		codexCfg := codexConfigFromOrchestrator(cfg.Codex, cfg)
 		codexWorker, err = codexworker.New(codexCfg)
@@ -422,8 +370,8 @@ func executeServe(args []string) {
 	ctx, cancel := ctxcontext.WithCancel(ctxcontext.Background())
 	defer cancel()
 
-	var crossCoord *crossprizm.Coordinator
-	var crossSvc *crossprizm.Service
+	var crossCoord *crossprism.Coordinator
+	var crossSvc *crossprism.Service
 	if cfg.Bridge.Enabled {
 		secret := bridgeSecret(cfg)
 		if secret == "" {
@@ -432,7 +380,7 @@ func executeServe(args []string) {
 		}
 		allowedSubjects := cfg.Bridge.AllowedSubjects
 		if len(allowedSubjects) == 0 {
-			allowedSubjects = crossprizm.DefaultSubjects()
+			allowedSubjects = crossprism.DefaultSubjects()
 		}
 
 		var factoryOp *factory.Operator
@@ -444,8 +392,8 @@ func executeServe(args []string) {
 			}
 		}
 
-		crossCoord = crossprizm.NewCoordinator(crossprizm.CoordinatorConfig{
-			InstanceID:             cfg.Prizm.InstanceID,
+		crossCoord = crossprism.NewCoordinator(crossprism.CoordinatorConfig{
+			InstanceID:             cfg.Prism.InstanceID,
 			LeaderInstance:         cfg.Bridge.LeaderInstance,
 			Secret:                 secret,
 			NATS:                   natsConn,
@@ -458,30 +406,28 @@ func executeServe(args []string) {
 			ReportOnly:             true,
 		})
 
-		crossSvc, err = crossprizm.NewService(natsConn, crossprizm.ServiceConfig{
-			InstanceID:      cfg.Prizm.InstanceID,
+		crossSvc, err = crossprism.NewService(natsConn, crossprism.ServiceConfig{
+			InstanceID:      cfg.Prism.InstanceID,
 			Secret:          secret,
 			AllowedSubjects: allowedSubjects,
 			MaxAge:          5 * time.Minute,
-		}, func(ctx ctxcontext.Context, subject string, msg crossprizm.Message) (*crossprizm.Message, error) {
+		}, func(ctx ctxcontext.Context, subject string, msg crossprism.Message) (*crossprism.Message, error) {
 			return crossCoord.Handle(ctx, subject, msg)
 		})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating cross-Prizm bridge: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error creating cross-Prism bridge: %v\n", err)
 			os.Exit(1)
 		}
 		if err := crossSvc.Start(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "Error starting cross-Prizm bridge: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error starting cross-Prism bridge: %v\n", err)
 			os.Exit(1)
 		}
 		defer crossSvc.Close()
-		fmt.Printf("  Cross-Prizm: %s listening on %d signed subject(s)\n", cfg.Prizm.InstanceID, len(allowedSubjects))
+		fmt.Printf("  Cross-Prism: %s listening on %d signed subject(s)\n", cfg.Prism.InstanceID, len(allowedSubjects))
 	}
 
 	var discordBots []*discordbot.BotAdapter
 	var factoryMon *factorymonitor.Monitor
-	var telegramBots []*telegram.BotAdapter
-	var slackBots []*slack.BotAdapter
 
 	// V32: State manager, context builder, and plan manager — shared across all channels
 	var stateMgr *state.Manager
@@ -493,436 +439,194 @@ func executeServe(args []string) {
 	var skillReg *skill.Registry
 	var toolExec *tool.Executor
 
-	// V78: Shared infrastructure — initialized before channel loop so all channels have access
-	var guardian *guard.Guard
-	var toolPolicy tool.PolicyConfig
-	var govLoader *governance.Loader
-	var contextAgent *agent.ContextAgent
-	var infraSubs []*nats.Subscription // V78: Infrastructure NATS subs for graceful teardown
-
-
-	// V79: Initialize shared infrastructure before channel loop.
-	// This ensures all channels have access to tools, memory, governance, etc.
-	// regardless of which channel is listed first in the config.
-
-
-	// V21: Build workspace context injection
-	ctxBuildr = nil
-	if cfg.Prizm.Workspace != "" {
-		ctxBuildr = context.NewBuilder(cfg.Prizm.Workspace)
-	} else {
-		// Default: use home directory + .openclaw/workspace
-		ctxBuildr = context.NewBuilder(filepath.Join(os.Getenv("HOME"), ".openclaw", "workspace"))
-	}
-
-	// V21: Create Remembrance client if enabled
-	if cfg.Remembrance.Enabled {
-		remClient = remembrance.NewClientWithTimeout(
-			cfg.Remembrance.URL,
-			remembranceTimeout(cfg),
-		)
-		if remClient.IsAvailable() {
-			fmt.Println("  Remembrance: connected")
-		} else {
-			log.Printf("[WARN] Remembrance enabled but not reachable at %s", cfg.Remembrance.URL)
-			remClient = nil // Disable gracefully
-		}
-	}
-
-	// Local memory store (MarkdownStore fallback)
-	memCfg := cfg.Memory
-	if memCfg.StorePath == "" {
-		memCfg = cfg.Prizm.Memory // fallback to prizm.memory
-	}
-	if memCfg.StorePath != "" {
-		memPath := memCfg.StorePath
-		if !filepath.IsAbs(memPath) {
-			ws := cfg.Prizm.Workspace
-			if ws == "" {
-				ws = "."
-			}
-			memPath = filepath.Join(ws, memPath)
-		}
-		memoryStore = memory.NewMarkdownStore(memPath)
-		fmt.Printf("  Memory: local markdown store at %s\n", memPath)
-
-		// V80: Embedding index for semantic search
-		if memCfg.EmbeddingEnabled {
-			embPath := memCfg.EmbeddingIndexPath
-			if embPath == "" {
-				embPath = filepath.Join(memPath, "embeddings.json")
-			}
-			if !filepath.IsAbs(embPath) {
-				embPath = filepath.Join(cfg.Prizm.Workspace, embPath)
-			}
-			embModel := memCfg.EmbeddingModel
-			if embModel == "" {
-				embModel = "nomic-embed-text"
-			}
-			embURL := memCfg.EmbeddingURL
-			if embURL == "" {
-				embURL = "http://localhost:11434"
-			}
-			embDims := memCfg.EmbeddingDimensions
-			if embDims == 0 {
-				embDims = 768
-			}
-
-			embIdx := memory.NewEmbeddingIndex(memory.EmbeddingConfig{
-				Enabled:          true,
-				Model:           embModel,
-				URL:             embURL,
-				Dimensions:      embDims,
-				IndexPath:       embPath,
-				ReindexOnStartup: memCfg.EmbeddingReindexOnStartup,
-			})
-
-			// Load existing index
-			if err := embIdx.Load(); err != nil {
-				log.Printf("[EMBEDDING] failed to load index: %v", err)
-			}
-
-			// Index all memories on startup if configured
-			if memCfg.EmbeddingReindexOnStartup {
-				allMems, _ := memoryStore.ListRecent(ctxcontext.Background(), 0)
-				if len(allMems) > 0 {
-					count, err := embIdx.IndexMemories(ctxcontext.Background(), allMems)
-					if err != nil {
-						log.Printf("[EMBEDDING] indexing failed: %v", err)
-					} else {
-						log.Printf("[EMBEDDING] indexed %d/%d memories", count, len(allMems))
-					}
-				}
-			}
-
-			memoryStore.SetEmbeddingIndex(embIdx)
-			log.Printf("[EMBEDDING] semantic search enabled: model=%s dims=%d", embModel, embDims)
-		}
-	}
-
-	// V79: Smart memory injector — query planner + search + recent modes
-	var memInjector *MemoryInjector
-	if memoryStore != nil {
-		var queryPlanner *memory.QueryPlanner
-		if memCfg.QueryPlannerEnabled {
-			qpModel := memCfg.QueryPlannerModel
-			if qpModel == "" {
-				qpModel = "deepseek-v4-flash:cloud"
-			}
-			qpTimeout := 300 * time.Second // default 5 min
-			if memCfg.QueryPlannerTimeoutS > 0 {
-				qpTimeout = time.Duration(memCfg.QueryPlannerTimeoutS) * time.Second
-			}
-			qpURL := memCfg.OllamaURL
-			if qpURL == "" {
-				qpURL = "http://localhost:11434"
-			}
-			queryPlanner = memory.NewQueryPlanner(memory.QueryPlanConfig{
-				Enabled:   true,
-				Model:     qpModel,
-				OllamaURL: qpURL,
-				Timeout:   qpTimeout,
-				Fallback:  "heuristic",
-			})
-			log.Printf("[MEMORY] query planner enabled: model=%s timeout=%s", qpModel, qpTimeout)
-		}
-		memInjector = NewMemoryInjector(memoryStore, queryPlanner)
-		log.Printf("[MEMORY] smart injector initialized (planner=%v)", memCfg.QueryPlannerEnabled)
-	}
-
-	// V83: Core identity block — permanent identity facts always in system prompt
-	var coreIdentity *CoreIdentityBlock
-	if cfg.Prizm.Workspace != "" {
-		coreIdentity = NewCoreIdentityBlock(cfg.Prizm.Workspace)
-		log.Printf("[MEMORY] core identity block initialized")
-	}
-
-	// V22: Register agent subscriptions against the shared task store.
-	if delegEngine != nil {
-		// Register agent subscriptions
-		for i := range cfg.Agents {
-			a := &cfg.Agents[i]
-			for _, sub := range a.Subscriptions {
-				agentID := a.ID
-				// Subscribe this agent to its configured NATS subjects
-				// The handler runs the agent's pipeline when a task.created event arrives
-				handler := func(agentID string, sub string) func(ctxcontext.Context, *task.Task) error {
-					return func(ctx ctxcontext.Context, t *task.Task) error {
-						log.Printf("[DELEGATION] agent %s received task %s via %s (type: %s)", agentID, t.ID, sub, t.Type)
-						// Task processing will be wired in M3.1d (DelegationStage)
-						return nil
-					}
-				}(agentID, sub)
-				if err := delegEngine.Subscribe(agentID, handler); err != nil {
-					log.Printf("[WARN] failed to subscribe agent %s to %s: %v", agentID, sub, err)
-				}
-			}
-		}
-	}
-
-	// V27/V28: Set up tool executor with full tool suite
-	workspaceRoot := cfg.Prizm.Workspace
-	if workspaceRoot == "" {
-		workspaceRoot = "."
-	}
-
-	// V76: Context agent for compressed identity injection
-	compCfg := agent.DefaultCompressionConfig()
-	if cfg.Prizm.ContextCompression != nil {
-		compCfg = *cfg.Prizm.ContextCompression
-	}
-	if compCfg.Enabled {
-		contextAgent = agent.NewContextAgent(workspaceRoot, compCfg)
-		log.Printf("[CONTEXT] compression enabled (model: %s, ttl: %s)", compCfg.Model, compCfg.CacheTTL)
-
-		// V76: Subscribe context agent to NATS context.requested events.
-		// When prizm.context.requested is published, the context agent
-		// compresses identity and publishes prizm.context.built.
-		if natsConn != nil {
-			ctxAgent := contextAgent // capture for closure
-			sub, err := natsConn.Subscribe("prizm.context.requested", func(msg *nats.Msg) {
-				var payload map[string]any
-				if err := json.Unmarshal(msg.Data, &payload); err != nil {
-					log.Printf("[CONTEXT-AGENT] invalid context.requested event: %v", err)
-					return
-				}
-				taskDesc, _ := payload["task_description"].(string)
-				compressed := ctxAgent.Compress(taskDesc)
-				log.Printf("[CONTEXT-AGENT] compressed context (%d chars) for task: %.50s", len(compressed), taskDesc)
-				// Publish prizm.context.built event
-				eventPayload, _ := json.Marshal(map[string]any{
-					"compressed_text": compressed,
-					"agent_id":       "context",
-					"v":              1,
-				})
-				natsConn.Publish("prizm.context.built", eventPayload)
-			})
-			if err != nil {
-				log.Printf("[CONTEXT-AGENT] failed to subscribe to prizm.context.requested: %v", err)
-			} else {
-				log.Printf("[CONTEXT-AGENT] subscribed to prizm.context.requested")
-			}
-			infraSubs = append(infraSubs, sub)
-		}
-	}
-
-	// V77: Memory extraction subscriber — consumes prizm.memory.extract.requested events
-	// and runs the gate → extract → store pipeline to persist memories.
-	if natsConn != nil && memoryStore != nil {
-		gateModels := []string{"qwen3.5:4b"} // default fallback
-		if len(cfg.Prizm.Memory.ModelFallbackChain) > 0 {
-			gateModels = cfg.Prizm.Memory.ModelFallbackChain
-		} else if cfg.Prizm.Memory.GateModel != "" {
-			gateModels = []string{cfg.Prizm.Memory.GateModel}
-		}
-		ollamaURL := "http://localhost:11434"
-		if cfg.Prizm.Memory.OllamaURL != "" {
-			ollamaURL = cfg.Prizm.Memory.OllamaURL
-		} else if cfg.Prizm.ContextCompression != nil && cfg.Prizm.ContextCompression.OllamaURL != "" {
-			ollamaURL = cfg.Prizm.ContextCompression.OllamaURL
-		}
-		gateExtractor := memory.NewGateExtractor(gateModels, ollamaURL, "")
-		autoExtractor := memory.NewAutoExtractor(gateExtractor, memoryStore, nil) // no event emitter for now
-
-		memSub, err := natsConn.Subscribe("prizm.memory.extract.requested", func(msg *nats.Msg) {
-			var payload map[string]any
-			if err := json.Unmarshal(msg.Data, &payload); err != nil {
-				log.Printf("[MEMORY-EXTRACT] invalid extract.requested event: %v", err)
-				return
-			}
-
-			sessionID, _ := payload["session_id"].(string)
-			agentID, _ := payload["agent_id"].(string)
-			userMsg, _ := payload["user_message"].(string)
-			agentResp, _ := payload["agent_response"].(string)
-
-			log.Printf("[MEMORY-EXTRACT] processing extract request (session=%s, agent=%s, user_msg_len=%d)", sessionID, agentID, len(userMsg))
-
-			turn := memory.ConversationTurn{
-				UserMessage:   userMsg,
-				AgentResponse: agentResp,
-				AgentID:       agentID,
-				SessionID:     sessionID,
-			}
-
-			// V77: Memory extraction with 60s timeout to prevent stuck goroutines
-			extractCtx, extractCancel := ctxcontext.WithTimeout(ctxcontext.Background(), 60*time.Second)
-			if err := autoExtractor.AutoExtract(extractCtx, turn); err != nil {
-				log.Printf("[MEMORY-AUTO] extraction failed: %v", err)
-			}
-			extractCancel()
-		})
-		if err != nil {
-			log.Printf("[MEMORY-EXTRACT] failed to subscribe to prizm.memory.extract.requested: %v", err)
-		} else {
-			log.Printf("[MEMORY-EXTRACT] subscribed to prizm.memory.extract.requested")
-		}
-		infraSubs = append(infraSubs, memSub)
-	}
-
-	readRoots := configuredReadRoots(cfg)
-	writeRoots := configuredWriteRoots(cfg)
-
-	toolReg = tool.NewRegistry()
-	tool.RegisterBuiltinsWithRoots(toolReg, workspaceRoot, 10*1024*1024, readRoots, writeRoots) // all read-only + project tools
-	toolReg.Register(&tool.WriteFileProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
-	toolReg.Register(&tool.CreateDirectoryProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
-	// V35: Direct write tool for autonomous wake actions (auto-approved via policy)
-	toolReg.Register(&tool.WriteFileDirect{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
-	toolReg.Register(&tool.CreateDirectoryDirect{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
-	// V28: Git mutation tools (require approval)
-	protectedBranch := cfg.ProtectedBranch()
-	toolReg.Register(&tool.GitAddTool{ToolPaths: tool.ToolPaths{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots}})
-	toolReg.Register(&tool.GitCommitTool{ToolPaths: tool.ToolPaths{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots}, ProtectedBranch: protectedBranch})
-	toolReg.Register(&tool.GitPushTool{ToolPaths: tool.ToolPaths{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots}, ProtectedBranch: protectedBranch})
-	toolReg.Register(&tool.GitCreatePRTool{})
-	// V32: State management tools
-	// V60: Shell tool for free mode (registered with tier_1 policy for gated mode)
-	shellTool := &tool.ShellTool{
-		Policy:         tool.BuildShellPolicyFromConfig("tier_1", cfg.Shell.Allowlists, cfg.Shell.Defaults.BlockedPatterns),
-		DefaultTimeout: cfg.Shell.Defaults.TimeoutSeconds,
-		MaxOutputBytes: cfg.Shell.Defaults.MaxOutputBytes,
-		MaxStderrBytes: cfg.Shell.Defaults.MaxOutputBytes / 2,
-	}
-	toolReg.Register(shellTool)
-
-	stateMgr = state.NewManager(workspaceRoot)
-	stateMgr.EnsureDir()
-	tool.RegisterStateTools(toolReg, stateMgr)
-
-	// V32: Plan-First Pipeline tools
-	planMgr = plan.NewManager(workspaceRoot)
-	planMgr.EnsureDir()
-	tool.RegisterPlanTools(toolReg, planMgr)
-
-	// Gated loop: RESEARCH-phase tools (web_search + memory_search).
-	// Pass the Remembrance client only when available so memory_search
-	// reports "disabled" instead of dereferencing a nil client.
-	var memSearcher tool.MemorySearcher
-	if remClient != nil {
-		memSearcher = remClient
-	}
-	// Wire local MarkdownStore as fallback for memory_search
-	var localStore tool.LocalMemoryStore
-	if memoryStore != nil {
-		localStore = memoryStore
-		log.Printf("[MEMORY] local MarkdownStore wired as fallback")
-	} else {
-		log.Printf("[MEMORY] WARNING: local MarkdownStore is nil, memory_search will have no fallback")
-	}
-	tool.RegisterResearchTools(toolReg, memSearcher, localStore, tool.WebSearchConfig{})
-
-	// Researcher reference-image tools: fetch/generate/analyze/collect.
-	// Images save under <workspace>/references by default and may target
-	// configured write roots via output_dir.
-	tool.RegisterImageTools(toolReg, imageToolsConfigFromPrizmConfig(cfg, workspaceRoot, writeRoots))
-
-	// V34: Cross-Prizm bridge tool — send messages to remote Prizm instances
-	if crossSvc != nil {
-		toolReg.Register(tool.NewSendCrossMessageTool(crossSvc))
-	}
-
-	// V49: External MCP tool servers — register their tools into the
-	// policy-gated registry so agents can use them like any built-in.
-	if specs := mcpServerSpecs(cfg); len(specs) > 0 {
-		for _, res := range mcp.RegisterServers(ctx, toolReg, specs, mcp.ProcessClientFactory) {
-			if res.Err != nil {
-				fmt.Printf("  MCP %s: error: %v\n", res.Server, res.Err)
-				continue
-			}
-			fmt.Printf("  MCP %s: %d tool(s) registered\n", res.Server, len(res.Tools))
-		}
-	}
-
-	// V54: Skills — discover SKILL.md skills (Claude Code / OpenClaw) under
-	// the workspace and expose them via the use_skill tool + prompt.
-	skillReg = skill.NewRegistry()
-	if n, serr := skillReg.LoadDefault(workspaceRoot); n > 0 || serr != nil {
-		if serr != nil {
-			fmt.Printf("  Skills: %d loaded (%v)\n", n, serr)
-		} else {
-			fmt.Printf("  Skills: %d loaded\n", n)
-		}
-	}
-	tool.RegisterSkillTool(toolReg, skillReg)
-
-	// V77: DelegateTool — allows agents to delegate tasks to other agents
-	if delegEngine != nil {
-		toolReg.Register(tool.NewDelegateTool(delegatorAdapter{Engine: delegEngine}, configuredOrchestratorAgentID(cfg)))
-	}
-
-	// V77: SkillWriteTool — allows agents to create/update SKILL.md files
-	skillsDir := filepath.Join(workspaceRoot, "skills")
-	toolReg.Register(tool.NewSkillWriteTool(skillsDir))
-
-	// V32: Self-Improvement Loop
-	improveMgr = improve.NewManager(workspaceRoot)
-	improveMgr.EnsureDir()
-
-	// V32: Guard rail (plan-first enforcement)
-	guardian = guard.NewGuard(planMgr, ctxBuildr)
-
-	toolPolicy = tool.DefaultPolicyConfig()
-	// Mutation operations require approval
-	toolPolicy.MaxFileSize = 10 * 1024 * 1024 // 10MB for serve mode
-	toolPolicy.WorkspaceRoot = workspaceRoot
-	toolPolicy.AllowedPaths = cfg.Prizm.AllowedPaths
-	toolPolicy.ReadRoots = readRoots
-	toolPolicy.WriteRoots = writeRoots
-	toolPolicy.OrchestratorAgentID = configuredOrchestratorAgentID(cfg)
-	toolPolicy.AutoApproveMCP = cfg.MCPAutoApprove // unattended MCP execution (default off)
-	// V62: safe shell commands (tier_1 allowlist) auto-approve even in
-	// gated mode — the hard blocklist inside EvaluateShellPolicy still
-	// applies regardless of tier.
-	toolPolicy.SafeShellPolicy = tool.BuildShellPolicyFromConfig("tier_1", cfg.Shell.Allowlists, cfg.Shell.Defaults.BlockedPatterns)
-	// V61: Load governance docs and populate frozen paths in tool policy
-	govLoader = governance.NewLoader(cfg.Prizm.Workspace, nil)
-	govLoader.Load()
-	for _, doc := range govLoader.Docs() {
-		for _, fp := range doc.Frontmatter.Governance.FrozenPaths {
-			toolPolicy.FrozenPaths = append(toolPolicy.FrozenPaths, fp)
-			reason := doc.Frontmatter.Governance.Reason
-			if reason == "" {
-				reason = fmt.Sprintf("Path %s is frozen per %s", fp, doc.Name)
-			}
-			if toolPolicy.FrozenPathReasons == nil {
-				toolPolicy.FrozenPathReasons = make(map[string]string)
-			}
-			toolPolicy.FrozenPathReasons[fp] = reason
-		}
-	}
-	toolExec = tool.NewExecutor(toolReg, &toolPolicy)
-	toolExec.SetApprovalStore(approval.NewStore(cfg.Prizm.RunsDir))
-	// V79: Emitter set in Discord case where bot is available (approval cards are Discord-specific)
-
-
 	for _, ch := range cfg.Channels {
 		switch ch.Type {
 		case "discord":
 			bot := discordbot.NewBotAdapter(ch.Token)
 
-			// V79: Set tool executor emitter with Discord bot reference for approval cards
-			if toolExec != nil {
-				discordBot := bot // capture for closure
-				toolExec.SetEmitter(func(eventType, source string, payload map[string]any) {
-					log.Printf("[TOOL-EVENT] %s: %v", eventType, payload)
-					if eventType == "prizm.approval.file_requested" {
-						approvalID, _ := payload["approval_id"].(string)
-						runID, _ := payload["run_id"].(string)
-						targetPath, _ := payload["target_path"].(string)
-						agentName, _ := payload["agent"].(string)
-						preview, _ := payload["preview"].(string)
-						mutationType, _ := payload["mutation_type"].(string)
-						toolName, _ := payload["tool_name"].(string)
-						if approvalID != "" && runID != "" {
-							channelID, _ := payload["_channel_id"].(string)
-							if channelID != "" && discordBot != nil {
-								sendApprovalCard(discordBot, channelID, approvalID, runID, targetPath, agentName, preview, mutationType, toolName)
+			// V21: Build workspace context injection
+			ctxBuildr = nil
+			if cfg.Prism.Workspace != "" {
+				ctxBuildr = context.NewBuilder(cfg.Prism.Workspace)
+			} else {
+				// Default: use home directory + .openclaw/workspace
+				ctxBuildr = context.NewBuilder(filepath.Join(os.Getenv("HOME"), ".openclaw", "workspace"))
+			}
+
+			// V21: Create Remembrance client if enabled
+			if cfg.Remembrance.Enabled {
+				remClient = remembrance.NewClientWithTimeout(
+					cfg.Remembrance.URL,
+					remembranceTimeout(cfg),
+				)
+				if remClient.IsAvailable() {
+					fmt.Println("  Remembrance: connected")
+				} else {
+					log.Printf("[WARN] Remembrance enabled but not reachable at %s", cfg.Remembrance.URL)
+					remClient = nil // Disable gracefully
+				}
+			}
+
+			// V22: Register agent subscriptions against the shared task store.
+			if delegEngine != nil {
+				// Register agent subscriptions
+				for i := range cfg.Agents {
+					a := &cfg.Agents[i]
+					for _, sub := range a.Subscriptions {
+						agentID := a.ID
+						// Subscribe this agent to its configured NATS subjects
+						// The handler runs the agent's pipeline when a task.created event arrives
+						handler := func(agentID string, sub string) func(ctxcontext.Context, *task.Task) error {
+							return func(ctx ctxcontext.Context, t *task.Task) error {
+								log.Printf("[DELEGATION] agent %s received task %s via %s (type: %s)", agentID, t.ID, sub, t.Type)
+								// Task processing will be wired in M3.1d (DelegationStage)
+								return nil
 							}
+						}(agentID, sub)
+						if err := delegEngine.Subscribe(agentID, handler); err != nil {
+							log.Printf("[WARN] failed to subscribe agent %s to %s: %v", agentID, sub, err)
 						}
 					}
-				})
+				}
 			}
+
+			// V27/V28: Set up tool executor with full tool suite
+			workspaceRoot := cfg.Prism.Workspace
+			if workspaceRoot == "" {
+				workspaceRoot = "."
+			}
+
+			readRoots := configuredReadRoots(cfg)
+			writeRoots := configuredWriteRoots(cfg)
+
+			toolReg = tool.NewRegistry()
+			tool.RegisterBuiltinsWithRoots(toolReg, workspaceRoot, 10*1024*1024, readRoots, writeRoots) // all read-only + project tools
+			toolReg.Register(&tool.WriteFileProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
+			toolReg.Register(&tool.CreateDirectoryProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
+			// V35: Direct write tool for autonomous wake actions (auto-approved via policy)
+			toolReg.Register(&tool.WriteFileDirect{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
+			toolReg.Register(&tool.CreateDirectoryDirect{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
+			// V28: Git mutation tools (require approval)
+			protectedBranch := cfg.ProtectedBranch()
+			toolReg.Register(&tool.GitAddTool{ToolPaths: tool.ToolPaths{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots}})
+			toolReg.Register(&tool.GitCommitTool{ToolPaths: tool.ToolPaths{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots}, ProtectedBranch: protectedBranch})
+			toolReg.Register(&tool.GitPushTool{ToolPaths: tool.ToolPaths{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots}, ProtectedBranch: protectedBranch})
+			toolReg.Register(&tool.GitCreatePRTool{})
+			// V32: State management tools
+			// V60: Shell tool for free mode (registered with tier_1 policy for gated mode)
+			shellTool := &tool.ShellTool{
+				Policy:         tool.BuildShellPolicyFromConfig("tier_1", cfg.Shell.Allowlists, cfg.Shell.Defaults.BlockedPatterns),
+				DefaultTimeout: cfg.Shell.Defaults.TimeoutSeconds,
+				MaxOutputBytes: cfg.Shell.Defaults.MaxOutputBytes,
+				MaxStderrBytes: cfg.Shell.Defaults.MaxOutputBytes / 2,
+			}
+			toolReg.Register(shellTool)
+
+			stateMgr = state.NewManager(workspaceRoot)
+			stateMgr.EnsureDir()
+			tool.RegisterStateTools(toolReg, stateMgr)
+
+			// V32: Plan-First Pipeline tools
+			planMgr = plan.NewManager(workspaceRoot)
+			planMgr.EnsureDir()
+			tool.RegisterPlanTools(toolReg, planMgr)
+
+			// Gated loop: RESEARCH-phase tools (web_search + memory_search).
+			// Pass the Remembrance client only when available so memory_search
+			// reports "disabled" instead of dereferencing a nil client.
+			var memSearcher tool.MemorySearcher
+			if remClient != nil {
+				memSearcher = remClient
+			}
+			tool.RegisterResearchTools(toolReg, memSearcher, tool.WebSearchConfig{})
+
+			// Researcher reference-image tools: fetch/generate/analyze/collect.
+			// Images save under <workspace>/references by default and may target
+			// configured write roots via output_dir.
+			tool.RegisterImageTools(toolReg, imageToolsConfigFromPrismConfig(cfg, workspaceRoot, writeRoots))
+
+			// V34: Cross-Prism bridge tool — send messages to remote Prism instances
+			if crossSvc != nil {
+				toolReg.Register(tool.NewSendCrossMessageTool(crossSvc))
+			}
+
+			// V49: External MCP tool servers — register their tools into the
+			// policy-gated registry so agents can use them like any built-in.
+			if specs := mcpServerSpecs(cfg); len(specs) > 0 {
+				for _, res := range mcp.RegisterServers(ctx, toolReg, specs, mcp.ProcessClientFactory) {
+					if res.Err != nil {
+						fmt.Printf("  MCP %s: error: %v\n", res.Server, res.Err)
+						continue
+					}
+					fmt.Printf("  MCP %s: %d tool(s) registered\n", res.Server, len(res.Tools))
+				}
+			}
+
+			// V54: Skills — discover SKILL.md skills (Claude Code / OpenClaw) under
+			// the workspace and expose them via the use_skill tool + prompt.
+			skillReg = skill.NewRegistry()
+			if n, serr := skillReg.LoadDefault(workspaceRoot); n > 0 || serr != nil {
+				if serr != nil {
+					fmt.Printf("  Skills: %d loaded (%v)\n", n, serr)
+				} else {
+					fmt.Printf("  Skills: %d loaded\n", n)
+				}
+			}
+			tool.RegisterSkillTool(toolReg, skillReg)
+
+			// V32: Self-Improvement Loop
+			improveMgr = improve.NewManager(workspaceRoot)
+			improveMgr.EnsureDir()
+
+			// V32: Guard rail (plan-first enforcement)
+			guardian := guard.NewGuard(planMgr, ctxBuildr)
+
+			toolPolicy := tool.DefaultPolicyConfig()
+			// Mutation operations require approval
+			toolPolicy.MaxFileSize = 10 * 1024 * 1024 // 10MB for serve mode
+			toolPolicy.WorkspaceRoot = workspaceRoot
+			toolPolicy.AllowedPaths = cfg.Prism.AllowedPaths
+			toolPolicy.ReadRoots = readRoots
+			toolPolicy.WriteRoots = writeRoots
+			toolPolicy.OrchestratorAgentID = configuredOrchestratorAgentID(cfg)
+			toolPolicy.AutoApproveMCP = cfg.MCPAutoApprove // unattended MCP execution (default off)
+			// V61: Load governance docs and populate frozen paths in tool policy
+			govLoader := governance.NewLoader(cfg.Prism.Workspace, nil)
+			govLoader.Load()
+			for _, doc := range govLoader.Docs() {
+				for _, fp := range doc.Frontmatter.Governance.FrozenPaths {
+					toolPolicy.FrozenPaths = append(toolPolicy.FrozenPaths, fp)
+					reason := doc.Frontmatter.Governance.Reason
+					if reason == "" {
+						reason = fmt.Sprintf("Path %s is frozen per %s", fp, doc.Name)
+					}
+					if toolPolicy.FrozenPathReasons == nil {
+						toolPolicy.FrozenPathReasons = make(map[string]string)
+					}
+					toolPolicy.FrozenPathReasons[fp] = reason
+				}
+			}
+			toolExec = tool.NewExecutor(toolReg, &toolPolicy)
+			toolExec.SetApprovalStore(approval.NewStore(cfg.Prism.RunsDir))
+			toolExec.SetEmitter(func(eventType, source string, payload map[string]any) {
+				log.Printf("[TOOL-EVENT] %s: %v", eventType, payload)
+				// Forward file approval requests to the Discord channel
+				if eventType == "prism.approval.file_requested" {
+					approvalID, _ := payload["approval_id"].(string)
+					runID, _ := payload["run_id"].(string)
+					targetPath, _ := payload["target_path"].(string)
+					agentName, _ := payload["agent"].(string)
+					preview, _ := payload["preview"].(string)
+					if approvalID != "" && runID != "" {
+						// Send approval card to the channel where the conversation is happening
+						// The channel ID is passed via the payload if available
+						channelID, _ := payload["_channel_id"].(string)
+						if channelID != "" && bot != nil {
+							sendFileApprovalCard(bot, channelID, approvalID, runID, targetPath, agentName, preview)
+						}
+					}
+				}
+			})
 
 			convCtx := &conversationContext{
 				router:      rtr,
@@ -930,8 +634,6 @@ func executeServe(args []string) {
 				cfg:         cfg,
 				providers:   provReg,
 				bot:         bot,
-				sender:      &discordSender{bot: bot}, // V78: channel-agnostic sender
-				platform:    PlatformDiscord,            // V78: running on Discord
 				debounce:    msgDebounce,
 				eventLog:    eventLog,
 				cancelReg:   cancelReg,
@@ -957,19 +659,11 @@ func executeServe(args []string) {
 				),
 				toolGate:    stage.NewToolRelevanceGate(true), // P-008: enabled by default
 				commitStore: commitStore,
-			ttsClient: ttsClient,
-			ttsConfig: ttsConfig,
-			contextAgent:  contextAgent,  // V76: compressed context block
-			reviewStore:       globalReviewStore, // V77: Mango review feedback
-			memoryStoreLocal: memoryStore,       // V77: Local memory recall
-			memInjector:     memInjector,          // V79: Smart memory injection
-			coreIdentity:    coreIdentity,           // V83: Permanent identity block
 				stateMgr:    stateMgr,   // V32: shared state manager (same instance as tools)
 				planMgr:     planMgr,    // V32: plan manager
 				improveMgr:  improveMgr, // V32: improvement manager
 				guardian:    guardian,   // V32: guard rail
 				pendingWork: make(map[string]pendingWorkStart),
-				approvalWait: make(map[string]chan approvalOutcome),
 			}
 
 			// Pre-build static system content for all agents
@@ -983,84 +677,42 @@ func executeServe(args []string) {
 			// the typed approve/changes/reject commands do.
 			if natsConn != nil {
 				nc := natsConn
-				// V62: route Discord approve/deny buttons through the same
-				// mutation.Executor the `prizm approval` CLI uses, instead of a
-				// second, hand-rolled apply implementation — this closes the gap
-				// where tool-call approvals (shell, git_*, mcp_*) silently did
-				// nothing (or ran a second time) when approved via Discord, and
-				// keeps safety checks (validateSafety) consistent across both
-				// approval surfaces. SetRegistry reuses the live server's
-				// registry, so git tool AND MCP tool approvals are fully
-				// functional here (unlike the standalone CLI, which has no live
-				// MCP connection).
-				buttonMutExec := mutation.NewExecutor(workspaceRoot, approval.NewStore(cfg.Prizm.RunsDir), writeRoots...)
-				buttonMutExec.SetShellTool(&tool.ShellTool{
-					Policy:         tool.BuildShellPolicyFromConfig("tier_3", cfg.Shell.Allowlists, cfg.Shell.Defaults.BlockedPatterns),
-					DefaultTimeout: cfg.Shell.Defaults.TimeoutSeconds,
-					MaxOutputBytes: cfg.Shell.Defaults.MaxOutputBytes,
-				})
-				buttonMutExec.SetRegistry(toolReg)
-				bot.OnButton(func(customID, userID, userName, channelID string) {
+				bot.OnButton(func(customID, userID, userName string) {
 					log.Printf("[BUTTON] clicked: customID=%q user=%q(%s)", customID, userName, userID)
 
-					// File approval buttons (prizmapprove: prefix)
+					// File approval buttons (prismapprove: prefix)
 					if approvalID, runID, action, ok := decodeFileApprovalButtonID(customID); ok {
 						log.Printf("[BUTTON] file approval: approvalID=%s runID=%s action=%s", approvalID, runID, action)
-						approvedBy := firstNonEmptyCommandArg(userName, userID, "discord")
-						if action == "approve" {
-							result, err := buttonMutExec.ApplyWithRun(ctxcontext.Background(), runID, approvalID, approvedBy)
-							if err != nil {
-								log.Printf("[BUTTON] file approval: apply failed: %v", err)
-								return
-							}
-							if !result.Success {
-								log.Printf("[BUTTON] file approval: apply failed: %s", result.Message)
-								return
-							}
-							log.Printf("[BUTTON] file approval: APPROVED and applied to %s by %s: %s", result.TargetPath, approvedBy, result.Message)
-						// V74: Signal the tool loop that this approval was resolved
-						convCtx.signalApproval(runID, approvalID, approvalOutcome{Approved: true, Message: result.Message})
-						} else if action == "deny" {
-							if err := buttonMutExec.DenyApproval(runID, approvalID, approvedBy, "denied via Discord button"); err != nil {
-								log.Printf("[BUTTON] file approval: deny failed: %v", err)
-								return
-							}
-							log.Printf("[BUTTON] file approval: DENIED by %s", approvedBy)
-						// V74: Signal the tool loop that this approval was denied
-						convCtx.signalApproval(runID, approvalID, approvalOutcome{Approved: false, Message: "tool was denied by user"})
-						}
-						return
-					}
-
-				// Plan approval buttons (plan: prefix)
-					if planID, action, ok := decodePlanButtonID(customID); ok {
-						log.Printf("[BUTTON] plan approval: planID=%s action=%s user=%s channel=%s", planID, action, userName, channelID)
-						// Authorization: only manager-room can approve/reject plans
-						channelRole := cfg.ResolveChannelRole(channelID)
-						if channelRole != "manager-room" {
-							log.Printf("[BUTTON] plan approval DENIED: channel %q has role %q, need manager-room", channelID, channelRole)
+						store := approval.NewStore(cfg.Prism.RunsDir)
+						a, err := store.Load(runID, approvalID)
+						if err != nil {
+							log.Printf("[BUTTON] file approval: failed to load approval: %v", err)
 							return
 						}
-						approvedBy := firstNonEmptyCommandArg(userName, userID, "discord")
-						if planMgr != nil {
-							if action == "approve" {
-								if err := planMgr.ApprovePlan(planID, approvedBy); err != nil {
-									log.Printf("[BUTTON] plan approve failed: %v", err)
-									return
-								}
-								log.Printf("[BUTTON] plan %s APPROVED by %s", planID, approvedBy)
-							} else if action == "reject" {
-								if err := planMgr.AbandonPlan(planID); err != nil {
-									log.Printf("[BUTTON] plan reject failed: %v", err)
-									return
-								}
-								log.Printf("[BUTTON] plan %s REJECTED by %s", planID, approvedBy)
+						if action == "approve" {
+							// Write the file to disk
+							if err := os.MkdirAll(filepath.Dir(a.TargetPath), 0755); err != nil {
+								log.Printf("[BUTTON] file approval: mkdir failed: %v", err)
+								return
 							}
+							if err := os.WriteFile(a.TargetPath, []byte(a.Content), 0644); err != nil {
+								log.Printf("[BUTTON] file approval: write failed: %v", err)
+								return
+							}
+							a.Status = approval.StatusApproved
+							a.ApprovedBy = firstNonEmptyCommandArg(userName, userID, "discord")
+							store.Save(a)
+							log.Printf("[BUTTON] file approval: APPROVED and written to %s by %s", a.TargetPath, a.ApprovedBy)
+						} else if action == "deny" {
+							a.Status = approval.StatusDenied
+							a.ApprovedBy = firstNonEmptyCommandArg(userName, userID, "discord")
+							store.Save(a)
+							log.Printf("[BUTTON] file approval: DENIED by %s", a.ApprovedBy)
 						}
 						return
 					}
 
-					// Workflow feedback buttons (prizmfb: prefix)
+					// Workflow feedback buttons (prismfb: prefix)
 					payload, ok := feedbackButtonPayload(customID, firstNonEmptyCommandArg(userName, userID, "discord"))
 					if !ok {
 						log.Printf("[BUTTON] payload decode failed for customID=%q", customID)
@@ -1071,7 +723,7 @@ func executeServe(args []string) {
 						log.Printf("[BUTTON] marshal failed: %v", mErr)
 						return
 					}
-					if pErr := nc.Publish("prizm.workflow.feedback.response", data); pErr != nil {
+					if pErr := nc.Publish("prism.workflow.feedback.response", data); pErr != nil {
 						log.Printf("[BUTTON] NATS publish failed: %v", pErr)
 						return
 					}
@@ -1087,143 +739,6 @@ func executeServe(args []string) {
 
 			discordBots = append(discordBots, bot)
 			fmt.Printf("  Discord: connecting\n")
-
-		case "telegram":
-			tgBot := telegram.NewBotAdapter(ch.Token, nil)
-			tgSender := &telegramSender{bot: tgBot}
-
-			// Shared infrastructure is initialized before the channel loop (V79).
-			// If toolReg is nil, the config is broken — this should not happen.
-
-			tgConvCtx := &conversationContext{
-				router:           rtr,
-				sessMgr:          sessMgr,
-				cfg:              cfg,
-				providers:        provReg,
-				sender:           tgSender,
-				platform:         PlatformTelegram,
-				debounce:         msgDebounce,
-				eventLog:         eventLog,
-				cancelReg:        cancelReg,
-				ctxBuilder:       ctxBuildr,
-				natsConn:         natsConn,
-				natsURL:          natsURL,
-				actionReg:        actionReg,
-				remClient:        remClient,
-				remSem:           make(chan struct{}, 4),
-				remCache:         newRemembranceCache(60 * time.Second),
-				summarySem:       make(chan struct{}, 1),
-				delegEngine:      delegEngine,
-				taskStore:        taskStore,
-				crossCoord:       crossCoord,
-				autopatcher:      autopatcher,
-				toolExec:         toolExec,
-				toolPolicy:       &toolPolicy,
-				rateLimiter:      safety.NewUserRateLimiter(10, 1, 60, 10),
-				toolGate:         stage.NewToolRelevanceGate(true),
-				commitStore:      commitStore,
-				ttsClient:        ttsClient,
-				ttsConfig:        ttsConfig,
-				contextAgent:     contextAgent,
-				reviewStore:      globalReviewStore,
-				memoryStoreLocal: memoryStore,
-			memInjector:     memInjector,
-			coreIdentity:    coreIdentity,
-				stateMgr:         stateMgr,
-				planMgr:          planMgr,
-				improveMgr:       improveMgr,
-				guardian:         guardian,
-				pendingWork:      make(map[string]pendingWorkStart),
-				approvalWait:     make(map[string]chan approvalOutcome),
-			}
-			tgConvCtx.rebuildStaticSystemContent(&cfg.Agents[0])
-			tgBot.OnMessage(func(msg *telegram.InboundMessage) {
-				tgConvCtx.handleMessage(ChannelMessage{
-					Platform:  PlatformTelegram,
-					ChannelID: msg.ChatID,
-					UserID:    msg.UserID,
-					UserName:  msg.UserName,
-					Content:   msg.Content,
-					MessageID: msg.MessageID,
-					IsBot:     msg.IsBot,
-				})
-			})
-			go func() {
-				if err := tgBot.Start(ctx); err != nil {
-					log.Printf("Telegram bot error: %v", err)
-				}
-			}()
-			fmt.Printf("  Telegram: connecting\n")
-			telegramBots = append(telegramBots, tgBot)
-
-		case "slack":
-			slackBot := slack.NewBotAdapter(ch.Token, nil)
-			slackSender := &slackSender{bot: slackBot}
-
-			// Shared infrastructure is initialized before the channel loop (V79).
-			// If toolReg is nil, the config is broken — this should not happen.
-
-			slackConvCtx := &conversationContext{
-				router:           rtr,
-				sessMgr:          sessMgr,
-				cfg:              cfg,
-				providers:        provReg,
-				sender:           slackSender,
-				platform:         PlatformSlack,
-				debounce:         msgDebounce,
-				eventLog:         eventLog,
-				cancelReg:        cancelReg,
-				ctxBuilder:       ctxBuildr,
-				natsConn:         natsConn,
-				natsURL:          natsURL,
-				actionReg:        actionReg,
-				remClient:        remClient,
-				remSem:           make(chan struct{}, 4),
-				remCache:         newRemembranceCache(60 * time.Second),
-				summarySem:       make(chan struct{}, 1),
-				delegEngine:      delegEngine,
-				taskStore:        taskStore,
-				crossCoord:       crossCoord,
-				autopatcher:      autopatcher,
-				toolExec:         toolExec,
-				toolPolicy:       &toolPolicy,
-				rateLimiter:      safety.NewUserRateLimiter(10, 1, 60, 10),
-				toolGate:         stage.NewToolRelevanceGate(true),
-				commitStore:      commitStore,
-				ttsClient:        ttsClient,
-				ttsConfig:        ttsConfig,
-				contextAgent:     contextAgent,
-				reviewStore:      globalReviewStore,
-				memoryStoreLocal: memoryStore,
-			memInjector:     memInjector,
-			coreIdentity:    coreIdentity,
-				stateMgr:         stateMgr,
-				planMgr:          planMgr,
-				improveMgr:       improveMgr,
-				guardian:         guardian,
-				pendingWork:      make(map[string]pendingWorkStart),
-				approvalWait:     make(map[string]chan approvalOutcome),
-			}
-			slackConvCtx.rebuildStaticSystemContent(&cfg.Agents[0])
-			slackBot.OnMessage(func(msg *slack.InboundMessage) {
-				slackConvCtx.handleMessage(ChannelMessage{
-					Platform:  PlatformSlack,
-					ChannelID: msg.ChannelID,
-					UserID:    msg.UserID,
-					UserName:  msg.UserName,
-					Content:   msg.Content,
-					MessageID: msg.MessageID,
-					IsBot:     msg.IsBot,
-					ThreadTS:  msg.ThreadTS,
-				})
-			})
-			go func() {
-				if err := slackBot.Start(ctx); err != nil {
-					log.Printf("Slack bot error: %v", err)
-				}
-			}()
-			fmt.Printf("  Slack: connecting\n")
-			slackBots = append(slackBots, slackBot)
 
 		default:
 			fmt.Fprintf(os.Stderr, "Warning: unknown channel type %q\n", ch.Type)
@@ -1244,7 +759,7 @@ func executeServe(args []string) {
 
 	apiPort := servePort + 1 // API on port+1 (default 8322)
 	// Serve the dashboard UI from the API server so config/cron editing is
-	// same-origin (no separate `prizm dashboard` process, no CORS).
+	// same-origin (no separate `prism dashboard` process, no CORS).
 	var staticUI http.Handler
 	if h, uiErr := dashboard.StaticFileServer(); uiErr != nil {
 		log.Printf("[WARN] dashboard UI unavailable: %v", uiErr)
@@ -1266,31 +781,23 @@ func executeServe(args []string) {
 		AuthToken:          cfg.API.ResolveAuthToken(),
 		AllowedOrigins:     cfg.API.AllowedOrigins,
 		ConfigDir:          filepath.Dir(*configPath),
-		WorkflowConfigPath: cfg.Prizm.WorkflowConfig,
+		WorkflowConfigPath: cfg.Prism.WorkflowConfig,
 		ConfigPath:         *configPath,
 		SchedulerActions:   schedulerActionList(),
 		StaticUI:           staticUI,
 		Usage:              usageStore,
 		UsageWindows:       usageWindowsFromConfig(cfg),
-		Workspace:          cfg.Prizm.Workspace,
+		Workspace:          cfg.Prism.Workspace,
 
 		MaxRequestBytes:       cfg.API.MaxRequestBytes,
 		MaxWorkspaceFileBytes: cfg.API.MaxWorkspaceFileBytes,
-		MemStore:              memoryStore,
-		RemClient:             remClient,
-		CtxBuilder:            ctxBuildr,
-		MemStoreForInvoke:    memoryStore,
-		MemInjectorForInvoke:  memInjector,
-		CoreIdentityForInvoke: coreIdentity,
-		ToolRegForInvoke:      toolReg,
-		ToolExecForInvoke:     toolExec,
 	})
 	go func() {
 		if err := apiServer.Start(); err != nil {
 			log.Printf("[WARN] API server failed: %v", err)
 		}
 	}()
-	displayHost := cfg.Prizm.BindHost
+	displayHost := cfg.Prism.BindHost
 	if strings.TrimSpace(displayHost) == "" {
 		displayHost = "127.0.0.1"
 	}
@@ -1321,7 +828,7 @@ func executeServe(args []string) {
 	}
 
 	fmt.Println()
-	fmt.Println("🔮 Prizm is running. Press Ctrl+C to stop.")
+	fmt.Println("🔮 Prism is running. Press Ctrl+C to stop.")
 
 	// 11. Start dream cycle scheduler (3AM nightly + event-triggered)
 	if remClient != nil {
@@ -1329,9 +836,9 @@ func executeServe(args []string) {
 	}
 
 	// V32: Start cron-style task scheduler if configured
-	if cfg.Prizm.Scheduler.Enabled {
+	if cfg.Prism.Scheduler.Enabled {
 		sched := scheduler.NewScheduler(&natsPublisherAdapter{conn: natsConn})
-		for _, jobCfg := range cfg.Prizm.Scheduler.Jobs {
+		for _, jobCfg := range cfg.Prism.Scheduler.Jobs {
 			schedule, err := scheduler.ParseCron(jobCfg.Schedule)
 			if err != nil {
 				log.Printf("[SCHEDULER] ERROR parsing cron for job %q: %v", jobCfg.Name, err)
@@ -1346,7 +853,7 @@ func executeServe(args []string) {
 			})
 		}
 		sched.StartInBackground()
-		log.Printf("[SCHEDULER] started with %d job(s)", len(cfg.Prizm.Scheduler.Jobs))
+		log.Printf("[SCHEDULER] started with %d job(s)", len(cfg.Prism.Scheduler.Jobs))
 	}
 
 	// V32/V36: Start wake handler to process scheduled events and interactive
@@ -1378,7 +885,7 @@ func executeServe(args []string) {
 			log.Printf("[WAKE] handler started, listening for scheduled and workflow events")
 		}
 		// V58: generic sub-agent worker — runs delegated task packets as
-		// autonomous sub-agents. Feature-flagged (PRIZM_SUBAGENT_WORKER); a
+		// autonomous sub-agents. Feature-flagged (PRISM_SUBAGENT_WORKER); a
 		// no-op until enabled, so this changes nothing by default.
 		startSubAgentWorker(natsConn, provReg, toolExec, toolReg, cfg)
 		if primaryDiscordBot != nil {
@@ -1410,45 +917,22 @@ func executeServe(args []string) {
 		}
 	}
 
-	// V77: Mango review subscriber — delegates prizm.review.requested to mango agent.
-	var mangoReviewer *mangoReviewer
-	if natsConn != nil && delegEngine != nil && len(discordBots) > 0 {
-		mr, err := startMangoReviewer(natsConn, delegEngine, cfg, discordBots[0], globalReviewStore)
-		if err != nil {
-			log.Printf("[MANGO-REVIEW] WARN failed to start: %v", err)
-		} else {
-			mangoReviewer = mr
-		}
-	}
-
 	// 12. Wait for shutdown signal
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
 
-	fmt.Println("\n🛑 Shutting down Prizm...")
+	fmt.Println("\n🛑 Shutting down Prism...")
 
-	// V78: Graceful teardown — unsubscribe NATS, stop reviewers, stop bots, cleanup
-	for _, sub := range infraSubs {
-		sub.Unsubscribe()
-	}
-	if mangoReviewer != nil {
-		mangoReviewer.Close()
-	}
+	// Cleanup
 	for _, bot := range discordBots {
-		bot.Stop()
-	}
-	for _, bot := range telegramBots {
-		bot.Stop()
-	}
-	for _, bot := range slackBots {
 		bot.Stop()
 	}
 	if natsCleanup != nil {
 		natsCleanup()
 	}
 
-	fmt.Println("✅ Prizm stopped.")
+	fmt.Println("✅ Prism stopped.")
 }
 
 // handleDiscordMessage processes an incoming Discord message through the
@@ -1463,59 +947,27 @@ func executeServe(args []string) {
 //
 // The StreamCallback bridges LLMStage streaming to Discord:
 // LLMStage calls callback(token) → callback sends to Discord via placeholder + edits.
-// getChannelID returns the current channel ID in a thread-safe manner.
-func (cc *conversationContext) getChannelID() string {
-	cc.channelIDMu.RLock()
-	defer cc.channelIDMu.RUnlock()
-	return cc.channelID
-}
-
-// handleDiscordMessage translates a Discord InboundMessage to a ChannelMessage
-// and delegates to the channel-agnostic handleMessage pipeline.
-// Discord-specific command handling (workflow feedback, plan approval, prizm commands)
-// is handled here before entering the general pipeline.
 func (cc *conversationContext) handleDiscordMessage(msg *discordbot.InboundMessage) {
-	// Discord-specific command handling
+	// Step 0: Skip empty or whitespace-only messages
+	trimmed := strings.TrimSpace(msg.Content)
+	if trimmed == "" {
+		return
+	}
+
 	if cc.handleWorkflowFeedbackCommand(msg) {
 		return
 	}
+
+	// Step 0a: Handle plan approval commands ("approve P-XXX" / "reject P-XXX")
 	if cc.planMgr != nil {
-		trimmed := strings.TrimSpace(msg.Content)
 		if strings.HasPrefix(trimmed, "approve ") || strings.HasPrefix(trimmed, "reject ") {
 			if handled := cc.handlePlanApproval(msg); handled {
 				return
 			}
 		}
 	}
-	if cc.handlePrizmCommand(msg) {
-		return
-	}
 
-	// Delegate to channel-agnostic pipeline
-	cc.handleMessage(ChannelMessage{
-		Platform:  PlatformDiscord,
-		ChannelID: msg.ChannelID,
-		UserID:    msg.UserID,
-		UserName:  msg.UserName,
-		Content:   msg.Content,
-		MessageID: msg.MessageID,
-		IsBot:     msg.IsBot,
-		IsDM:      msg.IsDM,
-		GuildID:   msg.GuildID,
-	})
-}
-
-// handleMessage is the channel-agnostic conversation pipeline.
-// All adapters (Discord, Telegram, Slack) route through this method.
-func (cc *conversationContext) handleMessage(msg ChannelMessage) {
-	// Thread-safe channel ID setter for concurrent message dispatch
-	cc.channelIDMu.Lock()
-	cc.channelID = msg.ChannelID
-	cc.channelIDMu.Unlock()
-
-	// Step 0: Skip empty or whitespace-only messages
-	trimmed := strings.TrimSpace(msg.Content)
-	if trimmed == "" {
+	if cc.handlePrismCommand(msg) {
 		return
 	}
 
@@ -1524,7 +976,7 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 			// Message from a listened-to agent — allow through pipeline for capture
 			log.Printf("[AGENT] processing agent message from %s (%s)", msg.UserName, msg.UserID)
 		} else {
-			log.Printf("[AGENT] ignoring bot message from %s (%s); cross-Prizm agents communicate over NATS", msg.UserName, msg.UserID)
+			log.Printf("[AGENT] ignoring Discord bot message from %s (%s); cross-Prism agents communicate over NATS", msg.UserName, msg.UserID)
 			return
 		}
 	}
@@ -1532,36 +984,16 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 	// Tagged-only mode: if the channel has tagged_only=true, skip unless the bot is mentioned
 	channelRoleConfig := cc.cfg.ResolveChannelRoleConfig(msg.ChannelID)
 	if channelRoleConfig != nil && channelRoleConfig.TaggedOnly {
-		// Platform-specific mention detection
+		selfID := cc.bot.SelfID()
 		mentioned := false
-		if cc.platform == PlatformDiscord {
-			selfID := cc.bot.SelfID()
-			if selfID != "" {
-				mentioned = strings.Contains(msg.Content, "<@"+selfID+">") ||
-					strings.Contains(msg.Content, "<@&"+selfID+">")
-			}
-		} else {
-			// On other platforms, always respond in tagged-only channels
-			mentioned = true
+		if selfID != "" {
+			mentioned = strings.Contains(msg.Content, "<@"+selfID+">") ||
+				strings.Contains(msg.Content, "<@&"+selfID+">")
 		}
 		if !mentioned {
 			return
 		}
 	}
-
-	// V62: holdsGateLock/gateMu guard the window during which this message's
-	// free-mode or first-class-tools handling below leaves cc.toolPolicy and
-	// the shared shell tool's Policy in a permissive state. Discord dispatches
-	// messages concurrently (one goroutine per message), so without this lock
-	// a gated channel's concurrent message could transiently observe another
-	// channel's elevated policy. Registered before either mutation site so it
-	// unlocks last, after both sites' own reset defers have run.
-	holdsGateLock := false
-	defer func() {
-		if holdsGateLock {
-			cc.gateMu.Unlock()
-		}
-	}()
 
 	// V60: Free mode — check if this channel is in free mode and the sender is the master user.
 	// Free mode skips phase gates, registers all tools including shell at the channel's tier,
@@ -1572,11 +1004,6 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 		if masterUserID != "" && msg.UserID == masterUserID {
 			freeMode = true
 			log.Printf("[FREE-MODE] activated for master user %s in channel %s", msg.UserID, msg.ChannelID)
-
-			if !holdsGateLock {
-				cc.gateMu.Lock()
-				holdsGateLock = true
-			}
 
 			// Set auto-approve mutations so write_file, git mutations, etc. execute directly
 			cc.toolPolicy.AutoApproveMutations = true
@@ -1594,7 +1021,7 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 			}
 
 			// Emit audit event
-			cc.publishEvent("prizm.free.action", map[string]any{
+			cc.publishEvent("prism.free.action", map[string]any{
 				"user_id":    msg.UserID,
 				"channel_id": msg.ChannelID,
 				"shell_tier": shellTier,
@@ -1629,7 +1056,10 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 	if cc.rateLimiter != nil {
 		if !cc.rateLimiter.Allow(msg.UserID) {
 			log.Printf("[RATE] user %s rate limited in channel %s", msg.UserID, msg.ChannelID)
-			cc.sender.Send(msg.ChannelID, "⚠️ Slow down! You're sending messages too fast. Please wait a moment.")
+			cc.bot.Send(&discordbot.OutboundMessage{
+				ChannelID: msg.ChannelID,
+				Content:   "⚠️ Slow down! You're sending messages too fast. Please wait a moment.",
+			})
 			return
 		}
 	}
@@ -1638,7 +1068,10 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 	injectionCheck := safety.CheckPromptInjection(msg.Content)
 	if injectionCheck.Severity == "critical" {
 		log.Printf("[SECURITY] blocked critical injection attempt from user %s: flags=%v", msg.UserID, injectionCheck.Flags)
-		cc.sender.Send(msg.ChannelID, "⚠️ That message contains potentially dangerous content and was blocked for safety.")
+		cc.bot.Send(&discordbot.OutboundMessage{
+			ChannelID: msg.ChannelID,
+			Content:   "⚠️ That message contains potentially dangerous content and was blocked for safety.",
+		})
 		return
 	}
 	sanitizedContent := msg.Content
@@ -1650,31 +1083,23 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 		log.Printf("[SECURITY] medium-severity flags in input from user %s: flags=%v", msg.UserID, injectionCheck.Flags)
 	}
 
-	if handled := cc.handlePendingWorkStartReply(msg); handled {
+	if cc.handlePendingWorkStartReply(msg) {
 		return
 	}
-
-	codesummaryMatch := codesummary.RequestMatches(sanitizedContent)
-	autopatchMatch := autopatch.RequestMatches(sanitizedContent)
-	log.Printf("[CLASSIFY] channel=%s user=%s codesummary=%v autopatch=%v",
-		msg.ChannelID, msg.UserID, codesummaryMatch, autopatchMatch)
-
-	if codesummaryMatch {
+	if codesummary.RequestMatches(sanitizedContent) {
 		cc.handleCodebaseSummaryRequest(msg, sanitizedContent)
 		return
 	}
-	if autopatchMatch {
+	if autopatch.RequestMatches(sanitizedContent) {
 		cc.handleAutoPatchRequest(msg, sanitizedContent)
 		return
 	}
-	if detected := cc.maybeStartDetectedWork(msg, sanitizedContent); detected {
-		log.Printf("[CLASSIFY] channel=%s user=%s matched=detected_work", msg.ChannelID, msg.UserID)
+	if cc.maybeStartDetectedWork(msg, sanitizedContent) {
 		return
 	}
-	log.Printf("[CLASSIFY] channel=%s user=%s matched=none — falling through to default chat/memory pipeline", msg.ChannelID, msg.UserID)
 
 	// Emit channel received event
-	cc.publishEvent("prizm.channel.received", map[string]any{
+	cc.publishEvent("prism.channel.received", map[string]any{
 		"user_id":    msg.UserID,
 		"channel_id": msg.ChannelID,
 	})
@@ -1692,7 +1117,10 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 	}
 	if gateDecision == stage.RespondLightly {
 		log.Printf("[GATE] light acknowledgment for message from %s in %s", msg.UserName, gateRole)
-		cc.sender.Send(msg.ChannelID, "👍")
+		cc.bot.Send(&discordbot.OutboundMessage{
+			ChannelID: msg.ChannelID,
+			Content:   "👍",
+		})
 		return
 	}
 
@@ -1706,12 +1134,6 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 			return
 		}
 		finalSent = true
-		// Only send a final report if we haven't already delivered the response.
-		// If responseText was sent to Discord, don't send a duplicate status message.
-		if status == "completed" {
-			log.Printf("[REPORT] skipping final report — response already delivered (status=%s)", status)
-			return
-		}
 		cc.sendFinalReport(msg.ChannelID, status, runID, message)
 	}
 	defer func() {
@@ -1731,7 +1153,7 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 	}()
 
 	// Step 3: Find or create an owner-scoped session while preserving channel metadata.
-	sess, ownerID, err := getOrCreateSessionForMessage(cc.sessMgr, cc.cfg, result.AgentID, string(msg.Platform), msg.ChannelID, msg.UserID)
+	sess, ownerID, err := getOrCreateSessionForMessage(cc.sessMgr, cc.cfg, result.AgentID, "discord", msg.ChannelID, msg.UserID)
 	if err != nil {
 		log.Printf("[ERROR] load session: %v", err)
 		finalMessage = "I could not load the conversation session."
@@ -1773,7 +1195,7 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 	}()
 
 	// Step 6: Send typing indicator (Discord-specific)
-	if err := cc.sender.Typing(msg.ChannelID); err != nil {
+	if err := cc.bot.Typing(msg.ChannelID); err != nil {
 		log.Printf("[WARN] typing indicator failed: %v", err)
 	}
 
@@ -1782,13 +1204,12 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 	stateActionKey := cc.cfg.ResolveChannelRole(msg.ChannelID)
 	channelRole := cc.cfg.ResolveChannelRoleConfig(msg.ChannelID)
 	promptSession := sess
+	prompt := cc.buildPrompt(promptSession, agentCfg, stateActionKey, channelRole)
 
 	// Step 7b: Inject Remembrance context (if available, with 60s TTL cache)
-	// V77: Memory injection — try Remembrance first, fall back to local memories.
-	// Fall back also when Remembrance is configured but fails at runtime.
-	// NOTE: buildPrompt is deferred until after memory injection to avoid
-	// building a prompt that will be immediately discarded.
-	memoriesInjected := false
+	// NOTE: This uses the same remembrance.Client as RemembranceStage but applies
+	// session-aware caching and prompt injection that the generic stage can't do.
+	// RemembranceStage is the reusable pipeline component; this is the runtime integration.
 	if cc.remClient != nil {
 		cacheKey := fmt.Sprintf("%s:%s", agentCfg.ID, sess.ID)
 		remCtx := cc.remCache.Get(cacheKey)
@@ -1796,7 +1217,7 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 			var remCtxErr error
 			remCtx, remCtxErr = cc.remClient.BuildContextWithOptions(remembrance.BuildContextRequest{
 				Task:               sanitizedContent,
-				ProjectID:          "prizm",
+				ProjectID:          "prism",
 				AgentID:            agentCfg.ID,
 				OwnerID:            ownerID,
 				LocalRecentSummary: localRecentSummary(sess),
@@ -1812,48 +1233,11 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 		if remCtx != nil {
 			if memoryBlock := remembranceMemoryBlock(remCtx); memoryBlock != "" {
 				promptSession = cloneSessionWithSystemMemory(sess, memoryBlock)
+				prompt = cc.buildPrompt(promptSession, agentCfg, stateActionKey, channelRole)
 				log.Printf("[REMEMBRANCE] injected %d memory sources into shared prompt layer", len(remCtx.SelectedMemories))
-				memoriesInjected = true
 			}
 		}
 	}
-
-	// V79: Smart memory injection — search mode for fresh questions, recent mode for continuations
-	if !memoriesInjected && cc.memInjector != nil {
-		// Choose injection mode based on session context
-		sessionAge := time.Since(sess.StartedAt)
-		mode := ChooseMode(len(sess.Messages), sessionAge)
-		log.Printf("[MEMORY-INJECTOR] attempting injection: mode=%v, msgCount=%d, age=%v, query_len=%d", mode, len(sess.Messages), sessionAge.Round(time.Second), len(sanitizedContent))
-		memBlock := cc.memInjector.InjectMemories(ctxcontext.Background(), mode, sanitizedContent, len(sess.Messages), 800)
-		log.Printf("[MEMORY-INJECTOR] result: block_len=%d", len(memBlock))
-		if memBlock != "" {
-			promptSession = cloneSessionWithSystemMemory(sess, memBlock)
-			log.Printf("[MEMORY] injected memories (mode=%v)", mode)
-			memoriesInjected = true
-		} else {
-			log.Printf("[MEMORY-INJECTOR] empty result, falling through to legacy path")
-		}
-	}
-
-	// Legacy fallback: if smart injector isn't available, use old ListRecent approach
-	if !memoriesInjected && cc.memoryStoreLocal != nil {
-		recentMemories, memErr := cc.memoryStoreLocal.ListRecent(ctxcontext.Background(), 5)
-		if memErr != nil {
-			log.Printf("[MEMORY] local memory recall failed: %v", memErr)
-		} else if len(recentMemories) > 0 {
-			var memBlock strings.Builder
-			memBlock.WriteString("## Recent Memories\n")
-			memBlock.WriteString("The following memories were automatically recalled from local storage:\n\n")
-			for _, m := range recentMemories {
-				memBlock.WriteString(fmt.Sprintf("- **%s** (%s): %s\n", m.Summary, m.Category, truncate(m.Content, 500)))
-			}
-			promptSession = cloneSessionWithSystemMemory(sess, memBlock.String())
-			log.Printf("[MEMORY] injected %d recent local memories into prompt", len(recentMemories))
-		}
-	}
-
-	// Build prompt once, after memory injection is settled
-	prompt := cc.buildPrompt(promptSession, agentCfg, stateActionKey, channelRole)
 
 	// P-008: Evaluate tool relevance gate BEFORE building the prompt
 	// This determines whether to include tools in the LLM request
@@ -1873,10 +1257,6 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 		// OpenClaw's first-class tool model.
 		log.Printf("[TOOL-CHANNEL] first-class tools enabled for agent %q — bypassing gate", agentCfg.ID)
 		gateResult = &stage.GateResult{Decision: stage.ToolDecisionInclude, Reason: "first-class tools: all tools available"}
-		if !holdsGateLock {
-			cc.gateMu.Lock()
-			holdsGateLock = true
-		}
 		cc.toolPolicy.AutoApproveMutations = true
 		defer func() { cc.toolPolicy.AutoApproveMutations = false }()
 	} else {
@@ -1911,9 +1291,9 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 	var accumulatedText string
 	var lastTypingTime time.Time
 
-	cc.sender.Typing(msg.ChannelID) // Initial typing indicator
+	cc.bot.Typing(msg.ChannelID) // Initial typing indicator
 
-	_, placeholderErr := cc.sender.SendPlaceholder(msg.ChannelID, "")
+	_, placeholderErr := cc.bot.SendPlaceholder(msg.ChannelID, "")
 	if placeholderErr != nil {
 		log.Printf("[STREAM] placeholder/typing failed: %v", placeholderErr)
 	}
@@ -1929,7 +1309,7 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 		if now.Sub(lastTypingTime) >= 8*time.Second {
 			lastTypingTime = now
 			go func() {
-				if err := cc.sender.Typing(msg.ChannelID); err != nil {
+				if err := cc.bot.Typing(msg.ChannelID); err != nil {
 					log.Printf("[STREAM] typing refresh failed: %v", err)
 				}
 			}()
@@ -1993,52 +1373,22 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 				log.Printf("[TOOL-GATE] subset: %d tools after filtering", len(chatTools))
 			}
 
-			loopMode := resolveAgentLoop(cc.cfg, agentCfg)
-			log.Printf("[TOOL-CHAT] entering native tool loop with %d tools (mode=%s)", len(chatTools), loopMode)
+			log.Printf("[TOOL-CHAT] entering native tool loop with %d tools", len(chatTools))
 
-			// V71: Route to agentic or classic loop
-			var finalResponse string
-			var toolSummaries []toolCallSummary
-			var modelInfo chatModelInfo
-			var toolErr error
-			if loopMode == "agentic" {
-				finalResponse, toolSummaries, modelInfo, toolErr = cc.runToolLoopAgentic(
-					runCtx,
-					messages,
-					chatTools,
-					agentCfg,
-					msg.ChannelID,
-					placeholderMsgID,
-					run.ID,
-				)
-			} else {
-				finalResponse, toolSummaries, modelInfo, toolErr = cc.runToolLoopChat(
-					runCtx,
-					messages,
-					chatTools,
-					agentCfg,
-					msg.ChannelID,
-					placeholderMsgID,
-					run.ID,
-				)
-			}
+			finalResponse, toolSummaries, toolErr := cc.runToolLoopChat(
+				runCtx,
+				messages,
+				chatTools,
+				agentCfg,
+				msg.ChannelID,
+				placeholderMsgID,
+				run.ID,
+			)
 			if toolErr != nil {
 				log.Printf("[TOOL-CHAT] tool loop failed: %v", toolErr)
 				finalRC.LLMResponse = "I had trouble processing that — the AI service returned an error. Please try again in a moment."
 			} else if finalResponse != "" {
 				finalRC.LLMResponse = finalResponse
-			}
-
-			// The failover chain can silently answer with a different model than
-			// the one this agent is configured with (e.g. a quota-exhausted cloud
-			// model dropping to a local last-resort model). Correct the run record
-			// so [RUN] logs reflect what actually generated the response instead of
-			// the nominal config.
-			if modelInfo.UsedFallback && modelInfo.Model != "" {
-				log.Printf("[TOOL-CHAT] response answered by fallback target %s/%s (configured model was %s/%s, local_fallback=%v)",
-					modelInfo.Provider, modelInfo.Model, agentCfg.Provider, agentCfg.Model, modelInfo.LocalFallback)
-				run.Provider = modelInfo.Provider
-				run.Model = modelInfo.Model
 			}
 
 			// Log tool call summaries
@@ -2127,101 +1477,16 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 	// Deliver the response to Discord as a new message
 	// (typing-only approach: no placeholder message, just send the complete response)
 	if responseText != "" {
-		err := cc.sender.Send(msg.ChannelID, responseText)
+		err := cc.bot.Send(&discordbot.OutboundMessage{
+			ChannelID: msg.ChannelID,
+			Content:   responseText,
+		})
 		if err != nil {
-			log.Printf("[ERROR] failed to send response: %v", err)
-			finalMessage = "I completed the task but could not send the result."
+			log.Printf("[ERROR] failed to send Discord response: %v", err)
+			finalMessage = "I completed the task but could not send the result to Discord."
 		} else {
 			finalStatus = "completed"
 			finalSent = true
-		}
-	}
-
-	// V70: Send plan approval buttons for pending_approval plans created in this run
-// V73: Also notify auto_proceed plans so the user can see what was created
-// V79: Route through ChannelSender — buttons only on platforms that support them
-	if cc.planMgr != nil {
-		if plans, err := cc.planMgr.LoadPlans(); err == nil {
-			for i := range plans {
-				if plans[i].Notified {
-					continue
-				}
-				if plans[i].Status == plan.StatusPendingApproval {
-					planMsg := formatPlanMessage(&plans[i])
-					if cc.sender.SupportsButtons() {
-						// Send with buttons on platforms that support them
-						if sendErr := cc.bot.Send(&planMsg); sendErr != nil {
-							log.Printf("[PLAN] failed to send approval buttons for %s: %v", plans[i].ID, sendErr)
-						} else {
-							plans[i].Notified = true
-							_ = cc.planMgr.UpdatePlan(plans[i].ID, map[string]any{"notified": true})
-						}
-					} else {
-						// Fallback: send plain text
-						if sendErr := cc.sender.Send(msg.ChannelID, planMsg.Content); sendErr != nil {
-							log.Printf("[PLAN] failed to send plan notification for %s: %v", plans[i].ID, sendErr)
-						} else {
-							plans[i].Notified = true
-							_ = cc.planMgr.UpdatePlan(plans[i].ID, map[string]any{"notified": true})
-						}
-					}
-				} else if plans[i].Status == plan.StatusAutoProceed {
-					summary := formatPlanMessage(&plans[i])
-					if sendErr := cc.sender.Send(msg.ChannelID, summary.Content); sendErr != nil {
-						log.Printf("[PLAN] failed to send plan notification for %s: %v", plans[i].ID, sendErr)
-					} else {
-						plans[i].Notified = true
-						_ = cc.planMgr.UpdatePlan(plans[i].ID, map[string]any{"notified": true})
-						log.Printf("[PLAN] sent auto_proceed plan %s notification", plans[i].ID)
-					}
-				}
-			}
-		}
-	}
-
-	// V73: Check for plan completion and notify
-	if cc.planMgr != nil {
-		if plans, err := cc.planMgr.LoadPlans(); err == nil {
-			for _, p := range plans {
-				if p.Status == plan.StatusAutoProceed {
-					completed, total := plan.StepProgress(&p)
-					if total > 0 && completed == total && !p.Notified {
-						// All steps completed — mark plan as completed and notify
-						_ = cc.planMgr.UpdatePlan(p.ID, map[string]any{"status": "completed", "notified": true})
-						completionMsg := fmt.Sprintf("✅ **Plan %s completed** — %s\nAll %d steps done!", p.ID, p.Title, total)
-						if sendErr := cc.sender.Send(msg.ChannelID, completionMsg); sendErr != nil {
-							log.Printf("[PLAN] failed to send completion notification for %s: %v", p.ID, sendErr)
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// V61: TTS — generate voice from response if enabled (platform-aware)
-	if finalSent && responseText != "" && cc.ttsClient != nil && cc.sender.SupportsAudio() {
-		ttsChannelRole := cc.cfg.ResolveChannelRoleConfig(msg.ChannelID)
-		channelTTS := false
-		if ttsChannelRole != nil {
-			channelTTS = ttsChannelRole.TTS
-		}
-		if shouldVoice := tts.ShouldVoice(cc.ttsConfig, channelTTS, len(responseText)); shouldVoice {
-			go func(text, channelID string) {
-				ttsCtx, ttsCancel := ctxcontext.WithTimeout(ctxcontext.Background(), 90*time.Second)
-				defer ttsCancel()
-
-				audio, err := cc.ttsClient.GenerateAndWait(ttsCtx, cc.ttsConfig.ProfileID, text, cc.ttsConfig.Engine)
-				if err != nil {
-					log.Printf("[TTS] failed: %v", err)
-					return
-				}
-				// V79: Send audio through ChannelSender (platform-aware)
-				if err := cc.sender.SendAudio(channelID, audio); err != nil {
-					log.Printf("[TTS] failed to send voice message: %v", err)
-					return
-				}
-				log.Printf("[TTS] sent voice message (%d bytes)", len(audio))
-			}(responseText, msg.ChannelID)
 		}
 	}
 
@@ -2237,7 +1502,7 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 	if cc.commitStore != nil && sanitizedContent != "" && responseText != "" {
 		go func(userText, assistantText, agentID, sessionKey, channel, senderID string) {
 			cc.extractCommitments(userText, assistantText, agentID, sessionKey, channel, senderID)
-		}(sanitizedContent, responseText, result.AgentID, sess.ID, string(msg.Platform), msg.UserID)
+		}(sanitizedContent, responseText, result.AgentID, sess.ID, "discord", msg.UserID)
 	}
 	// Log and publish completion events
 	llmResult := finalRC.Results["llm"]
@@ -2268,24 +1533,16 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 		enqueueLocalMemoryUpdate(cc.sessMgr, cc.cfg, cc.remClient, cc.remSem, cc.remCache, ownerID, msg.UserID, finalRC.Agent, sess.ID, run.ID)
 	}
 
-	// V76: Publish memory extraction event (event-driven, replaces fire-and-forget goroutine).
-	// The context agent or memory extractor subscribes to this event on NATS.
-	if responseText != "" {
-		cc.publishEvent(agent.EventMemoryExtractRequested, map[string]any{
-			"session_id":     sess.ID,
-			"agent_id":       finalRC.Agent,
-			"user_message":    msg.Content,
-			"agent_response":  responseText,
-		})
-	}
-
 	log.Printf("[RUN] %s completed in %s", run, run.Elapsed().Round(time.Millisecond))
 } // sendError sends a user-friendly error message to a Discord channel.
 //lint:ignore U1000 retained for channel error reporting integration
 func (cc *conversationContext) sendError(channelID, message string) {
-	err := cc.sender.Send(channelID, "⚠️ "+message)
+	err := cc.bot.Send(&discordbot.OutboundMessage{
+		ChannelID: channelID,
+		Content:   "⚠️ " + message,
+	})
 	if err != nil {
-		log.Printf("[ERROR] failed to send error message: %v", err)
+		log.Printf("[ERROR] failed to send error message to Discord: %v", err)
 	}
 }
 
@@ -2301,20 +1558,20 @@ func (cc *conversationContext) sendFinalReport(channelID, status, runID, message
 	if strings.TrimSpace(message) != "" {
 		content += ": " + strings.TrimSpace(message)
 	}
-	if err := cc.sender.Send(channelID, content); err != nil {
-		log.Printf("[ERROR] failed to send final report: %v", err)
+	if err := cc.bot.Send(&discordbot.OutboundMessage{ChannelID: channelID, Content: content}); err != nil {
+		log.Printf("[ERROR] failed to send final report to Discord: %v", err)
 	}
 }
 
 func serveLLMTimeout(cfg *orchestrator.Config) time.Duration {
-	if cfg != nil && cfg.Prizm.LLMTimeoutSeconds > 0 {
-		return time.Duration(cfg.Prizm.LLMTimeoutSeconds) * time.Second
+	if cfg != nil && cfg.Prism.LLMTimeoutSeconds > 0 {
+		return time.Duration(cfg.Prism.LLMTimeoutSeconds) * time.Second
 	}
 	return 1200 * time.Second
 }
 
 // V21: Events use per-agent namespace prefixes (<agent-id>.*).
-// System events use the prizm.* namespace.
+// System events use the prism.* namespace.
 // buildAgentConfigMap creates a map of agent ID → AgentConfig for the
 // DelegationStage capability checks.
 func (cc *conversationContext) buildAgentConfigMap() map[string]*orchestrator.AgentConfig {
@@ -2337,7 +1594,6 @@ func (cc *conversationContext) buildAgentConfigMap() map[string]*orchestrator.Ag
 
 // If NATS is not connected, the event is logged but not published.
 // All events include a schema version field for forward compatibility.
-// publishEvent publishes a NATS event with schema version.
 func (cc *conversationContext) publishEvent(subject string, payload map[string]any) {
 	// Add schema version to all events (don't mutate caller's map)
 	eventPayload := make(map[string]any, len(payload)+1)
@@ -2364,31 +1620,6 @@ func (cc *conversationContext) publishEvent(subject string, payload map[string]a
 	log.Printf("[EVENT] → %s", subject)
 }
 
-// publishReviewEvent fires a prizm.review.requested event when a file-mutating tool
-// succeeds. This enables automatic code review (feedback loop 3) via NATS.
-func (cc *conversationContext) publishReviewEvent(toolName string, input map[string]any, agentID string) {
-	// Only fire for file-mutating tools
-	switch toolName {
-	case "write_file", "write_file_proposal", "write_file_direct",
-		"edit_file", "edit_file_proposal",
-		"git_commit", "git_push":
-		// Extract file path if available
-		filePath, _ := input["path"].(string)
-		if filePath == "" {
-			filePath, _ = input["file_path"].(string)
-		}
-		if filePath == "" {
-			filePath = "unknown"
-		}
-		cc.publishEvent(agent.EventReviewRequested, map[string]any{
-			"agent_id":        agentID,
-			"files_changed":   []string{filePath},
-			"task_description": fmt.Sprintf("Auto-review after %s", toolName),
-			"channel_id":      cc.getChannelID(),
-		})
-	}
-}
-
 // findAgentConfig looks up the AgentConfig for a given agent ID.
 func (cc *conversationContext) findAgentConfig(agentID string) *orchestrator.AgentConfig {
 	for i := range cc.cfg.Agents {
@@ -2407,61 +1638,62 @@ func (cc *conversationContext) rebuildStaticSystemContent(agentCfg *orchestrator
 	var sb strings.Builder
 
 	// --- Layer 1: IDENTITY ---
-	// V76: Use context agent compression if available, otherwise fall back to
-	// full SOUL.md dump. Context agent compresses ~15KB of identity into ~300 tokens
-	// that are task-relevant instead of identity wallpaper.
+	// V33: Derive identity from workspace files (SOUL.md, IDENTITY.md) instead of
+	// generic "You are {id}, a {role} assistant". If workspace files have identity
+	// content, use it. Fall back to config id/role only if no identity files exist.
 	identityContent := ""
-	if cc.contextAgent != nil {
-		// Compressed path: context agent reads all workspace files and distills
-		compressed := cc.contextAgent.Compress("") // empty task desc for static cache
-		if compressed != "" {
-			identityContent = compressed
-			cc.hasSoulContent = true
-		}
-	}
-
-	if identityContent == "" {
-		// Fallback: load full SOUL.md/IDENTITY.md (original V33 behavior)
-		contextIdentity := ""
-		if cc.ctxBuilder != nil {
-			builder := context.NewBuilder(cc.ctxBuilder.WorkspaceRoot).WithNamedContexts([]string{"soul", "identity"})
-			injected, err := builder.Build()
-			if err == nil {
-				for _, f := range injected.Files {
-					if f.Name == "soul" && f.Content != "" {
-						contextIdentity = f.Content
-					}
+	contextIdentity := ""
+	if cc.ctxBuilder != nil {
+		builder := context.NewBuilder(cc.ctxBuilder.WorkspaceRoot).WithNamedContexts([]string{"soul", "identity"})
+		injected, err := builder.Build()
+		if err == nil {
+			for _, f := range injected.Files {
+				if f.Name == "soul" && f.Content != "" {
+					contextIdentity = f.Content
 				}
 			}
 		}
+	}
 
-		if contextIdentity != "" {
-			identityContent = contextIdentity
-			cc.hasSoulContent = true
-		} else {
-			identityContent = fmt.Sprintf("You are %s, a %s assistant.", agentCfg.ID, agentCfg.Role)
-		}
+	if contextIdentity != "" {
+		// Use workspace identity content — it's the real source of truth
+		identityContent = contextIdentity
+		cc.hasSoulContent = true
+	} else {
+		// Fall back to config id/role — better than nothing
+		identityContent = fmt.Sprintf("You are %s, a %s assistant.", agentCfg.ID, agentCfg.Role)
 	}
 
 	sb.WriteString("## Who You Are\n")
 	sb.WriteString(identityContent + "\n\n")
 
-	// V83: Core Identity Block — permanent identity facts that never need retrieval.
-	// This eliminates the class of hallucinations where the model forgets its own
-	// name, model, or relationships. Research showed production systems (Letta/MemGPT,
-	// RaMem, Adaptive Recall) all maintain an always-present core memory layer.
-	if cc.coreIdentity != nil {
-		coreBlock := cc.coreIdentity.Build(cc.memoryStoreLocal)
-		if coreBlock != "" {
-			sb.WriteString(coreBlock + "\n\n")
-		}
-	}
-
 	// --- Layer 2: WORKSPACE CONTEXT ---
-	// V72: Open book mode injects only file summaries; full mode loads everything.
-	if contextStr := buildContextString(cc.ctxBuilder, cc.cfg, agentCfg); contextStr != "" {
-		sb.WriteString("## Context\n")
-		sb.WriteString(contextStr + "\n")
+	// Full context files (AGENTS.md, USER.md, MEMORY.md, etc.)
+	// Excluding soul and identity which are already in Layer 1
+	if len(agentCfg.Context) > 0 && cc.ctxBuilder != nil {
+		budget := cc.cfg.Prism.ContextTokenBudget
+		if budget <= 0 {
+			budget = 128000
+		}
+
+		// Build context without soul/identity (already in Layer 1)
+		otherContexts := make([]string, 0, len(agentCfg.Context))
+		for _, c := range agentCfg.Context {
+			if c != "soul" && c != "identity" {
+				otherContexts = append(otherContexts, c)
+			}
+		}
+
+		if len(otherContexts) > 0 {
+			builder := context.NewBuilder(cc.ctxBuilder.WorkspaceRoot).
+				WithNamedContexts(otherContexts).
+				WithTokenBudget(budget)
+			injected, err := builder.BuildCached()
+			if err == nil && injected.FormattedString != "" {
+				sb.WriteString("## Context\n")
+				sb.WriteString(injected.FormattedString + "\n")
+			}
+		}
 	}
 
 	// Layer 3 (Behavior/"How You Respond") and Layer 4 (Tools) are NOT
@@ -2481,31 +1713,37 @@ func (cc *conversationContext) rebuildStaticSystemContent(agentCfg *orchestrator
 	// buildPrompt already has), not done here.
 	var sbChat strings.Builder
 	sbChat.WriteString("## Who You Are\n")
-	if cc.contextAgent != nil {
-		sbChat.WriteString(cc.contextAgent.Compress("") + "\n\n")
-	} else {
-		sbChat.WriteString(identityContent + "\n\n")
-	}
+	sbChat.WriteString(identityContent + "\n\n")
 
-	// V83: Core Identity Block for ChatProvider path too
-	if cc.coreIdentity != nil {
-		coreBlock := cc.coreIdentity.Build(cc.memoryStoreLocal)
-		if coreBlock != "" {
-			sbChat.WriteString(coreBlock + "\n\n")
+	if len(agentCfg.Context) > 0 && cc.ctxBuilder != nil {
+		budget := cc.cfg.Prism.ContextTokenBudget
+		if budget <= 0 {
+			budget = 128000
 		}
-	}
 
-	// V72: Open book mode for chat path
-	if contextStr := buildContextString(cc.ctxBuilder, cc.cfg, agentCfg); contextStr != "" {
-		sbChat.WriteString("## Context\n")
-		sbChat.WriteString(contextStr + "\n")
+		otherContexts := make([]string, 0, len(agentCfg.Context))
+		for _, c := range agentCfg.Context {
+			if c != "soul" && c != "identity" {
+				otherContexts = append(otherContexts, c)
+			}
+		}
+
+		if len(otherContexts) > 0 {
+			builder := context.NewBuilder(cc.ctxBuilder.WorkspaceRoot).
+				WithNamedContexts(otherContexts).
+				WithTokenBudget(budget)
+			injected, err := builder.BuildCached()
+			if err == nil && injected.FormattedString != "" {
+				sbChat.WriteString("## Context\n")
+				sbChat.WriteString(injected.FormattedString + "\n")
+			}
+		}
 	}
 
 	postfix := resolveConversationPostfix(agentCfg, nil, cc.hasSoulContent)
 	sbChat.WriteString("\n## How You Respond\n")
 	sbChat.WriteString(postfix + "\n")
 	sbChat.WriteString("\n## Tool Usage\n" + toolUsageGuidance + "\n")
-	sbChat.WriteString(executionDirectives + "\n")
 
 	cc.staticSystemChat = sbChat.String()
 }
@@ -2539,9 +1777,6 @@ func (cc *conversationContext) buildPrompt(sess *session.Session, agentCfg *orch
 	// --- Layer 4: TOOLS (text-based path) ---
 	sb.WriteString("## Tool Usage\n" + toolUsageGuidance + "\n\n")
 
-	// V75: Execution directives — separate from tool usage guidance for model salience
-	sb.WriteString("## Execution Bias\n" + executionDirectives + "\n\n")
-
 	// --- Layer 5: Working state injection ---
 	if cc.stateMgr != nil {
 		if statePrompt := cc.stateMgr.FormatStateForPrompt(); statePrompt != "" {
@@ -2558,14 +1793,6 @@ func (cc *conversationContext) buildPrompt(sess *session.Session, agentCfg *orch
 				sb.WriteString("\n" + plan.FormatPlanForPrompt(activePlan) + "\n")
 				log.Printf("[PLAN] injected active plan %s into prompt", activePlan.ID)
 			}
-		}
-	}
-
-	// --- Layer 6.5: Pending review feedback (V77) ---
-	if cc.reviewStore != nil {
-		if results := cc.reviewStore.PopForChannel(cc.getChannelID()); len(results) > 0 {
-			sb.WriteString("\n" + FormatReviewResultsForPrompt(results) + "\n")
-			log.Printf("[REVIEW-FEEDBACK] injected %d review results into prompt for channel %s", len(results), cc.getChannelID())
 		}
 	}
 
@@ -2593,7 +1820,7 @@ func (cc *conversationContext) buildPrompt(sess *session.Session, agentCfg *orch
 
 	// --- Layer 8: Commitment delivery (V61) ---
 	if cc.commitStore != nil {
-		if commitPrompt := cc.deliverCommitments(agentCfg.ID, sess.ID, string(cc.platform)); commitPrompt != "" {
+		if commitPrompt := cc.deliverCommitments(agentCfg.ID, sess.ID, "discord"); commitPrompt != "" {
 			sb.WriteString("\n" + commitPrompt + "\n")
 			log.Printf("[COMMITMENTS] injected pending commitments into prompt")
 		}
@@ -2673,9 +1900,9 @@ func createProvider(agentCfg orchestrator.AgentConfig, cfg *orchestrator.Config)
 
 	switch agentCfg.Provider {
 	case "ollama":
-		// Base URL precedence: OLLAMA_BASE_URL env → prizm.ollama_url →
+		// Base URL precedence: OLLAMA_BASE_URL env → prism.ollama_url →
 		// provider default (localhost:11434).
-		p, err := createOllamaProvider(agentCfg.Model, resolveOllamaURL("", cfg.Prizm.OllamaURL))
+		p, err := createOllamaProvider(agentCfg.Model, resolveOllamaURL("", cfg.Prism.OllamaURL))
 		if err != nil {
 			return nil, info, fmt.Errorf("ollama provider: %w", err)
 		}
@@ -2757,7 +1984,7 @@ func createClaudeCodeProvider(agentCfg orchestrator.AgentConfig, ccCfg orchestra
 // `codex` binary's subscription session — no API key required. Executable,
 // model, sandbox, and profile come from the top-level codex: config block; the
 // agent's Model field is only the provider-registry label. The --cd workspace
-// resolves from codex.workspace → prizm.workspace → cwd so `codex exec` always
+// resolves from codex.workspace → prism.workspace → cwd so `codex exec` always
 // gets a valid directory.
 func createCodexProvider(agentCfg orchestrator.AgentConfig, cxCfg orchestrator.CodexConfig, cfg *orchestrator.Config) (provider.Provider, error) {
 	c := codexcli.Config{
@@ -2768,7 +1995,7 @@ func createCodexProvider(agentCfg orchestrator.AgentConfig, cxCfg orchestrator.C
 		ApprovalPolicy: cxCfg.ApprovalPolicy,
 		TimeoutMinutes: cxCfg.TimeoutMinutes,
 		ExtraArgs:      cxCfg.ExtraArgs,
-		Workspace:      codexcli.ResolveWorkspace(cxCfg.Workspace, cfg.Prizm.Workspace),
+		Workspace:      codexcli.ResolveWorkspace(cxCfg.Workspace, cfg.Prism.Workspace),
 	}
 	c = codexcli.Normalize(c)
 	if _, err := exec.LookPath(c.Executable); err != nil {
@@ -2793,10 +2020,10 @@ func factoryConfigFromBridge(cfg orchestrator.FactoryBridgeConfig) factory.Confi
 	}
 }
 
-func crossProfilesFromBridge(profiles []orchestrator.BridgeTargetProfile) []crossprizm.TargetProfile {
-	out := make([]crossprizm.TargetProfile, 0, len(profiles))
+func crossProfilesFromBridge(profiles []orchestrator.BridgeTargetProfile) []crossprism.TargetProfile {
+	out := make([]crossprism.TargetProfile, 0, len(profiles))
 	for _, profile := range profiles {
-		out = append(out, crossprizm.TargetProfile{
+		out = append(out, crossprism.TargetProfile{
 			Name:         profile.Name,
 			InstanceID:   profile.InstanceID,
 			Adapter:      profile.Adapter,
@@ -2809,14 +2036,14 @@ func crossProfilesFromBridge(profiles []orchestrator.BridgeTargetProfile) []cros
 func codexConfigFromOrchestrator(cfg orchestrator.CodexConfig, root *orchestrator.Config) codexworker.Config {
 	workspace := cfg.Workspace
 	if workspace == "" && root != nil {
-		workspace = root.Prizm.Workspace
+		workspace = root.Prism.Workspace
 	}
 	if workspace == "" {
 		workspace = "."
 	}
-	dataDir := filepath.Join(".", ".prizm", "data", "codex")
-	if root != nil && root.Prizm.DataDir != "" {
-		dataDir = filepath.Join(root.Prizm.DataDir, "codex")
+	dataDir := filepath.Join(".", ".prism", "data", "codex")
+	if root != nil && root.Prism.DataDir != "" {
+		dataDir = filepath.Join(root.Prism.DataDir, "codex")
 	}
 	return codexworker.Config{
 		Enabled:        cfg.Enabled,
@@ -2835,7 +2062,7 @@ func codexConfigFromOrchestrator(cfg orchestrator.CodexConfig, root *orchestrato
 }
 
 // usageWindowsFromConfig builds the usage tracker's range→window/bucket map,
-// starting from the built-in defaults and applying any prizm.yaml overrides.
+// starting from the built-in defaults and applying any prism.yaml overrides.
 // Durations were already validated by Config.Validate, so parse failures here
 // are treated defensively (the offending field is left at its default).
 func usageWindowsFromConfig(cfg *orchestrator.Config) map[string]api.WindowSpec {
@@ -3053,15 +2280,7 @@ var readOnlyTools = map[string]bool{
 	"analyze_image":            true,
 	"collect_reference_images": true,
 	"plan_list":                true,
-	"plan_create":              true,
-	"plan_update":              true,
-	"plan_approve":             true,
-	"plan_complete":             true,
-	"plan_abandon":             true,
-	"plan_reopen":               true,
 	"state_get":                true,
-	"set_active_task":         true,
-	"clear_active_task":       true,
 }
 
 var mutationProposalTools = map[string]bool{
@@ -3152,33 +2371,8 @@ func mcpServerSpecs(cfg *orchestrator.Config) []mcp.ServerSpec {
 	return specs
 }
 
-// approvalCardCopy returns the title/icon and field label to use for an
-// approval card, based on what's actually being approved — a file
-// mutation (target is a filesystem path) reads differently from a tool
-// call (target is a command, git branch/message, or MCP tool name).
-func approvalCardCopy(mutationType, toolName string) (title, fieldLabel string) {
-	switch mutationType {
-	case approval.MutationWriteFile:
-		return "📝 **File write approval requested**", "Path"
-	case approval.MutationCreateDirectory:
-		return "📁 **Directory creation approval requested**", "Path"
-	case approval.MutationToolCall:
-		switch {
-		case toolName == "shell":
-			return "🖥️ **Shell command approval requested**", "Command"
-		case strings.HasPrefix(toolName, "git_") || toolName == "create_pr":
-			return "🔧 **Git action approval requested**", "Action"
-		case strings.HasPrefix(toolName, "mcp_"):
-			return "🔌 **MCP tool approval requested**", "Tool"
-		}
-	}
-	return "📋 **Approval requested**", "Target"
-}
-
-// sendApprovalCard sends a Discord message with Approve/Deny buttons for a
-// pending approval, whether it's a file mutation or a re-invocable tool call
-// (shell, git, MCP).
-func sendApprovalCard(bot *discordbot.BotAdapter, channelID, approvalID, runID, targetPath, agentName, preview, mutationType, toolName string) {
+// sendFileApprovalCard sends a Discord message with Approve/Deny buttons for a file write approval.
+func sendFileApprovalCard(bot *discordbot.BotAdapter, channelID, approvalID, runID, targetPath, agentName, preview string) {
 	if bot == nil || channelID == "" {
 		return
 	}
@@ -3191,8 +2385,7 @@ func sendApprovalCard(bot *discordbot.BotAdapter, channelID, approvalID, runID, 
 			CustomID: b.CustomID,
 		}
 	}
-	title, fieldLabel := approvalCardCopy(mutationType, toolName)
-	content := fmt.Sprintf("%s\n**Agent:** %s\n**%s:** `%s`\n**Preview:**\n```\n%s\n```", title, agentName, fieldLabel, targetPath, preview)
+	content := fmt.Sprintf("📋 **File write approval requested**\n**Agent:** %s\n**Path:** `%s`\n**Preview:**\n```\n%s\n```", agentName, targetPath, preview)
 	if err := bot.Send(&discordbot.OutboundMessage{
 		ChannelID: channelID,
 		Content:   content,
@@ -3200,18 +2393,4 @@ func sendApprovalCard(bot *discordbot.BotAdapter, channelID, approvalID, runID, 
 	}); err != nil {
 		log.Printf("[APPROVAL-CARD] failed to send: %v", err)
 	}
-}
-
-// delegatorAdapter wraps *delegation.Engine to satisfy tool.Delegator.
-// Engine.Delegate returns (*task.Task, error); the tool interface wants (taskID string, error).
-type delegatorAdapter struct {
-	*delegation.Engine
-}
-
-func (d delegatorAdapter) Delegate(ctx ctxcontext.Context, delegatedBy, delegatedTo, taskType, description string, contextData map[string]any) (string, error) {
-	t, err := d.Engine.Delegate(ctx, delegatedBy, delegatedTo, taskType, description, contextData)
-	if err != nil {
-		return "", err
-	}
-	return t.ID, nil
 }
