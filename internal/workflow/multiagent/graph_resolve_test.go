@@ -5,10 +5,16 @@ import (
 	"testing"
 )
 
-func TestTransitionResolver(t *testing.T) {
-	resolver, err := NewTransitionResolver(validDefinition())
+// graph_resolve_test.go replaces the deleted resolver_test.go: it exercises
+// the exact same test intent and assertions TestTransitionResolver /
+// TestTransitionResolverRejectsInvalidOutcome had against the now-deleted
+// *TransitionResolver, retargeted to CompiledGraph.Resolve via
+// CompatAdaptDefinition — CompiledGraph absorbed TransitionResolver entirely
+// in PR4 (see compiler.go's Resolve doc).
+func TestCompiledGraphResolve(t *testing.T) {
+	graph, err := CompatAdaptDefinition(validDefinition())
 	if err != nil {
-		t.Fatalf("new resolver: %v", err)
+		t.Fatalf("adapt definition: %v", err)
 	}
 
 	tests := []struct {
@@ -40,7 +46,7 @@ func TestTransitionResolver(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, resolveErr := resolver.Resolve(test.role, test.outcome)
+			got, resolveErr := graph.Resolve(test.role, test.outcome)
 			if resolveErr != nil {
 				t.Fatalf("resolve: %v", resolveErr)
 			}
@@ -51,13 +57,13 @@ func TestTransitionResolver(t *testing.T) {
 	}
 }
 
-func TestTransitionResolverRejectsInvalidOutcome(t *testing.T) {
-	resolver, err := NewTransitionResolver(validDefinition())
+func TestCompiledGraphResolveRejectsInvalidOutcome(t *testing.T) {
+	graph, err := CompatAdaptDefinition(validDefinition())
 	if err != nil {
-		t.Fatalf("new resolver: %v", err)
+		t.Fatalf("adapt definition: %v", err)
 	}
 
-	_, err = resolver.Resolve(RolePlanner, OutcomeTestsPassed)
+	_, err = graph.Resolve(RolePlanner, OutcomeTestsPassed)
 	var transitionErr *InvalidTransitionError
 	if !errors.As(err, &transitionErr) {
 		t.Fatalf("expected InvalidTransitionError, got %T: %v", err, err)

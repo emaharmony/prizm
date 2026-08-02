@@ -12,8 +12,9 @@ import (
 
 func TestRunStateValidateAndJSONRoundTrip(t *testing.T) {
 	definition := validDefinition()
+	graph := mustAdaptGraph(t, definition)
 	state := validRunState()
-	if err := state.Validate(definition); err != nil {
+	if err := state.Validate(graph); err != nil {
 		t.Fatalf("valid state rejected: %v", err)
 	}
 
@@ -28,7 +29,7 @@ func TestRunStateValidateAndJSONRoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(state, decoded) {
 		t.Fatalf("state round-trip mismatch:\nwant: %#v\n got: %#v", state, decoded)
 	}
-	if err := decoded.Validate(definition); err != nil {
+	if err := decoded.Validate(graph); err != nil {
 		t.Fatalf("round-tripped state rejected: %v", err)
 	}
 }
@@ -44,7 +45,7 @@ func TestRunStateRepresentsBudgetExhaustion(t *testing.T) {
 		Reason:    "maximum total transitions reached",
 		At:        terminalAt,
 	}
-	if err := state.Validate(definition); err != nil {
+	if err := state.Validate(mustAdaptGraph(t, definition)); err != nil {
 		t.Fatalf("budget-exhausted state rejected: %v", err)
 	}
 }
@@ -104,7 +105,7 @@ func TestRunStateRejectsInvariantViolations(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			state := validRunState()
 			test.mutate(&state)
-			err := state.Validate(validDefinition())
+			err := state.Validate(mustAdaptGraph(t, validDefinition()))
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("expected error containing %q, got %v", test.want, err)
 			}

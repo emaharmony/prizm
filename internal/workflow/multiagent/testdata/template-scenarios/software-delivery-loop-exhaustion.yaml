@@ -1,0 +1,41 @@
+# software-delivery-loop-exhaustion.yaml proves templates/software-delivery.yaml's
+# tester -> developer correction loop is actually bounded (loop.maxTraversals: 2
+# on the tester-to-dev edge): a 3rd consecutive tests_failed outcome must stop
+# the run with a budget-exhausted status instead of looping forever.
+#
+# Because this workflow reuses Phase 1's exact "tester" -> "developer" on
+# "tests_failed" vocabulary, its stable edge ID (edge:tester:tests_failed)
+# collides with the package's built-in LoopTesterToDeveloper constant, so the
+# budget name below is the same backward-compatible "max_tester_to_developer_loops"
+# slug Phase 1 always used, not a generic "max_edge:tester:tests_failed_loops"
+# name (see supervisor_types.go's loopBudgetSlug).
+workflow: ../../templates/software-delivery.yaml
+scenarios:
+  - name: tester-loop-exhausted
+    input:
+      id: task-loop-exhaustion
+      description: tests keep failing past the loop's traversal budget
+    script:
+      - role: planner
+        outcome: plan_ready
+      - role: developer
+        outcome: implementation_ready
+      - role: tester
+        outcome: tests_failed
+      - role: developer
+        outcome: implementation_ready
+      - role: tester
+        outcome: tests_failed
+      - role: developer
+        outcome: implementation_ready
+      - role: tester
+        outcome: tests_failed
+    expect:
+      finalStatus: budget_exhausted
+      loopExhausted: max_tester_to_developer_loops
+      nodeVisits:
+        planner: 1
+        developer: 3
+        tester: 3
+      edgeTraversals:
+        "edge:tester:tests_failed": 2

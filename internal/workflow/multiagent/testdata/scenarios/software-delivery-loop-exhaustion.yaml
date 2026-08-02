@@ -1,0 +1,51 @@
+# software-delivery-loop-exhaustion.yaml is a `prism graph test` scenario
+# fixture proving the reference software-delivery workflow's
+# tester -> developer correction loop is actually bounded: the workflow
+# declares `loop.maxTraversals: 3` on the tester-to-dev edge
+# (../scenario-fixtures/software-delivery.yaml), so a 4th consecutive tests_failed
+# outcome must stop the run with a budget-exhausted status rather than
+# looping forever.
+#
+# Note on the expected loopExhausted budget name: this workflow's node/edge
+# vocabulary ("tester" -> "developer" on "tests_failed") is byte-identical
+# to the Phase 1 reference flow's built-in tester/developer correction loop
+# vocabulary, so the loop's stable edge ID (edge:tester:tests_failed)
+# collides with the package's LoopTesterToDeveloper constant and the
+# resulting budget name is the same backward-compatible
+# "max_tester_to_developer_loops" slug Phase 1 always used — not a generic
+# "max_edge:tester:tests_failed_loops" name. See
+# supervisor_types.go's loopBudgetSlug for why.
+workflow: ../scenario-fixtures/software-delivery.yaml
+scenarios:
+  - name: tester-loop-exhausted
+    input:
+      id: task-loop-exhaustion
+      description: tests keep failing past the loop's traversal budget
+    script:
+      - role: planner
+        outcome: plan_ready
+      - role: developer
+        outcome: implementation_ready
+      - role: tester
+        outcome: tests_failed
+      - role: developer
+        outcome: implementation_ready
+      - role: tester
+        outcome: tests_failed
+      - role: developer
+        outcome: implementation_ready
+      - role: tester
+        outcome: tests_failed
+      - role: developer
+        outcome: implementation_ready
+      - role: tester
+        outcome: tests_failed
+    expect:
+      finalStatus: budget_exhausted
+      loopExhausted: max_tester_to_developer_loops
+      nodeVisits:
+        planner: 1
+        developer: 4
+        tester: 4
+      edgeTraversals:
+        "edge:tester:tests_failed": 3

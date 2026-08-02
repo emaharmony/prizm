@@ -59,10 +59,27 @@ type TerminalOutcome struct {
 // multi-agent run. PR2 defines the contract; persistence mechanics arrive in
 // the recovery phase.
 type RunState struct {
-	SchemaVersion       int                 `json:"schema_version"`
-	RunID               string              `json:"run_id"`
-	WorkflowID          string              `json:"workflow_id"`
-	WorkflowVersion     int                 `json:"workflow_version"`
+	SchemaVersion int    `json:"schema_version"`
+	RunID         string `json:"run_id"`
+	WorkflowID    string `json:"workflow_id"`
+	// WorkflowVersion is, going forward, a registry-assigned internal
+	// version (CompiledGraph.RegistryVersion) rather than a user-facing
+	// number — see CompiledGraph.registryVersion's doc (compiler.go). It
+	// stays an int, additive to the two new fields below, so every
+	// historical record (which stamped this from the legacy Definition.Version
+	// int field) keeps decoding and comparing correctly via
+	// CompatAdaptDefinition, which sets registryVersion to that same
+	// Definition.Version value.
+	WorkflowVersion int `json:"workflow_version"`
+	// WorkflowUserVersion is the new, additive, human-facing version string
+	// (CompiledGraph.WorkflowVersion()) — empty for any record persisted
+	// before this field existed.
+	WorkflowUserVersion string `json:"workflow_user_version,omitempty"`
+	// WorkflowFingerprint is the new, additive content fingerprint
+	// (CompiledGraph.Fingerprint()) pinning the exact compiled graph this run
+	// was created against — empty for any record persisted before this field
+	// existed. See RunState.Validate for how it is compared.
+	WorkflowFingerprint string              `json:"workflow_fingerprint,omitempty"`
 	CurrentRole         Role                `json:"current_role"`
 	CurrentTask         TaskReference       `json:"current_task"`
 	WorkspaceID         string              `json:"workspace_id,omitempty"`
@@ -80,9 +97,22 @@ type RunState struct {
 	TerminalOutcome     *TerminalOutcome    `json:"terminal_outcome,omitempty"`
 }
 
-// Validate enforces serialized-state invariants against the workflow
-// definition. It performs no persistence or transition.
-func (s RunState) Validate(definition Definition) error {
+// Validate enforces serialized-state invariants against a compiled graph. It
+// performs no persistence or transition.
+//
+// Before Phase 3 this took the legacy Definition directly; it now takes the
+// CompiledGraph every path (authored-YAML-compiled or
+// CompatAdaptDefinition-adapted) converges on. The workflow-version-equality
+// check is extended, not replaced: it keeps comparing the existing int
+// WorkflowVersion field against graph.RegistryVersion() (backward compatible
+// by construction — see CompiledGraph.registryVersion's doc), and
+// additionally compares WorkflowFingerprint against graph.Fingerprint() only
+// when both sides are non-empty, so a record persisted before the fingerprint
+// field existed (empty on the state side) or a graph with no registry
+// fingerprint yet (empty on the graph side, impossible in practice since
+// CompatAdaptDefinition/Compile always set one, but defensive regardless)
+// never hard-fails on that half of the check.
+func (s RunState) Validate(graph *CompiledGraph) error {
 	var problems []string
 	if s.SchemaVersion != RunStateSchemaVersion {
 		problems = append(problems, fmt.Sprintf("state schema_version must be %d", RunStateSchemaVersion))
@@ -90,16 +120,22 @@ func (s RunState) Validate(definition Definition) error {
 	if strings.TrimSpace(s.RunID) == "" {
 		problems = append(problems, "state run_id is required")
 	}
-	if s.WorkflowID != definition.ID {
-		problems = append(problems, fmt.Sprintf("state workflow_id %q does not match definition %q", s.WorkflowID, definition.ID))
+	if s.WorkflowID != graph.WorkflowID() {
+		problems = append(problems, fmt.Sprintf("state workflow_id %q does not match definition %q", s.WorkflowID, graph.WorkflowID()))
 	}
-	if s.WorkflowVersion != definition.Version {
+	if s.WorkflowVersion != graph.RegistryVersion() {
 		problems = append(
 			problems,
-			fmt.Sprintf("state workflow_version %d does not match definition version %d", s.WorkflowVersion, definition.Version),
+			fmt.Sprintf("state workflow_version %d does not match definition version %d", s.WorkflowVersion, graph.RegistryVersion()),
 		)
 	}
-	if _, exists := definition.RoleConfig(s.CurrentRole); !exists {
+	if s.WorkflowFingerprint != "" && graph.Fingerprint() != "" && s.WorkflowFingerprint != graph.Fingerprint() {
+		problems = append(problems, fmt.Sprintf(
+			"state workflow_fingerprint %q does not match compiled graph fingerprint %q",
+			s.WorkflowFingerprint, graph.Fingerprint(),
+		))
+	}
+	if _, exists := graph.RoleConfig(s.CurrentRole); !exists {
 		problems = append(problems, fmt.Sprintf("state references unknown current role %q", s.CurrentRole))
 	}
 	if strings.TrimSpace(s.CurrentTask.ID) == "" {
@@ -121,22 +157,39 @@ func (s RunState) Validate(definition Definition) error {
 		problems = append(problems, "state updated_at must not precede created_at")
 	}
 
-	for _, cfg := range definition.Roles {
-		roleState, exists := s.RoleStates[cfg.Role]
-		if !exists {
-			problems = append(problems, fmt.Sprintf("state has no role state for %q", cfg.Role))
+	for _, node := range graph.Nodes() {
+		if node.Kind != "role" {
 			continue
 		}
-		validateRoleState(cfg.Role, roleState, s.WorkspaceID, &problems)
+		roleState, exists := s.RoleStates[node.Role]
+		if !exists {
+			problems = append(problems, fmt.Sprintf("state has no role state for %q", node.Role))
+			continue
+		}
+		validateRoleState(node.Role, roleState, s.WorkspaceID, graph, &problems)
 	}
 	for role := range s.RoleStates {
-		if _, exists := definition.RoleConfig(role); !exists {
+		if _, exists := graph.RoleConfig(role); !exists {
 			problems = append(problems, fmt.Sprintf("state contains unknown role state %q", role))
 		}
 	}
 
 	validateBudgetUsage(s.BudgetUsage, &problems)
-	if s.LatestCompletedRole != "" && !s.LatestCompletedRole.Valid() {
+	// PR6 fix (see the definition registry acceptance test): the pre-PR6
+	// check here was the hardcoded, Phase-1-only s.LatestCompletedRole.Valid()
+	// (types.go's 4-role switch), which rejected every durable run for any
+	// authored WorkflowDefinition using role names outside that fixed
+	// vocabulary — handoff.go's own Validate already generalized the
+	// equivalent check to graph.HasRole/graph.HasOutcome when CompiledGraph
+	// absorbed the legacy TransitionResolver (see handoff.go's "Role/outcome/
+	// route legitimacy, generalized" comment); this call site and
+	// validateRoleState's LastOutcome check below were the two spots that
+	// generalization missed, so a non-legacy-vocabulary graph could compile
+	// and run in-memory (Supervisor.Run) but could never actually pass a
+	// DurableRuntime checkpoint's RunState.Validate call. Fixed the same way
+	// handoff.go already does it: consult the compiled graph's own
+	// per-definition vocabulary instead of the hardcoded switch.
+	if s.LatestCompletedRole != "" && !graph.HasRole(s.LatestCompletedRole) {
 		problems = append(problems, fmt.Sprintf("state has unknown latest_completed_role %q", s.LatestCompletedRole))
 	}
 
@@ -146,7 +199,7 @@ func (s RunState) Validate(definition Definition) error {
 		if s.LatestHandoff.RunID != s.RunID {
 			problems = append(problems, "state latest_handoff.run_id does not match state run_id")
 		}
-		if err := s.LatestHandoff.Validate(definition); err != nil {
+		if err := s.LatestHandoff.Validate(graph); err != nil {
 			problems = append(problems, err.Error())
 		}
 	}
@@ -181,7 +234,7 @@ func (s RunState) Validate(definition Definition) error {
 	return nil
 }
 
-func validateRoleState(role Role, state RoleState, runWorkspaceID string, problems *[]string) {
+func validateRoleState(role Role, state RoleState, runWorkspaceID string, graph *CompiledGraph, problems *[]string) {
 	if state.Role != role {
 		*problems = append(*problems, fmt.Sprintf("role state key %q does not match role field %q", role, state.Role))
 	}
@@ -206,7 +259,10 @@ func validateRoleState(role Role, state RoleState, runWorkspaceID string, proble
 	if state.Elapsed < 0 {
 		*problems = append(*problems, fmt.Sprintf("role %q elapsed must be non-negative", role))
 	}
-	if state.LastOutcome != "" && !state.LastOutcome.Valid() {
+	// See RunState.Validate's LatestCompletedRole fix above for why this
+	// consults the compiled graph's own outcome vocabulary (graph.HasOutcome)
+	// rather than the hardcoded, Phase-1-only TransitionOutcome.Valid().
+	if state.LastOutcome != "" && !graph.HasOutcome(state.LastOutcome) {
 		*problems = append(*problems, fmt.Sprintf("role %q has unsupported last_outcome %q", role, state.LastOutcome))
 	}
 	if state.WorkspaceID != "" {

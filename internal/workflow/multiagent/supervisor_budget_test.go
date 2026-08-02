@@ -118,7 +118,7 @@ func TestSupervisorBudgetEnforcement(t *testing.T) {
 			if got := sink.types()[len(sink.types())-1]; got != event.EventMultiAgentBudgetExhausted {
 				t.Errorf("last event = %q, want %q", got, event.EventMultiAgentBudgetExhausted)
 			}
-			if err := state.Validate(definition); err != nil {
+			if err := state.Validate(mustAdaptGraph(t, definition)); err != nil {
 				t.Fatalf("budget state invalid: %v", err)
 			}
 		})

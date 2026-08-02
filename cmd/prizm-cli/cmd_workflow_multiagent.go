@@ -27,14 +27,39 @@ import (
 
 const referenceManifestSchemaVersion = 1
 
+// referenceWorkflowManifest is the on-disk shape of every durable multiagent
+// run this package starts, whether via the legacy `prism workflow run`
+// reference-workflow path or PR6's `prism graph run` registry-backed path.
+// WorkflowVersion/DefinitionDBPath are PR6 additions (additive, omitempty):
+// WorkflowVersion == 0 (the pre-PR6 zero value) means "legacy run, build the
+// graph from the embedded Definition via CompatAdaptDefinition"; > 0 means
+// "registry-backed run, resolve (WorkflowID, WorkflowVersion) through the
+// DefinitionStore at DefinitionDBPath instead" (Definition is left at its
+// zero value for that case). This is what lets loadReferenceManifest/
+// openReferenceRuntime — and therefore the EXISTING `prism workflow
+// status/cancel/resume` commands and MultiAgentController's API-facing
+// Resume/Cancel/Pause — work unmodified against a `graph run`-started run:
+// they already only ever go through these two functions, which now branch
+// internally on WorkflowVersion instead of assuming a legacy Definition is
+// always present. See run_locator.go's parallel runManifest extension for
+// the same discriminator applied to the RunLocator-based read paths
+// (ListRuns/OpenInspection).
 type referenceWorkflowManifest struct {
-	SchemaVersion int                               `json:"schema_version"`
-	RunID         string                            `json:"run_id"`
-	WorkflowID    string                            `json:"workflow_id"`
-	Input         multiagent.ReferenceWorkflowInput `json:"input"`
-	Definition    multiagent.Definition             `json:"definition"`
-	WorkspaceID   string                            `json:"workspace_id"`
-	WorkspacePath string                            `json:"workspace_path"`
+	SchemaVersion    int                               `json:"schema_version"`
+	RunID            string                            `json:"run_id"`
+	WorkflowID       string                            `json:"workflow_id"`
+	Input            multiagent.ReferenceWorkflowInput `json:"input"`
+	Definition       multiagent.Definition             `json:"definition"`
+	WorkspaceID      string                            `json:"workspace_id"`
+	WorkspacePath    string                            `json:"workspace_path"`
+	WorkflowVersion  int64                             `json:"workflow_version,omitempty"`
+	DefinitionDBPath string                            `json:"definition_db_path,omitempty"`
+}
+
+// registryBacked reports whether m describes a PR6 `graph run`-started run
+// rather than a legacy reference-workflow run.
+func (m referenceWorkflowManifest) registryBacked() bool {
+	return m.WorkflowVersion > 0
 }
 
 type referenceRuntime struct {
@@ -291,8 +316,51 @@ func openReferenceRuntime(runDir string, manifest referenceWorkflowManifest, run
 		store.Close()
 		return nil, err
 	}
+	// Two convergence paths onto the same *multiagent.CompiledGraph: a legacy
+	// reference-workflow manifest builds it from the embedded Definition via
+	// CompatAdaptDefinition (unchanged since PR4 — a signature retarget, not
+	// a logic rewrite; loadReferenceManifest already calls
+	// manifest.Definition.Validate() for this case, so this does not
+	// re-validate). A PR6 registry-backed manifest (graph run) instead
+	// resolves its exact pinned (WorkflowID, WorkflowVersion) through a
+	// DefinitionStore opened at DefinitionDBPath — deliberately Get, never
+	// Latest, so this run keeps executing/resuming against the version it
+	// was started with even after a newer version is registered. This is
+	// what lets `prism workflow status/cancel/resume <run_id>` (and the API's
+	// MultiAgentController, which calls these same functions) work
+	// unmodified for a graph-run-started run.
+	var graph *multiagent.CompiledGraph
+	if manifest.registryBacked() {
+		defStore, defErr := multiagent.NewDefinitionStore(manifest.DefinitionDBPath)
+		if defErr != nil {
+			store.Close()
+			eventStore.Close()
+			return nil, fmt.Errorf("open definition registry for run %s: %w", manifest.RunID, defErr)
+		}
+		reg, getErr := defStore.Get(context.Background(), manifest.WorkflowID, manifest.WorkflowVersion)
+		closeErr := defStore.Close()
+		if getErr != nil {
+			store.Close()
+			eventStore.Close()
+			return nil, fmt.Errorf("resolve registry definition for run %s: %w", manifest.RunID, getErr)
+		}
+		if closeErr != nil {
+			store.Close()
+			eventStore.Close()
+			return nil, fmt.Errorf("close definition registry for run %s: %w", manifest.RunID, closeErr)
+		}
+		graph = reg.Graph
+	} else {
+		var err error
+		graph, err = multiagent.CompatAdaptDefinition(manifest.Definition)
+		if err != nil {
+			store.Close()
+			eventStore.Close()
+			return nil, err
+		}
+	}
 	runtime, err := multiagent.NewDurableRuntime(
-		manifest.Definition, runner, store,
+		graph, runner, store,
 		multiagent.FileRunClaimer{Root: runDir}, eventStore,
 		multiagent.DurableRuntimeOptions{},
 	)
@@ -378,14 +446,23 @@ func loadReferenceManifest(runDir, runID string) (referenceWorkflowManifest, err
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return manifest, fmt.Errorf("decode multi-agent manifest: %w", err)
 	}
-	if manifest.SchemaVersion != referenceManifestSchemaVersion || manifest.RunID != runID || manifest.WorkflowID != multiagent.ReferenceWorkflowID {
+	if manifest.SchemaVersion != referenceManifestSchemaVersion || manifest.RunID != runID {
 		return manifest, fmt.Errorf("unsupported or inconsistent multi-agent manifest for run %s", runID)
 	}
-	if err := manifest.Input.Validate(); err != nil {
-		return manifest, err
-	}
-	if err := manifest.Definition.Validate(); err != nil {
-		return manifest, err
+	// A PR6 registry-backed run (graph run) is not the fixed reference
+	// workflow and carries no embedded legacy Definition/ReferenceWorkflowInput
+	// to validate — openReferenceRuntime resolves its graph through the
+	// definition registry instead (see this file's registryBacked doc).
+	if !manifest.registryBacked() {
+		if manifest.WorkflowID != multiagent.ReferenceWorkflowID {
+			return manifest, fmt.Errorf("unsupported or inconsistent multi-agent manifest for run %s", runID)
+		}
+		if err := manifest.Input.Validate(); err != nil {
+			return manifest, err
+		}
+		if err := manifest.Definition.Validate(); err != nil {
+			return manifest, err
+		}
 	}
 	workspacePath, workspaceID, err := referenceWorkspace(manifest.WorkspacePath)
 	if err != nil {

@@ -8,6 +8,21 @@ import (
 	"github.com/emaharmony/prism/internal/retry"
 )
 
+// mustAdaptGraph is the test-only bridge from the legacy Definition fixtures
+// this package's existing tests already build (validDefinition() below,
+// DefaultReferenceDefinition(), etc.) to the *CompiledGraph every Validate
+// method and runtime constructor now takes as of PR4. It exists purely to
+// keep those existing fixtures usable with minimal, mechanical call-site
+// changes across this package's tests.
+func mustAdaptGraph(t *testing.T, definition Definition) *CompiledGraph {
+	t.Helper()
+	graph, err := CompatAdaptDefinition(definition)
+	if err != nil {
+		t.Fatalf("adapt definition: %v", err)
+	}
+	return graph
+}
+
 func TestDefinitionValidate(t *testing.T) {
 	definition := validDefinition()
 	if err := definition.Validate(); err != nil {

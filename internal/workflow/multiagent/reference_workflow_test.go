@@ -137,8 +137,8 @@ func TestReferenceWorkflowDeterministicEndToEnd(t *testing.T) {
 	if state.RoleStates[RoleDeveloper].Visits != 3 ||
 		state.RoleStates[RoleTester].Visits != 3 ||
 		state.RoleStates[RoleReviewer].Visits != 2 ||
-		state.LoopTraversals.TesterToDeveloper != 1 ||
-		state.LoopTraversals.ReviewerToDeveloper != 1 {
+		state.LoopTraversals.Get(LoopTesterToDeveloper) != 1 ||
+		state.LoopTraversals.Get(LoopReviewerToDeveloper) != 1 {
 		t.Fatalf("loop accounting = roles %#v loops %#v", state.RoleStates, state.LoopTraversals)
 	}
 

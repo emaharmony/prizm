@@ -81,6 +81,7 @@ import (
 	"github.com/emaharmony/prism/internal/tool"
 	"github.com/emaharmony/prism/internal/tool/mcp"
 	"github.com/emaharmony/prism/internal/usage"
+	"github.com/emaharmony/prism/internal/workflow/multiagent"
 
 	"github.com/nats-io/nats.go"
 )
@@ -156,6 +157,19 @@ func executeServe(args []string) {
 	configPath := serveCmd.String("config", "prism.yaml", "Path to prism.yaml configuration file")
 	portFlag := serveCmd.Int("port", 0, "Health check server port (default: prism.port from config, then 8321)")
 	busURL := serveCmd.String("bus-url", "", "NATS bus URL (empty = embedded)")
+	// Same flag name and default every other subcommand that touches
+	// multi-agent/workflow run output uses (see main.go's runCmd/workflowRunCmd
+	// etc. and cmd_workflow_multiagent.go's runDir parameter) — the dashboard's
+	// read-only multi-agent endpoints (GET /api/v1/multiagent/runs...) locate
+	// runs under this same directory.
+	runDir := serveCmd.String("run-dir", "./runs", "Directory for run outputs")
+	// PR6: the multi-agent workflow definition registry's own SQLite
+	// database, separate from any single run's per-run multiagent.db. Not
+	// derived from *runDir at flag-declaration time (flag defaults must be
+	// static string literals; *runDir isn't populated until Parse() below
+	// runs) — a caller overriding --run-dir should override this too if they
+	// want it colocated.
+	definitionsDBPath := serveCmd.String("definitions-db", "./runs/multiagent_definitions.db", "Path to the multi-agent workflow definition registry database")
 
 	serveCmd.Parse(args)
 
@@ -766,28 +780,48 @@ func executeServe(args []string) {
 	} else {
 		staticUI = h
 	}
+
+	// PR6: the multi-agent workflow definition registry. A failure to open
+	// it is logged, not fatal — every /api/v1/multiagent/definitions... route
+	// degrades to 503 (definitionStore == nil), matching how other optional
+	// subsystems in this server already degrade rather than blocking startup.
+	var definitionStore *multiagent.DefinitionStore
+	if store, defErr := multiagent.NewDefinitionStore(*definitionsDBPath); defErr != nil {
+		log.Printf("[WARN] multi-agent definition registry unavailable: %v", defErr)
+	} else {
+		definitionStore = store
+	}
+	graphRunWorkspace := cfg.Prism.Workspace
+	if strings.TrimSpace(graphRunWorkspace) == "" {
+		graphRunWorkspace = "."
+	}
+
 	apiServer := api.NewServer(api.Config{
-		Addr:               cfg.BindAddr(apiPort),
-		Orch:               orch,
-		Store:              taskStore,
-		Sessions:           sessMgr,
-		Engine:             delegEngine,
-		Approval:           approvalMgr,
-		Tracker:            delegTracker,
-		AutoPatch:          autopatcher,
-		NATS:               natsConn,
-		Providers:          provReg,
-		InvokeIdleTimeout:  time.Duration(cfg.Sessions.InvokeIdleTimeoutHours) * time.Hour,
-		AuthToken:          cfg.API.ResolveAuthToken(),
-		AllowedOrigins:     cfg.API.AllowedOrigins,
-		ConfigDir:          filepath.Dir(*configPath),
-		WorkflowConfigPath: cfg.Prism.WorkflowConfig,
-		ConfigPath:         *configPath,
-		SchedulerActions:   schedulerActionList(),
-		StaticUI:           staticUI,
-		Usage:              usageStore,
-		UsageWindows:       usageWindowsFromConfig(cfg),
-		Workspace:          cfg.Prism.Workspace,
+		Addr:                 cfg.BindAddr(apiPort),
+		Orch:                 orch,
+		Store:                taskStore,
+		Sessions:             sessMgr,
+		Engine:               delegEngine,
+		Approval:             approvalMgr,
+		Tracker:              delegTracker,
+		AutoPatch:            autopatcher,
+		NATS:                 natsConn,
+		Providers:            provReg,
+		InvokeIdleTimeout:    time.Duration(cfg.Sessions.InvokeIdleTimeoutHours) * time.Hour,
+		AuthToken:            cfg.API.ResolveAuthToken(),
+		AllowedOrigins:       cfg.API.AllowedOrigins,
+		ConfigDir:            filepath.Dir(*configPath),
+		WorkflowConfigPath:   cfg.Prism.WorkflowConfig,
+		ConfigPath:           *configPath,
+		SchedulerActions:     schedulerActionList(),
+		StaticUI:             staticUI,
+		Usage:                usageStore,
+		UsageWindows:         usageWindowsFromConfig(cfg),
+		Workspace:            cfg.Prism.Workspace,
+		MultiAgentRuns:       multiagent.RunLocator{Root: *runDir, DefinitionStore: definitionStore},
+		MultiAgentController: newReferenceMultiAgentController(*runDir, *configPath),
+		DefinitionStore:      definitionStore,
+		WorkflowRunStarter:   newGraphRunStarter(*runDir, *definitionsDBPath, *configPath, graphRunWorkspace),
 
 		MaxRequestBytes:       cfg.API.MaxRequestBytes,
 		MaxWorkspaceFileBytes: cfg.API.MaxWorkspaceFileBytes,

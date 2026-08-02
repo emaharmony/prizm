@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS multiagent_cancellations (
     reason TEXT NOT NULL,
     requested_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS multiagent_pause_requests (
+    run_id TEXT PRIMARY KEY,
+    reason TEXT NOT NULL,
+    requested_at TEXT NOT NULL
+);
 `
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
@@ -301,6 +306,69 @@ func (s *SQLiteDurableRunStore) CancellationRequest(
 		return "", false, fmt.Errorf("multiagent store: load cancellation request: %w", err)
 	}
 	return reason, true, nil
+}
+
+// RequestPause persists an operator pause request without taking the
+// execution claim and without forcing any state transition itself. The
+// active owner (or the next Resume call, for an idle run) observes it at the
+// next role boundary via PauseRequest. This is a purely additive sibling of
+// RequestCancellation/CancellationRequest and does not touch the
+// multiagent_cancellations table.
+func (s *SQLiteDurableRunStore) RequestPause(
+	ctx context.Context,
+	runID string,
+	reason string,
+) error {
+	result, err := s.db.ExecContext(ctx, `
+INSERT INTO multiagent_pause_requests(run_id, reason, requested_at)
+SELECT run_id, ?, ? FROM multiagent_runs WHERE run_id = ?
+ON CONFLICT(run_id) DO UPDATE SET
+    reason = excluded.reason,
+    requested_at = excluded.requested_at
+`, reason, time.Now().UTC().Format(time.RFC3339Nano), runID)
+	if err != nil {
+		return fmt.Errorf("multiagent store: request pause: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("multiagent store: pause rows affected: %w", err)
+	}
+	if count == 0 {
+		return fmt.Errorf("%w: %s", ErrRunNotFound, runID)
+	}
+	return nil
+}
+
+// PauseRequest returns the latest persisted pause request, if any.
+func (s *SQLiteDurableRunStore) PauseRequest(
+	ctx context.Context,
+	runID string,
+) (string, bool, error) {
+	var reason string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT reason FROM multiagent_pause_requests WHERE run_id = ?`, runID,
+	).Scan(&reason)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("multiagent store: load pause request: %w", err)
+	}
+	return reason, true, nil
+}
+
+// ClearPauseRequest removes any persisted pause request for runID. It is a
+// no-op (not an error) when no request is present, so callers can clear
+// unconditionally on resume.
+func (s *SQLiteDurableRunStore) ClearPauseRequest(ctx context.Context, runID string) error {
+	if _, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM multiagent_pause_requests WHERE run_id = ?`,
+		runID,
+	); err != nil {
+		return fmt.Errorf("multiagent store: clear pause request: %w", err)
+	}
+	return nil
 }
 
 // Close releases the SQLite connection.

@@ -1,10 +1,12 @@
 package multiagent
 
+import "fmt"
+
 func validateLoopTraversalCounts(counts LoopTraversalCounts, problems *[]string) {
-	if counts.TesterToDeveloper < 0 {
-		*problems = append(*problems, "state tester-to-developer loop traversals must be non-negative")
-	}
-	if counts.ReviewerToDeveloper < 0 {
-		*problems = append(*problems, "state reviewer-to-developer loop traversals must be non-negative")
+	for kind, value := range counts.Counts {
+		if value < 0 {
+			*problems = append(*problems, fmt.Sprintf(
+				"state loop traversal count for %q must be non-negative", kind))
+		}
 	}
 }

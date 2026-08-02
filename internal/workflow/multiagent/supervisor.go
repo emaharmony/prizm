@@ -24,22 +24,45 @@ type SupervisorOptions struct {
 
 // Supervisor is the single logical writer of one in-memory multi-agent run.
 type Supervisor struct {
-	definition   Definition
+	graph        *CompiledGraph
+	entryRole    Role
 	runner       RoleRunner
 	events       EventSink
-	resolver     *TransitionResolver
 	now          func() time.Time
 	newHandoffID func() string
 	logger       *slog.Logger
 }
 
-// NewSupervisor constructs an in-memory supervisor from a validated definition.
+// NewSupervisor constructs an in-memory supervisor from an already-compiled
+// graph. Before Phase 3 this took a legacy Definition and built its own
+// *TransitionResolver, validating the definition itself
+// (definition.Validate()) as part of construction; CompiledGraph absorbed
+// TransitionResolver entirely, and validation/compilation now happens before
+// NewSupervisor is ever called (ValidateDefinition+Compile for an authored
+// graph, Definition.Validate for a CompatAdaptDefinition-adapted one) — so
+// construction here is mostly a nil check, not a validate-and-build step.
+// CompiledGraph is already immutable (every accessor returns an independent
+// copy), so there is no cloneDefinition-equivalent defensive copy to make.
+//
+// The one exception is the entry role: NewSupervisor resolves and caches
+// graph.EntryNodeID()'s role here, once, so Run() (and newRunState, which it
+// calls on every run) never needs to re-derive it and can never silently
+// fall back to a hardcoded role. This should be unreachable in practice —
+// PR2's ValidateDefinition (structural.entry-node-missing and friends)
+// already guarantees a compiled graph's entry node exists and resolves to a
+// role/terminal node — but catching it here, at construction time, means a
+// caller gets a clear error immediately instead of Run() failing
+// confusingly (or worse, silently defaulting to the wrong role) on every
+// invocation.
 func NewSupervisor(
-	definition Definition,
+	graph *CompiledGraph,
 	runner RoleRunner,
 	events EventSink,
 	options SupervisorOptions,
 ) (*Supervisor, error) {
+	if graph == nil {
+		return nil, errors.New("multiagent: compiled graph is required")
+	}
 	if runner == nil {
 		return nil, errors.New("multiagent: role runner is required")
 	}
@@ -47,10 +70,12 @@ func NewSupervisor(
 		return nil, errors.New("multiagent: event sink is required")
 	}
 
-	definition = cloneDefinition(definition)
-	resolver, err := NewTransitionResolver(definition)
-	if err != nil {
-		return nil, err
+	entryNode, ok := graph.Node(graph.EntryNodeID())
+	if !ok || entryNode.Kind != "role" {
+		return nil, fmt.Errorf(
+			"multiagent: compiled graph entry node %q is not a valid role node (kind=%q, found=%t)",
+			graph.EntryNodeID(), entryNode.Kind, ok,
+		)
 	}
 
 	now := options.Clock
@@ -69,10 +94,10 @@ func NewSupervisor(
 	}
 
 	return &Supervisor{
-		definition:   definition,
+		graph:        graph,
+		entryRole:    entryNode.Role,
 		runner:       runner,
 		events:       events,
-		resolver:     resolver,
 		now:          now,
 		newHandoffID: newHandoffID,
 		logger:       logger,
@@ -101,7 +126,7 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (RunState, err
 		}
 
 		role := state.CurrentRole
-		roleConfig, _ := s.definition.RoleConfig(role)
+		roleConfig, _ := s.graph.RoleConfig(role)
 		s.enterRole(&state, role)
 
 		startedAt := s.now().UTC()
@@ -123,11 +148,11 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (RunState, err
 		if runErr != nil {
 			return s.failRole(state, role, &RoleExecutionError{Role: role, Cause: runErr})
 		}
-		if err := validateRoleRunResult(result); err != nil {
+		if err := validateRoleRunResult(s.graph, result); err != nil {
 			return s.failRole(state, role, &RoleExecutionError{Role: role, Cause: err})
 		}
 
-		transition, err := s.resolver.Resolve(role, result.Outcome)
+		transition, err := s.graph.Resolve(role, result.Outcome)
 		if err != nil {
 			return s.failRole(state, role, err)
 		}
@@ -170,8 +195,8 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (RunState, err
 			slog.Int("iteration", state.TransitionCount),
 		)
 
-		if loopKind, ok := correctionLoop(transition); ok {
-			state.LoopTraversals.increment(loopKind)
+		if loop, ok := s.graph.LoopFor(transition); ok {
+			state.LoopTraversals.increment(loop.Kind)
 			s.emitLoopTraversal(state, transition)
 		}
 
@@ -186,25 +211,45 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (RunState, err
 
 func (s *Supervisor) newRunState(request RunRequest) RunState {
 	now := s.now().UTC()
-	roleStates := make(map[Role]RoleState, len(s.definition.Roles))
-	for _, cfg := range s.definition.Roles {
-		roleStates[cfg.Role] = RoleState{
-			Role:      cfg.Role,
+	nodes := s.graph.Nodes()
+	roleStates := make(map[Role]RoleState, len(nodes))
+	for _, node := range nodes {
+		if node.Kind != "role" {
+			continue
+		}
+		roleStates[node.Role] = RoleState{
+			Role:      node.Role,
 			Status:    RoleStatusPending,
 			UpdatedAt: now,
 		}
 	}
 	return RunState{
-		SchemaVersion:   RunStateSchemaVersion,
-		RunID:           request.RunID,
-		WorkflowID:      s.definition.ID,
-		WorkflowVersion: s.definition.Version,
-		CurrentRole:     RolePlanner,
-		CurrentTask:     request.Task,
-		Status:          RunStatusRunning,
-		RoleStates:      roleStates,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		SchemaVersion: RunStateSchemaVersion,
+		RunID:         request.RunID,
+		WorkflowID:    s.graph.WorkflowID(),
+		// WorkflowVersion is the registry-assigned internal version
+		// (CompiledGraph.RegistryVersion) rather than the old user-facing
+		// int; WorkflowUserVersion/WorkflowFingerprint are the new additive
+		// fields carrying what used to be implied by the int alone. See
+		// state.go's RunState field docs.
+		WorkflowVersion:     s.graph.RegistryVersion(),
+		WorkflowUserVersion: s.graph.WorkflowVersion(),
+		WorkflowFingerprint: s.graph.Fingerprint(),
+		// CurrentRole is derived from the compiled graph's own entry node
+		// (s.entryRole, resolved once in NewSupervisor from
+		// graph.EntryNodeID()), not hardcoded to RolePlanner. A
+		// CompatAdaptDefinition-derived graph's entry node always IS the
+		// RolePlanner node (Definition.Validate requires it), so the Phase 1
+		// compat path resolves to the exact same role as before; an
+		// authored graph with an arbitrary entry role (e.g. "implementer"
+		// for a Security Review template) now starts there instead of
+		// failing at the very first RoleConfig lookup.
+		CurrentRole: s.entryRole,
+		CurrentTask: request.Task,
+		Status:      RunStatusRunning,
+		RoleStates:  roleStates,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 }
 
@@ -284,20 +329,21 @@ func (s *Supervisor) completeRole(
 }
 
 func (s *Supervisor) checkBeforeRole(state RunState) *BudgetExceededError {
-	if exceeded(state.TransitionCount+1, s.definition.Budgets.MaxTransitions) {
-		return newBudgetError("max_transitions", "", state.TransitionCount+1, s.definition.Budgets.MaxTransitions)
+	budgets := s.graph.Budgets()
+	if exceeded(state.TransitionCount+1, budgets.MaxTransitions) {
+		return newBudgetError("max_transitions", "", state.TransitionCount+1, budgets.MaxTransitions)
 	}
 	roleState := state.RoleStates[state.CurrentRole]
-	visitLimit := s.definition.Budgets.MaxVisitsPerRole[state.CurrentRole]
+	visitLimit := budgets.MaxVisitsPerRole[state.CurrentRole]
 	if exceeded(roleState.Visits+1, visitLimit) {
 		return newBudgetError("max_visits_per_role", state.CurrentRole, roleState.Visits+1, visitLimit)
 	}
-	if s.definition.Budgets.MaxDuration != UnlimitedDuration &&
-		s.now().UTC().Sub(state.CreatedAt) >= s.definition.Budgets.MaxDuration {
+	if budgets.MaxDuration != UnlimitedDuration &&
+		s.now().UTC().Sub(state.CreatedAt) >= budgets.MaxDuration {
 		return &BudgetExceededError{
 			Budget: "max_duration",
 			Used:   durationBudgetValue(s.now().UTC().Sub(state.CreatedAt)),
-			Limit:  durationBudgetValue(s.definition.Budgets.MaxDuration),
+			Limit:  durationBudgetValue(budgets.MaxDuration),
 		}
 	}
 	return nil
@@ -308,6 +354,7 @@ func (s *Supervisor) checkAfterRole(
 	role Role,
 	config RoleConfig,
 ) *BudgetExceededError {
+	budgets := s.graph.Budgets()
 	roleState := state.RoleStates[role]
 	checks := []struct {
 		name  string
@@ -315,16 +362,16 @@ func (s *Supervisor) checkAfterRole(
 		used  int
 		limit Limit
 	}{
-		{"max_local_iterations", "", state.BudgetUsage.TotalLocalIterations, s.definition.Budgets.MaxLocalIterations},
+		{"max_local_iterations", "", state.BudgetUsage.TotalLocalIterations, budgets.MaxLocalIterations},
 		{"role_max_local_iterations", role, roleState.LocalIterations, config.MaxLocalIterations},
-		{"max_retries", "", state.BudgetUsage.Retries, s.definition.Budgets.MaxRetries},
-		{"max_tokens", "", state.BudgetUsage.Tokens.TotalTokens, s.definition.Budgets.MaxTokens},
+		{"max_retries", "", state.BudgetUsage.Retries, budgets.MaxRetries},
+		{"max_tokens", "", state.BudgetUsage.Tokens.TotalTokens, budgets.MaxTokens},
 		{"role_token_budget", role, roleState.TokenUsage.TotalTokens, config.TokenBudget},
 		{
 			"max_repeated_failures",
 			"",
 			state.BudgetUsage.RepeatedFailures,
-			s.definition.Budgets.MaxRepeatedFailure,
+			budgets.MaxRepeatedFailure,
 		},
 	}
 	for _, check := range checks {
@@ -340,35 +387,36 @@ func (s *Supervisor) checkAfterRole(
 			Limit:  durationBudgetValue(config.TimeBudget),
 		}
 	}
-	if s.definition.Budgets.MaxDuration != UnlimitedDuration &&
-		state.BudgetUsage.Elapsed > s.definition.Budgets.MaxDuration {
+	if budgets.MaxDuration != UnlimitedDuration &&
+		state.BudgetUsage.Elapsed > budgets.MaxDuration {
 		return &BudgetExceededError{
 			Budget: "max_duration",
 			Used:   durationBudgetValue(state.BudgetUsage.Elapsed),
-			Limit:  durationBudgetValue(s.definition.Budgets.MaxDuration),
+			Limit:  durationBudgetValue(budgets.MaxDuration),
 		}
 	}
 	return nil
 }
 
+// checkLoopBudget replaces the old hardcoded switch over
+// LoopTesterToDeveloper/LoopReviewerToDeveloper with a lookup through the
+// compiled graph's own precomputed loop metadata (CompiledGraph.LoopFor) —
+// generic to any number of developer-defined loops, not just the two Phase 1
+// built-ins. loopBudgetName (supervisor_types.go) keeps the exact
+// "max_tester_to_developer_loops"/"max_reviewer_to_developer_loops" budget
+// names stable for those two, since LoopKind's underlying value is no longer
+// that literal slug (it is now edgeID-shaped).
 func (s *Supervisor) checkLoopBudget(
 	state RunState,
 	transition ResolvedTransition,
 ) *BudgetExceededError {
-	kind, ok := correctionLoop(transition)
+	loop, ok := s.graph.LoopFor(transition)
 	if !ok {
 		return nil
 	}
-	used := state.LoopTraversals.Get(kind) + 1
-	var limit Limit
-	switch kind {
-	case LoopTesterToDeveloper:
-		limit = s.definition.Budgets.MaxTesterToDeveloperLoops
-	case LoopReviewerToDeveloper:
-		limit = s.definition.Budgets.MaxReviewerToDeveloperLoops
-	}
-	if exceeded(used, limit) {
-		return newBudgetError("max_"+string(kind)+"_loops", transition.From, used, limit)
+	used := state.LoopTraversals.Get(loop.Kind) + 1
+	if exceeded(used, loop.MaxTraversals) {
+		return newBudgetError(loopBudgetName(loop.Kind), transition.From, used, loop.MaxTraversals)
 	}
 	return nil
 }
@@ -405,12 +453,47 @@ func (s *Supervisor) createHandoff(
 		Notes:             draft.Notes,
 		CreatedAt:         s.now().UTC(),
 	}
-	if err := handoff.Validate(s.definition); err != nil {
+	if err := handoff.Validate(s.graph); err != nil {
 		return Handoff{}, err
 	}
 	return handoff, nil
 }
 
+// finishTerminal resolves a transition whose destination is a terminal node.
+// Phase 1 only ever declared three terminal conditions
+// (completed/cancelled/failed — TerminalConditionBudgetExhausted is reached
+// through a different path, exhaustRun, not through a role's own declared
+// transition), so those three keep their exact, pre-Phase-3 behavior here
+// unchanged (completeRun/cancelRun/failRun, byte-identical to before this
+// PR — e2e_dashboard_scenario_test.go asserts completeRun's exact
+// Reason string literally, so that call is untouched).
+//
+// A Phase 3 authored workflow, by contrast, may declare ANY terminal
+// condition string (SchemaNode.TerminalCondition has no enum — the
+// validator and compiler both already treat it as an open, developer-chosen
+// value; see schema_types.go and compiler.go). Before this fix, ANY
+// terminal condition outside the three legacy values fell through to the
+// `default` case below and was rejected as an *InvalidTransitionError* —
+// meaning every authored workflow that used its own terminal condition name
+// (e.g. "published", "needs_revision") could never actually finish a run
+// through that edge, even though `prism graph validate`/`compile` accepted
+// the definition with zero errors. This is a real bug found while building
+// this PR's shipped templates (docs/workflows/security.md and this PR's
+// final report document it in full), not a hypothetical: templates/
+// documentation-change.yaml's very first scenario tripped it.
+//
+// The fix: any terminal condition that is not one of the three legacy
+// values now completes the run successfully (RunStatusCompleted), carrying
+// the AUTHOR'S ACTUAL declared condition string (not a hardcoded
+// "completed") and a generic, condition-derived reason — reaching a
+// terminal node via a real, validated, routed edge is by definition a
+// successful, designed run outcome; nothing in the schema distinguishes a
+// "success" terminal from a "failure" terminal by name (there is no
+// separate boolean), so treating "the graph said to stop here" as success
+// is the least surprising, most conservative available default. A workflow
+// author who wants failure semantics for a given terminal already has the
+// tool for it: name that terminal's condition "failed" (or route to it via
+// TerminalConditionFailed) to get the existing, unchanged failure path.
 func (s *Supervisor) finishTerminal(
 	state RunState,
 	transition ResolvedTransition,
@@ -427,8 +510,7 @@ func (s *Supervisor) finishTerminal(
 		}
 		return s.failRun(state, err), err
 	default:
-		err := &InvalidTransitionError{Role: transition.From, Outcome: transition.Outcome}
-		return s.failRun(state, err), err
+		return s.completeRunWithCondition(state, transition.Terminal), nil
 	}
 }
 
@@ -444,6 +526,26 @@ func (s *Supervisor) completeRun(state RunState) RunState {
 	state.UpdatedAt = now
 	s.emitRun(event.EventMultiAgentRunCompleted, state, state.TerminalOutcome.Reason)
 	s.log(state, "run completed")
+	return state
+}
+
+// completeRunWithCondition is completeRun's generalization for an authored
+// workflow's own (non-legacy) terminal condition — see finishTerminal's doc
+// comment above for why this exists as a separate function rather than a
+// change to completeRun itself (completeRun's exact output is pinned by an
+// existing Phase 1 test and must not change).
+func (s *Supervisor) completeRunWithCondition(state RunState, condition TerminalCondition) RunState {
+	now := s.now().UTC()
+	state.Status = RunStatusCompleted
+	state.TerminalOutcome = &TerminalOutcome{
+		Condition: condition,
+		Reason:    fmt.Sprintf("reached terminal condition %q", condition),
+		At:        now,
+	}
+	state.CompletedAt = timePointer(now)
+	state.UpdatedAt = now
+	s.emitRun(event.EventMultiAgentRunCompleted, state, state.TerminalOutcome.Reason)
+	s.log(state, "run completed", slog.String("terminal_condition", string(condition)))
 	return state
 }
 
@@ -641,6 +743,30 @@ func (s *Supervisor) emitBudgetExhausted(state RunState, budgetErr *BudgetExceed
 	s.emit(event.EventMultiAgentBudgetExhausted, state, payload)
 }
 
+// emitBudgetWarning emits EventMultiAgentBudgetWarning: a non-terminal,
+// purely informational signal that a correction loop is one traversal away
+// from exhausting its budget. It never affects pass/fail/routing decisions —
+// callers decide when to fire it (see DurableRuntime.executePreparedRole).
+func (s *Supervisor) emitBudgetWarning(
+	state RunState,
+	budget string,
+	role Role,
+	used int,
+	limit int,
+) {
+	payload := map[string]any{
+		"run_id":      state.RunID,
+		"workflow_id": state.WorkflowID,
+		"budget":      budget,
+		"used":        used,
+		"limit":       limit,
+	}
+	if role != "" {
+		payload["role"] = string(role)
+	}
+	s.emit(event.EventMultiAgentBudgetWarning, state, payload)
+}
+
 func (s *Supervisor) emit(eventType string, state RunState, payload map[string]any) {
 	now := s.now().UTC()
 	evt := event.NewEvent(eventType, supervisorEventSource, payload).
@@ -675,8 +801,18 @@ func transitionPayload(state RunState, transition ResolvedTransition) map[string
 	return payload
 }
 
-func validateRoleRunResult(result RoleRunResult) error {
-	if !result.Outcome.Valid() {
+// validateRoleRunResult checks a runner's result against graph's own outcome
+// vocabulary. Before Phase 3 this called result.Outcome.Valid(), the
+// Phase-1-hardcoded switch over exactly 8 outcomes — correct only for a
+// Phase 1 (or CompatAdaptDefinition-derived) graph, and wrongly rejective for
+// any other authored graph's own outcome vocabulary. graph.HasOutcome
+// preserves the same looseness the old check had (accepts any outcome
+// declared *anywhere* in the graph, not specifically for the current role;
+// a role/outcome combination that is syntactically a real outcome but not
+// valid for this particular role is still caught next, by graph.Resolve
+// returning InvalidTransitionError).
+func validateRoleRunResult(graph *CompiledGraph, result RoleRunResult) error {
+	if !graph.HasOutcome(result.Outcome) {
 		return fmt.Errorf("runner returned unsupported outcome %q", result.Outcome)
 	}
 	if result.LocalIterations <= 0 {
@@ -694,6 +830,15 @@ func validateRoleRunResult(result RoleRunResult) error {
 	return nil
 }
 
+// correctionLoop is a hardcoded pattern-match over the two Phase 1
+// correction-loop edges. Supervisor/DurableRuntime no longer call it as of
+// PR4 — they use CompiledGraph.LoopFor(transition) instead, a lookup
+// precomputed at compile/adapt time rather than pattern-matched at runtime.
+// This function is KEPT, unmodified, because graph_projection.go's
+// BuildRunGraph (Phase 2's dashboard read model, which operates on the
+// legacy Definition/RunState shape directly and is explicitly out of scope
+// for Phase 3 changes — see the plan's "Phase 2's dashboard read model...
+// zero changes" requirement) still calls it directly.
 func correctionLoop(transition ResolvedTransition) (LoopKind, bool) {
 	switch {
 	case transition.From == RoleTester &&

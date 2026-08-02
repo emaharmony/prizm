@@ -467,6 +467,10 @@ underlying assignment. Permission does not imply that the edge executed, and
 an executed edge does not grant new delegation authority. The graphs are
 related but never interchangeable.
 
+> Phase 2 adds a read-only dashboard rendering of the execution graph defined
+> here — nodes, edges, stable IDs, and status/counter semantics — without
+> changing anything in this section. See
+> [Multi-Agent Execution Graph Dashboard](MULTI_AGENT_EXECUTION_GRAPH.md).
 
 ## Real Prism agent adapter
 

@@ -64,8 +64,13 @@ type Handoff struct {
 	CreatedAt         time.Time           `json:"created_at"`
 }
 
-// Validate enforces handoff invariants against a validated definition.
-func (h Handoff) Validate(definition Definition) error {
+// Validate enforces handoff invariants against a compiled graph. Before
+// Phase 3 this took the legacy Definition directly and delegated
+// role/outcome/route legitimacy to Definition.ValidateTransition; it now
+// takes the CompiledGraph every path (authored-YAML-compiled or
+// CompatAdaptDefinition-adapted) converges on, and reimplements the
+// equivalent checks generically against the graph's own accessors.
+func (h Handoff) Validate(graph *CompiledGraph) error {
 	var problems []string
 	if strings.TrimSpace(h.ID) == "" {
 		problems = append(problems, "handoff id is required")
@@ -85,17 +90,44 @@ func (h Handoff) Validate(definition Definition) error {
 	if h.CreatedAt.IsZero() {
 		problems = append(problems, "handoff created_at is required")
 	}
-	if _, exists := definition.RoleConfig(h.SourceRole); !exists {
+	if _, exists := graph.RoleConfig(h.SourceRole); !exists {
 		problems = append(problems, fmt.Sprintf("handoff references unknown source role %q", h.SourceRole))
 	}
-	if _, exists := definition.RoleConfig(h.DestinationRole); !exists {
+	if _, exists := graph.RoleConfig(h.DestinationRole); !exists {
 		problems = append(problems, fmt.Sprintf("handoff references unknown destination role %q", h.DestinationRole))
 	}
-	if h.SourceRole == h.DestinationRole && !definition.AllowSelfTransitions {
-		problems = append(problems, fmt.Sprintf("handoff self-transition for role %q is not allowed", h.SourceRole))
-	}
-	if err := definition.ValidateTransition(h.SourceRole, h.Outcome, h.DestinationRole, ""); err != nil {
-		problems = append(problems, err.Error())
+
+	// Role/outcome/route legitimacy, generalized: the legacy path checked
+	// outcome.Valid()/outcome.ValidFor(from) (Phase-1-hardcoded vocabulary)
+	// then a linear scan of definition.Transitions for an exact match. The
+	// graph-based equivalent uses the compiled graph's own (per-definition)
+	// vocabulary — HasOutcome/OutcomeValidFor — and its precomputed routing
+	// table (Resolve) instead. A legitimately compiled self-transition edge
+	// (transition.To == h.SourceRole == h.DestinationRole) is therefore
+	// correctly accepted here with no special case: CompiledGraph carries no
+	// AllowSelfTransitions flag because a self-loop edge only ever appears in
+	// the graph if it was already accepted as legitimate at compile/adapt
+	// time. The "self-transition" wording is kept as a friendlier message in
+	// the one case the old code specifically named it — source==destination
+	// but the resolved route disagrees — not as an independent rule.
+	switch {
+	case !graph.HasOutcome(h.Outcome):
+		problems = append(problems, fmt.Sprintf("handoff has unsupported outcome %q", h.Outcome))
+	case !graph.OutcomeValidFor(h.SourceRole, h.Outcome):
+		problems = append(problems, fmt.Sprintf("handoff outcome %q is invalid for role %q", h.Outcome, h.SourceRole))
+	default:
+		if transition, err := graph.Resolve(h.SourceRole, h.Outcome); err != nil {
+			problems = append(problems, err.Error())
+		} else if transition.To != h.DestinationRole {
+			if h.SourceRole == h.DestinationRole {
+				problems = append(problems, fmt.Sprintf(
+					"handoff self-transition for role %q is not allowed", h.SourceRole))
+			} else {
+				problems = append(problems, fmt.Sprintf(
+					"handoff destination role %q does not match declared transition destination %q for role %q outcome %q",
+					h.DestinationRole, transition.To, h.SourceRole, h.Outcome))
+			}
+		}
 	}
 	validateArtifactRefs("handoff artifacts", h.Artifacts, &problems)
 	validateArtifactRefs("handoff evidence", h.Evidence, &problems)

@@ -1,0 +1,77 @@
+# software-delivery-happy-path.yaml is a `prism graph test` scenario fixture
+# exercising the reference software-delivery workflow's straight-through
+# path: planner -> developer -> tester -> reviewer -> completed, with no
+# correction loops taken.
+#
+# Points at ../scenario-fixtures/software-delivery.yaml (a scenario-testdata-local copy
+# of testdata/schema/valid/software-delivery.yaml with bounded loop
+# policies added so it actually compiles) rather than PR1's own fixture
+# directly — see that file's header comment for why.
+workflow: ../scenario-fixtures/software-delivery.yaml
+scenarios:
+  - name: happy-path
+    input:
+      id: task-happy-path
+      description: ship the feature with no correction loops
+    script:
+      - role: planner
+        outcome: plan_ready
+      - role: developer
+        outcome: implementation_ready
+      - role: tester
+        outcome: tests_passed
+      - role: reviewer
+        outcome: review_approved
+    expect:
+      finalStatus: completed
+      terminalNode: "node:terminal:completed"
+      transitions:
+        - "edge:planner:plan_ready"
+        - "edge:developer:implementation_ready"
+        - "edge:tester:tests_passed"
+        - "edge:reviewer:review_approved"
+      nodeVisits:
+        planner: 1
+        developer: 1
+        tester: 1
+        reviewer: 1
+      edgeTraversals:
+        "edge:planner:plan_ready": 1
+        "edge:developer:implementation_ready": 1
+        "edge:tester:tests_passed": 1
+        "edge:reviewer:review_approved": 1
+
+  - name: one-correction-loop-then-approved
+    input:
+      id: task-with-fix
+      description: tests fail once, developer fixes it, then everything passes
+    script:
+      - role: planner
+        outcome: plan_ready
+      - role: developer
+        outcome: implementation_ready
+      - role: tester
+        outcome: tests_failed
+      - role: developer
+        outcome: implementation_ready
+      - role: tester
+        outcome: tests_passed
+      - role: reviewer
+        outcome: changes_requested
+      - role: developer
+        outcome: implementation_ready
+      - role: tester
+        outcome: tests_passed
+      - role: reviewer
+        outcome: review_approved
+    expect:
+      finalStatus: completed
+      terminalNode: "node:terminal:completed"
+      nodeVisits:
+        planner: 1
+        developer: 3
+        tester: 3
+        reviewer: 2
+      edgeTraversals:
+        "edge:tester:tests_failed": 1
+        "edge:reviewer:changes_requested": 1

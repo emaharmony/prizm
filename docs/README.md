@@ -61,6 +61,8 @@ Pick the path that matches what you're doing:
 *   [Safety & Policy](./concepts/SAFETY.md) - How Prizm ensures safe execution.
 *   [Prizm Vision](./concepts/PRIZM-VISION.md) - The core philosophy and long-term goals.
 *   [Multi-Agent Workflow](./MULTI_AGENT_WORKFLOW.md) - Run, inspect, cancel, resume, and report the Phase 1 reference flow.
+*   [Multi-Agent Execution Graph Dashboard](./architecture/MULTI_AGENT_EXECUTION_GRAPH.md) - The live, replayable execution-graph dashboard for one multi-agent run.
+*   [Developer-Authored Workflow Graphs](./workflows/README.md) - Author, validate, test, register, and run your own role/outcome workflow graphs (Phase 3).
 
 ## 🛠️ Reference
 *   [Stability Matrix](./reference/stability-matrix.md) - Feature status and production readiness.

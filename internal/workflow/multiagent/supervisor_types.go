@@ -2,6 +2,7 @@ package multiagent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -10,39 +11,140 @@ import (
 	"github.com/emaharmony/prism/internal/validation"
 )
 
-// LoopKind identifies a bounded correction edge in the Phase 1 flow.
+// LoopKind identifies a bounded correction edge. For a compiled graph
+// (compiler.go), a LoopKind equals its owning edge's own stable ID (see
+// CompiledGraph.LoopFor) — an open-ended identity that scales to any number
+// of developer-defined loops, not just the two Phase 1 built-ins below.
 type LoopKind string
 
-const (
-	LoopTesterToDeveloper   LoopKind = "tester_to_developer"
-	LoopReviewerToDeveloper LoopKind = "reviewer_to_developer"
+// LoopTesterToDeveloper and LoopReviewerToDeveloper identify the two Phase 1
+// built-in correction-loop edges. Before Phase 3 these were untyped string
+// constants ("tester_to_developer" / "reviewer_to_developer"); Go does not
+// allow a function call in a const initializer, so — to make them agree with
+// every CompiledGraph's edgeID-based loop-kind keying (both the new
+// authored-YAML path in compiler.go and the legacy-Definition path in
+// compat.go) — they are now package-level vars computed via the same
+// edgeID(...) stable-ID scheme every compiled graph uses. The exported
+// identifiers are unchanged, so every existing reference to
+// LoopTesterToDeveloper/LoopReviewerToDeveloper by name keeps compiling and
+// keeps meaning "the tester->developer / reviewer->developer correction
+// loop" — only the underlying string value changed, from the old bare slug
+// to "edge:tester:tests_failed" / "edge:reviewer:changes_requested".
+//
+// Nothing else in this package requires these to be typed constants: LoopKind
+// is a plain string type, and they are only ever used as map keys,
+// switch-case values, or in string/equality comparisons, all of which work
+// identically for a var of a string-based type.
+var (
+	LoopTesterToDeveloper   = LoopKind(edgeID(RoleTester, OutcomeTestsFailed))
+	LoopReviewerToDeveloper = LoopKind(edgeID(RoleReviewer, OutcomeChangesRequested))
 )
 
-// LoopTraversalCounts records completed correction-loop traversals.
+// loopBudgetSlug returns the human-readable, backward-compatible slug used in
+// budget-error names and budget-warning payloads for kind. Before Phase 3,
+// these strings were derived directly from LoopKind's own (bare-slug) value;
+// now that LoopKind is edgeID-shaped ("edge:tester:tests_failed"), deriving
+// them directly would change every persisted/observed budget name and event
+// payload for the two Phase 1 loops — a real behavioral regression existing
+// callers (CLI output, dashboard, and multiple tests asserting the exact
+// strings "max_tester_to_developer_loops" / "tester_to_developer_loop")
+// depend on. This mapping keeps those exact strings stable for the two
+// known Phase 1 loops; any other (future, developer-defined) loop kind falls
+// back to its own LoopKind value, which is the best available generic slug.
+func loopBudgetSlug(kind LoopKind) string {
+	switch kind {
+	case LoopTesterToDeveloper:
+		return "tester_to_developer"
+	case LoopReviewerToDeveloper:
+		return "reviewer_to_developer"
+	default:
+		return string(kind)
+	}
+}
+
+// loopBudgetName returns the BudgetExceededError.Budget name for a loop
+// budget check on kind, e.g. "max_tester_to_developer_loops". See
+// loopBudgetSlug for why this is not simply "max_" + string(kind) + "_loops".
+func loopBudgetName(kind LoopKind) string {
+	return "max_" + loopBudgetSlug(kind) + "_loops"
+}
+
+// LoopTraversalCounts records completed correction-loop traversals, open to
+// any number of developer-defined loop kinds. Before Phase 3 this was a
+// fixed two-field struct ({TesterToDeveloper, ReviewerToDeveloper int}); it
+// is now a map so a developer-authored graph with any number of loop edges
+// can be tracked uniformly, using the same LoopKind identity
+// CompiledGraph.LoopFor already produces. UnmarshalJSON below detects and
+// migrates the OLD two-field wire shape — every DurableRun JSON blob
+// persisted before this change has exactly that shape — onto the new
+// map-based shape, at the correct edgeID-based keys. See
+// loop_traversal_legacy_json_test.go for the end-to-end proof this migration
+// is correct.
 type LoopTraversalCounts struct {
+	Counts map[LoopKind]int `json:"counts"`
+}
+
+// Get returns the recorded traversals for kind. A nil/absent entry is 0.
+func (c LoopTraversalCounts) Get(kind LoopKind) int {
+	return c.Counts[kind]
+}
+
+func (c *LoopTraversalCounts) increment(kind LoopKind) {
+	if c.Counts == nil {
+		c.Counts = make(map[LoopKind]int)
+	}
+	c.Counts[kind]++
+}
+
+// legacyLoopTraversalCounts is the exact pre-Phase-3 wire shape. The field
+// tags below are fixed historical wire literals — every LoopTraversalCounts
+// ever persisted before this change has exactly these two flat integer
+// fields — not tied to LoopTesterToDeveloper/LoopReviewerToDeveloper's
+// current (edgeID-based) Go value.
+type legacyLoopTraversalCounts struct {
 	TesterToDeveloper   int `json:"tester_to_developer"`
 	ReviewerToDeveloper int `json:"reviewer_to_developer"`
 }
 
-// Get returns the recorded traversals for kind.
-func (c LoopTraversalCounts) Get(kind LoopKind) int {
-	switch kind {
-	case LoopTesterToDeveloper:
-		return c.TesterToDeveloper
-	case LoopReviewerToDeveloper:
-		return c.ReviewerToDeveloper
-	default:
-		return 0
+// UnmarshalJSON accepts the current {"counts": {...}} shape and falls back
+// to decoding the legacy flat two-field shape, remapping it onto
+// Counts[LoopTesterToDeveloper]/Counts[LoopReviewerToDeveloper] (the
+// edgeID-valued vars above) so a resumed historical run's migrated counts
+// live at exactly the keys CompiledGraph.LoopFor produces today.
+//
+// Detection is based on whether the raw JSON object has a "counts" key at
+// all (probed via map[string]json.RawMessage), not on whether the decoded
+// value is nil/empty: a NEW-shape record with Counts == nil marshals to
+// {"counts":null}, which still has a "counts" key and must decode back to a
+// nil map (round-trip fidelity — see TestRunStateValidateAndJSONRoundTrip in
+// state_test.go) rather than being misdetected as the legacy shape.
+func (c *LoopTraversalCounts) UnmarshalJSON(data []byte) error {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return err
 	}
-}
+	if raw, ok := probe["counts"]; ok {
+		var counts map[LoopKind]int
+		if err := json.Unmarshal(raw, &counts); err != nil {
+			return err
+		}
+		c.Counts = counts
+		return nil
+	}
 
-func (c *LoopTraversalCounts) increment(kind LoopKind) {
-	switch kind {
-	case LoopTesterToDeveloper:
-		c.TesterToDeveloper++
-	case LoopReviewerToDeveloper:
-		c.ReviewerToDeveloper++
+	var legacy legacyLoopTraversalCounts
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
 	}
+	counts := make(map[LoopKind]int, 2)
+	if legacy.TesterToDeveloper != 0 {
+		counts[LoopTesterToDeveloper] = legacy.TesterToDeveloper
+	}
+	if legacy.ReviewerToDeveloper != 0 {
+		counts[LoopReviewerToDeveloper] = legacy.ReviewerToDeveloper
+	}
+	c.Counts = counts
+	return nil
 }
 
 // RunView is the intentionally limited state visible to a role runner.

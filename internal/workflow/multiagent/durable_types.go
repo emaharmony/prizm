@@ -76,7 +76,7 @@ type DurableRun struct {
 }
 
 // Validate rejects corrupt, internally contradictory, or future state.
-func (r DurableRun) Validate(definition Definition) error {
+func (r DurableRun) Validate(graph *CompiledGraph) error {
 	var problems []string
 	if r.SchemaVersion != DurableRunSchemaVersion {
 		problems = append(problems, fmt.Sprintf(
@@ -88,7 +88,7 @@ func (r DurableRun) Validate(definition Definition) error {
 	if !r.Phase.Valid() {
 		problems = append(problems, fmt.Sprintf("unknown checkpoint phase %q", r.Phase))
 	}
-	if err := r.State.Validate(definition); err != nil {
+	if err := r.State.Validate(graph); err != nil {
 		problems = append(problems, err.Error())
 	}
 
@@ -145,6 +145,14 @@ type DurableRunStore interface {
 	MarkEventsPublished(context.Context, []string) error
 	RequestCancellation(context.Context, string, string) error
 	CancellationRequest(context.Context, string) (string, bool, error)
+	// RequestPause, PauseRequest, and ClearPauseRequest are purely additive
+	// operator-pause operations (Phase 2 Milestone 9). They are intentionally
+	// separate from RequestCancellation/CancellationRequest, whose signatures
+	// and behavior are frozen: a pause, unlike a cancel, must remain
+	// resumable and never forces a terminal transition.
+	RequestPause(context.Context, string, string) error
+	PauseRequest(context.Context, string) (string, bool, error)
+	ClearPauseRequest(context.Context, string) error
 	Close() error
 }
 
@@ -173,6 +181,10 @@ var (
 	ErrRevisionConflict = errors.New("multiagent: durable revision conflict")
 	// ErrRunClaimed identifies another active execution owner.
 	ErrRunClaimed = errors.New("multiagent: durable run is already claimed")
+	// ErrRunAlreadyTerminal identifies an operator-pause request against a
+	// run that has already reached a terminal status; pausing a finished run
+	// is a no-op that must not be silently accepted.
+	ErrRunAlreadyTerminal = errors.New("multiagent: durable run is already terminal")
 )
 
 // RunWaitingError is a non-terminal result: external authority or manual

@@ -190,17 +190,17 @@ func TestSupervisorReferenceFlows(t *testing.T) {
 			if state.TransitionCount != test.wantTransfers {
 				t.Errorf("transition count = %d, want %d", state.TransitionCount, test.wantTransfers)
 			}
-			if state.LoopTraversals.TesterToDeveloper != test.wantTester {
+			if got := state.LoopTraversals.Get(LoopTesterToDeveloper); got != test.wantTester {
 				t.Errorf(
 					"tester loop count = %d, want %d",
-					state.LoopTraversals.TesterToDeveloper,
+					got,
 					test.wantTester,
 				)
 			}
-			if state.LoopTraversals.ReviewerToDeveloper != test.wantReviewer {
+			if got := state.LoopTraversals.Get(LoopReviewerToDeveloper); got != test.wantReviewer {
 				t.Errorf(
 					"reviewer loop count = %d, want %d",
-					state.LoopTraversals.ReviewerToDeveloper,
+					got,
 					test.wantReviewer,
 				)
 			}
@@ -219,7 +219,7 @@ func TestSupervisorReferenceFlows(t *testing.T) {
 				state.LatestHandoff.DestinationRole != RoleReviewer {
 				t.Errorf("latest handoff route = %s -> %s", state.LatestHandoff.SourceRole, state.LatestHandoff.DestinationRole)
 			}
-			if err := state.Validate(validDefinition()); err != nil {
+			if err := state.Validate(mustAdaptGraph(t, validDefinition())); err != nil {
 				t.Fatalf("final state invalid: %v", err)
 			}
 			for _, evt := range sink.snapshot() {
@@ -253,8 +253,8 @@ func TestSupervisorBudgetExhaustionStopsBeforeAnotherLoopTraversal(t *testing.T)
 	if state.Status != RunStatusBudgetExhausted {
 		t.Errorf("status = %q", state.Status)
 	}
-	if state.LoopTraversals.TesterToDeveloper != 1 {
-		t.Errorf("recorded loop traversals = %d, want 1", state.LoopTraversals.TesterToDeveloper)
+	if got := state.LoopTraversals.Get(LoopTesterToDeveloper); got != 1 {
+		t.Errorf("recorded loop traversals = %d, want 1", got)
 	}
 	if state.RoleStates[RoleDeveloper].Visits != 2 {
 		t.Errorf("developer visits = %d, want 2", state.RoleStates[RoleDeveloper].Visits)
@@ -262,7 +262,7 @@ func TestSupervisorBudgetExhaustionStopsBeforeAnotherLoopTraversal(t *testing.T)
 	if got := sink.types()[len(sink.types())-1]; got != event.EventMultiAgentBudgetExhausted {
 		t.Errorf("last event = %q, want %q", got, event.EventMultiAgentBudgetExhausted)
 	}
-	if err := state.Validate(definition); err != nil {
+	if err := state.Validate(mustAdaptGraph(t, definition)); err != nil {
 		t.Fatalf("budget state invalid: %v", err)
 	}
 }
@@ -455,8 +455,9 @@ func newTestSupervisor(
 	sink EventSink,
 ) *Supervisor {
 	t.Helper()
+	graph := mustAdaptGraph(t, definition)
 	var handoffSequence int
-	supervisor, err := NewSupervisor(definition, runner, sink, SupervisorOptions{
+	supervisor, err := NewSupervisor(graph, runner, sink, SupervisorOptions{
 		Clock: func() time.Time {
 			return time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
 		},

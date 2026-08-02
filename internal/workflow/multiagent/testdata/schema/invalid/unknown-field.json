@@ -1,0 +1,23 @@
+{
+  "apiVersion": "prism.dev/v1alpha1",
+  "kind": "MultiAgentWorkflow",
+  "metadata": {
+    "name": "software-delivery",
+    "version": "1.0.0"
+  },
+  "spec": {
+    "entryNode": "planner",
+    "budgets": {},
+    "nodes": [
+      {
+        "id": "planner",
+        "type": "role",
+        "role": "planner",
+        "agentProfile": "planner-default",
+        "allowedOutcomes": ["plan_ready"],
+        "notARealField": "oops"
+      }
+    ],
+    "edges": []
+  }
+}
