@@ -226,6 +226,53 @@ func TestSQLiteEventStore_WALMode(t *testing.T) {
 	}
 }
 
+func TestSQLiteEventStore_QueryOrdersByIDNotTimestamp(t *testing.T) {
+	store, err := NewSQLiteEventStore(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteEventStore() error = %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	// Both events share one colliding timestamp. Insert the lexically
+	// larger ID first so an insertion-order or timestamp-order query would
+	// return it first; ORDER BY id ASC must still return evt_a before
+	// evt_b.
+	const collidingTimestamp = "2026-07-30T12:00:00Z"
+	later := Event{
+		ID:        "evt_b_second",
+		Type:      "prism.task.created",
+		Timestamp: collidingTimestamp,
+		Payload:   map[string]any{},
+		Metadata:  EventMetadata{RunID: "run_id_order"},
+	}
+	earlier := Event{
+		ID:        "evt_a_first",
+		Type:      "prism.task.created",
+		Timestamp: collidingTimestamp,
+		Payload:   map[string]any{},
+		Metadata:  EventMetadata{RunID: "run_id_order"},
+	}
+	if err := store.Store(ctx, later); err != nil {
+		t.Fatalf("store later: %v", err)
+	}
+	if err := store.Store(ctx, earlier); err != nil {
+		t.Fatalf("store earlier: %v", err)
+	}
+
+	results, err := store.Query(ctx, EventFilter{RunID: "run_id_order"})
+	if err != nil {
+		t.Fatalf("Query() error = %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(results))
+	}
+	if results[0].ID != "evt_a_first" || results[1].ID != "evt_b_second" {
+		t.Fatalf("events not ordered by id: got [%s, %s], want [evt_a_first, evt_b_second]",
+			results[0].ID, results[1].ID)
+	}
+}
+
 func TestSQLiteEventStore_DuplicateEventIDIsIdempotent(t *testing.T) {
 	store, err := NewSQLiteEventStore(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
