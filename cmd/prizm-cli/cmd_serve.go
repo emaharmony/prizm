@@ -159,6 +159,7 @@ type conversationContext struct {
 	contextAgent     *agent.ContextAgent        // V76: Compress workspace identity into short context block
 	pendingWorkMu   sync.Mutex
 	pendingWork     map[string]pendingWorkStart
+	channelIDMu     sync.RWMutex                // Protects channelID for concurrent access
 	channelID       string                    // Current conversation channel ID for event routing
 	reviewStore     *reviewResultStore         // V77: Pending Mango review results for feedback injection
 	memoryStoreLocal *memory.MarkdownStore      // V77: Local memory store for automatic recall
@@ -639,11 +640,12 @@ func executeServe(args []string) {
 						SessionID:     sessionID,
 					}
 
-					if err := autoExtractor.AutoExtract(ctxcontext.Background(), turn); err != nil {
-						log.Printf("[MEMORY-EXTRACT] auto-extract failed: %v", err)
-					} else {
-						log.Printf("[MEMORY-EXTRACT] completed for session=%s", sessionID)
+					// V77: Memory extraction with 60s timeout to prevent stuck goroutines
+					extractCtx, extractCancel := ctxcontext.WithTimeout(ctxcontext.Background(), 60*time.Second)
+					if err := autoExtractor.AutoExtract(extractCtx, turn); err != nil {
+						log.Printf("[MEMORY-AUTO] extraction failed: %v", err)
 					}
+					extractCancel()
 				})
 				if err != nil {
 					log.Printf("[MEMORY-EXTRACT] failed to subscribe to prizm.memory.extract.requested: %v", err)
@@ -1175,9 +1177,18 @@ func executeServe(args []string) {
 //
 // The StreamCallback bridges LLMStage streaming to Discord:
 // LLMStage calls callback(token) → callback sends to Discord via placeholder + edits.
+// getChannelID returns the current channel ID in a thread-safe manner.
+func (cc *conversationContext) getChannelID() string {
+	cc.channelIDMu.RLock()
+	defer cc.channelIDMu.RUnlock()
+	return cc.channelID
+}
+
 func (cc *conversationContext) handleDiscordMessage(msg *discordbot.InboundMessage) {
-	// Store channel ID for event routing (e.g., review feedback)
+	// Thread-safe channel ID setter for concurrent Discord message dispatch
+	cc.channelIDMu.Lock()
 	cc.channelID = msg.ChannelID
+	cc.channelIDMu.Unlock()
 
 	// Step 0: Skip empty or whitespace-only messages
 	trimmed := strings.TrimSpace(msg.Content)
@@ -1474,6 +1485,9 @@ func (cc *conversationContext) handleDiscordMessage(msg *discordbot.InboundMessa
 	// NOTE: This uses the same remembrance.Client as RemembranceStage but applies
 	// session-aware caching and prompt injection that the generic stage can't do.
 	// RemembranceStage is the reusable pipeline component; this is the runtime integration.
+	// V77: Memory injection — try Remembrance first, fall back to local memories.
+	// Fall back also when Remembrance is configured but fails at runtime.
+	memoriesInjected := false
 	if cc.remClient != nil {
 		cacheKey := fmt.Sprintf("%s:%s", agentCfg.ID, sess.ID)
 		remCtx := cc.remCache.Get(cacheKey)
@@ -1499,27 +1513,26 @@ func (cc *conversationContext) handleDiscordMessage(msg *discordbot.InboundMessa
 				promptSession = cloneSessionWithSystemMemory(sess, memoryBlock)
 				prompt = cc.buildPrompt(promptSession, agentCfg, stateActionKey, channelRole)
 				log.Printf("[REMEMBRANCE] injected %d memory sources into shared prompt layer", len(remCtx.SelectedMemories))
+				memoriesInjected = true
 			}
 		}
-	} else {
-		// V77: Local memory injection — when Remembrance is unavailable,
-		// inject recent local MarkdownStore memories into the prompt.
-		// This ensures Lumi always sees recent memories even without Remembrance.
-		if cc.memoryStoreLocal != nil {
-			recentMemories, memErr := cc.memoryStoreLocal.ListRecent(ctxcontext.Background(), 10)
-			if memErr != nil {
-				log.Printf("[MEMORY] local memory recall failed: %v", memErr)
-			} else if len(recentMemories) > 0 {
-				var memBlock strings.Builder
-				memBlock.WriteString("## Recent Memories\n")
-				memBlock.WriteString("The following memories were automatically recalled from local storage:\n\n")
-				for _, m := range recentMemories {
+	}
+
+	// Fall back to local memory when Remembrance is unavailable OR failed
+	if !memoriesInjected && cc.memoryStoreLocal != nil {
+		recentMemories, memErr := cc.memoryStoreLocal.ListRecent(ctxcontext.Background(), 10)
+		if memErr != nil {
+			log.Printf("[MEMORY] local memory recall failed: %v", memErr)
+		} else if len(recentMemories) > 0 {
+			var memBlock strings.Builder
+			memBlock.WriteString("## Recent Memories\n")
+			memBlock.WriteString("The following memories were automatically recalled from local storage:\n\n")
+			for _, m := range recentMemories {
 				memBlock.WriteString(fmt.Sprintf("- **%s** (%s): %s\n", m.Summary, m.Category, truncate(m.Content, 200)))
-				}
-				promptSession = cloneSessionWithSystemMemory(sess, memBlock.String())
-				prompt = cc.buildPrompt(promptSession, agentCfg, stateActionKey, channelRole)
-				log.Printf("[MEMORY] injected %d recent local memories into prompt", len(recentMemories))
 			}
+			promptSession = cloneSessionWithSystemMemory(sess, memBlock.String())
+			prompt = cc.buildPrompt(promptSession, agentCfg, stateActionKey, channelRole)
+			log.Printf("[MEMORY] injected %d recent local memories into prompt", len(recentMemories))
 		}
 	}
 
@@ -2051,7 +2064,7 @@ func (cc *conversationContext) publishReviewEvent(toolName string, input map[str
 			"agent_id":        agentID,
 			"files_changed":   []string{filePath},
 			"task_description": fmt.Sprintf("Auto-review after %s", toolName),
-			"channel_id":      cc.channelID,
+			"channel_id":      cc.getChannelID(),
 		})
 	}
 }
@@ -2211,9 +2224,9 @@ func (cc *conversationContext) buildPrompt(sess *session.Session, agentCfg *orch
 
 	// --- Layer 6.5: Pending review feedback (V77) ---
 	if cc.reviewStore != nil {
-		if results := cc.reviewStore.PopForChannel(cc.channelID); len(results) > 0 {
+		if results := cc.reviewStore.PopForChannel(cc.getChannelID()); len(results) > 0 {
 			sb.WriteString("\n" + FormatReviewResultsForPrompt(results) + "\n")
-			log.Printf("[REVIEW-FEEDBACK] injected %d review results into prompt for channel %s", len(results), cc.channelID)
+			log.Printf("[REVIEW-FEEDBACK] injected %d review results into prompt for channel %s", len(results), cc.getChannelID())
 		}
 	}
 

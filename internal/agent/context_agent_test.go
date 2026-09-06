@@ -18,8 +18,8 @@ func TestNewContextAgent(t *testing.T) {
 	if ca.workspaceRoot != tmpDir {
 		t.Errorf("expected workspaceRoot %s, got %s", tmpDir, ca.workspaceRoot)
 	}
-	if ca.model != "phi3:mini" {
-		t.Errorf("expected model phi3:mini, got %s", ca.model)
+	if ca.model != "deepseek-v4-flash:cloud" {
+		t.Errorf("expected model deepseek-v4-flash:cloud, got %s", ca.model)
 	}
 	if ca.ollamaURL != "http://localhost:11434" {
 		t.Errorf("expected ollama URL http://localhost:11434, got %s", ca.ollamaURL)
@@ -214,8 +214,8 @@ func TestCompressionConfig_Defaults(t *testing.T) {
 	if !cfg.Enabled {
 		t.Error("expected compression enabled by default")
 	}
-	if cfg.Model != "phi3:mini" {
-		t.Errorf("expected default model phi3:mini, got %s", cfg.Model)
+	if cfg.Model != "deepseek-v4-flash:cloud" {
+		t.Errorf("expected default model deepseek-v4-flash:cloud, got %s", cfg.Model)
 	}
 	if cfg.MaxContext != 400 {
 		t.Errorf("expected max context 400, got %d", cfg.MaxContext)

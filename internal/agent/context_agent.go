@@ -32,6 +32,7 @@ type ContextAgent struct {
 	model         string
 	ollamaURL     string
 	builder       *context.Builder
+	maxContext    int // target max tokens for compressed output
 
 	mu       sync.RWMutex
 	cached   *compressedContext
@@ -48,7 +49,7 @@ type compressedContext struct {
 // CompressionConfig controls context compression behavior.
 type CompressionConfig struct {
 	Enabled    bool   `yaml:"enabled"`     // default: true
-	Model      string `yaml:"model"`       // default: phi3:mini
+	Model      string `yaml:"model"`       // default: deepseek-v4-flash:cloud
 	OllamaURL  string `yaml:"ollama_url"`  // default: http://localhost:11434
 	CacheTTL   string `yaml:"cache_ttl"`   // default: 5m
 	MaxContext int    `yaml:"max_context"`  // default: 400 tokens (~1600 chars)
@@ -58,7 +59,7 @@ type CompressionConfig struct {
 func DefaultCompressionConfig() CompressionConfig {
 	return CompressionConfig{
 		Enabled:    true,
-		Model:      "phi3:mini",
+		Model:      "deepseek-v4-flash:cloud",
 		OllamaURL:  "http://localhost:11434",
 		CacheTTL:   "5m",
 		MaxContext: 400,
@@ -78,6 +79,7 @@ func NewContextAgent(workspaceRoot string, cfg CompressionConfig) *ContextAgent 
 		workspaceRoot: workspaceRoot,
 		model:         cfg.Model,
 		ollamaURL:      cfg.OllamaURL,
+		maxContext:    cfg.MaxContext,
 		builder:        builder,
 		fileInfo:       make(map[string]fs.FileInfo),
 		cacheTTL:       cacheTTL,
@@ -143,14 +145,12 @@ func (ca *ContextAgent) Compress(taskDescription string) string {
 
 	// V77: Log compressed output on first call for quality verification
 	if ca.cached == nil {
-		const maxLog = 2000
+		const maxLog = 500
 		logged := compressed
 		if len(logged) > maxLog {
 			logged = logged[:maxLog] + "..."
 		}
 		log.Printf("[CONTEXT-AGENT] first compression output (preview): %s", logged)
-		// Also write full output to temp file for quality review
-		os.WriteFile("/tmp/prizm-compressed-context.txt", []byte(compressed), 0644)
 	}
 
 	// Cache the result
@@ -301,7 +301,7 @@ Rules:
 		"prompt": prompt,
 		"stream": false,
 		"options": map[string]any{
-			"num_predict": 512,
+			"num_predict": ca.maxPredictTokens(),
 			"temperature": 0.3,
 		},
 	}
@@ -311,7 +311,7 @@ Rules:
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: 120 * time.Second} // longer timeout for cloud models
 	resp, err := client.Post(ca.ollamaURL+"/api/generate", "application/json", bytes.NewReader(jsonBody))
 	if err != nil {
 		return "", fmt.Errorf("ollama request: %w", err)
@@ -347,6 +347,15 @@ Rules:
 }
 
 // InvalidateCache forces the next Compress() call to rebuild.
+// maxPredictTokens converts MaxContext (target tokens) to Ollama's num_predict,
+// adding a buffer for the model's output overhead.
+func (ca *ContextAgent) maxPredictTokens() int {
+	if ca.maxContext <= 0 {
+		return 512
+	}
+	return ca.maxContext * 2 // generous buffer
+}
+
 func (ca *ContextAgent) InvalidateCache() {
 	ca.mu.Lock()
 	ca.cached = nil

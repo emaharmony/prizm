@@ -88,6 +88,15 @@ func startMangoReviewer(nc *nats.Conn, deleg *delegation.Engine, cfg *orchestrat
 	}
 	_ = taskSub
 
+	// Subscribe to review completed events for audit logging
+	reviewSub, err := nc.Subscribe("prizm.review.completed", func(msg *nats.Msg) {
+		log.Printf("[MANGO-REVIEW] review completed event: %s", string(msg.Data))
+	})
+	if err != nil {
+		log.Printf("[MANGO-REVIEW] WARN: could not subscribe to prizm.review.completed: %v", err)
+	}
+	_ = reviewSub
+
 	go mr.processReviews()
 
 	log.Printf("[MANGO-REVIEW] watching prizm.review.requested (delegating to mango)")
@@ -121,7 +130,15 @@ func (mr *mangoReviewer) handleTaskCompleted(msg *nats.Msg) {
 	status, _ := payload["status"].(string)
 	result, _ := payload["result"].(string)
 
-	log.Printf("[MANGO-REVIEW] mango task %s completed (status: %s)", taskID, status)
+	// Only process review tasks — filter on task_type or review_type in context_data
+	if contextData, ok := payload["context_data"].(map[string]any); ok {
+		if reviewType, ok := contextData["review_type"].(string); ok && reviewType != "post_mutation" {
+			log.Printf("[MANGO-REVIEW] skipping non-review task %s (type: %s)", taskID, reviewType)
+			return
+		}
+	}
+
+	log.Printf("[MANGO-REVIEW] mango review task %s completed (status: %s)", taskID, status)
 
 	// If we have a result and a bot, format it and send to Discord
 	if result != "" && mr.bot != nil {
@@ -201,7 +218,11 @@ func formatReviewFeedback(taskID, status, result string) string {
 	var sb strings.Builder
 	sb.WriteString("📋 **Mango Review** (task: `")
 	if len(taskID) > 8 {
-		sb.WriteString(taskID[:8])
+		if len(taskID) > 8 {
+			sb.WriteString(taskID[:8])
+		} else {
+			sb.WriteString(taskID)
+		}
 	} else {
 		sb.WriteString(taskID)
 	}
