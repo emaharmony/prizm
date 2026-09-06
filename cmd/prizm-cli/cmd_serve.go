@@ -38,6 +38,8 @@ import (
 
 	"github.com/emaharmony/prizm/internal/action"
 	"github.com/emaharmony/prizm/internal/adapter/builtin/discordbot"
+	"github.com/emaharmony/prizm/internal/adapter/builtin/slack"
+	"github.com/emaharmony/prizm/internal/adapter/builtin/telegram"
 	"github.com/emaharmony/prizm/internal/agent"
 	"github.com/emaharmony/prizm/internal/api"
 	"github.com/emaharmony/prizm/internal/approval"
@@ -488,6 +490,12 @@ func executeServe(args []string) {
 	var skillReg *skill.Registry
 	var toolExec *tool.Executor
 
+	// V78: Shared infrastructure — created by first channel, available to all
+	var guardian *guard.Guard
+	var toolPolicy tool.PolicyConfig
+	var govLoader *governance.Loader
+	var contextAgent *agent.ContextAgent
+
 	for _, ch := range cfg.Channels {
 		switch ch.Type {
 		case "discord":
@@ -564,7 +572,6 @@ func executeServe(args []string) {
 			}
 
 			// V76: Context agent for compressed identity injection
-			var contextAgent *agent.ContextAgent
 			compCfg := agent.DefaultCompressionConfig()
 			if cfg.Prizm.ContextCompression != nil {
 				compCfg = *cfg.Prizm.ContextCompression
@@ -758,9 +765,9 @@ func executeServe(args []string) {
 			improveMgr.EnsureDir()
 
 			// V32: Guard rail (plan-first enforcement)
-			guardian := guard.NewGuard(planMgr, ctxBuildr)
+			guardian = guard.NewGuard(planMgr, ctxBuildr)
 
-			toolPolicy := tool.DefaultPolicyConfig()
+			toolPolicy = tool.DefaultPolicyConfig()
 			// Mutation operations require approval
 			toolPolicy.MaxFileSize = 10 * 1024 * 1024 // 10MB for serve mode
 			toolPolicy.WorkspaceRoot = workspaceRoot
@@ -774,7 +781,7 @@ func executeServe(args []string) {
 			// applies regardless of tier.
 			toolPolicy.SafeShellPolicy = tool.BuildShellPolicyFromConfig("tier_1", cfg.Shell.Allowlists, cfg.Shell.Defaults.BlockedPatterns)
 			// V61: Load governance docs and populate frozen paths in tool policy
-			govLoader := governance.NewLoader(cfg.Prizm.Workspace, nil)
+			govLoader = governance.NewLoader(cfg.Prizm.Workspace, nil)
 			govLoader.Load()
 			for _, doc := range govLoader.Docs() {
 				for _, fp := range doc.Frontmatter.Governance.FrozenPaths {
@@ -976,10 +983,141 @@ func executeServe(args []string) {
 			fmt.Printf("  Discord: connecting\n")
 
 		case "telegram":
-			fmt.Fprintf(os.Stderr, "Warning: Telegram adapter wiring not yet complete — needs shared infrastructure refactor\n")
+			tgBot := telegram.NewBotAdapter(ch.Token, nil)
+			tgSender := &telegramSender{bot: tgBot}
+
+			// Shared infrastructure must be initialized by Discord case (first channel)
+			if toolReg == nil {
+				fmt.Fprintf(os.Stderr, "Warning: Telegram adapter requires Discord to be configured first (shared infrastructure)\n")
+				break
+			}
+
+			tgConvCtx := &conversationContext{
+				router:           rtr,
+				sessMgr:          sessMgr,
+				cfg:              cfg,
+				providers:        provReg,
+				sender:           tgSender,
+				platform:         PlatformTelegram,
+				debounce:         msgDebounce,
+				eventLog:         eventLog,
+				cancelReg:        cancelReg,
+				ctxBuilder:       ctxBuildr,
+				natsConn:         natsConn,
+				natsURL:          natsURL,
+				actionReg:        actionReg,
+				remClient:        remClient,
+				remSem:           make(chan struct{}, 4),
+				remCache:         newRemembranceCache(60 * time.Second),
+				summarySem:       make(chan struct{}, 1),
+				delegEngine:      delegEngine,
+				taskStore:        taskStore,
+				crossCoord:       crossCoord,
+				autopatcher:      autopatcher,
+				toolExec:         toolExec,
+				toolPolicy:       &toolPolicy,
+				rateLimiter:      safety.NewUserRateLimiter(10, 1, 60, 10),
+				toolGate:         stage.NewToolRelevanceGate(true),
+				commitStore:      commitStore,
+				ttsClient:        ttsClient,
+				ttsConfig:        ttsConfig,
+				contextAgent:     contextAgent,
+				reviewStore:      globalReviewStore,
+				memoryStoreLocal: memoryStore,
+				stateMgr:         stateMgr,
+				planMgr:          planMgr,
+				improveMgr:       improveMgr,
+				guardian:         guardian,
+				pendingWork:      make(map[string]pendingWorkStart),
+				approvalWait:     make(map[string]chan approvalOutcome),
+			}
+			tgConvCtx.rebuildStaticSystemContent(&cfg.Agents[0])
+			tgBot.OnMessage(func(msg *telegram.InboundMessage) {
+				tgConvCtx.handleMessage(ChannelMessage{
+					Platform:  PlatformTelegram,
+					ChannelID: msg.ChatID,
+					UserID:    msg.UserID,
+					UserName:  msg.UserName,
+					Content:   msg.Content,
+					MessageID: msg.MessageID,
+					IsBot:     msg.IsBot,
+				})
+			})
+			go func() {
+				if err := tgBot.Start(ctx); err != nil {
+					log.Printf("Telegram bot error: %v", err)
+				}
+			}()
+			fmt.Printf("  Telegram: connecting\n")
 
 		case "slack":
-			fmt.Fprintf(os.Stderr, "Warning: Slack adapter wiring not yet complete — needs shared infrastructure refactor\n")
+			slackBot := slack.NewBotAdapter(ch.Token, nil)
+			slackSender := &slackSender{bot: slackBot}
+
+			// Shared infrastructure must be initialized by Discord case (first channel)
+			if toolReg == nil {
+				fmt.Fprintf(os.Stderr, "Warning: Slack adapter requires Discord to be configured first (shared infrastructure)\n")
+				break
+			}
+
+			slackConvCtx := &conversationContext{
+				router:           rtr,
+				sessMgr:          sessMgr,
+				cfg:              cfg,
+				providers:        provReg,
+				sender:           slackSender,
+				platform:         PlatformSlack,
+				debounce:         msgDebounce,
+				eventLog:         eventLog,
+				cancelReg:        cancelReg,
+				ctxBuilder:       ctxBuildr,
+				natsConn:         natsConn,
+				natsURL:          natsURL,
+				actionReg:        actionReg,
+				remClient:        remClient,
+				remSem:           make(chan struct{}, 4),
+				remCache:         newRemembranceCache(60 * time.Second),
+				summarySem:       make(chan struct{}, 1),
+				delegEngine:      delegEngine,
+				taskStore:        taskStore,
+				crossCoord:       crossCoord,
+				autopatcher:      autopatcher,
+				toolExec:         toolExec,
+				toolPolicy:       &toolPolicy,
+				rateLimiter:      safety.NewUserRateLimiter(10, 1, 60, 10),
+				toolGate:         stage.NewToolRelevanceGate(true),
+				commitStore:      commitStore,
+				ttsClient:        ttsClient,
+				ttsConfig:        ttsConfig,
+				contextAgent:     contextAgent,
+				reviewStore:      globalReviewStore,
+				memoryStoreLocal: memoryStore,
+				stateMgr:         stateMgr,
+				planMgr:          planMgr,
+				improveMgr:       improveMgr,
+				guardian:         guardian,
+				pendingWork:      make(map[string]pendingWorkStart),
+				approvalWait:     make(map[string]chan approvalOutcome),
+			}
+			slackConvCtx.rebuildStaticSystemContent(&cfg.Agents[0])
+			slackBot.OnMessage(func(msg *slack.InboundMessage) {
+				slackConvCtx.handleMessage(ChannelMessage{
+					Platform:  PlatformSlack,
+					ChannelID: msg.ChannelID,
+					UserID:    msg.UserID,
+					UserName:  msg.UserName,
+					Content:   msg.Content,
+					MessageID: msg.MessageID,
+					IsBot:     msg.IsBot,
+					ThreadTS:  msg.ThreadTS,
+				})
+			})
+			go func() {
+				if err := slackBot.Start(ctx); err != nil {
+					log.Printf("Slack bot error: %v", err)
+				}
+			}()
+			fmt.Printf("  Slack: connecting\n")
 
 		default:
 			fmt.Fprintf(os.Stderr, "Warning: unknown channel type %q\n", ch.Type)
