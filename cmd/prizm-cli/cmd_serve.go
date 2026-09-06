@@ -741,6 +741,15 @@ func executeServe(args []string) {
 			}
 			tool.RegisterSkillTool(toolReg, skillReg)
 
+			// V77: DelegateTool — allows agents to delegate tasks to other agents
+			if delegEngine != nil {
+				toolReg.Register(tool.NewDelegateTool(delegatorAdapter{Engine: delegEngine}, configuredOrchestratorAgentID(cfg)))
+			}
+
+			// V77: SkillWriteTool — allows agents to create/update SKILL.md files
+			skillsDir := filepath.Join(workspaceRoot, "skills")
+			toolReg.Register(tool.NewSkillWriteTool(skillsDir))
+
 			// V32: Self-Improvement Loop
 			improveMgr = improve.NewManager(workspaceRoot)
 			improveMgr.EnsureDir()
@@ -1479,14 +1488,12 @@ func (cc *conversationContext) handleDiscordMessage(msg *discordbot.InboundMessa
 	stateActionKey := cc.cfg.ResolveChannelRole(msg.ChannelID)
 	channelRole := cc.cfg.ResolveChannelRoleConfig(msg.ChannelID)
 	promptSession := sess
-	prompt := cc.buildPrompt(promptSession, agentCfg, stateActionKey, channelRole)
 
 	// Step 7b: Inject Remembrance context (if available, with 60s TTL cache)
-	// NOTE: This uses the same remembrance.Client as RemembranceStage but applies
-	// session-aware caching and prompt injection that the generic stage can't do.
-	// RemembranceStage is the reusable pipeline component; this is the runtime integration.
 	// V77: Memory injection — try Remembrance first, fall back to local memories.
 	// Fall back also when Remembrance is configured but fails at runtime.
+	// NOTE: buildPrompt is deferred until after memory injection to avoid
+	// building a prompt that will be immediately discarded.
 	memoriesInjected := false
 	if cc.remClient != nil {
 		cacheKey := fmt.Sprintf("%s:%s", agentCfg.ID, sess.ID)
@@ -1511,7 +1518,6 @@ func (cc *conversationContext) handleDiscordMessage(msg *discordbot.InboundMessa
 		if remCtx != nil {
 			if memoryBlock := remembranceMemoryBlock(remCtx); memoryBlock != "" {
 				promptSession = cloneSessionWithSystemMemory(sess, memoryBlock)
-				prompt = cc.buildPrompt(promptSession, agentCfg, stateActionKey, channelRole)
 				log.Printf("[REMEMBRANCE] injected %d memory sources into shared prompt layer", len(remCtx.SelectedMemories))
 				memoriesInjected = true
 			}
@@ -1531,10 +1537,12 @@ func (cc *conversationContext) handleDiscordMessage(msg *discordbot.InboundMessa
 				memBlock.WriteString(fmt.Sprintf("- **%s** (%s): %s\n", m.Summary, m.Category, truncate(m.Content, 200)))
 			}
 			promptSession = cloneSessionWithSystemMemory(sess, memBlock.String())
-			prompt = cc.buildPrompt(promptSession, agentCfg, stateActionKey, channelRole)
 			log.Printf("[MEMORY] injected %d recent local memories into prompt", len(recentMemories))
 		}
 	}
+
+	// Build prompt once, after memory injection is settled
+	prompt := cc.buildPrompt(promptSession, agentCfg, stateActionKey, channelRole)
 
 	// P-008: Evaluate tool relevance gate BEFORE building the prompt
 	// This determines whether to include tools in the LLM request
@@ -2861,4 +2869,18 @@ func sendApprovalCard(bot *discordbot.BotAdapter, channelID, approvalID, runID, 
 	}); err != nil {
 		log.Printf("[APPROVAL-CARD] failed to send: %v", err)
 	}
+}
+
+// delegatorAdapter wraps *delegation.Engine to satisfy tool.Delegator.
+// Engine.Delegate returns (*task.Task, error); the tool interface wants (taskID string, error).
+type delegatorAdapter struct {
+	*delegation.Engine
+}
+
+func (d delegatorAdapter) Delegate(ctx ctxcontext.Context, delegatedBy, delegatedTo, taskType, description string, contextData map[string]any) (string, error) {
+	t, err := d.Engine.Delegate(ctx, delegatedBy, delegatedTo, taskType, description, contextData)
+	if err != nil {
+		return "", err
+	}
+	return t.ID, nil
 }
