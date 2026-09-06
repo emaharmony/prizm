@@ -975,6 +975,12 @@ func executeServe(args []string) {
 			discordBots = append(discordBots, bot)
 			fmt.Printf("  Discord: connecting\n")
 
+		case "telegram":
+			fmt.Fprintf(os.Stderr, "Warning: Telegram adapter wiring not yet complete — needs shared infrastructure refactor\n")
+
+		case "slack":
+			fmt.Fprintf(os.Stderr, "Warning: Slack adapter wiring not yet complete — needs shared infrastructure refactor\n")
+
 		default:
 			fmt.Fprintf(os.Stderr, "Warning: unknown channel type %q\n", ch.Type)
 		}
