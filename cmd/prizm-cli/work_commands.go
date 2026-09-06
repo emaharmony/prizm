@@ -56,7 +56,7 @@ func (cc *conversationContext) handleWorkStartCommand(msg *discordbot.InboundMes
 	cc.resolveAndStartWork(msg.ChannelID, req)
 }
 
-func (cc *conversationContext) handlePendingWorkStartReply(msg *discordbot.InboundMessage) bool {
+func (cc *conversationContext) handlePendingWorkStartReply(msg ChannelMessage) bool {
 	key := workPendingKey(msg.UserID, msg.ChannelID)
 
 	cc.pendingWorkMu.Lock()
@@ -138,7 +138,7 @@ func (cc *conversationContext) handleWorkflowFeedbackCommand(msg *discordbot.Inb
 	})
 }
 
-func (cc *conversationContext) maybeStartDetectedWork(msg *discordbot.InboundMessage, sanitizedContent string) bool {
+func (cc *conversationContext) maybeStartDetectedWork(msg ChannelMessage, sanitizedContent string) bool {
 	if cc.cfg == nil {
 		return false
 	}

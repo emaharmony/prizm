@@ -32,7 +32,7 @@ func (b *finalReportBot) GetRecentMessages(channelID string, limit int) []discor
 
 func TestSendFinalReportIncludesStatusRunAndMessage(t *testing.T) {
 	bot := &finalReportBot{}
-	cc := &conversationContext{bot: bot}
+	cc := &conversationContext{bot: bot, sender: &discordSender{bot: bot}}
 
 	cc.sendFinalReport("chan-1", "timed_out", "run_123", "Task timed out.")
 

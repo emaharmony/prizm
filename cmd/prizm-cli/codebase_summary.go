@@ -17,7 +17,7 @@ import (
 	"github.com/rs/xid"
 )
 
-func (cc *conversationContext) handleCodebaseSummaryRequest(msg *discordbot.InboundMessage, content string) {
+func (cc *conversationContext) handleCodebaseSummaryRequest(msg ChannelMessage, content string) {
 	if cc.taskStore == nil {
 		cc.bot.Send(&discordbot.OutboundMessage{
 			ChannelID: msg.ChannelID,

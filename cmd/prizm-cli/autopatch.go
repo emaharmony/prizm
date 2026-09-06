@@ -93,12 +93,9 @@ func buildLocalAutoPatchWorker(cfg *orchestrator.Config, providers *provider.Pro
 	return autopatch.NewLocalAgentWorker(p, agentCfg.Model, agentID)
 }
 
-func (cc *conversationContext) handleAutoPatchRequest(msg *discordbot.InboundMessage, content string) {
+func (cc *conversationContext) handleAutoPatchRequest(msg ChannelMessage, content string) {
 	if cc.autopatcher == nil || !cc.autopatcher.Enabled() {
-		cc.bot.Send(&discordbot.OutboundMessage{
-			ChannelID: msg.ChannelID,
-			Content:   "Autopatch is not enabled. Add `autopatch.enabled: true` to prizm.yaml and configure Codex or a local patch agent.",
-		})
+		cc.sender.Send(msg.ChannelID, "Autopatch is not enabled. Add `autopatch.enabled: true` to prizm.yaml and configure Codex or a local patch agent.")
 		return
 	}
 	tsk, err := cc.autopatcher.Start(ctxcontext.Background(), autopatch.Request{
@@ -134,7 +131,7 @@ func (cc *conversationContext) postAutoPatchCompletion(channelID, taskID string)
 	for {
 		select {
 		case <-deadline:
-			cc.bot.Send(&discordbot.OutboundMessage{ChannelID: channelID, Content: fmt.Sprintf("Autopatch task `%s` is still running. Check `/api/v1/tasks/%s` for status.", taskID, taskID)})
+			cc.sender.Send(channelID, fmt.Sprintf("Autopatch task `%s` is still running. Check `/api/v1/tasks/%s` for status.", taskID, taskID))
 			return
 		case <-ticker.C:
 			tsk, err := cc.taskStore.Get(taskID)
@@ -142,7 +139,7 @@ func (cc *conversationContext) postAutoPatchCompletion(channelID, taskID string)
 				continue
 			}
 			if tsk.Status == task.StatusCompleted || tsk.Status == task.StatusFailed || tsk.Status == task.StatusCancelled {
-				cc.bot.Send(&discordbot.OutboundMessage{ChannelID: channelID, Content: formatAutoPatchTaskMessage(tsk)})
+				cc.sender.Send(channelID, formatAutoPatchTaskMessage(tsk))
 				return
 			}
 		}

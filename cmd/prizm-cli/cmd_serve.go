@@ -129,6 +129,9 @@ type conversationContext struct {
 	cfg           *orchestrator.Config
 	providers     *provider.ProviderRegistry
 	bot           discordBotClient
+	sender        ChannelSender             // V78: Channel-agnostic message sender
+	botUserID    string                    // V78: Bot's own user ID for self-mention detection
+	platform     Platform                  // V78: Which channel platform this context serves
 	debounce      *debounce.Tracker
 	eventLog      *runtrack.EventLogger
 	cancelReg     *runtrack.CancelRegistry
@@ -816,6 +819,8 @@ func executeServe(args []string) {
 				cfg:         cfg,
 				providers:   provReg,
 				bot:         bot,
+				sender:      &discordSender{bot: bot}, // V78: channel-agnostic sender
+				platform:    PlatformDiscord,            // V78: running on Discord
 				debounce:    msgDebounce,
 				eventLog:    eventLog,
 				cancelReg:   cancelReg,
@@ -1193,8 +1198,45 @@ func (cc *conversationContext) getChannelID() string {
 	return cc.channelID
 }
 
+// handleDiscordMessage translates a Discord InboundMessage to a ChannelMessage
+// and delegates to the channel-agnostic handleMessage pipeline.
+// Discord-specific command handling (workflow feedback, plan approval, prizm commands)
+// is handled here before entering the general pipeline.
 func (cc *conversationContext) handleDiscordMessage(msg *discordbot.InboundMessage) {
-	// Thread-safe channel ID setter for concurrent Discord message dispatch
+	// Discord-specific command handling
+	if cc.handleWorkflowFeedbackCommand(msg) {
+		return
+	}
+	if cc.planMgr != nil {
+		trimmed := strings.TrimSpace(msg.Content)
+		if strings.HasPrefix(trimmed, "approve ") || strings.HasPrefix(trimmed, "reject ") {
+			if handled := cc.handlePlanApproval(msg); handled {
+				return
+			}
+		}
+	}
+	if cc.handlePrizmCommand(msg) {
+		return
+	}
+
+	// Delegate to channel-agnostic pipeline
+	cc.handleMessage(ChannelMessage{
+		Platform:  PlatformDiscord,
+		ChannelID: msg.ChannelID,
+		UserID:    msg.UserID,
+		UserName:  msg.UserName,
+		Content:   msg.Content,
+		MessageID: msg.MessageID,
+		IsBot:     msg.IsBot,
+		IsDM:      msg.IsDM,
+		GuildID:   msg.GuildID,
+	})
+}
+
+// handleMessage is the channel-agnostic conversation pipeline.
+// All adapters (Discord, Telegram, Slack) route through this method.
+func (cc *conversationContext) handleMessage(msg ChannelMessage) {
+	// Thread-safe channel ID setter for concurrent message dispatch
 	cc.channelIDMu.Lock()
 	cc.channelID = msg.ChannelID
 	cc.channelIDMu.Unlock()
@@ -1202,23 +1244,6 @@ func (cc *conversationContext) handleDiscordMessage(msg *discordbot.InboundMessa
 	// Step 0: Skip empty or whitespace-only messages
 	trimmed := strings.TrimSpace(msg.Content)
 	if trimmed == "" {
-		return
-	}
-
-	if cc.handleWorkflowFeedbackCommand(msg) {
-		return
-	}
-
-	// Step 0a: Handle plan approval commands ("approve P-XXX" / "reject P-XXX")
-	if cc.planMgr != nil {
-		if strings.HasPrefix(trimmed, "approve ") || strings.HasPrefix(trimmed, "reject ") {
-			if handled := cc.handlePlanApproval(msg); handled {
-				return
-			}
-		}
-	}
-
-	if cc.handlePrizmCommand(msg) {
 		return
 	}
 
@@ -1235,11 +1260,17 @@ func (cc *conversationContext) handleDiscordMessage(msg *discordbot.InboundMessa
 	// Tagged-only mode: if the channel has tagged_only=true, skip unless the bot is mentioned
 	channelRoleConfig := cc.cfg.ResolveChannelRoleConfig(msg.ChannelID)
 	if channelRoleConfig != nil && channelRoleConfig.TaggedOnly {
-		selfID := cc.bot.SelfID()
+		// Platform-specific mention detection
 		mentioned := false
-		if selfID != "" {
-			mentioned = strings.Contains(msg.Content, "<@"+selfID+">") ||
-				strings.Contains(msg.Content, "<@&"+selfID+">")
+		if cc.platform == PlatformDiscord {
+			selfID := cc.bot.SelfID()
+			if selfID != "" {
+				mentioned = strings.Contains(msg.Content, "<@"+selfID+">") ||
+					strings.Contains(msg.Content, "<@&"+selfID+">")
+			}
+		} else {
+			// On other platforms, always respond in tagged-only channels
+			mentioned = true
 		}
 		if !mentioned {
 			return
@@ -1326,10 +1357,7 @@ func (cc *conversationContext) handleDiscordMessage(msg *discordbot.InboundMessa
 	if cc.rateLimiter != nil {
 		if !cc.rateLimiter.Allow(msg.UserID) {
 			log.Printf("[RATE] user %s rate limited in channel %s", msg.UserID, msg.ChannelID)
-			cc.bot.Send(&discordbot.OutboundMessage{
-				ChannelID: msg.ChannelID,
-				Content:   "⚠️ Slow down! You're sending messages too fast. Please wait a moment.",
-			})
+			cc.sender.Send(msg.ChannelID, "⚠️ Slow down! You're sending messages too fast. Please wait a moment.")
 			return
 		}
 	}
@@ -1338,10 +1366,7 @@ func (cc *conversationContext) handleDiscordMessage(msg *discordbot.InboundMessa
 	injectionCheck := safety.CheckPromptInjection(msg.Content)
 	if injectionCheck.Severity == "critical" {
 		log.Printf("[SECURITY] blocked critical injection attempt from user %s: flags=%v", msg.UserID, injectionCheck.Flags)
-		cc.bot.Send(&discordbot.OutboundMessage{
-			ChannelID: msg.ChannelID,
-			Content:   "⚠️ That message contains potentially dangerous content and was blocked for safety.",
-		})
+		cc.sender.Send(msg.ChannelID, "⚠️ That message contains potentially dangerous content and was blocked for safety.")
 		return
 	}
 	sanitizedContent := msg.Content
@@ -1395,10 +1420,7 @@ func (cc *conversationContext) handleDiscordMessage(msg *discordbot.InboundMessa
 	}
 	if gateDecision == stage.RespondLightly {
 		log.Printf("[GATE] light acknowledgment for message from %s in %s", msg.UserName, gateRole)
-		cc.bot.Send(&discordbot.OutboundMessage{
-			ChannelID: msg.ChannelID,
-			Content:   "👍",
-		})
+		cc.sender.Send(msg.ChannelID, "👍")
 		return
 	}
 
@@ -1479,7 +1501,7 @@ func (cc *conversationContext) handleDiscordMessage(msg *discordbot.InboundMessa
 	}()
 
 	// Step 6: Send typing indicator (Discord-specific)
-	if err := cc.bot.Typing(msg.ChannelID); err != nil {
+	if err := cc.sender.Typing(msg.ChannelID); err != nil {
 		log.Printf("[WARN] typing indicator failed: %v", err)
 	}
 
@@ -1600,9 +1622,9 @@ func (cc *conversationContext) handleDiscordMessage(msg *discordbot.InboundMessa
 	var accumulatedText string
 	var lastTypingTime time.Time
 
-	cc.bot.Typing(msg.ChannelID) // Initial typing indicator
+	cc.sender.Typing(msg.ChannelID) // Initial typing indicator
 
-	_, placeholderErr := cc.bot.SendPlaceholder(msg.ChannelID, "")
+	_, placeholderErr := cc.sender.SendPlaceholder(msg.ChannelID, "")
 	if placeholderErr != nil {
 		log.Printf("[STREAM] placeholder/typing failed: %v", placeholderErr)
 	}
@@ -1618,7 +1640,7 @@ func (cc *conversationContext) handleDiscordMessage(msg *discordbot.InboundMessa
 		if now.Sub(lastTypingTime) >= 8*time.Second {
 			lastTypingTime = now
 			go func() {
-				if err := cc.bot.Typing(msg.ChannelID); err != nil {
+				if err := cc.sender.Typing(msg.ChannelID); err != nil {
 					log.Printf("[STREAM] typing refresh failed: %v", err)
 				}
 			}()
@@ -1816,13 +1838,10 @@ func (cc *conversationContext) handleDiscordMessage(msg *discordbot.InboundMessa
 	// Deliver the response to Discord as a new message
 	// (typing-only approach: no placeholder message, just send the complete response)
 	if responseText != "" {
-		err := cc.bot.Send(&discordbot.OutboundMessage{
-			ChannelID: msg.ChannelID,
-			Content:   responseText,
-		})
+		err := cc.sender.Send(msg.ChannelID, responseText)
 		if err != nil {
-			log.Printf("[ERROR] failed to send Discord response: %v", err)
-			finalMessage = "I completed the task but could not send the result to Discord."
+			log.Printf("[ERROR] failed to send response: %v", err)
+			finalMessage = "I completed the task but could not send the result."
 		} else {
 			finalStatus = "completed"
 			finalSent = true
@@ -1968,12 +1987,9 @@ func (cc *conversationContext) handleDiscordMessage(msg *discordbot.InboundMessa
 } // sendError sends a user-friendly error message to a Discord channel.
 //lint:ignore U1000 retained for channel error reporting integration
 func (cc *conversationContext) sendError(channelID, message string) {
-	err := cc.bot.Send(&discordbot.OutboundMessage{
-		ChannelID: channelID,
-		Content:   "⚠️ " + message,
-	})
+	err := cc.sender.Send(channelID, "⚠️ "+message)
 	if err != nil {
-		log.Printf("[ERROR] failed to send error message to Discord: %v", err)
+		log.Printf("[ERROR] failed to send error message: %v", err)
 	}
 }
 
@@ -1989,8 +2005,8 @@ func (cc *conversationContext) sendFinalReport(channelID, status, runID, message
 	if strings.TrimSpace(message) != "" {
 		content += ": " + strings.TrimSpace(message)
 	}
-	if err := cc.bot.Send(&discordbot.OutboundMessage{ChannelID: channelID, Content: content}); err != nil {
-		log.Printf("[ERROR] failed to send final report to Discord: %v", err)
+	if err := cc.sender.Send(channelID, content); err != nil {
+		log.Printf("[ERROR] failed to send final report: %v", err)
 	}
 }
 
