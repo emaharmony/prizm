@@ -479,6 +479,7 @@ func executeServe(args []string) {
 
 	var discordBots []*discordbot.BotAdapter
 	var factoryMon *factorymonitor.Monitor
+	var activeContexts []*conversationContext // V78: track for graceful shutdown
 
 	// V32: State manager, context builder, and plan manager — shared across all channels
 	var stateMgr *state.Manager
@@ -495,6 +496,7 @@ func executeServe(args []string) {
 	var toolPolicy tool.PolicyConfig
 	var govLoader *governance.Loader
 	var contextAgent *agent.ContextAgent
+	var infraSubs []*nats.Subscription // V78: Infrastructure NATS subs for graceful teardown
 
 	for _, ch := range cfg.Channels {
 		switch ch.Type {
@@ -607,7 +609,7 @@ func executeServe(args []string) {
 					} else {
 						log.Printf("[CONTEXT-AGENT] subscribed to prizm.context.requested")
 					}
-					_ = sub
+					infraSubs = append(infraSubs, sub)
 				}
 			}
 
@@ -662,7 +664,7 @@ func executeServe(args []string) {
 				} else {
 					log.Printf("[MEMORY-EXTRACT] subscribed to prizm.memory.extract.requested")
 				}
-				_ = memSub
+				infraSubs = append(infraSubs, memSub)
 			}
 
 			readRoots := configuredReadRoots(cfg)
@@ -870,6 +872,7 @@ func executeServe(args []string) {
 			for _, a := range cfg.Agents {
 				convCtx.rebuildStaticSystemContent(&a)
 			}
+			activeContexts = append(activeContexts, convCtx)
 			bot.OnMessage(func(msg *discordbot.InboundMessage) {
 				convCtx.handleDiscordMessage(msg)
 			})
@@ -1032,6 +1035,7 @@ func executeServe(args []string) {
 				approvalWait:     make(map[string]chan approvalOutcome),
 			}
 			tgConvCtx.rebuildStaticSystemContent(&cfg.Agents[0])
+			activeContexts = append(activeContexts, tgConvCtx)
 			tgBot.OnMessage(func(msg *telegram.InboundMessage) {
 				tgConvCtx.handleMessage(ChannelMessage{
 					Platform:  PlatformTelegram,
@@ -1100,6 +1104,7 @@ func executeServe(args []string) {
 				approvalWait:     make(map[string]chan approvalOutcome),
 			}
 			slackConvCtx.rebuildStaticSystemContent(&cfg.Agents[0])
+			activeContexts = append(activeContexts, slackConvCtx)
 			slackBot.OnMessage(func(msg *slack.InboundMessage) {
 				slackConvCtx.handleMessage(ChannelMessage{
 					Platform:  PlatformSlack,
@@ -1299,9 +1304,13 @@ func executeServe(args []string) {
 	}
 
 	// V77: Mango review subscriber — delegates prizm.review.requested to mango agent.
-	if natsConn != nil && delegEngine != nil {
-		if err := startMangoReviewer(natsConn, delegEngine, cfg, discordBots[0], globalReviewStore); err != nil {
+	var mangoReviewer *mangoReviewer
+	if natsConn != nil && delegEngine != nil && len(discordBots) > 0 {
+		mr, err := startMangoReviewer(natsConn, delegEngine, cfg, discordBots[0], globalReviewStore)
+		if err != nil {
 			log.Printf("[MANGO-REVIEW] WARN failed to start: %v", err)
+		} else {
+			mangoReviewer = mr
 		}
 	}
 
@@ -1312,7 +1321,13 @@ func executeServe(args []string) {
 
 	fmt.Println("\n🛑 Shutting down Prizm...")
 
-	// Cleanup
+	// V78: Graceful teardown — unsubscribe NATS, stop reviewers, stop bots, cleanup
+	for _, sub := range infraSubs {
+		sub.Unsubscribe()
+	}
+	if mangoReviewer != nil {
+		mangoReviewer.Close()
+	}
 	for _, bot := range discordBots {
 		bot.Stop()
 	}

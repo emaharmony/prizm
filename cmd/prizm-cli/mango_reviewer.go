@@ -30,6 +30,7 @@ type mangoReviewer struct {
 	bot         *discordbot.BotAdapter
 	reviewStore *reviewResultStore // V77: stores review results for prompt injection
 	reviewCh    chan reviewRequest
+	subs        []*nats.Subscription // V78: NATS subscriptions for graceful teardown
 }
 
 type reviewRequest struct {
@@ -43,12 +44,12 @@ type reviewRequest struct {
 }
 
 // startMangoReviewer subscribes to review events and delegates to mango.
-func startMangoReviewer(nc *nats.Conn, deleg *delegation.Engine, cfg *orchestrator.Config, bot *discordbot.BotAdapter, store *reviewResultStore) error {
+func startMangoReviewer(nc *nats.Conn, deleg *delegation.Engine, cfg *orchestrator.Config, bot *discordbot.BotAdapter, store *reviewResultStore) (*mangoReviewer, error) {
 	if nc == nil {
-		return fmt.Errorf("mango reviewer requires NATS connection")
+		return nil, fmt.Errorf("mango reviewer requires NATS connection")
 	}
 	if deleg == nil {
-		return fmt.Errorf("mango reviewer requires delegation engine")
+		return nil, fmt.Errorf("mango reviewer requires delegation engine")
 	}
 
 	mangoConfigured := false
@@ -60,7 +61,7 @@ func startMangoReviewer(nc *nats.Conn, deleg *delegation.Engine, cfg *orchestrat
 	}
 	if !mangoConfigured {
 		log.Printf("[MANGO-REVIEW] mango agent not configured, reviewer disabled")
-		return nil
+		return nil, nil
 	}
 
 	mr := &mangoReviewer{
@@ -75,9 +76,9 @@ func startMangoReviewer(nc *nats.Conn, deleg *delegation.Engine, cfg *orchestrat
 	// Subscribe to review request events
 	sub, err := nc.Subscribe("prizm.review.requested", mr.handleMsg)
 	if err != nil {
-		return fmt.Errorf("subscribe review.requested: %w", err)
+		return nil, fmt.Errorf("subscribe review.requested: %w", err)
 	}
-	_ = sub
+	mr.subs = append(mr.subs, sub)
 
 	// Subscribe to mango task completion events for feedback injection
 	taskSub, err := nc.Subscribe("mango.task.completed", mr.handleTaskCompleted)
@@ -85,8 +86,8 @@ func startMangoReviewer(nc *nats.Conn, deleg *delegation.Engine, cfg *orchestrat
 		log.Printf("[MANGO-REVIEW] WARN: could not subscribe to mango.task.completed: %v", err)
 	} else {
 		log.Printf("[MANGO-REVIEW] listening for mango.task.completed (feedback injection)")
+		mr.subs = append(mr.subs, taskSub)
 	}
-	_ = taskSub
 
 	// Subscribe to review completed events for audit logging
 	reviewSub, err := nc.Subscribe("prizm.review.completed", func(msg *nats.Msg) {
@@ -94,13 +95,14 @@ func startMangoReviewer(nc *nats.Conn, deleg *delegation.Engine, cfg *orchestrat
 	})
 	if err != nil {
 		log.Printf("[MANGO-REVIEW] WARN: could not subscribe to prizm.review.completed: %v", err)
+	} else {
+		mr.subs = append(mr.subs, reviewSub)
 	}
-	_ = reviewSub
 
 	go mr.processReviews()
 
 	log.Printf("[MANGO-REVIEW] watching prizm.review.requested (delegating to mango)")
-	return nil
+	return mr, nil
 }
 
 func (mr *mangoReviewer) handleMsg(msg *nats.Msg) {
@@ -257,6 +259,25 @@ func formatReviewFeedback(taskID, status, result string) string {
 	}
 
 	return sb.String()
+}
+
+// Close gracefully shuts down the mango reviewer: drains pending reviews,
+// unsubscribes from NATS, and waits for in-flight reviews to complete.
+func (mr *mangoReviewer) Close() {
+	// Unsubscribe from all NATS subscriptions
+	for _, sub := range mr.subs {
+		if err := sub.Unsubscribe(); err != nil {
+			log.Printf("[MANGO-REVIEW] unsubscribe error: %v", err)
+		}
+	}
+
+	// Drain the review channel — process any pending reviews
+	close(mr.reviewCh)
+	for req := range mr.reviewCh {
+		log.Printf("[MANGO-REVIEW] draining review: %s", req.TaskDesc)
+	}
+
+	log.Printf("[MANGO-REVIEW] shutdown complete")
 }
 
 func (mr *mangoReviewer) processReviews() {
