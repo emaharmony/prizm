@@ -1716,7 +1716,7 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 
 	// Fall back to local memory when Remembrance is unavailable OR failed
 	if !memoriesInjected && cc.memoryStoreLocal != nil {
-		recentMemories, memErr := cc.memoryStoreLocal.ListRecent(ctxcontext.Background(), 10)
+		recentMemories, memErr := cc.memoryStoreLocal.ListRecent(ctxcontext.Background(), 30)
 		if memErr != nil {
 			log.Printf("[MEMORY] local memory recall failed: %v", memErr)
 		} else if len(recentMemories) > 0 {
