@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/emaharmony/prizm/internal/adapter/builtin/discordbot"
@@ -31,6 +32,8 @@ type mangoReviewer struct {
 	reviewStore *reviewResultStore // V77: stores review results for prompt injection
 	reviewCh    chan reviewRequest
 	subs        []*nats.Subscription // V78: NATS subscriptions for graceful teardown
+	done        chan struct{}         // V78: signals processReviews to stop
+	wg          sync.WaitGroup       // V78: tracks in-flight reviews
 }
 
 type reviewRequest struct {
@@ -71,6 +74,7 @@ func startMangoReviewer(nc *nats.Conn, deleg *delegation.Engine, cfg *orchestrat
 		bot:         bot,
 		reviewStore: store,
 		reviewCh:    make(chan reviewRequest, 16),
+		done:        make(chan struct{}),
 	}
 
 	// Subscribe to review request events
@@ -132,12 +136,16 @@ func (mr *mangoReviewer) handleTaskCompleted(msg *nats.Msg) {
 	status, _ := payload["status"].(string)
 	result, _ := payload["result"].(string)
 
-	// Only process review tasks — filter on task_type or review_type in context_data
-	if contextData, ok := payload["context_data"].(map[string]any); ok {
-		if reviewType, ok := contextData["review_type"].(string); ok && reviewType != "post_mutation" {
-			log.Printf("[MANGO-REVIEW] skipping non-review task %s (type: %s)", taskID, reviewType)
-			return
-		}
+	// Only process review tasks — require review_type == "post_mutation" explicitly
+	// so that unrelated mango completions are never misrouted as review feedback.
+	contextData, _ := payload["context_data"].(map[string]any)
+	if contextData == nil {
+		log.Printf("[MANGO-REVIEW] skipping task %s — no context_data", taskID)
+		return
+	}
+	if reviewType, ok := contextData["review_type"].(string); !ok || reviewType != "post_mutation" {
+		log.Printf("[MANGO-REVIEW] skipping non-review task %s (review_type: %v)", taskID, contextData["review_type"])
+		return
 	}
 
 	log.Printf("[MANGO-REVIEW] mango review task %s completed (status: %s)", taskID, status)
@@ -261,8 +269,8 @@ func formatReviewFeedback(taskID, status, result string) string {
 	return sb.String()
 }
 
-// Close gracefully shuts down the mango reviewer: drains pending reviews,
-// unsubscribes from NATS, and waits for in-flight reviews to complete.
+// Close gracefully shuts down the mango reviewer: unsubscribes from NATS,
+// signals the review processor to stop, and waits for in-flight reviews to complete.
 func (mr *mangoReviewer) Close() {
 	// Unsubscribe from all NATS subscriptions
 	for _, sub := range mr.subs {
@@ -271,10 +279,20 @@ func (mr *mangoReviewer) Close() {
 		}
 	}
 
-	// Drain the review channel — process any pending reviews
-	close(mr.reviewCh)
-	for req := range mr.reviewCh {
-		log.Printf("[MANGO-REVIEW] draining review: %s", req.TaskDesc)
+	// Signal processReviews to stop accepting new work
+	close(mr.done)
+
+	// Wait for in-flight reviews to finish (up to 10 seconds)
+	done := make(chan struct{})
+	go func() {
+		mr.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		log.Printf("[MANGO-REVIEW] all in-flight reviews completed")
+	case <-time.After(10 * time.Second):
+		log.Printf("[MANGO-REVIEW] timeout waiting for in-flight reviews")
 	}
 
 	log.Printf("[MANGO-REVIEW] shutdown complete")
@@ -282,7 +300,9 @@ func (mr *mangoReviewer) Close() {
 
 func (mr *mangoReviewer) processReviews() {
 	for req := range mr.reviewCh {
+		mr.wg.Add(1)
 		mr.review(req)
+		mr.wg.Done()
 	}
 }
 

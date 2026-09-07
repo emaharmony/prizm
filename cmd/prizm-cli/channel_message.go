@@ -52,6 +52,4 @@ type ChannelSender interface {
 type channelResponse struct {
 	Content   string // Response text
 	ChannelID string // Which channel to send to
-	EditMsgID string // If non-empty, edit this message instead of sending new
-	ThreadTS  string // Thread timestamp (Slack)
 }

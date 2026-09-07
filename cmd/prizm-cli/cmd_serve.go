@@ -132,7 +132,6 @@ type conversationContext struct {
 	providers     *provider.ProviderRegistry
 	bot           discordBotClient
 	sender        ChannelSender             // V78: Channel-agnostic message sender
-	botUserID    string                    // V78: Bot's own user ID for self-mention detection
 	platform     Platform                  // V78: Which channel platform this context serves
 	debounce      *debounce.Tracker
 	eventLog      *runtrack.EventLogger
@@ -479,7 +478,8 @@ func executeServe(args []string) {
 
 	var discordBots []*discordbot.BotAdapter
 	var factoryMon *factorymonitor.Monitor
-	var activeContexts []*conversationContext // V78: track for graceful shutdown
+	var telegramBots []*telegram.BotAdapter
+	var slackBots []*slack.BotAdapter
 
 	// V32: State manager, context builder, and plan manager — shared across all channels
 	var stateMgr *state.Manager
@@ -872,7 +872,6 @@ func executeServe(args []string) {
 			for _, a := range cfg.Agents {
 				convCtx.rebuildStaticSystemContent(&a)
 			}
-			activeContexts = append(activeContexts, convCtx)
 			bot.OnMessage(func(msg *discordbot.InboundMessage) {
 				convCtx.handleDiscordMessage(msg)
 			})
@@ -1035,7 +1034,6 @@ func executeServe(args []string) {
 				approvalWait:     make(map[string]chan approvalOutcome),
 			}
 			tgConvCtx.rebuildStaticSystemContent(&cfg.Agents[0])
-			activeContexts = append(activeContexts, tgConvCtx)
 			tgBot.OnMessage(func(msg *telegram.InboundMessage) {
 				tgConvCtx.handleMessage(ChannelMessage{
 					Platform:  PlatformTelegram,
@@ -1053,6 +1051,7 @@ func executeServe(args []string) {
 				}
 			}()
 			fmt.Printf("  Telegram: connecting\n")
+			telegramBots = append(telegramBots, tgBot)
 
 		case "slack":
 			slackBot := slack.NewBotAdapter(ch.Token, nil)
@@ -1104,7 +1103,6 @@ func executeServe(args []string) {
 				approvalWait:     make(map[string]chan approvalOutcome),
 			}
 			slackConvCtx.rebuildStaticSystemContent(&cfg.Agents[0])
-			activeContexts = append(activeContexts, slackConvCtx)
 			slackBot.OnMessage(func(msg *slack.InboundMessage) {
 				slackConvCtx.handleMessage(ChannelMessage{
 					Platform:  PlatformSlack,
@@ -1123,6 +1121,7 @@ func executeServe(args []string) {
 				}
 			}()
 			fmt.Printf("  Slack: connecting\n")
+			slackBots = append(slackBots, slackBot)
 
 		default:
 			fmt.Fprintf(os.Stderr, "Warning: unknown channel type %q\n", ch.Type)
@@ -1331,6 +1330,12 @@ func executeServe(args []string) {
 	for _, bot := range discordBots {
 		bot.Stop()
 	}
+	for _, bot := range telegramBots {
+		bot.Stop()
+	}
+	for _, bot := range slackBots {
+		bot.Stop()
+	}
 	if natsCleanup != nil {
 		natsCleanup()
 	}
@@ -1411,7 +1416,7 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 			// Message from a listened-to agent — allow through pipeline for capture
 			log.Printf("[AGENT] processing agent message from %s (%s)", msg.UserName, msg.UserID)
 		} else {
-			log.Printf("[AGENT] ignoring Discord bot message from %s (%s); cross-Prizm agents communicate over NATS", msg.UserName, msg.UserID)
+			log.Printf("[AGENT] ignoring bot message from %s (%s); cross-Prizm agents communicate over NATS", msg.UserName, msg.UserID)
 			return
 		}
 	}
