@@ -368,29 +368,3 @@ func TestSlugify(t *testing.T) {
 	}
 }
 
-func TestRealWorkspaceListRecent(t *testing.T) {
-	store := NewMarkdownStore("/Users/ema/.openclaw/workspace")
-	memories, err := store.ListRecent(context.Background(), 0)
-	if err != nil {
-		t.Fatalf("ListRecent: %v", err)
-	}
-	t.Logf("Found %d memories from workspace", len(memories))
-	
-	// Check for the Lumi name origin
-	found := false
-	for _, m := range memories {
-		if strings.Contains(strings.ToLower(m.Summary), "lumi name origin") {
-			found = true
-			t.Logf("Found Lumi name memory: %s (content: %d chars)", m.Summary, len(m.Content))
-			break
-		}
-	}
-	if !found {
-	for _, m := range memories {
-		if strings.Contains(strings.ToLower(m.Summary), "lumi") || strings.Contains(strings.ToLower(m.Content), "lumi name") {
-			t.Logf("  Candidate: Summary=%q, Date=%s, ContentLen=%d", m.Summary, m.CreatedAt.Format("2006-01-02"), len(m.Content))
-		}
-	}
-		t.Error("expected to find Lumi name origin memory")
-	}
-}
