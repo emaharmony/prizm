@@ -29,3 +29,20 @@ func (ds *discordSender) EditMessage(channelID, messageID, content string) error
 func (ds *discordSender) Typing(channelID string) error {
 	return ds.bot.Typing(channelID)
 }
+
+func (ds *discordSender) SendWithButtons(channelID string, buttons []ActionButton, content string) error {
+	// Convert generic ActionButtons to Discord-specific OutboundMessage
+	// Discord buttons are handled via formatPlanMessage which creates OutboundMessage directly.
+	// This method is a fallback for non-plan button use cases.
+	return ds.bot.Send(&discordbot.OutboundMessage{
+		ChannelID: channelID,
+		Content:   content,
+	})
+}
+
+func (ds *discordSender) SendAudio(channelID string, audio []byte) error {
+	return ds.bot.SendAudio(channelID, audio)
+}
+
+func (ds *discordSender) SupportsButtons() bool { return true }
+func (ds *discordSender) SupportsAudio() bool   { return true }

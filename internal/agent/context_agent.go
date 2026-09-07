@@ -132,10 +132,16 @@ func (ca *ContextAgent) Compress(taskDescription string) string {
 		log.Printf("[CONTEXT-AGENT] raw context truncated from %d to %d bytes", rawContext.Len(), maxRawContext)
 	}
 
-	// Call local model to compress
+	// Call cloud model to compress
 	compressed, err := ca.callOllama(rawStr, taskDescription)
 	if err != nil {
-		log.Printf("[CONTEXT-AGENT] ollama failed: %v, using fallback", err)
+		log.Printf("[CONTEXT-AGENT] model compression failed: %v, falling back to template extraction", err)
+		// V79: Template extraction as deterministic fallback (no LLM, no hallucination)
+		templateResult := ca.TemplateExtract(taskDescription)
+		if templateResult != "" {
+			ca.cacheResult(templateResult)
+			return templateResult
+		}
 		return ca.fallback()
 	}
 
@@ -154,12 +160,8 @@ func (ca *ContextAgent) Compress(taskDescription string) string {
 	}
 
 	// Cache the result
+	ca.cacheResult(compressed)
 	ca.mu.Lock()
-	ca.cached = &compressedContext{
-		text:    compressed,
-		builtAt: time.Now(),
-		ttl:     ca.cacheTTL,
-	}
 	ca.updateFileInfo(injected.Files)
 	ca.mu.Unlock()
 
@@ -224,6 +226,17 @@ func (ca *ContextAgent) fallback() string {
 }
 
 // readRecentMemoryFiles reads the most recent N memory files from the given directory.
+// cacheResult stores a compressed context result in the cache.
+func (ca *ContextAgent) cacheResult(text string) {
+	ca.mu.Lock()
+	ca.cached = &compressedContext{
+		text:    text,
+		builtAt: time.Now(),
+		ttl:     ca.cacheTTL,
+	}
+	ca.mu.Unlock()
+}
+
 func (ca *ContextAgent) readRecentMemoryFiles(dir string, n int) string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {

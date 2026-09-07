@@ -2018,40 +2018,48 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 
 	// V70: Send plan approval buttons for pending_approval plans created in this run
 // V73: Also notify auto_proceed plans so the user can see what was created
-	if cc.planMgr != nil && cc.bot != nil {
+// V79: Route through ChannelSender — buttons only on platforms that support them
+	if cc.planMgr != nil {
 		if plans, err := cc.planMgr.LoadPlans(); err == nil {
 			for i := range plans {
 				if plans[i].Notified {
 					continue
 				}
 				if plans[i].Status == plan.StatusPendingApproval {
-					// Send with approval buttons
 					planMsg := formatPlanMessage(&plans[i])
-					planMsg.ChannelID = msg.ChannelID
-					if sendErr := cc.bot.Send(&planMsg); sendErr != nil {
-						log.Printf("[PLAN] failed to send approval buttons for %s: %v", plans[i].ID, sendErr)
+					if cc.sender.SupportsButtons() {
+						// Send with buttons on platforms that support them
+						if sendErr := cc.bot.Send(&planMsg); sendErr != nil {
+							log.Printf("[PLAN] failed to send approval buttons for %s: %v", plans[i].ID, sendErr)
+						} else {
+							plans[i].Notified = true
+							_ = cc.planMgr.UpdatePlan(plans[i].ID, map[string]any{"notified": true})
+						}
 					} else {
-						plans[i].Notified = true
-						_ = cc.planMgr.UpdatePlan(plans[i].ID, map[string]any{"notified": true})
+						// Fallback: send plain text
+						if sendErr := cc.sender.Send(msg.ChannelID, planMsg.Content); sendErr != nil {
+							log.Printf("[PLAN] failed to send plan notification for %s: %v", plans[i].ID, sendErr)
+						} else {
+							plans[i].Notified = true
+							_ = cc.planMgr.UpdatePlan(plans[i].ID, map[string]any{"notified": true})
+						}
 					}
 				} else if plans[i].Status == plan.StatusAutoProceed {
-					// Send plan summary without buttons
 					summary := formatPlanMessage(&plans[i])
-					summary.ChannelID = msg.ChannelID
-					if sendErr := cc.bot.Send(&summary); sendErr != nil {
+					if sendErr := cc.sender.Send(msg.ChannelID, summary.Content); sendErr != nil {
 						log.Printf("[PLAN] failed to send plan notification for %s: %v", plans[i].ID, sendErr)
 					} else {
 						plans[i].Notified = true
 						_ = cc.planMgr.UpdatePlan(plans[i].ID, map[string]any{"notified": true})
-						log.Printf("[PLAN] sent auto_proceed plan %s notification to Discord", plans[i].ID)
+						log.Printf("[PLAN] sent auto_proceed plan %s notification", plans[i].ID)
 					}
 				}
 			}
 		}
 	}
 
-	// V73: Check for plan completion and notify Discord
-	if cc.planMgr != nil && cc.bot != nil {
+	// V73: Check for plan completion and notify
+	if cc.planMgr != nil {
 		if plans, err := cc.planMgr.LoadPlans(); err == nil {
 			for _, p := range plans {
 				if p.Status == plan.StatusAutoProceed {
@@ -2060,8 +2068,7 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 						// All steps completed — mark plan as completed and notify
 						_ = cc.planMgr.UpdatePlan(p.ID, map[string]any{"status": "completed", "notified": true})
 						completionMsg := fmt.Sprintf("✅ **Plan %s completed** — %s\nAll %d steps done!", p.ID, p.Title, total)
-						discordMsg := discordbot.OutboundMessage{Content: completionMsg, ChannelID: msg.ChannelID}
-						if sendErr := cc.bot.Send(&discordMsg); sendErr != nil {
+						if sendErr := cc.sender.Send(msg.ChannelID, completionMsg); sendErr != nil {
 							log.Printf("[PLAN] failed to send completion notification for %s: %v", p.ID, sendErr)
 						}
 					}
@@ -2070,8 +2077,8 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 		}
 	}
 
-	// V61: TTS — generate voice from response if enabled
-	if finalSent && responseText != "" && cc.ttsClient != nil {
+	// V61: TTS — generate voice from response if enabled (platform-aware)
+	if finalSent && responseText != "" && cc.ttsClient != nil && cc.sender.SupportsAudio() {
 		ttsChannelRole := cc.cfg.ResolveChannelRoleConfig(msg.ChannelID)
 		channelTTS := false
 		if ttsChannelRole != nil {
@@ -2087,8 +2094,8 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 					log.Printf("[TTS] failed: %v", err)
 					return
 				}
-				// Send audio to Discord
-				if err := cc.bot.SendAudio(channelID, audio); err != nil {
+				// V79: Send audio through ChannelSender (platform-aware)
+				if err := cc.sender.SendAudio(channelID, audio); err != nil {
 					log.Printf("[TTS] failed to send voice message: %v", err)
 					return
 				}

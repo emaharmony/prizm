@@ -46,6 +46,23 @@ type ChannelSender interface {
 	EditMessage(channelID, messageID, content string) error
 	// Typing shows a typing indicator in the channel.
 	Typing(channelID string) error
+	// SendWithButtons sends a message with interactive buttons (approval cards, etc).
+	// Platforms that don't support buttons should log a warning and send plain text instead.
+	SendWithButtons(channelID string, buttons []ActionButton, content string) error
+	// SendAudio sends an audio/voice message to the channel.
+	// Platforms that don't support audio should log a warning and skip.
+	SendAudio(channelID string, audio []byte) error
+	// SupportsButtons returns true if the platform supports interactive buttons.
+	SupportsButtons() bool
+	// SupportsAudio returns true if the platform supports audio/voice messages.
+	SupportsAudio() bool
+}
+
+// ActionButton represents a clickable button in a message.
+type ActionButton struct {
+	Label    string
+	CustomID string
+	Style    string // "primary", "danger", "secondary"
 }
 
 // channelResponse is what the pipeline sends back to the adapter.

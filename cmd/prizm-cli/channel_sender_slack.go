@@ -3,6 +3,8 @@
 package main
 
 import (
+	"log"
+
 	"github.com/emaharmony/prizm/internal/adapter/builtin/slack"
 )
 
@@ -35,3 +37,21 @@ func (ss *slackSender) Typing(channelID string) error {
 	// Slack doesn't have an explicit typing indicator API
 	return nil
 }
+
+func (ss *slackSender) SendWithButtons(channelID string, buttons []ActionButton, content string) error {
+	// Slack supports Block Kit buttons — future implementation
+	log.Printf("[SLACK] SendWithButtons: buttons not yet implemented, sending plain text")
+	return ss.bot.Send(&slack.OutboundMessage{
+		ChannelID: channelID,
+		Content:   content,
+	})
+}
+
+func (ss *slackSender) SendAudio(channelID string, audio []byte) error {
+	// Slack doesn't support direct audio messages
+	log.Printf("[SLACK] SendAudio: audio not supported on Slack, skipping")
+	return nil
+}
+
+func (ss *slackSender) SupportsButtons() bool { return false }
+func (ss *slackSender) SupportsAudio() bool   { return false }
