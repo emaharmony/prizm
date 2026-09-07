@@ -18,7 +18,7 @@ import (
 
 // Memory is a single stored memory entry.
 type Memory struct {
-	ID         string            // ULID
+	ID         string            // ULID or derived from section title
 	Content    string            // The memory text
 	Category   string            // e.g., "decision", "preference", "fact"
 	Tier       string            // "ephemeral", "active", "persist"
@@ -34,7 +34,6 @@ type Memory struct {
 }
 
 // MemoryStore is the abstract interface for memory operations.
-// Phase 1 = MarkdownStore, Phase 2 = SQLiteStore (swap-in replacement).
 type MemoryStore interface {
 	Search(ctx context.Context, query string, limit int) ([]Memory, error)
 	Get(ctx context.Context, id string) (*Memory, error)
@@ -45,8 +44,8 @@ type MemoryStore interface {
 
 // MarkdownStore implements MemoryStore using memory/*.md files.
 type MarkdownStore struct {
-	root    string // workspace root (contains memory/ subdir)
-	mu      sync.Map // per-date mutex for concurrent writes
+	root string    // workspace root (contains memory/ subdir)
+	mu   sync.Map // per-date mutex for concurrent writes
 }
 
 // NewMarkdownStore creates a MarkdownStore rooted at the given workspace path.
@@ -245,12 +244,22 @@ func scoreMemory(m Memory, terms []string) float64 {
 }
 
 // --- Parsing ---
+//
+// parseMemoryFile uses a multi-strategy approach:
+//   1. Structured: ### ID — Summary format with - **Key:** Value fields
+//   2. Header-based: Any markdown header (# through ######) creates a section
+//   3. Paragraph-based: If no headers, each blank-line-separated block is a memory
+//
+// This makes Prizm's memory system work with any markdown notes — Obsidian vaults,
+// Logseq folders, plain daily notes, or the structured ### format.
 
 var (
-	headerRe  = regexp.MustCompile(`^###\s+(\S+)\s+—\s+(.+)$`)
-	fieldRe   = regexp.MustCompile(`^-\s+\*\*([^*]+):\*\*\s+(.+)$`)
-	separator = regexp.MustCompile(`^---+$`)
+	headerRe = regexp.MustCompile(`(?m)^###\s+(\S+)\s+—\s+(.+)$`)
+	fieldRe  = regexp.MustCompile(`^-\s+\*\*([^*]+):\*\*\s+(.+)$`)
 )
+
+// mdHeaderRe matches any markdown header line (# through ######)
+var mdHeaderRe = regexp.MustCompile(`^#{1,6}\s+(.+)$`)
 
 func parseMemoryFile(path string) ([]Memory, error) {
 	data, err := os.ReadFile(path)
@@ -258,12 +267,47 @@ func parseMemoryFile(path string) ([]Memory, error) {
 		return nil, err
 	}
 
+	content := string(data)
+	filename := filepath.Base(path)
+
+	// Extract date from filename (e.g., "2026-07-27.md" → 2026-07-27)
+	dateFromFilename := time.Time{}
+	dateStr := strings.TrimSuffix(filename, ".md")
+	if t, err := time.Parse("2006-01-02", dateStr); err == nil {
+		dateFromFilename = t
+	}
+
+	// Strategy 1: Try structured ### ID — Summary format first
+	if memories := parseStructured(content, dateFromFilename); len(memories) > 0 {
+		return memories, nil
+	}
+
+	// Strategy 2: Header-based extraction (any # through ######)
+	if memories := parseByHeaders(content, filename, dateFromFilename); len(memories) > 0 {
+		return memories, nil
+	}
+
+	// Strategy 3: Paragraph-based (no headers — split on blank lines)
+	if memories := parseByParagraphs(content, filename, dateFromFilename); len(memories) > 0 {
+		return memories, nil
+	}
+
+	return nil, nil
+}
+
+// parseStructured extracts memories in the OpenClaw ### ID — Summary format.
+func parseStructured(content string, date time.Time) []Memory {
+	// Only use structured parsing if the content actually contains ### — lines
+	if !headerRe.MatchString(content) {
+		return nil
+	}
+
 	var memories []Memory
 	var current *Memory
 	var contentLines []string
 	inContent := false
 
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, line := range strings.Split(content, "\n") {
 		if m := headerRe.FindStringSubmatch(line); m != nil {
 			if current != nil {
 				current.Content = strings.TrimSpace(strings.Join(contentLines, "\n"))
@@ -275,29 +319,6 @@ func parseMemoryFile(path string) ([]Memory, error) {
 			contentLines = nil
 			inContent = false
 			continue
-		}
-
-		// V79: Fallback for ## Title sections (plain markdown memories)
-		// Each ## header becomes a memory with the title as both ID and summary.
-		if strings.HasPrefix(line, "## ") {
-			title := strings.TrimPrefix(line, "## ")
-			title = strings.TrimSpace(title)
-			if title != "" && current == nil {
-				// First section in file — start a new memory
-				current = &Memory{ID: strings.ReplaceAll(title, " ", "-"), Summary: title}
-				contentLines = nil
-				inContent = true
-				continue
-			}
-			if current != nil && title != "" {
-				// New section — save previous and start next
-				current.Content = strings.TrimSpace(strings.Join(contentLines, "\n"))
-				memories = append(memories, *current)
-				current = &Memory{ID: strings.ReplaceAll(title, " ", "-"), Summary: title}
-				contentLines = nil
-				inContent = true
-				continue
-			}
 		}
 
 		if current == nil {
@@ -342,19 +363,205 @@ func parseMemoryFile(path string) ([]Memory, error) {
 		memories = append(memories, *current)
 	}
 
-	// Derive date from filename for CreatedAt
-	base := filepath.Base(path)
-	dateStr := strings.TrimSuffix(base, ".md")
-	if t, err := time.Parse("2006-01-02", dateStr); err == nil {
+	// Set date from filename
+	if !date.IsZero() {
 		for i := range memories {
 			if memories[i].CreatedAt.IsZero() {
-				memories[i].CreatedAt = t
-				memories[i].AccessedAt = t
+				memories[i].CreatedAt = date
+				memories[i].AccessedAt = date
 			}
 		}
 	}
 
-	return memories, nil
+	return memories
+}
+
+// parseByHeaders extracts memories from any markdown header level (# through ######).
+// Each header creates a new memory section. Headers at the same or higher level
+// start a new memory. Deeper headers are included in the current section's content.
+func parseByHeaders(content string, filename string, date time.Time) []Memory {
+	var memories []Memory
+	var current *sectionBuilder
+
+	for _, line := range strings.Split(content, "\n") {
+		if m := mdHeaderRe.FindStringSubmatch(line); m != nil {
+			title := strings.TrimSpace(m[1])
+			if title == "" {
+				continue
+			}
+			// Save previous section
+			if current != nil {
+				mem := current.build(date)
+				if mem.Content != "" || mem.Summary != "" {
+					memories = append(memories, mem)
+				}
+			}
+			current = newSectionBuilder(slugify(title), title)
+			continue
+		}
+
+		if current != nil {
+			current.addLine(line)
+		}
+	}
+
+	// Save last section
+	if current != nil {
+		mem := current.build(date)
+		if mem.Content != "" || mem.Summary != "" {
+			memories = append(memories, mem)
+		}
+	}
+
+	// If no headers were found, return nil (let paragraph parser handle it)
+	if len(memories) == 0 {
+		return nil
+	}
+
+	return memories
+}
+
+// parseByParagraphs extracts memories from plain text by splitting on blank lines.
+// Each paragraph becomes a memory with the first line as summary.
+// This handles files with no headers at all — just bullet lists or prose.
+func parseByParagraphs(content string, filename string, date time.Time) []Memory {
+	paragraphs := splitParagraphs(content)
+	if len(paragraphs) == 0 {
+		return nil
+	}
+
+	var memories []Memory
+	for _, para := range paragraphs {
+		para = strings.TrimSpace(para)
+		if para == "" {
+			continue
+		}
+		// Use first line as summary, rest as content
+		lines := strings.SplitN(para, "\n", 2)
+		summary := strings.TrimSpace(lines[0])
+		// Strip leading list markers for summary
+		summary = strings.TrimLeft(summary, "-•* ")
+		// Truncate summary if too long
+		if len(summary) > 100 {
+			summary = summary[:97] + "..."
+		}
+
+		body := para
+		if len(lines) > 1 {
+			body = para
+		}
+
+		mem := Memory{
+			ID:        slugify(summary),
+			Summary:   summary,
+			Content:   body,
+			CreatedAt: date,
+			AccessedAt: date,
+		}
+		memories = append(memories, mem)
+	}
+
+	return memories
+}
+
+// sectionBuilder helps construct a Memory from a header-based section.
+type sectionBuilder struct {
+	id       string
+	summary  string
+	lines    []string
+	meta     map[string]string // key-value metadata from - **Key:** Value lines
+}
+
+func newSectionBuilder(id, summary string) *sectionBuilder {
+	return &sectionBuilder{
+		id:      id,
+		summary: summary,
+		meta:    make(map[string]string),
+	}
+}
+
+func (sb *sectionBuilder) addLine(line string) {
+	// Check for - **Key:** Value metadata lines
+	if m := fieldRe.FindStringSubmatch(line); m != nil {
+		sb.meta[strings.TrimSpace(m[1])] = strings.TrimSpace(m[2])
+		return
+	}
+	sb.lines = append(sb.lines, line)
+}
+
+func (sb *sectionBuilder) build(date time.Time) Memory {
+	content := strings.TrimSpace(strings.Join(sb.lines, "\n"))
+	mem := Memory{
+		ID:        sb.id,
+		Summary:   sb.summary,
+		Content:   content,
+		CreatedAt: date,
+		AccessedAt: date,
+	}
+	// Extract metadata
+	if v, ok := sb.meta["Category"]; ok {
+		mem.Category = v
+	}
+	if v, ok := sb.meta["Tier"]; ok {
+		mem.Tier = v
+	}
+	if v, ok := sb.meta["Source"]; ok {
+		mem.Source = v
+	}
+	if v, ok := sb.meta["Agent"]; ok {
+		mem.AgentID = v
+	}
+	if v, ok := sb.meta["Key Topics"]; ok {
+		mem.KeyTopics = strings.Split(v, ", ")
+	}
+	return mem
+}
+
+// slugify converts a title to a URL-friendly slug for use as a memory ID.
+func slugify(s string) string {
+	s = strings.ToLower(s)
+	// Replace spaces with hyphens
+	s = strings.ReplaceAll(s, " ", "-")
+	// Remove non-alphanumeric characters except hyphens
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	result := b.String()
+	// Collapse multiple hyphens
+	for strings.Contains(result, "--") {
+		result = strings.ReplaceAll(result, "--", "-")
+	}
+	return strings.Trim(result, "-")
+}
+
+// splitParagraphs splits text into paragraphs separated by blank lines.
+func splitParagraphs(text string) []string {
+	var paragraphs []string
+	var current strings.Builder
+	lines := strings.Split(text, "\n")
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			// End of paragraph
+			if current.Len() > 0 {
+				paragraphs = append(paragraphs, current.String())
+				current.Reset()
+			}
+			continue
+		}
+		current.WriteString(line)
+		current.WriteString("\n")
+	}
+	// Don't forget the last paragraph
+	if current.Len() > 0 {
+		paragraphs = append(paragraphs, current.String())
+	}
+
+	return paragraphs
 }
 
 // --- Formatting ---
