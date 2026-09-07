@@ -491,336 +491,346 @@ func executeServe(args []string) {
 	var skillReg *skill.Registry
 	var toolExec *tool.Executor
 
-	// V78: Shared infrastructure — created by first channel, available to all
+	// V78: Shared infrastructure — initialized before channel loop so all channels have access
 	var guardian *guard.Guard
 	var toolPolicy tool.PolicyConfig
 	var govLoader *governance.Loader
 	var contextAgent *agent.ContextAgent
 	var infraSubs []*nats.Subscription // V78: Infrastructure NATS subs for graceful teardown
 
+
+	// V79: Initialize shared infrastructure before channel loop.
+	// This ensures all channels have access to tools, memory, governance, etc.
+	// regardless of which channel is listed first in the config.
+
+
+	// V21: Build workspace context injection
+	ctxBuildr = nil
+	if cfg.Prizm.Workspace != "" {
+		ctxBuildr = context.NewBuilder(cfg.Prizm.Workspace)
+	} else {
+		// Default: use home directory + .openclaw/workspace
+		ctxBuildr = context.NewBuilder(filepath.Join(os.Getenv("HOME"), ".openclaw", "workspace"))
+	}
+
+	// V21: Create Remembrance client if enabled
+	if cfg.Remembrance.Enabled {
+		remClient = remembrance.NewClientWithTimeout(
+			cfg.Remembrance.URL,
+			remembranceTimeout(cfg),
+		)
+		if remClient.IsAvailable() {
+			fmt.Println("  Remembrance: connected")
+		} else {
+			log.Printf("[WARN] Remembrance enabled but not reachable at %s", cfg.Remembrance.URL)
+			remClient = nil // Disable gracefully
+		}
+	}
+
+	// Local memory store (MarkdownStore fallback)
+	memCfg := cfg.Memory
+	if memCfg.StorePath == "" {
+		memCfg = cfg.Prizm.Memory // fallback to prizm.memory
+	}
+	if memCfg.StorePath != "" {
+		memPath := memCfg.StorePath
+		if !filepath.IsAbs(memPath) {
+			ws := cfg.Prizm.Workspace
+			if ws == "" {
+				ws = "."
+			}
+			memPath = filepath.Join(ws, memPath)
+		}
+		memoryStore = memory.NewMarkdownStore(memPath)
+		fmt.Printf("  Memory: local markdown store at %s\n", memPath)
+	}
+
+	// V22: Register agent subscriptions against the shared task store.
+	if delegEngine != nil {
+		// Register agent subscriptions
+		for i := range cfg.Agents {
+			a := &cfg.Agents[i]
+			for _, sub := range a.Subscriptions {
+				agentID := a.ID
+				// Subscribe this agent to its configured NATS subjects
+				// The handler runs the agent's pipeline when a task.created event arrives
+				handler := func(agentID string, sub string) func(ctxcontext.Context, *task.Task) error {
+					return func(ctx ctxcontext.Context, t *task.Task) error {
+						log.Printf("[DELEGATION] agent %s received task %s via %s (type: %s)", agentID, t.ID, sub, t.Type)
+						// Task processing will be wired in M3.1d (DelegationStage)
+						return nil
+					}
+				}(agentID, sub)
+				if err := delegEngine.Subscribe(agentID, handler); err != nil {
+					log.Printf("[WARN] failed to subscribe agent %s to %s: %v", agentID, sub, err)
+				}
+			}
+		}
+	}
+
+	// V27/V28: Set up tool executor with full tool suite
+	workspaceRoot := cfg.Prizm.Workspace
+	if workspaceRoot == "" {
+		workspaceRoot = "."
+	}
+
+	// V76: Context agent for compressed identity injection
+	compCfg := agent.DefaultCompressionConfig()
+	if cfg.Prizm.ContextCompression != nil {
+		compCfg = *cfg.Prizm.ContextCompression
+	}
+	if compCfg.Enabled {
+		contextAgent = agent.NewContextAgent(workspaceRoot, compCfg)
+		log.Printf("[CONTEXT] compression enabled (model: %s, ttl: %s)", compCfg.Model, compCfg.CacheTTL)
+
+		// V76: Subscribe context agent to NATS context.requested events.
+		// When prizm.context.requested is published, the context agent
+		// compresses identity and publishes prizm.context.built.
+		if natsConn != nil {
+			ctxAgent := contextAgent // capture for closure
+			sub, err := natsConn.Subscribe("prizm.context.requested", func(msg *nats.Msg) {
+				var payload map[string]any
+				if err := json.Unmarshal(msg.Data, &payload); err != nil {
+					log.Printf("[CONTEXT-AGENT] invalid context.requested event: %v", err)
+					return
+				}
+				taskDesc, _ := payload["task_description"].(string)
+				compressed := ctxAgent.Compress(taskDesc)
+				log.Printf("[CONTEXT-AGENT] compressed context (%d chars) for task: %.50s", len(compressed), taskDesc)
+				// Publish prizm.context.built event
+				eventPayload, _ := json.Marshal(map[string]any{
+					"compressed_text": compressed,
+					"agent_id":       "context",
+					"v":              1,
+				})
+				natsConn.Publish("prizm.context.built", eventPayload)
+			})
+			if err != nil {
+				log.Printf("[CONTEXT-AGENT] failed to subscribe to prizm.context.requested: %v", err)
+			} else {
+				log.Printf("[CONTEXT-AGENT] subscribed to prizm.context.requested")
+			}
+			infraSubs = append(infraSubs, sub)
+		}
+	}
+
+	// V77: Memory extraction subscriber — consumes prizm.memory.extract.requested events
+	// and runs the gate → extract → store pipeline to persist memories.
+	if natsConn != nil && memoryStore != nil {
+		gateModels := []string{"qwen3.5:4b"} // default fallback
+		if len(cfg.Prizm.Memory.ModelFallbackChain) > 0 {
+			gateModels = cfg.Prizm.Memory.ModelFallbackChain
+		} else if cfg.Prizm.Memory.GateModel != "" {
+			gateModels = []string{cfg.Prizm.Memory.GateModel}
+		}
+		ollamaURL := "http://localhost:11434"
+		if cfg.Prizm.Memory.OllamaURL != "" {
+			ollamaURL = cfg.Prizm.Memory.OllamaURL
+		} else if cfg.Prizm.ContextCompression != nil && cfg.Prizm.ContextCompression.OllamaURL != "" {
+			ollamaURL = cfg.Prizm.ContextCompression.OllamaURL
+		}
+		gateExtractor := memory.NewGateExtractor(gateModels, ollamaURL, "")
+		autoExtractor := memory.NewAutoExtractor(gateExtractor, memoryStore, nil) // no event emitter for now
+
+		memSub, err := natsConn.Subscribe("prizm.memory.extract.requested", func(msg *nats.Msg) {
+			var payload map[string]any
+			if err := json.Unmarshal(msg.Data, &payload); err != nil {
+				log.Printf("[MEMORY-EXTRACT] invalid extract.requested event: %v", err)
+				return
+			}
+
+			sessionID, _ := payload["session_id"].(string)
+			agentID, _ := payload["agent_id"].(string)
+			userMsg, _ := payload["user_message"].(string)
+			agentResp, _ := payload["agent_response"].(string)
+
+			log.Printf("[MEMORY-EXTRACT] processing extract request (session=%s, agent=%s, user_msg_len=%d)", sessionID, agentID, len(userMsg))
+
+			turn := memory.ConversationTurn{
+				UserMessage:   userMsg,
+				AgentResponse: agentResp,
+				AgentID:       agentID,
+				SessionID:     sessionID,
+			}
+
+			// V77: Memory extraction with 60s timeout to prevent stuck goroutines
+			extractCtx, extractCancel := ctxcontext.WithTimeout(ctxcontext.Background(), 60*time.Second)
+			if err := autoExtractor.AutoExtract(extractCtx, turn); err != nil {
+				log.Printf("[MEMORY-AUTO] extraction failed: %v", err)
+			}
+			extractCancel()
+		})
+		if err != nil {
+			log.Printf("[MEMORY-EXTRACT] failed to subscribe to prizm.memory.extract.requested: %v", err)
+		} else {
+			log.Printf("[MEMORY-EXTRACT] subscribed to prizm.memory.extract.requested")
+		}
+		infraSubs = append(infraSubs, memSub)
+	}
+
+	readRoots := configuredReadRoots(cfg)
+	writeRoots := configuredWriteRoots(cfg)
+
+	toolReg = tool.NewRegistry()
+	tool.RegisterBuiltinsWithRoots(toolReg, workspaceRoot, 10*1024*1024, readRoots, writeRoots) // all read-only + project tools
+	toolReg.Register(&tool.WriteFileProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
+	toolReg.Register(&tool.CreateDirectoryProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
+	// V35: Direct write tool for autonomous wake actions (auto-approved via policy)
+	toolReg.Register(&tool.WriteFileDirect{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
+	toolReg.Register(&tool.CreateDirectoryDirect{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
+	// V28: Git mutation tools (require approval)
+	protectedBranch := cfg.ProtectedBranch()
+	toolReg.Register(&tool.GitAddTool{ToolPaths: tool.ToolPaths{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots}})
+	toolReg.Register(&tool.GitCommitTool{ToolPaths: tool.ToolPaths{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots}, ProtectedBranch: protectedBranch})
+	toolReg.Register(&tool.GitPushTool{ToolPaths: tool.ToolPaths{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots}, ProtectedBranch: protectedBranch})
+	toolReg.Register(&tool.GitCreatePRTool{})
+	// V32: State management tools
+	// V60: Shell tool for free mode (registered with tier_1 policy for gated mode)
+	shellTool := &tool.ShellTool{
+		Policy:         tool.BuildShellPolicyFromConfig("tier_1", cfg.Shell.Allowlists, cfg.Shell.Defaults.BlockedPatterns),
+		DefaultTimeout: cfg.Shell.Defaults.TimeoutSeconds,
+		MaxOutputBytes: cfg.Shell.Defaults.MaxOutputBytes,
+		MaxStderrBytes: cfg.Shell.Defaults.MaxOutputBytes / 2,
+	}
+	toolReg.Register(shellTool)
+
+	stateMgr = state.NewManager(workspaceRoot)
+	stateMgr.EnsureDir()
+	tool.RegisterStateTools(toolReg, stateMgr)
+
+	// V32: Plan-First Pipeline tools
+	planMgr = plan.NewManager(workspaceRoot)
+	planMgr.EnsureDir()
+	tool.RegisterPlanTools(toolReg, planMgr)
+
+	// Gated loop: RESEARCH-phase tools (web_search + memory_search).
+	// Pass the Remembrance client only when available so memory_search
+	// reports "disabled" instead of dereferencing a nil client.
+	var memSearcher tool.MemorySearcher
+	if remClient != nil {
+		memSearcher = remClient
+	}
+	// Wire local MarkdownStore as fallback for memory_search
+	var localStore tool.LocalMemoryStore
+	if memoryStore != nil {
+		localStore = memoryStore
+		log.Printf("[MEMORY] local MarkdownStore wired as fallback")
+	} else {
+		log.Printf("[MEMORY] WARNING: local MarkdownStore is nil, memory_search will have no fallback")
+	}
+	tool.RegisterResearchTools(toolReg, memSearcher, localStore, tool.WebSearchConfig{})
+
+	// Researcher reference-image tools: fetch/generate/analyze/collect.
+	// Images save under <workspace>/references by default and may target
+	// configured write roots via output_dir.
+	tool.RegisterImageTools(toolReg, imageToolsConfigFromPrizmConfig(cfg, workspaceRoot, writeRoots))
+
+	// V34: Cross-Prizm bridge tool — send messages to remote Prizm instances
+	if crossSvc != nil {
+		toolReg.Register(tool.NewSendCrossMessageTool(crossSvc))
+	}
+
+	// V49: External MCP tool servers — register their tools into the
+	// policy-gated registry so agents can use them like any built-in.
+	if specs := mcpServerSpecs(cfg); len(specs) > 0 {
+		for _, res := range mcp.RegisterServers(ctx, toolReg, specs, mcp.ProcessClientFactory) {
+			if res.Err != nil {
+				fmt.Printf("  MCP %s: error: %v\n", res.Server, res.Err)
+				continue
+			}
+			fmt.Printf("  MCP %s: %d tool(s) registered\n", res.Server, len(res.Tools))
+		}
+	}
+
+	// V54: Skills — discover SKILL.md skills (Claude Code / OpenClaw) under
+	// the workspace and expose them via the use_skill tool + prompt.
+	skillReg = skill.NewRegistry()
+	if n, serr := skillReg.LoadDefault(workspaceRoot); n > 0 || serr != nil {
+		if serr != nil {
+			fmt.Printf("  Skills: %d loaded (%v)\n", n, serr)
+		} else {
+			fmt.Printf("  Skills: %d loaded\n", n)
+		}
+	}
+	tool.RegisterSkillTool(toolReg, skillReg)
+
+	// V77: DelegateTool — allows agents to delegate tasks to other agents
+	if delegEngine != nil {
+		toolReg.Register(tool.NewDelegateTool(delegatorAdapter{Engine: delegEngine}, configuredOrchestratorAgentID(cfg)))
+	}
+
+	// V77: SkillWriteTool — allows agents to create/update SKILL.md files
+	skillsDir := filepath.Join(workspaceRoot, "skills")
+	toolReg.Register(tool.NewSkillWriteTool(skillsDir))
+
+	// V32: Self-Improvement Loop
+	improveMgr = improve.NewManager(workspaceRoot)
+	improveMgr.EnsureDir()
+
+	// V32: Guard rail (plan-first enforcement)
+	guardian = guard.NewGuard(planMgr, ctxBuildr)
+
+	toolPolicy = tool.DefaultPolicyConfig()
+	// Mutation operations require approval
+	toolPolicy.MaxFileSize = 10 * 1024 * 1024 // 10MB for serve mode
+	toolPolicy.WorkspaceRoot = workspaceRoot
+	toolPolicy.AllowedPaths = cfg.Prizm.AllowedPaths
+	toolPolicy.ReadRoots = readRoots
+	toolPolicy.WriteRoots = writeRoots
+	toolPolicy.OrchestratorAgentID = configuredOrchestratorAgentID(cfg)
+	toolPolicy.AutoApproveMCP = cfg.MCPAutoApprove // unattended MCP execution (default off)
+	// V62: safe shell commands (tier_1 allowlist) auto-approve even in
+	// gated mode — the hard blocklist inside EvaluateShellPolicy still
+	// applies regardless of tier.
+	toolPolicy.SafeShellPolicy = tool.BuildShellPolicyFromConfig("tier_1", cfg.Shell.Allowlists, cfg.Shell.Defaults.BlockedPatterns)
+	// V61: Load governance docs and populate frozen paths in tool policy
+	govLoader = governance.NewLoader(cfg.Prizm.Workspace, nil)
+	govLoader.Load()
+	for _, doc := range govLoader.Docs() {
+		for _, fp := range doc.Frontmatter.Governance.FrozenPaths {
+			toolPolicy.FrozenPaths = append(toolPolicy.FrozenPaths, fp)
+			reason := doc.Frontmatter.Governance.Reason
+			if reason == "" {
+				reason = fmt.Sprintf("Path %s is frozen per %s", fp, doc.Name)
+			}
+			if toolPolicy.FrozenPathReasons == nil {
+				toolPolicy.FrozenPathReasons = make(map[string]string)
+			}
+			toolPolicy.FrozenPathReasons[fp] = reason
+		}
+	}
+	toolExec = tool.NewExecutor(toolReg, &toolPolicy)
+	toolExec.SetApprovalStore(approval.NewStore(cfg.Prizm.RunsDir))
+	// V79: Emitter set in Discord case where bot is available (approval cards are Discord-specific)
+
+
 	for _, ch := range cfg.Channels {
 		switch ch.Type {
 		case "discord":
 			bot := discordbot.NewBotAdapter(ch.Token)
 
-			// V21: Build workspace context injection
-			ctxBuildr = nil
-			if cfg.Prizm.Workspace != "" {
-				ctxBuildr = context.NewBuilder(cfg.Prizm.Workspace)
-			} else {
-				// Default: use home directory + .openclaw/workspace
-				ctxBuildr = context.NewBuilder(filepath.Join(os.Getenv("HOME"), ".openclaw", "workspace"))
-			}
-
-			// V21: Create Remembrance client if enabled
-			if cfg.Remembrance.Enabled {
-				remClient = remembrance.NewClientWithTimeout(
-					cfg.Remembrance.URL,
-					remembranceTimeout(cfg),
-				)
-				if remClient.IsAvailable() {
-					fmt.Println("  Remembrance: connected")
-				} else {
-					log.Printf("[WARN] Remembrance enabled but not reachable at %s", cfg.Remembrance.URL)
-					remClient = nil // Disable gracefully
-				}
-			}
-
-			// Local memory store (MarkdownStore fallback)
-			memCfg := cfg.Memory
-			if memCfg.StorePath == "" {
-				memCfg = cfg.Prizm.Memory // fallback to prizm.memory
-			}
-			if memCfg.StorePath != "" {
-				memPath := memCfg.StorePath
-				if !filepath.IsAbs(memPath) {
-					ws := cfg.Prizm.Workspace
-					if ws == "" {
-						ws = "."
-					}
-					memPath = filepath.Join(ws, memPath)
-				}
-				memoryStore = memory.NewMarkdownStore(memPath)
-				fmt.Printf("  Memory: local markdown store at %s\n", memPath)
-			}
-
-			// V22: Register agent subscriptions against the shared task store.
-			if delegEngine != nil {
-				// Register agent subscriptions
-				for i := range cfg.Agents {
-					a := &cfg.Agents[i]
-					for _, sub := range a.Subscriptions {
-						agentID := a.ID
-						// Subscribe this agent to its configured NATS subjects
-						// The handler runs the agent's pipeline when a task.created event arrives
-						handler := func(agentID string, sub string) func(ctxcontext.Context, *task.Task) error {
-							return func(ctx ctxcontext.Context, t *task.Task) error {
-								log.Printf("[DELEGATION] agent %s received task %s via %s (type: %s)", agentID, t.ID, sub, t.Type)
-								// Task processing will be wired in M3.1d (DelegationStage)
-								return nil
+			// V79: Set tool executor emitter with Discord bot reference for approval cards
+			if toolExec != nil {
+				discordBot := bot // capture for closure
+				toolExec.SetEmitter(func(eventType, source string, payload map[string]any) {
+					log.Printf("[TOOL-EVENT] %s: %v", eventType, payload)
+					if eventType == "prizm.approval.file_requested" {
+						approvalID, _ := payload["approval_id"].(string)
+						runID, _ := payload["run_id"].(string)
+						targetPath, _ := payload["target_path"].(string)
+						agentName, _ := payload["agent"].(string)
+						preview, _ := payload["preview"].(string)
+						mutationType, _ := payload["mutation_type"].(string)
+						toolName, _ := payload["tool_name"].(string)
+						if approvalID != "" && runID != "" {
+							channelID, _ := payload["_channel_id"].(string)
+							if channelID != "" && discordBot != nil {
+								sendApprovalCard(discordBot, channelID, approvalID, runID, targetPath, agentName, preview, mutationType, toolName)
 							}
-						}(agentID, sub)
-						if err := delegEngine.Subscribe(agentID, handler); err != nil {
-							log.Printf("[WARN] failed to subscribe agent %s to %s: %v", agentID, sub, err)
 						}
 					}
-				}
-			}
-
-			// V27/V28: Set up tool executor with full tool suite
-			workspaceRoot := cfg.Prizm.Workspace
-			if workspaceRoot == "" {
-				workspaceRoot = "."
-			}
-
-			// V76: Context agent for compressed identity injection
-			compCfg := agent.DefaultCompressionConfig()
-			if cfg.Prizm.ContextCompression != nil {
-				compCfg = *cfg.Prizm.ContextCompression
-			}
-			if compCfg.Enabled {
-				contextAgent = agent.NewContextAgent(workspaceRoot, compCfg)
-				log.Printf("[CONTEXT] compression enabled (model: %s, ttl: %s)", compCfg.Model, compCfg.CacheTTL)
-
-				// V76: Subscribe context agent to NATS context.requested events.
-				// When prizm.context.requested is published, the context agent
-				// compresses identity and publishes prizm.context.built.
-				if natsConn != nil {
-					ctxAgent := contextAgent // capture for closure
-					sub, err := natsConn.Subscribe("prizm.context.requested", func(msg *nats.Msg) {
-						var payload map[string]any
-						if err := json.Unmarshal(msg.Data, &payload); err != nil {
-							log.Printf("[CONTEXT-AGENT] invalid context.requested event: %v", err)
-							return
-						}
-						taskDesc, _ := payload["task_description"].(string)
-						compressed := ctxAgent.Compress(taskDesc)
-						log.Printf("[CONTEXT-AGENT] compressed context (%d chars) for task: %.50s", len(compressed), taskDesc)
-						// Publish prizm.context.built event
-						eventPayload, _ := json.Marshal(map[string]any{
-							"compressed_text": compressed,
-							"agent_id":       "context",
-							"v":              1,
-						})
-						natsConn.Publish("prizm.context.built", eventPayload)
-					})
-					if err != nil {
-						log.Printf("[CONTEXT-AGENT] failed to subscribe to prizm.context.requested: %v", err)
-					} else {
-						log.Printf("[CONTEXT-AGENT] subscribed to prizm.context.requested")
-					}
-					infraSubs = append(infraSubs, sub)
-				}
-			}
-
-			// V77: Memory extraction subscriber — consumes prizm.memory.extract.requested events
-			// and runs the gate → extract → store pipeline to persist memories.
-			if natsConn != nil && memoryStore != nil {
-				gateModels := []string{"qwen3.5:4b"} // default fallback
-				if len(cfg.Prizm.Memory.ModelFallbackChain) > 0 {
-					gateModels = cfg.Prizm.Memory.ModelFallbackChain
-				} else if cfg.Prizm.Memory.GateModel != "" {
-					gateModels = []string{cfg.Prizm.Memory.GateModel}
-				}
-				ollamaURL := "http://localhost:11434"
-				if cfg.Prizm.Memory.OllamaURL != "" {
-					ollamaURL = cfg.Prizm.Memory.OllamaURL
-				} else if cfg.Prizm.ContextCompression != nil && cfg.Prizm.ContextCompression.OllamaURL != "" {
-					ollamaURL = cfg.Prizm.ContextCompression.OllamaURL
-				}
-				gateExtractor := memory.NewGateExtractor(gateModels, ollamaURL, "")
-				autoExtractor := memory.NewAutoExtractor(gateExtractor, memoryStore, nil) // no event emitter for now
-
-				memSub, err := natsConn.Subscribe("prizm.memory.extract.requested", func(msg *nats.Msg) {
-					var payload map[string]any
-					if err := json.Unmarshal(msg.Data, &payload); err != nil {
-						log.Printf("[MEMORY-EXTRACT] invalid extract.requested event: %v", err)
-						return
-					}
-
-					sessionID, _ := payload["session_id"].(string)
-					agentID, _ := payload["agent_id"].(string)
-					userMsg, _ := payload["user_message"].(string)
-					agentResp, _ := payload["agent_response"].(string)
-
-					log.Printf("[MEMORY-EXTRACT] processing extract request (session=%s, agent=%s, user_msg_len=%d)", sessionID, agentID, len(userMsg))
-
-					turn := memory.ConversationTurn{
-						UserMessage:   userMsg,
-						AgentResponse: agentResp,
-						AgentID:       agentID,
-						SessionID:     sessionID,
-					}
-
-					// V77: Memory extraction with 60s timeout to prevent stuck goroutines
-					extractCtx, extractCancel := ctxcontext.WithTimeout(ctxcontext.Background(), 60*time.Second)
-					if err := autoExtractor.AutoExtract(extractCtx, turn); err != nil {
-						log.Printf("[MEMORY-AUTO] extraction failed: %v", err)
-					}
-					extractCancel()
 				})
-				if err != nil {
-					log.Printf("[MEMORY-EXTRACT] failed to subscribe to prizm.memory.extract.requested: %v", err)
-				} else {
-					log.Printf("[MEMORY-EXTRACT] subscribed to prizm.memory.extract.requested")
-				}
-				infraSubs = append(infraSubs, memSub)
 			}
-
-			readRoots := configuredReadRoots(cfg)
-			writeRoots := configuredWriteRoots(cfg)
-
-			toolReg = tool.NewRegistry()
-			tool.RegisterBuiltinsWithRoots(toolReg, workspaceRoot, 10*1024*1024, readRoots, writeRoots) // all read-only + project tools
-			toolReg.Register(&tool.WriteFileProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
-			toolReg.Register(&tool.CreateDirectoryProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
-			// V35: Direct write tool for autonomous wake actions (auto-approved via policy)
-			toolReg.Register(&tool.WriteFileDirect{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
-			toolReg.Register(&tool.CreateDirectoryDirect{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
-			// V28: Git mutation tools (require approval)
-			protectedBranch := cfg.ProtectedBranch()
-			toolReg.Register(&tool.GitAddTool{ToolPaths: tool.ToolPaths{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots}})
-			toolReg.Register(&tool.GitCommitTool{ToolPaths: tool.ToolPaths{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots}, ProtectedBranch: protectedBranch})
-			toolReg.Register(&tool.GitPushTool{ToolPaths: tool.ToolPaths{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots}, ProtectedBranch: protectedBranch})
-			toolReg.Register(&tool.GitCreatePRTool{})
-			// V32: State management tools
-			// V60: Shell tool for free mode (registered with tier_1 policy for gated mode)
-			shellTool := &tool.ShellTool{
-				Policy:         tool.BuildShellPolicyFromConfig("tier_1", cfg.Shell.Allowlists, cfg.Shell.Defaults.BlockedPatterns),
-				DefaultTimeout: cfg.Shell.Defaults.TimeoutSeconds,
-				MaxOutputBytes: cfg.Shell.Defaults.MaxOutputBytes,
-				MaxStderrBytes: cfg.Shell.Defaults.MaxOutputBytes / 2,
-			}
-			toolReg.Register(shellTool)
-
-			stateMgr = state.NewManager(workspaceRoot)
-			stateMgr.EnsureDir()
-			tool.RegisterStateTools(toolReg, stateMgr)
-
-			// V32: Plan-First Pipeline tools
-			planMgr = plan.NewManager(workspaceRoot)
-			planMgr.EnsureDir()
-			tool.RegisterPlanTools(toolReg, planMgr)
-
-			// Gated loop: RESEARCH-phase tools (web_search + memory_search).
-			// Pass the Remembrance client only when available so memory_search
-			// reports "disabled" instead of dereferencing a nil client.
-			var memSearcher tool.MemorySearcher
-			if remClient != nil {
-				memSearcher = remClient
-			}
-			// Wire local MarkdownStore as fallback for memory_search
-			var localStore tool.LocalMemoryStore
-			if memoryStore != nil {
-				localStore = memoryStore
-				log.Printf("[MEMORY] local MarkdownStore wired as fallback")
-			} else {
-				log.Printf("[MEMORY] WARNING: local MarkdownStore is nil, memory_search will have no fallback")
-			}
-			tool.RegisterResearchTools(toolReg, memSearcher, localStore, tool.WebSearchConfig{})
-
-			// Researcher reference-image tools: fetch/generate/analyze/collect.
-			// Images save under <workspace>/references by default and may target
-			// configured write roots via output_dir.
-			tool.RegisterImageTools(toolReg, imageToolsConfigFromPrizmConfig(cfg, workspaceRoot, writeRoots))
-
-			// V34: Cross-Prizm bridge tool — send messages to remote Prizm instances
-			if crossSvc != nil {
-				toolReg.Register(tool.NewSendCrossMessageTool(crossSvc))
-			}
-
-			// V49: External MCP tool servers — register their tools into the
-			// policy-gated registry so agents can use them like any built-in.
-			if specs := mcpServerSpecs(cfg); len(specs) > 0 {
-				for _, res := range mcp.RegisterServers(ctx, toolReg, specs, mcp.ProcessClientFactory) {
-					if res.Err != nil {
-						fmt.Printf("  MCP %s: error: %v\n", res.Server, res.Err)
-						continue
-					}
-					fmt.Printf("  MCP %s: %d tool(s) registered\n", res.Server, len(res.Tools))
-				}
-			}
-
-			// V54: Skills — discover SKILL.md skills (Claude Code / OpenClaw) under
-			// the workspace and expose them via the use_skill tool + prompt.
-			skillReg = skill.NewRegistry()
-			if n, serr := skillReg.LoadDefault(workspaceRoot); n > 0 || serr != nil {
-				if serr != nil {
-					fmt.Printf("  Skills: %d loaded (%v)\n", n, serr)
-				} else {
-					fmt.Printf("  Skills: %d loaded\n", n)
-				}
-			}
-			tool.RegisterSkillTool(toolReg, skillReg)
-
-			// V77: DelegateTool — allows agents to delegate tasks to other agents
-			if delegEngine != nil {
-				toolReg.Register(tool.NewDelegateTool(delegatorAdapter{Engine: delegEngine}, configuredOrchestratorAgentID(cfg)))
-			}
-
-			// V77: SkillWriteTool — allows agents to create/update SKILL.md files
-			skillsDir := filepath.Join(workspaceRoot, "skills")
-			toolReg.Register(tool.NewSkillWriteTool(skillsDir))
-
-			// V32: Self-Improvement Loop
-			improveMgr = improve.NewManager(workspaceRoot)
-			improveMgr.EnsureDir()
-
-			// V32: Guard rail (plan-first enforcement)
-			guardian = guard.NewGuard(planMgr, ctxBuildr)
-
-			toolPolicy = tool.DefaultPolicyConfig()
-			// Mutation operations require approval
-			toolPolicy.MaxFileSize = 10 * 1024 * 1024 // 10MB for serve mode
-			toolPolicy.WorkspaceRoot = workspaceRoot
-			toolPolicy.AllowedPaths = cfg.Prizm.AllowedPaths
-			toolPolicy.ReadRoots = readRoots
-			toolPolicy.WriteRoots = writeRoots
-			toolPolicy.OrchestratorAgentID = configuredOrchestratorAgentID(cfg)
-			toolPolicy.AutoApproveMCP = cfg.MCPAutoApprove // unattended MCP execution (default off)
-			// V62: safe shell commands (tier_1 allowlist) auto-approve even in
-			// gated mode — the hard blocklist inside EvaluateShellPolicy still
-			// applies regardless of tier.
-			toolPolicy.SafeShellPolicy = tool.BuildShellPolicyFromConfig("tier_1", cfg.Shell.Allowlists, cfg.Shell.Defaults.BlockedPatterns)
-			// V61: Load governance docs and populate frozen paths in tool policy
-			govLoader = governance.NewLoader(cfg.Prizm.Workspace, nil)
-			govLoader.Load()
-			for _, doc := range govLoader.Docs() {
-				for _, fp := range doc.Frontmatter.Governance.FrozenPaths {
-					toolPolicy.FrozenPaths = append(toolPolicy.FrozenPaths, fp)
-					reason := doc.Frontmatter.Governance.Reason
-					if reason == "" {
-						reason = fmt.Sprintf("Path %s is frozen per %s", fp, doc.Name)
-					}
-					if toolPolicy.FrozenPathReasons == nil {
-						toolPolicy.FrozenPathReasons = make(map[string]string)
-					}
-					toolPolicy.FrozenPathReasons[fp] = reason
-				}
-			}
-			toolExec = tool.NewExecutor(toolReg, &toolPolicy)
-			toolExec.SetApprovalStore(approval.NewStore(cfg.Prizm.RunsDir))
-			toolExec.SetEmitter(func(eventType, source string, payload map[string]any) {
-				log.Printf("[TOOL-EVENT] %s: %v", eventType, payload)
-				// Forward file approval requests to the Discord channel
-				if eventType == "prizm.approval.file_requested" {
-					approvalID, _ := payload["approval_id"].(string)
-					runID, _ := payload["run_id"].(string)
-					targetPath, _ := payload["target_path"].(string)
-					agentName, _ := payload["agent"].(string)
-					preview, _ := payload["preview"].(string)
-					mutationType, _ := payload["mutation_type"].(string)
-					toolName, _ := payload["tool_name"].(string)
-					if approvalID != "" && runID != "" {
-						// Send approval card to the channel where the conversation is happening
-						// The channel ID is passed via the payload if available
-						channelID, _ := payload["_channel_id"].(string)
-						if channelID != "" && bot != nil {
-							sendApprovalCard(bot, channelID, approvalID, runID, targetPath, agentName, preview, mutationType, toolName)
-						}
-					}
-				}
-			})
 
 			convCtx := &conversationContext{
 				router:      rtr,
@@ -988,11 +998,8 @@ func executeServe(args []string) {
 			tgBot := telegram.NewBotAdapter(ch.Token, nil)
 			tgSender := &telegramSender{bot: tgBot}
 
-			// Shared infrastructure must be initialized by Discord case (first channel)
-			if toolReg == nil {
-				fmt.Fprintf(os.Stderr, "Warning: Telegram adapter requires Discord to be configured first (shared infrastructure)\n")
-				break
-			}
+			// Shared infrastructure is initialized before the channel loop (V79).
+			// If toolReg is nil, the config is broken — this should not happen.
 
 			tgConvCtx := &conversationContext{
 				router:           rtr,
@@ -1057,11 +1064,8 @@ func executeServe(args []string) {
 			slackBot := slack.NewBotAdapter(ch.Token, nil)
 			slackSender := &slackSender{bot: slackBot}
 
-			// Shared infrastructure must be initialized by Discord case (first channel)
-			if toolReg == nil {
-				fmt.Fprintf(os.Stderr, "Warning: Slack adapter requires Discord to be configured first (shared infrastructure)\n")
-				break
-			}
+			// Shared infrastructure is initialized before the channel loop (V79).
+			// If toolReg is nil, the config is broken — this should not happen.
 
 			slackConvCtx := &conversationContext{
 				router:           rtr,
@@ -1623,7 +1627,7 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 	}()
 
 	// Step 3: Find or create an owner-scoped session while preserving channel metadata.
-	sess, ownerID, err := getOrCreateSessionForMessage(cc.sessMgr, cc.cfg, result.AgentID, "discord", msg.ChannelID, msg.UserID)
+	sess, ownerID, err := getOrCreateSessionForMessage(cc.sessMgr, cc.cfg, result.AgentID, string(msg.Platform), msg.ChannelID, msg.UserID)
 	if err != nil {
 		log.Printf("[ERROR] load session: %v", err)
 		finalMessage = "I could not load the conversation session."
@@ -2105,7 +2109,7 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 	if cc.commitStore != nil && sanitizedContent != "" && responseText != "" {
 		go func(userText, assistantText, agentID, sessionKey, channel, senderID string) {
 			cc.extractCommitments(userText, assistantText, agentID, sessionKey, channel, senderID)
-		}(sanitizedContent, responseText, result.AgentID, sess.ID, "discord", msg.UserID)
+		}(sanitizedContent, responseText, result.AgentID, sess.ID, string(msg.Platform), msg.UserID)
 	}
 	// Log and publish completion events
 	llmResult := finalRC.Results["llm"]
@@ -2442,7 +2446,7 @@ func (cc *conversationContext) buildPrompt(sess *session.Session, agentCfg *orch
 
 	// --- Layer 8: Commitment delivery (V61) ---
 	if cc.commitStore != nil {
-		if commitPrompt := cc.deliverCommitments(agentCfg.ID, sess.ID, "discord"); commitPrompt != "" {
+		if commitPrompt := cc.deliverCommitments(agentCfg.ID, sess.ID, string(cc.platform)); commitPrompt != "" {
 			sb.WriteString("\n" + commitPrompt + "\n")
 			log.Printf("[COMMITMENTS] injected pending commitments into prompt")
 		}
