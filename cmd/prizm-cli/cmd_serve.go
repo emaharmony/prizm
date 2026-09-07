@@ -1724,7 +1724,7 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 			memBlock.WriteString("## Recent Memories\n")
 			memBlock.WriteString("The following memories were automatically recalled from local storage:\n\n")
 			for _, m := range recentMemories {
-				memBlock.WriteString(fmt.Sprintf("- **%s** (%s): %s\n", m.Summary, m.Category, truncate(m.Content, 200)))
+				memBlock.WriteString(fmt.Sprintf("- **%s** (%s): %s\n", m.Summary, m.Category, truncate(m.Content, 500)))
 			}
 			promptSession = cloneSessionWithSystemMemory(sess, memBlock.String())
 			log.Printf("[MEMORY] injected %d recent local memories into prompt", len(recentMemories))

@@ -277,6 +277,29 @@ func parseMemoryFile(path string) ([]Memory, error) {
 			continue
 		}
 
+		// V79: Fallback for ## Title sections (plain markdown memories)
+		// Each ## header becomes a memory with the title as both ID and summary.
+		if strings.HasPrefix(line, "## ") {
+			title := strings.TrimPrefix(line, "## ")
+			title = strings.TrimSpace(title)
+			if title != "" && current == nil {
+				// First section in file — start a new memory
+				current = &Memory{ID: strings.ReplaceAll(title, " ", "-"), Summary: title}
+				contentLines = nil
+				inContent = true
+				continue
+			}
+			if current != nil && title != "" {
+				// New section — save previous and start next
+				current.Content = strings.TrimSpace(strings.Join(contentLines, "\n"))
+				memories = append(memories, *current)
+				current = &Memory{ID: strings.ReplaceAll(title, " ", "-"), Summary: title}
+				contentLines = nil
+				inContent = true
+				continue
+			}
+		}
+
 		if current == nil {
 			continue
 		}
