@@ -954,6 +954,11 @@ type MemoryConfig struct {
 
 	// RecallSync controls whether to push memories to Recall after local storage.
 	RecallSync string `yaml:"recall_sync"` // "async" or "off"
+
+	// QueryPlanner controls the model-driven keyword extraction for memory search.
+	QueryPlannerEnabled  bool          `yaml:"query_planner_enabled"`
+	QueryPlannerModel    string        `yaml:"query_planner_model"`
+	QueryPlannerTimeoutS int           `yaml:"query_planner_timeout_s"`
 }
 
 // DefaultConfig returns a Config with sensible defaults.

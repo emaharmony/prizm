@@ -546,11 +546,34 @@ func executeServe(args []string) {
 		fmt.Printf("  Memory: local markdown store at %s\n", memPath)
 	}
 
-	// V79: Smart memory injector — search mode for fresh questions, recent mode for continuations
+	// V79: Smart memory injector — query planner + search + recent modes
 	var memInjector *MemoryInjector
 	if memoryStore != nil {
-		memInjector = NewMemoryInjector(memoryStore)
-		log.Printf("[MEMORY] smart injector initialized (search + recent modes)")
+		var queryPlanner *memory.QueryPlanner
+		if memCfg.QueryPlannerEnabled {
+			qpModel := memCfg.QueryPlannerModel
+			if qpModel == "" {
+				qpModel = "deepseek-v4-flash:cloud"
+			}
+			qpTimeout := 300 * time.Second // default 5 min
+			if memCfg.QueryPlannerTimeoutS > 0 {
+				qpTimeout = time.Duration(memCfg.QueryPlannerTimeoutS) * time.Second
+			}
+			qpURL := memCfg.OllamaURL
+			if qpURL == "" {
+				qpURL = "http://localhost:11434"
+			}
+			queryPlanner = memory.NewQueryPlanner(memory.QueryPlanConfig{
+				Enabled:   true,
+				Model:     qpModel,
+				OllamaURL: qpURL,
+				Timeout:   qpTimeout,
+				Fallback:  "heuristic",
+			})
+			log.Printf("[MEMORY] query planner enabled: model=%s timeout=%s", qpModel, qpTimeout)
+		}
+		memInjector = NewMemoryInjector(memoryStore, queryPlanner)
+		log.Printf("[MEMORY] smart injector initialized (planner=%v)", memCfg.QueryPlannerEnabled)
 	}
 
 	// V22: Register agent subscriptions against the shared task store.
