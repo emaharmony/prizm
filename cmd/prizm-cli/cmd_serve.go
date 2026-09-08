@@ -544,6 +544,59 @@ func executeServe(args []string) {
 		}
 		memoryStore = memory.NewMarkdownStore(memPath)
 		fmt.Printf("  Memory: local markdown store at %s\n", memPath)
+
+		// V80: Embedding index for semantic search
+		if memCfg.EmbeddingEnabled {
+			embPath := memCfg.EmbeddingIndexPath
+			if embPath == "" {
+				embPath = filepath.Join(memPath, "embeddings.json")
+			}
+			if !filepath.IsAbs(embPath) {
+				embPath = filepath.Join(cfg.Prizm.Workspace, embPath)
+			}
+			embModel := memCfg.EmbeddingModel
+			if embModel == "" {
+				embModel = "nomic-embed-text"
+			}
+			embURL := memCfg.EmbeddingURL
+			if embURL == "" {
+				embURL = "http://localhost:11434"
+			}
+			embDims := memCfg.EmbeddingDimensions
+			if embDims == 0 {
+				embDims = 768
+			}
+
+			embIdx := memory.NewEmbeddingIndex(memory.EmbeddingConfig{
+				Enabled:          true,
+				Model:           embModel,
+				URL:             embURL,
+				Dimensions:      embDims,
+				IndexPath:       embPath,
+				ReindexOnStartup: memCfg.EmbeddingReindexOnStartup,
+			})
+
+			// Load existing index
+			if err := embIdx.Load(); err != nil {
+				log.Printf("[EMBEDDING] failed to load index: %v", err)
+			}
+
+			// Index all memories on startup if configured
+			if memCfg.EmbeddingReindexOnStartup {
+				allMems, _ := memoryStore.ListRecent(ctxcontext.Background(), 0)
+				if len(allMems) > 0 {
+					count, err := embIdx.IndexMemories(ctxcontext.Background(), allMems)
+					if err != nil {
+						log.Printf("[EMBEDDING] indexing failed: %v", err)
+					} else {
+						log.Printf("[EMBEDDING] indexed %d/%d memories", count, len(allMems))
+					}
+				}
+			}
+
+			memoryStore.SetEmbeddingIndex(embIdx)
+			log.Printf("[EMBEDDING] semantic search enabled: model=%s dims=%d", embModel, embDims)
+		}
 	}
 
 	// V79: Smart memory injector — query planner + search + recent modes

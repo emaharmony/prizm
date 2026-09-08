@@ -952,6 +952,14 @@ type MemoryConfig struct {
 	// MaxMemoriesPerTurn limits extraction from a single turn.
 	MaxMemoriesPerTurn int `yaml:"max_memories_per_turn"`
 
+	// Embedding config for semantic search.
+	EmbeddingEnabled          bool   `yaml:"embedding_enabled"`
+	EmbeddingModel            string `yaml:"embedding_model"`
+	EmbeddingURL              string `yaml:"embedding_url"`
+	EmbeddingDimensions       int    `yaml:"embedding_dimensions"`
+	EmbeddingIndexPath        string `yaml:"embedding_index_path"`
+	EmbeddingReindexOnStartup bool   `yaml:"embedding_reindex_on_startup"`
+
 	// RecallSync controls whether to push memories to Recall after local storage.
 	RecallSync string `yaml:"recall_sync"` // "async" or "off"
 

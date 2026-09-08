@@ -140,7 +140,7 @@ func (mi *MemoryInjector) injectPlannedSearch(ctx context.Context, userMessage s
 		}
 	}
 
-	// Step 2: Search using the planned query
+	// Step 2: Keyword search using the planned query
 	cacheKey := queryKey(searchQuery)
 	if cached := mi.cache.get(cacheKey); cached != nil {
 		log.Printf("[MEMORY-INJECTOR] cache hit for key=%s", cacheKey)
@@ -148,8 +148,29 @@ func (mi *MemoryInjector) injectPlannedSearch(ctx context.Context, userMessage s
 	}
 
 	results, err := mi.store.Search(ctx, searchQuery, 20)
-	log.Printf("[MEMORY-INJECTOR] search results: count=%d, err=%v, query=%q", len(results), err, searchQuery)
-	if err != nil {
+	log.Printf("[MEMORY-INJECTOR] keyword search results: count=%d, err=%v, query=%q", len(results), err, searchQuery)
+
+	// Step 3: If keyword results are weak, try embedding search
+	if (len(results) < 3 || err != nil) && mi.store != nil {
+		embResults, embErr := mi.store.EmbeddingSearch(ctx, searchQuery, 10)
+		if embErr == nil && len(embResults) > 0 {
+			log.Printf("[MEMORY-INJECTOR] embedding search returned %d results, supplementing keyword results", len(embResults))
+			seen := make(map[string]bool)
+			for _, m := range results {
+				seen[m.ID] = true
+			}
+			for _, m := range embResults {
+				if !seen[m.ID] {
+					results = append(results, m)
+					seen[m.ID] = true
+				}
+			}
+		} else if embErr != nil {
+			log.Printf("[MEMORY-INJECTOR] embedding search failed: %v (keyword-only fallback)", embErr)
+		}
+	}
+
+	if err != nil && len(results) == 0 {
 		log.Printf("[MEMORY-SEARCH] search failed: %v", err)
 		return mi.injectRecent(ctx, maxTokens)
 	}
@@ -164,7 +185,7 @@ func (mi *MemoryInjector) injectPlannedSearch(ctx context.Context, userMessage s
 	log.Printf("[MEMORY-INJECTOR] search results detail: query=%q, count=%d", searchQuery, len(results))
 	for i, m := range results {
 		if i < 5 {
-			log.Printf("[MEMORY-INJECTOR]   result[%d]: id=%s category=%s summary=%q", i, m.ID, m.Category, truncate(m.Summary, 80))
+			log.Printf("[MEMORY-INJECTOR]   result[%d]: id=%s category=%s summary=%q", i, m.ID, m.Category, memory.TruncateStr(m.Summary, 80))
 		}
 	}
 

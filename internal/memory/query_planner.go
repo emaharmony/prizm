@@ -193,7 +193,7 @@ User message: %s`, msgCount, age.Round(time.Second), userMessage)
 	// Extract JSON from response (model might include surrounding text)
 	result, err := parseQueryPlanJSON(raw)
 	if err != nil {
-		log.Printf("[QUERY-PLANNER] failed to parse LLM response: %v, raw: %s", err, truncateStr(raw, 200))
+		log.Printf("[QUERY-PLANNER] failed to parse LLM response: %v, raw: %s", err, TruncateStr(raw, 200))
 		return nil, fmt.Errorf("parse response: %w", err)
 	}
 
@@ -360,7 +360,7 @@ func messageKey(msg string) string {
 }
 
 // truncateStr truncates a string to n characters.
-func truncateStr(s string, n int) string {
+func TruncateStr(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}

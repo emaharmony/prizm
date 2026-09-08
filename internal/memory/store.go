@@ -44,8 +44,9 @@ type MemoryStore interface {
 
 // MarkdownStore implements MemoryStore using memory/*.md files.
 type MarkdownStore struct {
-	root string    // workspace root (contains memory/ subdir)
-	mu   sync.Map // per-date mutex for concurrent writes
+	root    string          // workspace root (contains memory/ subdir)
+	mu      sync.Map        // per-date mutex for concurrent writes
+	embIdx  *EmbeddingIndex // V80: embedding index for semantic search
 }
 
 // NewMarkdownStore creates a MarkdownStore rooted at the given workspace path.
@@ -209,6 +210,49 @@ func (s *MarkdownStore) Search(ctx context.Context, query string, limit int) ([]
 		}
 		out = append(out, r.Memory)
 	}
+	return out, nil
+}
+
+// SetEmbeddingIndex sets the embedding index for semantic search.
+func (s *MarkdownStore) SetEmbeddingIndex(idx *EmbeddingIndex) {
+	s.embIdx = idx
+}
+
+// EmbeddingSearch performs semantic search using the embedding index.
+// Returns memories sorted by cosine similarity to the query.
+// Returns nil if embeddings are unavailable.
+func (s *MarkdownStore) EmbeddingSearch(ctx context.Context, query string, limit int) ([]Memory, error) {
+	if s.embIdx == nil {
+		return nil, nil
+	}
+
+	results := s.embIdx.Search(ctx, query, limit*2) // get 2x for re-ranking
+	if len(results) == 0 {
+		return nil, nil
+	}
+
+	// Look up full Memory objects by ID
+	all, err := s.ListRecent(ctx, 0) // get all
+	if err != nil {
+		return nil, err
+	}
+
+	idMap := make(map[string]Memory)
+	for _, m := range all {
+		idMap[m.ID] = m
+	}
+
+	var out []Memory
+	for _, r := range results {
+		if m, ok := idMap[r.ID]; ok {
+			m.Metadata["embedding_score"] = fmt.Sprintf("%.4f", r.Score)
+			out = append(out, m)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+
 	return out, nil
 }
 
