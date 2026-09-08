@@ -167,6 +167,7 @@ type conversationContext struct {
 	channelID       string                    // Current conversation channel ID for event routing
 	reviewStore     *reviewResultStore         // V77: Pending Mango review results for feedback injection
 	memoryStoreLocal *memory.MarkdownStore      // V77: Local memory store for automatic recall
+	memInjector     *MemoryInjector             // V79: Smart memory injection (search vs recent)
 
 	// V74: Interactive tool approval — blocking wait for Discord button responses
 	approvalWaitMu sync.Mutex
@@ -543,6 +544,13 @@ func executeServe(args []string) {
 		}
 		memoryStore = memory.NewMarkdownStore(memPath)
 		fmt.Printf("  Memory: local markdown store at %s\n", memPath)
+	}
+
+	// V79: Smart memory injector — search mode for fresh questions, recent mode for continuations
+	var memInjector *MemoryInjector
+	if memoryStore != nil {
+		memInjector = NewMemoryInjector(memoryStore)
+		log.Printf("[MEMORY] smart injector initialized (search + recent modes)")
 	}
 
 	// V22: Register agent subscriptions against the shared task store.
@@ -1033,6 +1041,7 @@ func executeServe(args []string) {
 				contextAgent:     contextAgent,
 				reviewStore:      globalReviewStore,
 				memoryStoreLocal: memoryStore,
+			memInjector:     memInjector,
 				stateMgr:         stateMgr,
 				planMgr:          planMgr,
 				improveMgr:       improveMgr,
@@ -1099,6 +1108,7 @@ func executeServe(args []string) {
 				contextAgent:     contextAgent,
 				reviewStore:      globalReviewStore,
 				memoryStoreLocal: memoryStore,
+			memInjector:     memInjector,
 				stateMgr:         stateMgr,
 				planMgr:          planMgr,
 				improveMgr:       improveMgr,
@@ -1714,9 +1724,22 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 		}
 	}
 
-	// Fall back to local memory when Remembrance is unavailable OR failed
+	// V79: Smart memory injection — search mode for fresh questions, recent mode for continuations
+	if !memoriesInjected && cc.memInjector != nil {
+		// Choose injection mode based on session context
+		sessionAge := time.Since(sess.StartedAt)
+		mode := ChooseMode(len(sess.Messages), sessionAge)
+		memBlock := cc.memInjector.InjectMemories(ctxcontext.Background(), mode, sanitizedContent, len(sess.Messages), 300)
+		if memBlock != "" {
+			promptSession = cloneSessionWithSystemMemory(sess, memBlock)
+			log.Printf("[MEMORY] injected memories (mode=%v)", mode)
+			memoriesInjected = true
+		}
+	}
+
+	// Legacy fallback: if smart injector isn't available, use old ListRecent approach
 	if !memoriesInjected && cc.memoryStoreLocal != nil {
-		recentMemories, memErr := cc.memoryStoreLocal.ListRecent(ctxcontext.Background(), 77)
+		recentMemories, memErr := cc.memoryStoreLocal.ListRecent(ctxcontext.Background(), 5)
 		if memErr != nil {
 			log.Printf("[MEMORY] local memory recall failed: %v", memErr)
 		} else if len(recentMemories) > 0 {
