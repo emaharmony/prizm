@@ -49,13 +49,32 @@ type MarkdownStore struct {
 	embIdx  *EmbeddingIndex // V80: embedding index for semantic search
 }
 
-// NewMarkdownStore creates a MarkdownStore rooted at the given workspace path.
-func NewMarkdownStore(workspacePath string) *MarkdownStore {
-	return &MarkdownStore{root: workspacePath}
+// NewMarkdownStore creates a MarkdownStore rooted at the given path.
+// The path can be either a workspace root (containing a memory/ subdir)
+// or the memory directory itself (containing .md files).
+func NewMarkdownStore(path string) *MarkdownStore {
+	// If path already contains .md files, use it directly as the memory dir.
+	// Otherwise, path is a workspace root and memory files are in path/memory/.
+	return &MarkdownStore{root: path}
+}
+
+// memDir returns the directory containing memory .md files.
+// If root contains .md files, it's the memory dir itself.
+// Otherwise, it's root/memory/.
+func (s *MarkdownStore) memDir() string {
+	entries, err := os.ReadDir(s.root)
+	if err == nil {
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".md") {
+				return s.root
+			}
+		}
+	}
+	return filepath.Join(s.root, "memory")
 }
 
 func (s *MarkdownStore) datePath(t time.Time) string {
-	return filepath.Join(s.root, "memory", t.Format("2006-01-02")+".md")
+	return filepath.Join(s.memDir(), t.Format("2006-01-02")+".md")
 }
 
 func (s *MarkdownStore) dateMu(t time.Time) *sync.Mutex {
@@ -109,7 +128,7 @@ func (s *MarkdownStore) Store(ctx context.Context, mem Memory) (string, error) {
 
 // Get retrieves a memory by ID prefix match in markdown files.
 func (s *MarkdownStore) Get(ctx context.Context, id string) (*Memory, error) {
-	memDir := filepath.Join(s.root, "memory")
+	memDir := s.memDir()
 	entries, err := os.ReadDir(memDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -138,7 +157,7 @@ func (s *MarkdownStore) Get(ctx context.Context, id string) (*Memory, error) {
 
 // ListRecent returns the N most recent memories across all daily files.
 func (s *MarkdownStore) ListRecent(ctx context.Context, limit int) ([]Memory, error) {
-	memDir := filepath.Join(s.root, "memory")
+	memDir := s.memDir()
 	entries, err := os.ReadDir(memDir)
 	if err != nil {
 		if os.IsNotExist(err) {
