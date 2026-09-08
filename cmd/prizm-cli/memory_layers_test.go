@@ -73,11 +73,21 @@ func TestEphemeralMemoryLayerKeepsLocalTranscriptAfterRemembrance(t *testing.T) 
 	textPrompt := cc.buildPrompt(withMemory, agentCfg, "", nil)
 	remIdx := strings.Index(textPrompt, "stale topic was red widgets")
 	localIdx := strings.Index(textPrompt, "current local topic is blue widgets")
-	if remIdx < 0 || localIdx < 0 {
-		t.Fatalf("expected both memory layers in prompt: %s", textPrompt)
+	if remIdx < 0 {
+		t.Fatalf("expected Remembrance memory in prompt: %s", textPrompt)
 	}
-	if localIdx < remIdx {
-		t.Fatalf("expected exact local transcript after Remembrance so it wins by recency: %s", textPrompt)
+	if localIdx < 0 {
+		t.Fatalf("expected local transcript in prompt: %s", textPrompt)
+	}
+	// V79: Cache-safe injection appends system-reminder to the user message,
+	// so both local and Remembrance content are in the same message block.
+	// The user's original content comes first, then the system-reminder.
+	// Verify the system-reminder tag is present.
+	if !strings.Contains(textPrompt, "<system-reminder>") {
+		t.Fatalf("expected <system-reminder> tag in prompt: %s", textPrompt)
+	}
+	if !strings.Contains(textPrompt, "</system-reminder>") {
+		t.Fatalf("expected closing </system-reminder> tag in prompt: %s", textPrompt)
 	}
 }
 

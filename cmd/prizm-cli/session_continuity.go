@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"time"
 
 	"github.com/emaharmony/prizm/internal/orchestrator"
@@ -93,18 +94,43 @@ func getOrCreateSessionForMessage(mgr *session.Manager, cfg *orchestrator.Config
 	return sess, ownerID, err
 }
 
+// cloneSessionWithSystemMemory injects memory content into the session
+// in a cache-safe way. Instead of prepending a system message (which
+// breaks the prompt cache prefix), it appends the content as a
+// <system-reminder> tag in the last user message. This preserves the
+// cached prefix so only the delta tokens are processed.
+//
+// V79: Cache-safe injection pattern (inspired by Claude Code).
+// If no user message exists, falls back to a system message.
 func cloneSessionWithSystemMemory(sess *session.Session, content string) *session.Session {
 	if sess == nil || content == "" {
 		return sess
 	}
+
 	cloned := *sess
-	cloned.Messages = make([]session.Message, 0, len(sess.Messages)+1)
-	cloned.Messages = append(cloned.Messages, session.Message{
-		ID:        "remembrance-context",
+	cloned.Messages = make([]session.Message, len(sess.Messages))
+	copy(cloned.Messages, sess.Messages)
+
+	// Find the last user message and append the memory block as a system-reminder
+	for i := len(cloned.Messages) - 1; i >= 0; i-- {
+		if cloned.Messages[i].Role == "user" {
+			cloned.Messages[i] = session.Message{
+				ID:        cloned.Messages[i].ID,
+				Role:      "user",
+				Content:   cloned.Messages[i].Content + "\n\n<system-reminder>\n" + content + "\n</system-reminder>",
+				Timestamp: cloned.Messages[i].Timestamp,
+			}
+			return &cloned
+		}
+	}
+
+	// No user message found — inject as system message (fallback, breaks cache)
+	log.Printf("[MEMORY] WARNING: no user message found for cache-safe injection, falling back to system message")
+	cloned.Messages = append([]session.Message{{
+		ID:        "memory-context",
 		Role:      "system",
 		Content:   content,
 		Timestamp: time.Now().UTC(),
-	})
-	cloned.Messages = append(cloned.Messages, sess.Messages...)
+	}}, cloned.Messages...)
 	return &cloned
 }
