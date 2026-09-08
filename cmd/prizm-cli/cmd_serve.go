@@ -878,6 +878,7 @@ func executeServe(args []string) {
 			contextAgent:  contextAgent,  // V76: compressed context block
 			reviewStore:       globalReviewStore, // V77: Mango review feedback
 			memoryStoreLocal: memoryStore,       // V77: Local memory recall
+			memInjector:     memInjector,          // V79: Smart memory injection
 				stateMgr:    stateMgr,   // V32: shared state manager (same instance as tools)
 				planMgr:     planMgr,    // V32: plan manager
 				improveMgr:  improveMgr, // V32: improvement manager
@@ -1729,11 +1730,15 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 		// Choose injection mode based on session context
 		sessionAge := time.Since(sess.StartedAt)
 		mode := ChooseMode(len(sess.Messages), sessionAge)
+		log.Printf("[MEMORY-INJECTOR] attempting injection: mode=%v, msgCount=%d, age=%v, query_len=%d", mode, len(sess.Messages), sessionAge.Round(time.Second), len(sanitizedContent))
 		memBlock := cc.memInjector.InjectMemories(ctxcontext.Background(), mode, sanitizedContent, len(sess.Messages), 300)
+		log.Printf("[MEMORY-INJECTOR] result: block_len=%d", len(memBlock))
 		if memBlock != "" {
 			promptSession = cloneSessionWithSystemMemory(sess, memBlock)
 			log.Printf("[MEMORY] injected memories (mode=%v)", mode)
 			memoriesInjected = true
+		} else {
+			log.Printf("[MEMORY-INJECTOR] empty result, falling through to legacy path")
 		}
 	}
 

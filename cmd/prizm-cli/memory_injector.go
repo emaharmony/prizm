@@ -88,17 +88,20 @@ func (mi *MemoryInjector) InjectMemories(ctx context.Context, mode InjectMode, u
 // and returns a formatted block.
 func (mi *MemoryInjector) injectSearch(ctx context.Context, query string, maxTokens int) string {
 	if mi.store == nil || query == "" {
+		log.Printf("[MEMORY-INJECTOR] injectSearch skipped: store_nil=%v, query_empty=%v", mi.store == nil, query == "")
 		return ""
 	}
 
 	// Check cache first
 	cacheKey := queryKey(query)
 	if cached := mi.cache.get(cacheKey); cached != nil {
+		log.Printf("[MEMORY-INJECTOR] cache hit for key=%s", cacheKey)
 		return formatMemories(cached, "Relevant Memories", maxTokens)
 	}
 
 	// Search for relevant memories
 	results, err := mi.store.Search(ctx, query, 20)
+	log.Printf("[MEMORY-INJECTOR] search results: count=%d, err=%v", len(results), err)
 	if err != nil {
 		log.Printf("[MEMORY-SEARCH] search failed: %v", err)
 		// Fall back to recent
@@ -106,6 +109,7 @@ func (mi *MemoryInjector) injectSearch(ctx context.Context, query string, maxTok
 	}
 
 	if len(results) == 0 {
+		log.Printf("[MEMORY-INJECTOR] no search results, falling back to recent")
 		// No relevant memories — try recent as fallback
 		return mi.injectRecent(ctx, maxTokens)
 	}
