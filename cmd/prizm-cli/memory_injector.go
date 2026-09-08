@@ -117,6 +117,13 @@ func (mi *MemoryInjector) injectSearch(ctx context.Context, query string, maxTok
 	// Cache the results
 	mi.cache.set(cacheKey, results)
 
+	log.Printf("[MEMORY-INJECTOR] search results detail: query=%q, count=%d", query, len(results))
+	for i, m := range results {
+		if i < 5 {
+			log.Printf("[MEMORY-INJECTOR]   result[%d]: id=%s category=%s summary=%q", i, m.ID, m.Category, truncate(m.Summary, 80))
+		}
+	}
+
 	return formatMemories(results, "Relevant Memories", maxTokens)
 }
 
