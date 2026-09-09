@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -220,6 +221,10 @@ func (ei *EmbeddingIndex) IndexMemories(ctx context.Context, memories []Memory) 
 		text := m.Summary
 		if m.Content != "" && m.Content != m.Summary {
 			text = m.Summary + ". " + TruncateStr(m.Content, 500)
+		}
+		// V80: Include keywords in embedding text for richer vectors
+		if len(m.KeyTopics) > 0 {
+			text = strings.Join(m.KeyTopics, " ") + ". " + text
 		}
 
 		emb, err := ei.httpClient.Embed(ctx, ei.model, text)

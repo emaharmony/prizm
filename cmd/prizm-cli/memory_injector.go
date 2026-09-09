@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -182,6 +183,9 @@ func (mi *MemoryInjector) injectPlannedSearch(ctx context.Context, userMessage s
 
 	mi.cache.set(cacheKey, results)
 
+	// V80: Track recall count for injected memories
+	go mi.trackRecalls(results)
+
 	log.Printf("[MEMORY-INJECTOR] search results detail: query=%q, count=%d", searchQuery, len(results))
 	for i, m := range results {
 		if i < 5 {
@@ -342,4 +346,32 @@ func queryKey(query string) string {
 		words = words[:5]
 	}
 	return strings.Join(words, "_")
+}
+
+// trackRecalls updates recall_count and last_recalled metadata for injected memories.
+// This runs in a goroutine so it doesn't block the response.
+func (mi *MemoryInjector) trackRecalls(memories []memory.Memory) {
+	if mi.store == nil {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, m := range memories {
+		if m.Metadata == nil {
+			m.Metadata = make(map[string]string)
+		}
+		// Increment recall count
+		count := 0
+		if v, ok := m.Metadata["recall_count"]; ok {
+			if n, err := strconv.Atoi(v); err == nil {
+				count = n
+			}
+		}
+		m.Metadata["recall_count"] = strconv.Itoa(count + 1)
+		m.Metadata["last_recalled"] = now
+
+		// Save the updated memory back to the store
+		if _, err := mi.store.Store(context.Background(), m); err != nil {
+			log.Printf("[MEMORY-INJECTOR] failed to track recall for %s: %v", m.ID, err)
+		}
+	}
 }

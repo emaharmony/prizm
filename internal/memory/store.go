@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -212,6 +213,10 @@ func (s *MarkdownStore) Search(ctx context.Context, query string, limit int) ([]
 	var results []scored
 
 	for _, m := range all {
+		// Skip superseded memories
+		if isSuperseded(m) {
+			continue
+		}
 		score := scoreMemory(m, terms)
 		if score > 0 {
 			results = append(results, scored{Memory: m, Score: score})
@@ -264,6 +269,13 @@ func (s *MarkdownStore) EmbeddingSearch(ctx context.Context, query string, limit
 	var out []Memory
 	for _, r := range results {
 		if m, ok := idMap[r.ID]; ok {
+			// Skip superseded memories
+			if isSuperseded(m) {
+				continue
+			}
+			if m.Metadata == nil {
+				m.Metadata = make(map[string]string)
+			}
 			m.Metadata["embedding_score"] = fmt.Sprintf("%.4f", r.Score)
 			out = append(out, m)
 			if len(out) >= limit {
@@ -296,6 +308,23 @@ func scoreMemory(m Memory, terms []string) float64 {
 			score += 3.0
 		}
 	}
+	// V80: KeyTopics match bonus — if the memory has explicit keywords that match the query
+	for _, topic := range m.KeyTopics {
+		lowerTopic := strings.ToLower(topic)
+		for _, term := range terms {
+			if strings.Contains(lowerTopic, term) || strings.Contains(term, lowerTopic) {
+				score += 2.0
+			}
+		}
+	}
+	// V80: Confidence boost — higher confidence memories rank higher
+	if m.Metadata != nil {
+		if conf, ok := m.Metadata["confidence"]; ok {
+			if confFloat, err := parseFloat(conf); err == nil {
+				score *= (0.5 + confFloat*0.5) // confidence scales from 0.5x to 1.0x
+			}
+		}
+	}
 	// Recency boost: newer memories score higher (max +5 for today, decaying over 30 days)
 	daysSince := time.Since(m.CreatedAt).Hours() / 24
 	if daysSince < 0 {
@@ -304,6 +333,11 @@ func scoreMemory(m Memory, terms []string) float64 {
 	recencyBoost := 5.0 * (1.0 / (1.0 + daysSince/7.0))
 	score += recencyBoost
 	return score
+}
+
+// parseFloat parses a float64 from a string, returning 0 on failure.
+func parseFloat(s string) (float64, error) {
+	return strconv.ParseFloat(strings.TrimSpace(s), 64)
 }
 
 // --- Parsing ---
@@ -340,18 +374,37 @@ func parseMemoryFile(path string) ([]Memory, error) {
 		dateFromFilename = t
 	}
 
+	// V80: Extract YAML front matter if present
+	fileMeta, contentWithoutFM := parseFrontMatter(content)
+
 	// Strategy 1: Try structured ### ID — Summary format first
-	if memories := parseStructured(content, dateFromFilename); len(memories) > 0 {
+	if memories := parseStructured(contentWithoutFM, dateFromFilename); len(memories) > 0 {
+		// Apply front matter to all memories in this file
+		if fileMeta != nil {
+			for i := range memories {
+				applyFrontMatter(&memories[i], fileMeta)
+			}
+		}
 		return memories, nil
 	}
 
 	// Strategy 2: Header-based extraction (any # through ######)
-	if memories := parseByHeaders(content, filename, dateFromFilename); len(memories) > 0 {
+	if memories := parseByHeaders(contentWithoutFM, filename, dateFromFilename); len(memories) > 0 {
+		if fileMeta != nil {
+			for i := range memories {
+				applyFrontMatter(&memories[i], fileMeta)
+			}
+		}
 		return memories, nil
 	}
 
 	// Strategy 3: Paragraph-based (no headers — split on blank lines)
-	if memories := parseByParagraphs(content, filename, dateFromFilename); len(memories) > 0 {
+	if memories := parseByParagraphs(contentWithoutFM, filename, dateFromFilename); len(memories) > 0 {
+		if fileMeta != nil {
+			for i := range memories {
+				applyFrontMatter(&memories[i], fileMeta)
+			}
+		}
 		return memories, nil
 	}
 
