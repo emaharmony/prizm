@@ -402,8 +402,14 @@ func evaluateHeuristic(test SoulTransferTest, response string) (float64, string)
 }
 
 func invokeAgent(baseURL, agentID, prompt, conversationID string) (string, error) {
+	// Prepend test awareness instruction so the agent relies on memory, not fabrication
+	testAwareness := "[EVALUATION MODE] You are being tested on identity, memory accuracy, and personality consistency. " +
+		"Answer from your stored memories and configured identity — do not fabricate or speculate beyond what you know. " +
+		"If you don't know something, say so honestly. Rely on your memory search results, not assumptions."
+	enhancedPrompt := testAwareness + "\n\n" + prompt
+
 	reqBody := map[string]any{
-		"prompt":          prompt,
+		"prompt":          enhancedPrompt,
 		"conversation_id": conversationID,
 		"reset":           true,
 	}
