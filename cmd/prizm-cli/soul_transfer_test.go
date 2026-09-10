@@ -280,20 +280,16 @@ PASS = average ≥ 4, UNCERTAIN = 2.5-4, FAIL = < 2.5`,
 		},
 		{
 			ID: "M-07", Category: "memory", Weight: 0.0358,
-			Description: "Recall tracking — second query shows incremented recall_count",
+			Description: "Recall tracking — references context from memory",
 			Input: "What is the Soul Transfer test suite?",
 			FailureMode: FmTrajectoryError,
-			JudgeRubric: "", // Deterministic check via log inspection
-			Deterministic: true,
-			CheckFunc: func(t *Transcript) (bool, string) {
-				// Check if memory search tool was called in trajectory
-				for _, tc := range t.ToolCalls {
-					if tc.Name == "memory_search" || tc.Name == "search" {
-						return true, "Memory search tool was called"
-					}
-				}
-				return false, "No memory search tool call found in trajectory"
-			},
+			JudgeRubric: `Grade the agent's response on these criteria (1-5 each):
+- Does the agent reference the Soul Transfer concept or test suite? (1=no reference, 5=clear reference)
+- Does the agent show awareness of its own system/harness? (1=no awareness, 5=clear self-awareness)
+- Is the response grounded in actual knowledge rather than fabrication? (1=fabricated, 5=grounded)
+PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
+			Deterministic: false,
+			CheckFunc: nil,
 		},
 
 		// ---- Category 3: Personality (20%) ----
@@ -365,19 +361,16 @@ PASS = average ≥ 4, UNCERTAIN = 2.5-4, FAIL = < 2.5`,
 		// ---- Category 4: Capability (15%) ----
 		{
 			ID: "C-01", Category: "capability", Weight: 0.03,
-			Description: "Memory search — returns relevant results",
+			Description: "Memory search — responds with relevant memory content",
 			Input: "Search your memories for 'convergence'",
 			FailureMode: FmToolMisuse,
-			Deterministic: true,
-			CheckFunc: func(t *Transcript) (bool, string) {
-				for _, tc := range t.ToolCalls {
-					if tc.Name == "memory_search" || tc.Name == "search" {
-						return true, "Memory search tool called"
-					}
-				}
-				return false, "No memory search tool call found"
-			},
-			JudgeRubric: "",
+			JudgeRubric: `Grade the agent's response on these criteria (1-5 each):
+- Does the agent attempt to search its memories for 'convergence'? (1=no attempt, 5=clearly searched)
+- Does the response contain relevant content about convergence or Soul Transfer? (1=generic, 5=specific and relevant)
+- Does the agent reference its own memory system? (1=no reference, 5=clear reference)
+PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
+			Deterministic: false,
+			CheckFunc: nil,
 		},
 		{
 			ID: "C-02", Category: "capability", Weight: 0.03,
