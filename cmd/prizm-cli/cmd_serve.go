@@ -38,15 +38,12 @@ import (
 
 	"github.com/emaharmony/prizm/internal/action"
 	"github.com/emaharmony/prizm/internal/adapter/builtin/discordbot"
-	"github.com/emaharmony/prizm/internal/adapter/builtin/slack"
-	"github.com/emaharmony/prizm/internal/adapter/builtin/telegram"
 	"github.com/emaharmony/prizm/internal/agent"
 	"github.com/emaharmony/prizm/internal/api"
 	"github.com/emaharmony/prizm/internal/approval"
 	"github.com/emaharmony/prizm/internal/autopatch"
 	"github.com/emaharmony/prizm/internal/bus"
 	"github.com/emaharmony/prizm/internal/claudecli"
-	"github.com/emaharmony/prizm/internal/claudeworker"
 	"github.com/emaharmony/prizm/internal/codesummary"
 	"github.com/emaharmony/prizm/internal/memory"
 	"github.com/emaharmony/prizm/internal/codexworker"
@@ -73,7 +70,6 @@ import (
 	"github.com/emaharmony/prizm/internal/provider/gemini"
 	"github.com/emaharmony/prizm/internal/provider/ollama"
 	"github.com/emaharmony/prizm/internal/provider/openai"
-	"github.com/emaharmony/prizm/internal/remembrance"
 	"github.com/emaharmony/prizm/internal/router"
 	"github.com/emaharmony/prizm/internal/runtrack"
 	"github.com/emaharmony/prizm/internal/safety"
@@ -140,9 +136,6 @@ type conversationContext struct {
 	natsConn      *nats.Conn               // V21: NATS bus connection for event publishing
 	natsURL       string                   // V21: NATS bus URL
 	actionReg     *action.Registry         // V21: action registry for event-triggered actions
-	remClient     *remembrance.Client      // V21: Remembrance client for memory auto-save
-	remSem        chan struct{}            // V21: Semaphore limiting concurrent Remembrance goroutines (max 4)
-	remCache      *remembranceCache        // V26: TTL cache for BuildContext results
 	summarySem    chan struct{}            // Long-running codebase summary concurrency guard
 	delegEngine   *delegation.Engine       // V22: Delegation engine for agent-to-agent task delegation
 	taskStore     *task.Store              // V22: Task store for delegation tracking
@@ -200,7 +193,6 @@ func executeServe(args []string) {
 		taskStore   *task.Store
 		delegEngine *delegation.Engine
 		orch        *orchestrator.Orchestrator
-		remClient   *remembrance.Client
 		codexWorker *codexworker.Worker
 		memoryStore *memory.MarkdownStore
 	)
@@ -479,8 +471,6 @@ func executeServe(args []string) {
 
 	var discordBots []*discordbot.BotAdapter
 	var factoryMon *factorymonitor.Monitor
-	var telegramBots []*telegram.BotAdapter
-	var slackBots []*slack.BotAdapter
 
 	// V32: State manager, context builder, and plan manager — shared across all channels
 	var stateMgr *state.Manager
@@ -512,20 +502,6 @@ func executeServe(args []string) {
 	} else {
 		// Default: use home directory + .openclaw/workspace
 		ctxBuildr = context.NewBuilder(filepath.Join(os.Getenv("HOME"), ".openclaw", "workspace"))
-	}
-
-	// V21: Create Remembrance client if enabled
-	if cfg.Remembrance.Enabled {
-		remClient = remembrance.NewClientWithTimeout(
-			cfg.Remembrance.URL,
-			remembranceTimeout(cfg),
-		)
-		if remClient.IsAvailable() {
-			fmt.Println("  Remembrance: connected")
-		} else {
-			log.Printf("[WARN] Remembrance enabled but not reachable at %s", cfg.Remembrance.URL)
-			remClient = nil // Disable gracefully
-		}
 	}
 
 	// Local memory store (MarkdownStore fallback)
@@ -787,14 +763,8 @@ func executeServe(args []string) {
 	planMgr.EnsureDir()
 	tool.RegisterPlanTools(toolReg, planMgr)
 
-	// Gated loop: RESEARCH-phase tools (web_search + memory_search).
-	// Pass the Remembrance client only when available so memory_search
-	// reports "disabled" instead of dereferencing a nil client.
-	var memSearcher tool.MemorySearcher
-	if remClient != nil {
-		memSearcher = remClient
-	}
-	// Wire local MarkdownStore as fallback for memory_search
+	// Gated loop: RESEARCH-phase tools (web_search + local memory_search).
+	// Wire the local MarkdownStore as the sole memory source.
 	var localStore tool.LocalMemoryStore
 	if memoryStore != nil {
 		localStore = memoryStore
@@ -802,7 +772,7 @@ func executeServe(args []string) {
 	} else {
 		log.Printf("[MEMORY] WARNING: local MarkdownStore is nil, memory_search will have no fallback")
 	}
-	tool.RegisterResearchTools(toolReg, memSearcher, localStore, tool.WebSearchConfig{})
+	tool.RegisterResearchTools(toolReg, nil, localStore, tool.WebSearchConfig{})
 
 	// Researcher reference-image tools: fetch/generate/analyze/collect.
 	// Images save under <workspace>/references by default and may target
@@ -931,9 +901,6 @@ func executeServe(args []string) {
 				natsConn:    natsConn,
 				natsURL:     natsURL,
 				actionReg:   actionReg,
-				remClient:   remClient,
-				remSem:      make(chan struct{}, 4),
-				remCache:    newRemembranceCache(60 * time.Second),
 				summarySem:  make(chan struct{}, 1),
 				delegEngine: delegEngine,
 				taskStore:   taskStore,
@@ -1078,141 +1045,6 @@ func executeServe(args []string) {
 
 			discordBots = append(discordBots, bot)
 			fmt.Printf("  Discord: connecting\n")
-
-		case "telegram":
-			tgBot := telegram.NewBotAdapter(ch.Token, nil)
-			tgSender := &telegramSender{bot: tgBot}
-
-			// Shared infrastructure is initialized before the channel loop (V79).
-			// If toolReg is nil, the config is broken — this should not happen.
-
-			tgConvCtx := &conversationContext{
-				router:           rtr,
-				sessMgr:          sessMgr,
-				cfg:              cfg,
-				providers:        provReg,
-				sender:           tgSender,
-				platform:         PlatformTelegram,
-				debounce:         msgDebounce,
-				eventLog:         eventLog,
-				cancelReg:        cancelReg,
-				ctxBuilder:       ctxBuildr,
-				natsConn:         natsConn,
-				natsURL:          natsURL,
-				actionReg:        actionReg,
-				remClient:        remClient,
-				remSem:           make(chan struct{}, 4),
-				remCache:         newRemembranceCache(60 * time.Second),
-				summarySem:       make(chan struct{}, 1),
-				delegEngine:      delegEngine,
-				taskStore:        taskStore,
-				crossCoord:       crossCoord,
-				autopatcher:      autopatcher,
-				toolExec:         toolExec,
-				toolPolicy:       &toolPolicy,
-				rateLimiter:      safety.NewUserRateLimiter(10, 1, 60, 10),
-				toolGate:         stage.NewToolRelevanceGate(true),
-				commitStore:      commitStore,
-				ttsClient:        ttsClient,
-				ttsConfig:        ttsConfig,
-				contextAgent:     contextAgent,
-				reviewStore:      globalReviewStore,
-				memoryStoreLocal: memoryStore,
-			memInjector:     memInjector,
-				stateMgr:         stateMgr,
-				planMgr:          planMgr,
-				improveMgr:       improveMgr,
-				guardian:         guardian,
-				pendingWork:      make(map[string]pendingWorkStart),
-				approvalWait:     make(map[string]chan approvalOutcome),
-			}
-			tgConvCtx.rebuildStaticSystemContent(&cfg.Agents[0])
-			tgBot.OnMessage(func(msg *telegram.InboundMessage) {
-				tgConvCtx.handleMessage(ChannelMessage{
-					Platform:  PlatformTelegram,
-					ChannelID: msg.ChatID,
-					UserID:    msg.UserID,
-					UserName:  msg.UserName,
-					Content:   msg.Content,
-					MessageID: msg.MessageID,
-					IsBot:     msg.IsBot,
-				})
-			})
-			go func() {
-				if err := tgBot.Start(ctx); err != nil {
-					log.Printf("Telegram bot error: %v", err)
-				}
-			}()
-			fmt.Printf("  Telegram: connecting\n")
-			telegramBots = append(telegramBots, tgBot)
-
-		case "slack":
-			slackBot := slack.NewBotAdapter(ch.Token, nil)
-			slackSender := &slackSender{bot: slackBot}
-
-			// Shared infrastructure is initialized before the channel loop (V79).
-			// If toolReg is nil, the config is broken — this should not happen.
-
-			slackConvCtx := &conversationContext{
-				router:           rtr,
-				sessMgr:          sessMgr,
-				cfg:              cfg,
-				providers:        provReg,
-				sender:           slackSender,
-				platform:         PlatformSlack,
-				debounce:         msgDebounce,
-				eventLog:         eventLog,
-				cancelReg:        cancelReg,
-				ctxBuilder:       ctxBuildr,
-				natsConn:         natsConn,
-				natsURL:          natsURL,
-				actionReg:        actionReg,
-				remClient:        remClient,
-				remSem:           make(chan struct{}, 4),
-				remCache:         newRemembranceCache(60 * time.Second),
-				summarySem:       make(chan struct{}, 1),
-				delegEngine:      delegEngine,
-				taskStore:        taskStore,
-				crossCoord:       crossCoord,
-				autopatcher:      autopatcher,
-				toolExec:         toolExec,
-				toolPolicy:       &toolPolicy,
-				rateLimiter:      safety.NewUserRateLimiter(10, 1, 60, 10),
-				toolGate:         stage.NewToolRelevanceGate(true),
-				commitStore:      commitStore,
-				ttsClient:        ttsClient,
-				ttsConfig:        ttsConfig,
-				contextAgent:     contextAgent,
-				reviewStore:      globalReviewStore,
-				memoryStoreLocal: memoryStore,
-			memInjector:     memInjector,
-				stateMgr:         stateMgr,
-				planMgr:          planMgr,
-				improveMgr:       improveMgr,
-				guardian:         guardian,
-				pendingWork:      make(map[string]pendingWorkStart),
-				approvalWait:     make(map[string]chan approvalOutcome),
-			}
-			slackConvCtx.rebuildStaticSystemContent(&cfg.Agents[0])
-			slackBot.OnMessage(func(msg *slack.InboundMessage) {
-				slackConvCtx.handleMessage(ChannelMessage{
-					Platform:  PlatformSlack,
-					ChannelID: msg.ChannelID,
-					UserID:    msg.UserID,
-					UserName:  msg.UserName,
-					Content:   msg.Content,
-					MessageID: msg.MessageID,
-					IsBot:     msg.IsBot,
-					ThreadTS:  msg.ThreadTS,
-				})
-			})
-			go func() {
-				if err := slackBot.Start(ctx); err != nil {
-					log.Printf("Slack bot error: %v", err)
-				}
-			}()
-			fmt.Printf("  Slack: connecting\n")
-			slackBots = append(slackBots, slackBot)
 
 		default:
 			fmt.Fprintf(os.Stderr, "Warning: unknown channel type %q\n", ch.Type)
