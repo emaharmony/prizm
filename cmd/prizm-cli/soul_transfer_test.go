@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -784,6 +785,14 @@ func TestSoulTransferSuite(t *testing.T) {
 	if prizmURL == "" {
 		prizmURL = "http://localhost:8100"
 	}
+
+	// Skip if no live Prizm instance is available
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(prizmURL + "/api/v1/agents")
+	if err != nil || resp.StatusCode >= 500 {
+		t.Skip("Soul Transfer suite requires a running Prizm instance at " + prizmURL)
+	}
+	resp.Body.Close()
 
 	// Group tests by category
 	categoryMap := map[string][]SoulTransferTest{}

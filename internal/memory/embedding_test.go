@@ -106,6 +106,11 @@ func TestEmbeddingIndexSearch(t *testing.T) {
 	mock := &mockEmbeddingClient{dims: 4}
 	idx.httpClient = mock
 
+	// Pre-set the query embedding so it's closer to mem1
+	mock.embeddings = map[string][]float64{
+		"identity origin": {0.9, 0.1, 0.0, 0.0}, // same direction as mem1
+	}
+
 	// Manually add entries with 4-dim vectors
 	idx.entries["mem1"] = &EmbeddingEntry{
 		ID:          "mem1",
