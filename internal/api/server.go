@@ -44,7 +44,7 @@
 package api
 
 import (
-	"context"
+	contextctx "context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -62,6 +62,7 @@ import (
 	"github.com/emaharmony/prizm/internal/agentns"
 	"github.com/emaharmony/prizm/internal/autopatch"
 	costpkg "github.com/emaharmony/prizm/internal/cost"
+	"github.com/emaharmony/prizm/internal/context"
 	"github.com/emaharmony/prizm/internal/delegation"
 	"github.com/emaharmony/prizm/internal/editor"
 	"github.com/emaharmony/prizm/internal/invocation"
@@ -110,6 +111,12 @@ type Server struct {
 	// workflowConfigPath is the gated-loop workflow definition file the
 	// dashboard workflow editor reads and writes. Empty → read-only default.
 	workflowConfigPath string
+
+	// CtxBuilder builds the system prompt (SOUL.md, USER.md, context files) for invoke.
+	ctxBuilder *context.Builder
+
+	// memStoreForInvoke is the MarkdownStore used for memory injection in invokes.
+	memStoreForInvoke *memory.MarkdownStore
 
 	// memStore is the local MarkdownStore for the memories API.
 	memStore *memory.MarkdownStore
@@ -190,8 +197,16 @@ type Config struct {
 	MaxRequestBytes int64
 	// MaxWorkspaceFileBytes caps a single workspace file write. 0 → 4 MiB.
 	MaxWorkspaceFileBytes int64
+	// CtxBuilder builds the system prompt (SOUL.md, USER.md, context files) for invoke.
+	// When nil, invokes use a minimal system prompt (ConversationPostfix only).
+	CtxBuilder *context.Builder
+
+	// MemStoreForInvoke is the local MarkdownStore for memory injection in invokes.
+	MemStoreForInvoke *memory.MarkdownStore
+
 	// MemStore is the local MarkdownStore for the memories API. Nil → memories endpoints return empty.
 	MemStore *memory.MarkdownStore
+
 	// RemClient is the Remembrance client for the memories API. Nil → Remembrance source disabled.
 	RemClient *remembrance.Client
 }
@@ -199,7 +214,7 @@ type Config struct {
 // AutoPatchStarter is the API surface needed from the autopatch service.
 type AutoPatchStarter interface {
 	Enabled() bool
-	Start(ctx context.Context, req autopatch.Request) (*task.Task, error)
+	Start(ctx contextctx.Context, req autopatch.Request) (*task.Task, error)
 }
 
 // NewServer creates a new API server.
@@ -233,6 +248,8 @@ func NewServer(cfg Config) *Server {
 		maxWorkspaceFileBytes: cfg.MaxWorkspaceFileBytes,
 		memStore:             cfg.MemStore,
 		remClient:            cfg.RemClient,
+		ctxBuilder:           cfg.CtxBuilder,
+		memStoreForInvoke:    cfg.MemStoreForInvoke,
 	}
 	if s.maxRequestBytes <= 0 {
 		s.maxRequestBytes = 1 << 20 // 1 MiB
@@ -575,7 +592,7 @@ func (s *Server) handleAgentInvoke(w http.ResponseWriter, r *http.Request, agent
 	// single-shot behavior — one prompt in, one result out, nothing persisted.
 	if conversationID == "" || s.sessions == nil {
 		inv := s.invocations.Create(agentID)
-		go s.runInvocation(*agentCfg, inv.ID, singleShotMessages(*agentCfg, req.Prompt), "", maxTokens)
+		go s.runInvocation(*agentCfg, inv.ID, s.singleShotMessages(*agentCfg, req.Prompt), "", maxTokens)
 		s.writeInvocationAccepted(w, inv)
 		return
 	}
@@ -610,7 +627,7 @@ func (s *Server) handleAgentInvoke(w http.ResponseWriter, r *http.Request, agent
 
 	// Build the message list synchronously (sess.Messages now includes this turn)
 	// so the background call doesn't race concurrent session mutation.
-	messages := invokeSessionMessages(*agentCfg, sess)
+	messages := s.invokeSessionMessages(*agentCfg, sess)
 
 	inv := s.invocations.Create(agentID)
 	go s.runInvocation(*agentCfg, inv.ID, messages, sess.ID, maxTokens)
@@ -659,24 +676,113 @@ func (s *Server) resolveInvokeSession(agentID, conversationID string, reset bool
 	return s.sessions.Create(agentID, invokeChannel, conversationID, conversationID)
 }
 
-// singleShotMessages builds the classic memoryless prompt: optional system
-// postfix + the single user turn.
-func singleShotMessages(agentCfg orchestrator.AgentConfig, prompt string) []provider.ChatMessage {
-	messages := make([]provider.ChatMessage, 0, 2)
+// resolveConversationPostfixForInvoke picks the behavior directive for invoke.
+// If SOUL.md was loaded (hasSoul=true), return "" — SOUL.md is the personality authority.
+// Otherwise fall back to the agent's conversation_postfix or a default.
+func resolveConversationPostfixForInvoke(agentCfg orchestrator.AgentConfig, hasSoul bool) string {
+	if hasSoul {
+		return ""
+	}
 	if agentCfg.ConversationPostfix != "" {
-		messages = append(messages, provider.ChatMessage{Role: "system", Content: agentCfg.ConversationPostfix})
+		return agentCfg.ConversationPostfix
+	}
+	return "Stay present in the conversation. Be engaged and responsive."
+}
+
+// singleShotMessages builds the full system prompt (SOUL.md, context files,
+// memory injection) plus the single user turn.
+// Falls back to minimal prompt (ConversationPostfix only) if ctxBuilder is nil.
+func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig) string {
+	if s.ctxBuilder == nil {
+		if agentCfg.ConversationPostfix != "" {
+			return agentCfg.ConversationPostfix
+		}
+		return ""
+	}
+
+	var sb strings.Builder
+
+	// Layer 1: Identity (SOUL.md)
+	identityContent := ""
+	hasSoul := false
+	builder := context.NewBuilder(s.ctxBuilder.WorkspaceRoot).WithNamedContexts([]string{"soul", "identity"})
+	if injected, err := builder.Build(); err == nil {
+		for _, f := range injected.Files {
+			if f.Name == "soul" && f.Content != "" {
+				identityContent = f.Content
+				hasSoul = true
+			}
+		}
+	}
+	if identityContent == "" {
+		identityContent = fmt.Sprintf("You are %s, a %s assistant.", agentCfg.ID, agentCfg.Role)
+	}
+	sb.WriteString("## Who You Are\n")
+	sb.WriteString(identityContent + "\n\n")
+
+	// Layer 2: Context files (USER.md, HEARTBEAT.md, AGENTS.md, etc.)
+	if len(agentCfg.Context) > 0 {
+		budget := 4000 // default token budget
+		otherContexts := make([]string, 0, len(agentCfg.Context))
+		for _, c := range agentCfg.Context {
+			if c != "soul" && c != "identity" {
+				otherContexts = append(otherContexts, c)
+			}
+		}
+		if len(otherContexts) > 0 {
+			ctxBuilder := context.NewBuilder(s.ctxBuilder.WorkspaceRoot).
+				WithNamedContexts(otherContexts).
+				WithTokenBudget(budget)
+			if injected, err := ctxBuilder.BuildCached(); err == nil && injected.FormattedString != "" {
+				sb.WriteString("## Context\n")
+				sb.WriteString(injected.FormattedString + "\n")
+			}
+		}
+	}
+
+	// Layer 3: Memory injection
+	if s.memStoreForInvoke != nil {
+		// Inject recent memories as context
+		ctx := contextctx.Background()
+		memories, err := s.memStoreForInvoke.Search(ctx, identityContent, 10)
+		if err == nil && len(memories) > 0 {
+			sb.WriteString("## Memories\n")
+			for i, mem := range memories {
+				if i >= 5 {
+					break
+				}
+				sb.WriteString(fmt.Sprintf("- %s\n", mem.Content))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	// Layer 4: Conversation postfix (behavior)
+	postfix := resolveConversationPostfixForInvoke(agentCfg, hasSoul)
+	if postfix != "" {
+		sb.WriteString("## How You Respond\n")
+		sb.WriteString(postfix + "\n\n")
+	}
+
+	return sb.String()
+}
+
+// singleShotMessages builds the full system prompt plus the single user turn.
+func (s *Server) singleShotMessages(agentCfg orchestrator.AgentConfig, prompt string) []provider.ChatMessage {
+	messages := make([]provider.ChatMessage, 0, 2)
+	systemPrompt := s.buildInvokeSystemPrompt(agentCfg)
+	if systemPrompt != "" {
+		messages = append(messages, provider.ChatMessage{Role: "system", Content: systemPrompt})
 	}
 	return append(messages, provider.ChatMessage{Role: "user", Content: prompt})
 }
 
-// invokeSessionMessages builds the prompt from persisted conversation history,
-// mapping session roles to chat roles the same way the built-in chat pipeline
-// does (see buildMessages in cmd/prizm-cli/tool_loop_chat.go). The current user
-// turn is already the last message in sess.Messages.
-func invokeSessionMessages(agentCfg orchestrator.AgentConfig, sess *session.Session) []provider.ChatMessage {
-	messages := make([]provider.ChatMessage, 0, len(sess.Messages)+1)
-	if agentCfg.ConversationPostfix != "" {
-		messages = append(messages, provider.ChatMessage{Role: "system", Content: agentCfg.ConversationPostfix})
+// invokeSessionMessages builds the full system prompt plus conversation history.
+func (s *Server) invokeSessionMessages(agentCfg orchestrator.AgentConfig, sess *session.Session) []provider.ChatMessage {
+	messages := make([]provider.ChatMessage, 0, len(sess.Messages)+2)
+	systemPrompt := s.buildInvokeSystemPrompt(agentCfg)
+	if systemPrompt != "" {
+		messages = append(messages, provider.ChatMessage{Role: "system", Content: systemPrompt})
 	}
 	for _, m := range sess.Messages {
 		switch m.Role {
@@ -697,7 +803,7 @@ func invokeSessionMessages(agentCfg orchestrator.AgentConfig, sess *session.Sess
 // conversation, so the assistant reply is persisted back to that session for the
 // next turn; when empty the call is single-shot and nothing is saved.
 func (s *Server) runInvocation(agentCfg orchestrator.AgentConfig, invocationID string, messages []provider.ChatMessage, sessionID string, maxTokens int) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := contextctx.WithTimeout(contextctx.Background(), 2*time.Minute)
 	defer cancel()
 
 	chatProv, err := s.providers.GetChatProviderForAgent(agentCfg.ID, agentCfg.Model)

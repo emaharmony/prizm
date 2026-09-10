@@ -1267,6 +1267,8 @@ func executeServe(args []string) {
 		MaxWorkspaceFileBytes: cfg.API.MaxWorkspaceFileBytes,
 		MemStore:              memoryStore,
 		RemClient:             remClient,
+		CtxBuilder:            ctxBuildr,
+		MemStoreForInvoke:    memoryStore,
 	})
 	go func() {
 		if err := apiServer.Start(); err != nil {

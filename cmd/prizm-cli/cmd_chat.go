@@ -38,6 +38,7 @@ import (
 	"github.com/emaharmony/prizm/internal/context"
 	"github.com/emaharmony/prizm/internal/delegation"
 	"github.com/emaharmony/prizm/internal/guard"
+	"github.com/emaharmony/prizm/internal/memory"
 	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/plan"
 	"github.com/emaharmony/prizm/internal/provider"
@@ -74,6 +75,8 @@ type chatContext struct {
 	stateMgr    *state.Manager // V32: Working state manager for adaptive context
 	planMgr     *plan.Manager  // V32: Plan manager for plan-first pipeline
 	guardian    *guard.Guard   // V32: Guard rail for plan enforcement
+	memInjector *MemoryInjector // V79: Smart memory injection
+	memoryStore *memory.MarkdownStore // V77: Local memory store for recall
 	hasSoulContent bool        // True when SOUL.md is loaded — takes precedence over postfix
 
 	// Cached static system content — built once, reused every message.
@@ -352,6 +355,68 @@ func executeChat(args []string) {
 		delegEngine = delegation.NewEngine(taskStore, natsConn)
 	}
 
+	// 9.5. Set up memory store and injector
+	var chatMemStore *memory.MarkdownStore
+	var chatMemInjector *MemoryInjector
+	if cfg.Memory.StoreType != "" || cfg.Memory.StorePath != "" {
+		memPath := filepath.Join(cfg.Prizm.DataDir, "memory")
+		if cfg.Memory.StorePath != "" {
+			memPath = cfg.Memory.StorePath
+			if !filepath.IsAbs(memPath) {
+				memPath = filepath.Join(cfg.Prizm.Workspace, memPath)
+			}
+		}
+		chatMemStore = memory.NewMarkdownStore(memPath)
+
+		// V80: Embedding index for semantic search
+		if cfg.Memory.EmbeddingEnabled {
+			embPath := cfg.Memory.EmbeddingIndexPath
+			if embPath == "" {
+				embPath = filepath.Join(memPath, "embeddings.json")
+			}
+			if !filepath.IsAbs(embPath) {
+				embPath = filepath.Join(cfg.Prizm.Workspace, embPath)
+			}
+			embModel := cfg.Memory.EmbeddingModel
+			if embModel == "" {
+				embModel = "nomic-embed-text"
+			}
+			embURL := cfg.Memory.EmbeddingURL
+			if embURL == "" {
+				embURL = "http://localhost:11434"
+			}
+			embDims := cfg.Memory.EmbeddingDimensions
+			if embDims == 0 {
+				embDims = 768
+			}
+			embIdx := memory.NewEmbeddingIndex(memory.EmbeddingConfig{
+				Enabled:          true,
+				Model:           embModel,
+				URL:             embURL,
+				Dimensions:      embDims,
+				IndexPath:       embPath,
+				ReindexOnStartup: cfg.Memory.EmbeddingReindexOnStartup,
+			})
+			if err := embIdx.Load(); err != nil {
+				log.Printf("[CHAT-EMBEDDING] failed to load index: %v", err)
+			}
+			chatMemStore.SetEmbeddingIndex(embIdx)
+		}
+
+		// V79: Smart memory injector — query planner + search + recent modes
+		var queryPlanner *memory.QueryPlanner
+		if cfg.Memory.QueryPlannerEnabled {
+			queryPlanner = memory.NewQueryPlanner(memory.QueryPlanConfig{
+				Enabled:  true,
+				Model:    cfg.Memory.QueryPlannerModel,
+				OllamaURL: cfg.Prizm.OllamaURL,
+				Timeout:  time.Duration(cfg.Memory.QueryPlannerTimeoutS) * time.Second,
+				Fallback: "heuristic",
+			})
+		}
+		chatMemInjector = NewMemoryInjector(chatMemStore, queryPlanner)
+	}
+
 	// 10. Build chat context
 	cc := &chatContext{
 		router:      rtr,
@@ -373,6 +438,8 @@ func executeChat(args []string) {
 		stateMgr:    chatStateMgr,
 		planMgr:     chatPlanMgr,
 		guardian:    chatGuardian,
+		memInjector: chatMemInjector,
+		memoryStore: chatMemStore,
 	}
 
 	// 10.5. Pre-build static system content (only needs to be done once)
@@ -561,7 +628,7 @@ func (cc *chatContext) processWithChatProvider(
 	}
 
 	// Build messages from session
-	messages := cc.buildChatMessages(sess, agentCfg, "", nil) // CLI chat has no channel context
+	messages := cc.buildChatMessages(sess, agentCfg, "", nil, userInput) // CLI chat has no channel context
 	chatTools := cc.buildChatToolDefs()
 	chatTools = filterChatToolsByAgentPolicy(chatTools, cc.toolPolicy, agentCfg.ID)
 
@@ -606,7 +673,7 @@ func (cc *chatContext) processWithTextProvider(
 	run *runtrack.Run,
 ) (string, error) {
 	// Build the full prompt (same as Discord pipeline)
-	prompt := cc.buildChatPrompt(sess, agentCfg, "", nil) // CLI chat has no channel context
+	prompt := cc.buildChatPrompt(sess, agentCfg, "", nil, userInput) // CLI chat has no channel context
 
 	// Set up NATS for event pipeline (using persistent connection)
 	var natsAdapter *natsPublisherAdapter
@@ -811,7 +878,7 @@ func (cc *chatContext) buildStaticSystemContent(agentCfg *orchestrator.AgentConf
 
 // buildChatPrompt builds a flat string prompt (for text-based providers).
 // V33: Layered prompt with channel context support.
-func (cc *chatContext) buildChatPrompt(sess *session.Session, agentCfg *orchestrator.AgentConfig, stateActionKey string, channelRole *orchestrator.ChannelRole) string {
+func (cc *chatContext) buildChatPrompt(sess *session.Session, agentCfg *orchestrator.AgentConfig, stateActionKey string, channelRole *orchestrator.ChannelRole, lastUserInput string) string {
 	var sb strings.Builder
 
 	// Static system content (cached, built once at startup)
@@ -862,6 +929,28 @@ func (cc *chatContext) buildChatPrompt(sess *session.Session, agentCfg *orchestr
 		}
 	}
 
+	// V79: Smart memory injection
+	if cc.memInjector != nil {
+		sessionAge := time.Since(sess.StartedAt)
+		mode := ChooseMode(len(sess.Messages), sessionAge)
+		memBlock := cc.memInjector.InjectMemories(ctxcontext.Background(), mode, lastUserInput, len(sess.Messages), 300)
+		if memBlock != "" {
+			sb.WriteString(memBlock + "\n")
+		}
+	} else if cc.memoryStore != nil {
+		// Legacy fallback: inject recent memories
+		recentMemories, memErr := cc.memoryStore.ListRecent(ctxcontext.Background(), 5)
+		if memErr == nil && len(recentMemories) > 0 {
+			var memSb strings.Builder
+			memSb.WriteString("## Recent memories\n")
+			memSb.WriteString("The following memories were automatically recalled from local storage:\n\n")
+			for _, m := range recentMemories {
+				memSb.WriteString(fmt.Sprintf("- %s\n", m.Content))
+			}
+			sb.WriteString(memSb.String() + "\n")
+		}
+	}
+
 	// Dynamic session awareness
 	sessionAge := time.Since(sess.StartedAt).Round(time.Second)
 	sessionMsgCount := len(sess.Messages)
@@ -883,7 +972,7 @@ func (cc *chatContext) buildChatPrompt(sess *session.Session, agentCfg *orchestr
 }
 
 // buildChatMessages builds structured ChatMessage array (for ChatProvider).
-func (cc *chatContext) buildChatMessages(sess *session.Session, agentCfg *orchestrator.AgentConfig, stateActionKey string, channelRole *orchestrator.ChannelRole) []provider.ChatMessage {
+func (cc *chatContext) buildChatMessages(sess *session.Session, agentCfg *orchestrator.AgentConfig, stateActionKey string, channelRole *orchestrator.ChannelRole, lastUserInput string) []provider.ChatMessage {
 	var messages []provider.ChatMessage
 
 	// System message
@@ -930,6 +1019,26 @@ func (cc *chatContext) buildChatMessages(sess *session.Session, agentCfg *orches
 		// Backward compatibility: fall back to state_actions.inject
 		if sa := cc.cfg.ResolveStateAction(agentCfg.ID, stateActionKey); sa != nil && sa.Inject != "" {
 			systemContent += "\n## Context\n" + sa.Inject + "\n\n"
+		}
+	}
+
+	// V79: Smart memory injection
+	if cc.memInjector != nil {
+		sessionAge := time.Since(sess.StartedAt)
+		mode := ChooseMode(len(sess.Messages), sessionAge)
+		memBlock := cc.memInjector.InjectMemories(ctxcontext.Background(), mode, lastUserInput, len(sess.Messages), 300)
+		if memBlock != "" {
+			systemContent += memBlock + "\n"
+		}
+	} else if cc.memoryStore != nil {
+		// Legacy fallback: inject recent memories
+		recentMemories, memErr := cc.memoryStore.ListRecent(ctxcontext.Background(), 5)
+		if memErr == nil && len(recentMemories) > 0 {
+			systemContent += "## Recent memories\nThe following memories were automatically recalled from local storage:\n\n"
+			for _, m := range recentMemories {
+				systemContent += fmt.Sprintf("- %s\n", m.Content)
+			}
+			systemContent += "\n"
 		}
 	}
 

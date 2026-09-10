@@ -89,7 +89,7 @@ func TestBuildChatPrompt_PersonalityDirective(t *testing.T) {
 	cc.buildStaticSystemContent(agentCfg)
 
 	channelRole := &orchestrator.ChannelRole{Role: "manager-room", Personality: "terse"}
-	prompt := cc.buildChatPrompt(sess, agentCfg, "manager-room", channelRole)
+	prompt := cc.buildChatPrompt(sess, agentCfg, "manager-room", channelRole, "")
 	if !strings.Contains(prompt, "## How You Respond") {
 		t.Error("expected prompt to contain a How You Respond section")
 	}
@@ -101,7 +101,7 @@ func TestBuildChatPrompt_PersonalityDirective(t *testing.T) {
 		t.Error("expected SOUL.md to take precedence over harness default postfix")
 	}
 
-	messages := cc.buildChatMessages(sess, agentCfg, "manager-room", channelRole)
+	messages := cc.buildChatMessages(sess, agentCfg, "manager-room", channelRole, "")
 	if len(messages) == 0 || messages[0].Role != "system" {
 		t.Fatal("expected a system message")
 	}
