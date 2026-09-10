@@ -11,7 +11,6 @@ import (
 	"github.com/emaharmony/prizm/internal/agent"
 	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/provider"
-	"github.com/emaharmony/prizm/internal/remembrance"
 )
 
 // handleAgentMessage processes an incoming message from another bot agent.
