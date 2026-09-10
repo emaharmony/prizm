@@ -81,11 +81,7 @@ func (wh *WakeHandler) molStatusReport() string {
 	}
 
 	// --- Memory ---
-	if wh.remClient != nil {
-		sb.WriteString("**Memory:** Recall connected\n\n")
-	} else {
-		sb.WriteString("**Memory:** Recall not connected\n\n")
-	}
+	sb.WriteString("**Memory:** Local MarkdownStore\n\n")
 
 	// --- Recent git activity ---
 	repoPath := wh.statusReportRepoPath()

@@ -45,7 +45,6 @@ func TestMolStatusReport_BasicOutput(t *testing.T) {
 		cfg:       cfg,
 		sessMgr:   sessMgr,
 		planMgr:   planMgr,
-		remClient: nil,
 	}
 
 	report := wh.molStatusReport()
@@ -60,8 +59,8 @@ func TestMolStatusReport_BasicOutput(t *testing.T) {
 	if !strings.Contains(report, "Agents:** 2") {
 		t.Error("expected 'Agents:** 2' in report")
 	}
-	if !strings.Contains(report, "Recall not connected") {
-		t.Error("expected 'Recall not connected' in report")
+	if !strings.Contains(report, "Local MarkdownStore") {
+		t.Error("expected 'Local MarkdownStore' in report")
 	}
 	if !strings.Contains(report, "TTS: on") {
 		t.Error("expected 'TTS: on' in report")

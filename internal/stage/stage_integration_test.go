@@ -90,7 +90,6 @@ func TestConnectionStage_Rollback(t *testing.T) {
 	}
 }
 
-// RemembranceStage tests moved to remembrance_test.go
 
 func TestLLMStage_Validate(t *testing.T) {
 	stage := &LLMStage{}
@@ -333,7 +332,6 @@ func TestFullPipeline_Integration(t *testing.T) {
 
 	pipeline := NewPipeline(
 		&ConnectionStage{RunDir: tmpDir},
-		&RemembranceStage{MemoryEnabled: false},
 		&LLMStage{DryRun: true},
 		&ToolStage{ToolRegistry: toolReg, PolicyConfig: tool.PolicyConfig{WorkspaceRoot: ".", MaxFileSize: 1024 * 1024}, WorkspaceRoot: "."},
 		&ApprovalStage{WorkspaceRoot: "."},
@@ -357,9 +355,9 @@ func TestFullPipeline_Integration(t *testing.T) {
 		t.Fatalf("pipeline.Run() error = %v", err)
 	}
 
-	// All 6 stages should have results
-	if len(final.Results) != 6 {
-		t.Errorf("expected 6 results, got %d", len(final.Results))
+	// All stages should have results (5 stages, Remembrance removed)
+	if len(final.Results) != 5 {
+		t.Errorf("expected 5 results, got %d", len(final.Results))
 	}
 
 	// All stages should have succeeded

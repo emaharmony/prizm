@@ -670,8 +670,6 @@ func main() {
 		executeConfig(os.Args[2:])
 	case "runs":
 		executeRuns(os.Args[2:])
-	case "remembrance":
-		executeRemembrance(os.Args[2:])
 	case "version":
 		fmt.Println(version.String())
 	default:
@@ -741,7 +739,6 @@ func commandUsage() string {
 			"prizm search --query <text> [options]         Search the vector store",
 			"prizm projection list|rebuild|query           Manage CQRS projection snapshots",
 			"prizm adapter list|show|health [<name>]       Inspect adapters",
-			"prizm remembrance health|status|serve         Manage the Remembrance memory service",
 			"prizm version                                 Print version",
 		}},
 	}

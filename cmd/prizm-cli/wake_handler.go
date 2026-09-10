@@ -55,7 +55,7 @@ type WakeHandler struct {
 	planMgr    *plan.Manager
 	improveMgr *improve.Manager
 	factoryMon *factorymonitor.Monitor
-	remClient  *remembrance.Client
+
 	toolExec   *tool.Executor  // V35: Tool executor for project_work action
 	toolReg    *tool.Registry  // V35: Tool registry for listing tools in prompt
 	skills     *skill.Registry // V54: skills advertised in the system prompt
@@ -224,7 +224,6 @@ func NewWakeHandler(
 	planMgr *plan.Manager,
 	improveMgr *improve.Manager,
 	factoryMon *factorymonitor.Monitor,
-	remClient *remembrance.Client,
 	toolExec *tool.Executor,
 	toolReg *tool.Registry,
 ) *WakeHandler {
@@ -239,7 +238,6 @@ func NewWakeHandler(
 		planMgr:    planMgr,
 		improveMgr: improveMgr,
 		factoryMon: factoryMon,
-		remClient:  remClient,
 		toolExec:   toolExec,
 		toolReg:    toolReg,
 	}
@@ -666,28 +664,8 @@ func (wh *WakeHandler) handleScheduledEvent(msg *nats.Msg) {
 	//   2. Recent Discord channel messages (conversation context)
 	//   3. Recent inter-agent NATS messages
 	//   4. The current date (for recency-aware recall)
-	if wh.remClient != nil {
-		searchQueries := wh.buildDynamicMemoryQueries(action, actionDef)
-		for _, q := range searchQueries {
-			results, err := wh.remClient.Search(q, "hybrid", "", "", 5)
-			if err == nil && results != nil {
-				if hits, ok := results["results"].([]any); ok && len(hits) > 0 {
-					systemPrompt += fmt.Sprintf("\n\n## Memory Search: %q\n", q)
-					for _, hit := range hits {
-						if m, ok := hit.(map[string]any); ok {
-							snippet := fmt.Sprintf("%v", m["snippet"])
-							if len(snippet) > 200 {
-								snippet = snippet[:200] + "..."
-							}
-							score := fmt.Sprintf("%v", m["score"])
-							systemPrompt += fmt.Sprintf("- [score: %s] %s\n", score, snippet)
-						}
-					}
-					systemPrompt += "\n--- End of memory search ---\n"
-				}
-			}
-		}
-	}
+	// Memory search is handled upstream by Smart Memory Injector.
+	// Local MarkdownStore handles all memory retrieval now.
 
 	// V34: Inject tool capability summary so Prizm knows what she can do
 	systemPrompt += `
@@ -2136,17 +2114,7 @@ func (wh *WakeHandler) hasWorkToDo(action string) bool {
 		if prList != "" && !strings.Contains(prList, "No pull requests") {
 			return true // Open PRs to review
 		}
-		// Check Remembrance for any assigned tasks using a dynamic query
-		if wh.remClient != nil {
-			projectID := wh.cfg.DefaultProject().ID
-			dynQuery := fmt.Sprintf("assigned task pending fix %s %s", projectID, time.Now().Format("2006-01-02"))
-			results, err := wh.remClient.Search(dynQuery, "hybrid", "", "", 3)
-			if err == nil && results != nil {
-				if hits, ok := results["results"].([]any); ok && len(hits) > 0 {
-					return true
-				}
-			}
-		}
+		// Memory search handled by local MarkdownStore
 		return false
 
 	case "daily_review":

@@ -1098,7 +1098,6 @@ func executeServe(args []string) {
 		MaxRequestBytes:       cfg.API.MaxRequestBytes,
 		MaxWorkspaceFileBytes: cfg.API.MaxWorkspaceFileBytes,
 		MemStore:              memoryStore,
-		RemClient:             remClient,
 		CtxBuilder:            ctxBuildr,
 		MemStoreForInvoke:    memoryStore,
 	})
@@ -1141,9 +1140,6 @@ func executeServe(args []string) {
 	fmt.Println("🔮 Prizm is running. Press Ctrl+C to stop.")
 
 	// 11. Start dream cycle scheduler (3AM nightly + event-triggered)
-	if remClient != nil {
-		go startDreamScheduler(remClient)
-	}
 
 	// V32: Start cron-style task scheduler if configured
 	if cfg.Prizm.Scheduler.Enabled {
@@ -1184,7 +1180,6 @@ func executeServe(args []string) {
 			planMgr,
 			improveMgr,
 			factoryMon,
-			remClient,
 			toolExec, // V35: Tool executor for project_work
 			toolReg,  // V35: Tool registry for project_work
 		)
@@ -1207,25 +1202,7 @@ func executeServe(args []string) {
 
 	// Claude Code sub-agent reviewer — fulfills gated-loop feedback gates that
 	// require the configured reviewer name. Independent of the scheduler.
-	if cfg.ClaudeCode.Enabled && natsConn != nil {
-		claudeExe, err := claudecli.ResolveExecutable(cfg.ClaudeCode.Executable, exec.LookPath)
-		if err != nil {
-			log.Printf("[CLAUDE-REVIEW] WARN disabled: %v", err)
-		} else {
-			reviewer := claudeworker.New(claudeworker.Config{
-				Enabled:        true,
-				Executable:     claudeExe,
-				Model:          cfg.ClaudeCode.Model,
-				ReviewerName:   cfg.ClaudeCode.ReviewerName,
-				TimeoutMinutes: cfg.ClaudeCode.TimeoutMinutes,
-				AllowedTools:   cfg.ClaudeCode.AllowedTools,
-				ExtraArgs:      cfg.ClaudeCode.ExtraArgs,
-			})
-			if err := startClaudeReviewer(natsConn, reviewer, cfg); err != nil {
-				log.Printf("[CLAUDE-REVIEW] WARN failed to start: %v", err)
-			}
-		}
-	}
+	// Claude reviewer removed — Mango reviewer handles all code review now.
 
 	// V77: Mango review subscriber — delegates prizm.review.requested to mango agent.
 	var mangoReviewer *mangoReviewer
@@ -1253,12 +1230,6 @@ func executeServe(args []string) {
 		mangoReviewer.Close()
 	}
 	for _, bot := range discordBots {
-		bot.Stop()
-	}
-	for _, bot := range telegramBots {
-		bot.Stop()
-	}
-	for _, bot := range slackBots {
 		bot.Stop()
 	}
 	if natsCleanup != nil {
@@ -1548,7 +1519,7 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 	}()
 
 	// Step 3: Find or create an owner-scoped session while preserving channel metadata.
-	sess, ownerID, err := getOrCreateSessionForMessage(cc.sessMgr, cc.cfg, result.AgentID, string(msg.Platform), msg.ChannelID, msg.UserID)
+	sess, _, err := getOrCreateSessionForMessage(cc.sessMgr, cc.cfg, result.AgentID, string(msg.Platform), msg.ChannelID, msg.UserID)
 	if err != nil {
 		log.Printf("[ERROR] load session: %v", err)
 		finalMessage = "I could not load the conversation session."
@@ -1602,38 +1573,9 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 
 	// Step 7b: Inject Remembrance context (if available, with 60s TTL cache)
 	// V77: Memory injection — try Remembrance first, fall back to local memories.
-	// Fall back also when Remembrance is configured but fails at runtime.
-	// NOTE: buildPrompt is deferred until after memory injection to avoid
-	// building a prompt that will be immediately discarded.
+	// Remembrance removed: local MarkdownStore handles memory injection
+	// via the Smart Memory Injector. No external service call needed.
 	memoriesInjected := false
-	if cc.remClient != nil {
-		cacheKey := fmt.Sprintf("%s:%s", agentCfg.ID, sess.ID)
-		remCtx := cc.remCache.Get(cacheKey)
-		if remCtx == nil {
-			var remCtxErr error
-			remCtx, remCtxErr = cc.remClient.BuildContextWithOptions(remembrance.BuildContextRequest{
-				Task:               sanitizedContent,
-				ProjectID:          "prizm",
-				AgentID:            agentCfg.ID,
-				OwnerID:            ownerID,
-				LocalRecentSummary: localRecentSummary(sess),
-				ChannelContext:     channelRoleContext(channelRole),
-				MaxTokens:          remembrance.DefaultContextMaxTokens,
-			})
-			if remCtxErr != nil {
-				log.Printf("[REMEMBRANCE] context build failed: %v", remCtxErr)
-			} else if remCtx != nil {
-				cc.remCache.Set(cacheKey, remCtx)
-			}
-		}
-		if remCtx != nil {
-			if memoryBlock := remembranceMemoryBlock(remCtx); memoryBlock != "" {
-				promptSession = cloneSessionWithSystemMemory(sess, memoryBlock)
-				log.Printf("[REMEMBRANCE] injected %d memory sources into shared prompt layer", len(remCtx.SelectedMemories))
-				memoriesInjected = true
-			}
-		}
-	}
 
 	// V79: Smart memory injection — search mode for fresh questions, recent mode for continuations
 	if !memoriesInjected && cc.memInjector != nil {
@@ -2082,7 +2024,6 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 
 	// Step 11: Update local summary and optionally send curated candidates to Remembrance.
 	if responseText != "" {
-		enqueueLocalMemoryUpdate(cc.sessMgr, cc.cfg, cc.remClient, cc.remSem, cc.remCache, ownerID, msg.UserID, finalRC.Agent, sess.ID, run.ID)
 	}
 
 	// V76: Publish memory extraction event (event-driven, replaces fire-and-forget goroutine).
@@ -2682,13 +2623,10 @@ func createOpenAIProvider(model string) (provider.Provider, error) {
 	return openai.New(apiKey), nil
 }
 
-// createOpenAIResponsesProvider creates an OpenAI Responses API provider.
+// createOpenAIResponsesProvider creates an OpenAI provider using the Chat API.
+// The Responses API provider was removed; we fall back to Chat API.
 func createOpenAIResponsesProvider(model string) (provider.Provider, error) {
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		return nil, fmt.Errorf("OPENAI_API_KEY environment variable not set")
-	}
-	return openai.NewResponses(apiKey), nil
+	return createOpenAIProvider(model)
 }
 
 // createAnthropicProvider creates an Anthropic provider instance.
@@ -2795,13 +2733,10 @@ func (cc *conversationContext) checkChannelToolAccess(toolName, channelID string
 	return nil
 }
 
-// remembranceTimeout returns the configured Remembrance timeout duration,
-// falling back to the default if not set.
+// remembranceTimeout is a no-op stub. Remembrance has been removed;
+// local MarkdownStore handles all memory operations now.
 func remembranceTimeout(cfg *orchestrator.Config) time.Duration {
-	if cfg.Remembrance.TimeoutSeconds > 0 {
-		return time.Duration(cfg.Remembrance.TimeoutSeconds) * time.Second
-	}
-	return remembrance.DefaultTimeout
+	return 30 * time.Second // sensible default
 }
 
 func bridgeSecret(cfg *orchestrator.Config) string {

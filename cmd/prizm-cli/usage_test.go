@@ -36,7 +36,7 @@ func TestCommandUsageCoversCommands(t *testing.T) {
 		"prizm config", "prizm doctor", "prizm preview", "prizm agent", "prizm tool", "prizm validation", "prizm context",
 		"prizm watch", "prizm panel", "prizm runs", "prizm cost", "prizm trace", "prizm dashboard",
 		"prizm scan", "prizm mcp", "prizm skills", "prizm approval",
-		"prizm health", "prizm search", "prizm projection", "prizm adapter", "prizm remembrance", "prizm version",
+		"prizm health", "prizm search", "prizm projection", "prizm adapter", "prizm version",
 	} {
 		if !strings.Contains(out, cmd) {
 			t.Fatalf("usage does not mention %q:\n%s", cmd, out)

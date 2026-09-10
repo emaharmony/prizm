@@ -11,7 +11,6 @@ import (
 	"github.com/emaharmony/prizm/internal/bus"
 	"github.com/emaharmony/prizm/internal/context"
 	"github.com/emaharmony/prizm/internal/orchestrator"
-	"github.com/emaharmony/prizm/internal/remembrance"
 	"github.com/emaharmony/prizm/internal/session"
 )
 
@@ -383,14 +382,10 @@ func TestBuildPrompt_ConfigurableTokenBudget(t *testing.T) {
 // --- Remembrance Integration Tests ---
 
 func TestConversationContext_RemembranceNil(t *testing.T) {
-	// When remClient is nil, no panic should occur
-	convCtx := &conversationContext{
+	// Remembrance removed: this test verifies that conversationContext
+	// initializes without remClient (now handled by MarkdownStore)
+	_ = &conversationContext{
 		cfg: &orchestrator.Config{},
-	}
-
-	// This should be a no-op — no panic, no error
-	if convCtx.remClient != nil {
-		t.Error("remClient should be nil when not configured")
 	}
 }
 
@@ -476,43 +471,6 @@ func TestPublishEvent_NilPayload(t *testing.T) {
 	// Should not panic
 	cc.publishEvent("test.subject", nil)
 }
-
-func TestRemembranceTimeout_Config(t *testing.T) {
-	cfg := &orchestrator.Config{
-		Remembrance: orchestrator.RemembranceConfig{
-			TimeoutSeconds: 45,
-		},
-	}
-	got := remembranceTimeout(cfg)
-	if got != 45*time.Second {
-		t.Errorf("expected 45s, got %v", got)
-	}
-}
-
-func TestRemembranceTimeout_Zero(t *testing.T) {
-	cfg := &orchestrator.Config{
-		Remembrance: orchestrator.RemembranceConfig{
-			TimeoutSeconds: 0,
-		},
-	}
-	got := remembranceTimeout(cfg)
-	if got != remembrance.DefaultTimeout {
-		t.Errorf("expected default %v, got %v", remembrance.DefaultTimeout, got)
-	}
-}
-
-func TestRemembranceTimeout_Negative(t *testing.T) {
-	cfg := &orchestrator.Config{
-		Remembrance: orchestrator.RemembranceConfig{
-			TimeoutSeconds: -1,
-		},
-	}
-	got := remembranceTimeout(cfg)
-	if got != remembrance.DefaultTimeout {
-		t.Errorf("expected default %v for negative, got %v", remembrance.DefaultTimeout, got)
-	}
-}
-
 func TestBridgeSecret_UsesEnvFirst(t *testing.T) {
 	t.Setenv("PRIZM_TEST_BRIDGE_SECRET", "from-env")
 	cfg := &orchestrator.Config{

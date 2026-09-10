@@ -1,7 +1,7 @@
 // Package api provides the Prizm HTTP API server.
 // This file implements the memory visualizer API endpoints:
 //
-//	GET /api/v1/memories           — list/search memories (local + optional Remembrance)
+//	GET /api/v1/memories           — list/search memories (local MarkdownStore)
 //	GET /api/v1/memories/stats     — aggregate memory stats
 //	GET /api/v1/memories/categories — distinct categories
 //	GET /api/v1/memories/{id}      — single memory lookup
@@ -17,15 +17,14 @@ import (
 	"time"
 
 	"github.com/emaharmony/prizm/internal/memory"
-	"github.com/emaharmony/prizm/internal/remembrance"
 )
 
 // memoryResponse is the JSON envelope returned by GET /api/v1/memories.
 type memoryResponse struct {
 	Memories []memoryEntry `json:"memories"`
 	Total    int           `json:"total"`
-	Query    string        `json:"query,omitempty"`
-	Source   string        `json:"source"` // "local", "remembrance", or "merged"
+	Query    string         `json:"query,omitempty"`
+	Source   string         `json:"source"` // "local" (MarkdownStore only)
 }
 
 // memoryEntry is a single memory in the API response.
@@ -52,7 +51,7 @@ type memoryEntry struct {
 //	q      — search query (keyword match, optional)
 //	limit  — max memories to return (default 100)
 //	sort   — sort order: "newest" (default), "oldest", "category"
-//	source — "local" (default), "remembrance", or "all" (merge both)
+//	source — "local" (default, only option now)
 func (s *Server) handleMemories(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -70,30 +69,11 @@ func (s *Server) handleMemories(w http.ResponseWriter, r *http.Request) {
 	if sortOrder == "" {
 		sortOrder = "newest"
 	}
-	source := r.URL.Query().Get("source")
-	if source == "" {
-		source = "local"
-	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	var entries []memoryEntry
-	var responseSource string
-
-	switch source {
-	case "remembrance":
-		entries = s.fetchRemembranceMemories(ctx, query, limit)
-		responseSource = "remembrance"
-	case "all":
-		localEntries := s.fetchLocalMemories(ctx, query, limit)
-		remEntries := s.fetchRemembranceMemories(ctx, query, limit)
-		entries = mergeMemories(localEntries, remEntries)
-		responseSource = "merged"
-	default:
-		entries = s.fetchLocalMemories(ctx, query, limit)
-		responseSource = "local"
-	}
+	entries := s.fetchLocalMemories(ctx, query, limit)
 
 	// Sort
 	sortMemories(entries, sortOrder)
@@ -107,7 +87,7 @@ func (s *Server) handleMemories(w http.ResponseWriter, r *http.Request) {
 		Memories: entries,
 		Total:    len(entries),
 		Query:    query,
-		Source:   responseSource,
+		Source:   "local",
 	})
 }
 
@@ -136,65 +116,6 @@ func (s *Server) fetchLocalMemories(ctx context.Context, query string, limit int
 		entries = append(entries, memoryToEntry(m))
 	}
 	return entries
-}
-
-// fetchRemembranceMemories queries the Remembrance service for memories.
-// It maps the Remembrance ContextMemory response (which has MemoryID, Title,
-// Summary, Score) into the unified memoryEntry shape.
-func (s *Server) fetchRemembranceMemories(ctx context.Context, query string, limit int) []memoryEntry {
-	if s.remClient == nil {
-		return nil
-	}
-
-	remCtx, err := s.remClient.BuildContextWithOptions(remembrance.BuildContextRequest{
-		Task:      query,
-		ProjectID: "prizm",
-		MaxTokens: 4000,
-	})
-	if err != nil {
-		log.Printf("[API] remembrance query error: %v", err)
-		return nil
-	}
-
-	if remCtx == nil || remCtx.ContextJSON == nil || len(remCtx.ContextJSON.Memories) == 0 {
-		return nil
-	}
-
-	entries := make([]memoryEntry, 0, len(remCtx.ContextJSON.Memories))
-	for _, sm := range remCtx.ContextJSON.Memories {
-		entries = append(entries, memoryEntry{
-			ID:       sm.MemoryID,
-			Content:  sm.Summary, // Remembrance ContextMemory has summary, not full content
-			Category: sm.Scope,
-			Summary:  sm.Summary,
-			Source:   "remembrance",
-			AgentID:  remCtx.AgentID,
-			// Score and Reason are available but not in the base memoryEntry yet
-		})
-	}
-	return entries
-}
-
-// mergeMemories deduplicates local and Remembrance entries by ID, preferring
-// the Remembrance version when both exist.
-func mergeMemories(local, rem []memoryEntry) []memoryEntry {
-	seen := make(map[string]bool, len(local)+len(rem))
-	merged := make([]memoryEntry, 0, len(local)+len(rem))
-
-	// Remembrance entries first (they're usually richer)
-	for _, e := range rem {
-		if !seen[e.ID] {
-			seen[e.ID] = true
-			merged = append(merged, e)
-		}
-	}
-	for _, e := range local {
-		if !seen[e.ID] {
-			seen[e.ID] = true
-			merged = append(merged, e)
-		}
-	}
-	return merged
 }
 
 // sortMemories sorts entries by the given order.
@@ -257,36 +178,11 @@ func (s *Server) handleMemoriesDetail(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	// Try local store first
 	if s.memStore != nil {
 		mem, err := s.memStore.Get(ctx, id)
 		if err == nil && mem != nil {
 			writeJSON(w, memoryToEntry(*mem))
 			return
-		}
-	}
-
-	// Try Remembrance
-	if s.remClient != nil {
-		remCtx, err := s.remClient.BuildContextWithOptions(remembrance.BuildContextRequest{
-			Task:      id,
-			ProjectID: "prizm",
-			MaxTokens: 1000,
-		})
-		if err == nil && remCtx != nil && remCtx.ContextJSON != nil {
-			for _, sm := range remCtx.ContextJSON.Memories {
-				if strings.HasPrefix(sm.MemoryID, id) || sm.MemoryID == id {
-					writeJSON(w, memoryEntry{
-						ID:       sm.MemoryID,
-						Content:  sm.Summary,
-						Category: sm.Scope,
-						Summary:  sm.Summary,
-						Source:   "remembrance",
-						AgentID:  remCtx.AgentID,
-					})
-					return
-				}
-			}
 		}
 	}
 
@@ -367,10 +263,10 @@ func (s *Server) handleMemoriesStats(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(categories)
 
 	writeJSON(w, map[string]any{
-		"total":         len(memories),
-		"categories":    categoryCounts,
-		"tiers":         tierCounts,
-		"agents":        agentCounts,
-		"categoryList":  categories,
+		"total":        len(memories),
+		"categories":   categoryCounts,
+		"tiers":        tierCounts,
+		"agents":       agentCounts,
+		"categoryList": categories,
 	})
 }

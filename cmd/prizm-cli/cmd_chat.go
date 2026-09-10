@@ -573,7 +573,6 @@ LOOP:
 		if _, err := sessMgr.AddMessage(sess.ID, "agent", responseText, agentCfg.ID); err != nil {
 			log.Printf("[WARN] failed to save agent message: %v", err)
 		}
-		enqueueLocalMemoryUpdate(sessMgr, cfg, nil, nil, nil, ownerID, "local-user", agentCfg.ID, sess.ID, "")
 
 		// Display response
 		fmt.Printf("%s: %s\n", agentCfg.ID, responseText)

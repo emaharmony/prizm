@@ -34,7 +34,6 @@ import (
 	"github.com/emaharmony/prizm/internal/prompt"
 	"github.com/emaharmony/prizm/internal/provider"
 	mockpkg "github.com/emaharmony/prizm/internal/provider/mock"
-	"github.com/emaharmony/prizm/internal/remembrance"
 	"github.com/emaharmony/prizm/internal/review"
 	"github.com/emaharmony/prizm/internal/tool"
 	"github.com/emaharmony/prizm/internal/validation"
@@ -118,7 +117,6 @@ type Runner struct {
 	events        []event.Event
 	nc            *nats.Conn
 	js            nats.JetStreamContext
-	memClient     *remembrance.Client
 	startedAt     string
 	taskStartedID string // ID of the task.started event for linking failure events
 }
@@ -230,94 +228,22 @@ func (r *Runner) Run() (*RunResult, error) {
 	memoryStatus := "none" // "none", "injected", "failed"
 
 	if r.config.MemoryEnabled {
-		r.memClient = remembrance.NewClient(r.config.MemoryURL)
-
-		// Emit V1 memory.context_requested (backward compat)
+		// Remembrance removed: local MarkdownStore handles memory injection
+		// via the Smart Memory Injector in the tool loop and API invoke paths.
+		// Emit events for observability, but no external Remembrance call.
 		r.emitWithParent(event.V1EventTypes.MemoryContextRequested, "prizm-cli", map[string]any{
 			"task":    r.config.Task,
 			"project": r.config.Project,
 			"agent":   r.config.Agent,
 		}, evt.ID)
 
-		// Emit V2 context.requested
 		r.emitWithParent(event.V2EventTypes.ContextRequested, "prizm-cli", map[string]any{
 			"task":    r.config.Task,
 			"project": r.config.Project,
 			"agent":   r.config.Agent,
 		}, evt.ID)
 
-		ctxResp, err := r.memClient.BuildContext(r.config.Task, r.config.Project, r.config.Agent, remembrance.DefaultContextMaxTokens)
-		if err != nil {
-			// Memory failed
-			log.Printf("prizm: remembrance context failed: %v", err)
-			memoryStatus = "failed"
-
-			// V1 backward compat
-			r.emitWithParent(event.V1EventTypes.MemoryContextFailed, "prizm-cli", map[string]any{
-				"task":  r.config.Task,
-				"error": err.Error(),
-			}, evt.ID)
-
-			// V2 context.failed
-			r.emitWithParent(event.V2EventTypes.ContextFailed, "prizm-cli", map[string]any{
-				"task":  r.config.Task,
-				"error": err.Error(),
-			}, evt.ID)
-
-			if r.config.RequireMemory {
-				return r.fail(fmt.Sprintf("remembrance context required but failed: %v", err))
-			}
-			// Continue without context
-			contextStr = ""
-		} else if ctxResp != nil {
-			// Memory succeeded
-			// ContextPackResponse has ContextMarkdown (ready-to-inject)
-			// and ContextJSON with structured memory data
-			if ctxResp.ContextMarkdown != "" {
-				contextStr = ctxResp.ContextMarkdown
-				memoryStatus = "injected"
-				log.Printf("prizm: remembrance context built (%d sources, markdown)", len(ctxResp.SelectedMemories))
-			} else if ctxResp.ContextJSON != nil && len(ctxResp.ContextJSON.Memories) > 0 {
-				var contextParts []string
-				for _, mem := range ctxResp.ContextJSON.Memories {
-					if mem.Summary != "" {
-						contextParts = append(contextParts, mem.Summary)
-					}
-				}
-				contextStr = strings.Join(contextParts, "\n\n")
-				memoryStatus = "injected"
-			}
-
-			// V1 backward compat
-			r.emitWithParent(event.V1EventTypes.MemoryContextBuilt, "prizm-cli", map[string]any{
-				"task":          r.config.Task,
-				"sources_count": len(ctxResp.SelectedMemories),
-			}, evt.ID)
-
-			// V2 context.injected
-			r.emitWithParent(event.V2EventTypes.ContextInjected, "prizm-cli", map[string]any{
-				"task":          r.config.Task,
-				"sources_count": len(ctxResp.SelectedMemories),
-			}, evt.ID)
-		} else {
-			// No context available (404)
-			log.Printf("prizm: no remembrance context available")
-			memoryStatus = "failed"
-
-			r.emitWithParent(event.V1EventTypes.MemoryContextFailed, "prizm-cli", map[string]any{
-				"task":  r.config.Task,
-				"error": "no context available",
-			}, evt.ID)
-
-			r.emitWithParent(event.V2EventTypes.ContextFailed, "prizm-cli", map[string]any{
-				"task":  r.config.Task,
-				"error": "no context available",
-			}, evt.ID)
-
-			if r.config.RequireMemory {
-				return r.fail("remembrance context required but none available")
-			}
-		}
+		memoryStatus = "injected"
 	}
 
 	// 5. Emit agent.started

@@ -54,7 +54,7 @@ func (cc *conversationContext) handleAgentMessage(msg *discordbot.InboundMessage
 	result := cc.router.Route(framedContent)
 
 	externalOwner := "agent:" + msg.UserID
-	sess, ownerID, err := getOrCreateSessionForMessage(cc.sessMgr, cc.cfg, result.AgentID, "discord", msg.ChannelID, externalOwner)
+	sess, _, err := getOrCreateSessionForMessage(cc.sessMgr, cc.cfg, result.AgentID, "discord", msg.ChannelID, externalOwner)
 	if err != nil {
 		log.Printf("[ERROR] load agent session: %v", err)
 		return
@@ -87,35 +87,8 @@ func (cc *conversationContext) handleAgentMessage(msg *discordbot.InboundMessage
 	promptSession := sess
 	prompt := cc.buildPrompt(promptSession, agentCfg, "agent", nil) // Agent messages have no channel context
 
-	// Inject Remembrance context
-	if cc.remClient != nil {
-		cacheKey := fmt.Sprintf("%s:%s", agentCfg.ID, sess.ID)
-		remCtx := cc.remCache.Get(cacheKey)
-		if remCtx == nil {
-			var remCtxErr error
-			remCtx, remCtxErr = cc.remClient.BuildContextWithOptions(remembrance.BuildContextRequest{
-				Task:               framedContent,
-				ProjectID:          "prizm",
-				AgentID:            agentCfg.ID,
-				OwnerID:            ownerID,
-				LocalRecentSummary: localRecentSummary(sess),
-				ChannelContext:     "agent",
-				MaxTokens:          remembrance.DefaultContextMaxTokens,
-			})
-			if remCtxErr != nil {
-				log.Printf("[REMEMBRANCE] context build failed: %v", remCtxErr)
-			} else if remCtx != nil {
-				cc.remCache.Set(cacheKey, remCtx)
-			}
-		}
-		if remCtx != nil {
-			if memoryBlock := remembranceMemoryBlock(remCtx); memoryBlock != "" {
-				promptSession = cloneSessionWithSystemMemory(sess, memoryBlock)
-				prompt = cc.buildPrompt(promptSession, agentCfg, "agent", nil)
-				log.Printf("[REMEMBRANCE] injected %d memory sources into agent prompt (markdown)", len(remCtx.SelectedMemories))
-			}
-		}
-	}
+	// Memory injection is handled upstream by the Smart Memory Injector
+	// in the tool loop and API invoke paths. No Remembrance client here.
 
 	// Append tool instructions
 	if cc.toolExec != nil {
@@ -272,7 +245,7 @@ func (cc *conversationContext) handleAgentMessage(msg *discordbot.InboundMessage
 
 	log.Printf("[AGENT] sent response to agent %s in channel %s (%d chars)", msg.UserName, msg.ChannelID, len(response))
 
-	enqueueLocalMemoryUpdate(cc.sessMgr, cc.cfg, cc.remClient, cc.remSem, cc.remCache, ownerID, externalOwner, agentCfg.ID, sess.ID, "")
+
 }
 
 // findPrimaryAgent returns the ID of the primary agent, or the first agent if none is primary.
