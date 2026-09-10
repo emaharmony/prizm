@@ -180,15 +180,23 @@ func (s *MarkdownStore) ListRecent(ctx context.Context, limit int) ([]Memory, er
 		all = append(all, memories...)
 	}
 
+	// Filter out superseded memories
+	filtered := make([]Memory, 0, len(all))
+	for _, m := range all {
+		if !isSuperseded(m) {
+			filtered = append(filtered, m)
+		}
+	}
+
 	// Sort by CreatedAt descending
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].CreatedAt.After(all[j].CreatedAt)
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].CreatedAt.After(filtered[j].CreatedAt)
 	})
 
-	if limit > 0 && len(all) > limit {
-		all = all[:limit]
+	if limit > 0 && len(filtered) > limit {
+		filtered = filtered[:limit]
 	}
-	return all, nil
+	return filtered, nil
 }
 
 // Search performs keyword matching across memory files with recency boost.
