@@ -58,6 +58,9 @@ type Config struct {
 	// ExtraInputKeys are additional key-value pairs added to every tool call input
 	// (e.g., _run_id, _channel_id).
 	ExtraInputKeys map[string]string
+
+	// RunID is the correlation ID for this tool loop invocation.
+	RunID string
 }
 
 // DefaultConfig returns sensible defaults for a production tool loop.
@@ -340,7 +343,7 @@ func executeTool(
 		input[k] = v
 	}
 
-	result, err := toolExec.ExecuteWithPolicy(ctx, tc.Function.Name, agentCfg.ID, "prizm", "", input)
+	result, err := toolExec.ExecuteWithPolicy(ctx, tc.Function.Name, agentCfg.ID, "prizm", cfg.RunID, input)
 
 	if err != nil {
 		return fmt.Sprintf("Error executing tool: %v", err), CallSummary{

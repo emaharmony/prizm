@@ -692,7 +692,7 @@ func resolveConversationPostfixForInvoke(agentCfg orchestrator.AgentConfig, hasS
 // singleShotMessages builds the full system prompt (SOUL.md, context files,
 // memory injection) plus the single user turn.
 // Falls back to minimal prompt (ConversationPostfix only) if ctxBuilder is nil.
-func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig) string {
+func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig, searchQuery string) string {
 	if s.ctxBuilder == nil {
 		if agentCfg.ConversationPostfix != "" {
 			return agentCfg.ConversationPostfix
@@ -723,6 +723,9 @@ func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig) stri
 	// Layer 2: Context files (USER.md, HEARTBEAT.md, AGENTS.md, etc.)
 	if len(agentCfg.Context) > 0 {
 		budget := 4000 // default token budget
+		if s.orch != nil && s.orch.Config.Prizm.ContextTokenBudget > 0 {
+			budget = s.orch.Config.Prizm.ContextTokenBudget
+		}
 		otherContexts := make([]string, 0, len(agentCfg.Context))
 		for _, c := range agentCfg.Context {
 			if c != "soul" && c != "identity" {
@@ -744,7 +747,7 @@ func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig) stri
 	if s.memStoreForInvoke != nil {
 		// Inject recent memories as context
 		ctx := contextctx.Background()
-		memories, err := s.memStoreForInvoke.Search(ctx, identityContent, 10)
+		memories, err := s.memStoreForInvoke.Search(ctx, searchQuery, 10)
 		if err == nil && len(memories) > 0 {
 			sb.WriteString("## Memories\n")
 			for i, mem := range memories {
@@ -770,17 +773,28 @@ func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig) stri
 // singleShotMessages builds the full system prompt plus the single user turn.
 func (s *Server) singleShotMessages(agentCfg orchestrator.AgentConfig, prompt string) []provider.ChatMessage {
 	messages := make([]provider.ChatMessage, 0, 2)
-	systemPrompt := s.buildInvokeSystemPrompt(agentCfg)
+	systemPrompt := s.buildInvokeSystemPrompt(agentCfg, prompt)
 	if systemPrompt != "" {
 		messages = append(messages, provider.ChatMessage{Role: "system", Content: systemPrompt})
 	}
 	return append(messages, provider.ChatMessage{Role: "user", Content: prompt})
 }
 
+// lastUserMessage returns the content of the last user message in the session,
+// or empty string if none.
+func lastUserMessage(sess *session.Session) string {
+	for i := len(sess.Messages) - 1; i >= 0; i-- {
+		if sess.Messages[i].Role == "user" {
+			return sess.Messages[i].Content
+		}
+	}
+	return ""
+}
+
 // invokeSessionMessages builds the full system prompt plus conversation history.
 func (s *Server) invokeSessionMessages(agentCfg orchestrator.AgentConfig, sess *session.Session) []provider.ChatMessage {
 	messages := make([]provider.ChatMessage, 0, len(sess.Messages)+2)
-	systemPrompt := s.buildInvokeSystemPrompt(agentCfg)
+	systemPrompt := s.buildInvokeSystemPrompt(agentCfg, lastUserMessage(sess))
 	if systemPrompt != "" {
 		messages = append(messages, provider.ChatMessage{Role: "system", Content: systemPrompt})
 	}
