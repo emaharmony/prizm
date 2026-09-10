@@ -39,6 +39,7 @@ import (
 	"github.com/emaharmony/prizm/internal/delegation"
 	"github.com/emaharmony/prizm/internal/guard"
 	"github.com/emaharmony/prizm/internal/memory"
+	"github.com/emaharmony/prizm/internal/toolloop"
 	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/plan"
 	"github.com/emaharmony/prizm/internal/provider"
@@ -1115,87 +1116,22 @@ func (cc *chatContext) buildChatToolDefs() []provider.ChatTool {
 	return chatTools
 }
 
-// runChatToolLoop is the CLI version of runToolLoopChat.
-// It mirrors the Discord tool loop but prints to terminal instead of editing Discord messages.
+// runChatToolLoop delegates to the shared toolloop package with a CLI sink.
 func (cc *chatContext) runChatToolLoop(
 	parentCtx ctxcontext.Context,
 	messages []provider.ChatMessage,
 	chatTools []provider.ChatTool,
 	chatProv provider.ChatProvider,
 	agentCfg *orchestrator.AgentConfig,
-) (string, []toolCallSummary, error) {
-	ctx, cancel := ctxcontext.WithTimeout(parentCtx, chatToolLoopTimeout)
-	defer cancel()
+) (string, []toolloop.CallSummary, error) {
+	sink := &CLISink{}
+	cfg := toolloop.CLIConfig()
 
-	var summaries []toolCallSummary
-	currentMessages := make([]provider.ChatMessage, len(messages))
-	copy(currentMessages, messages)
-
-	nudgeInjected := false
-	var lastContent string
-
-	for i := 0; i < maxChatToolIterations; i++ {
-		if i >= 3 && !nudgeInjected {
-			currentMessages = append(currentMessages, provider.ChatMessage{
-				Role:    "system",
-				Content: "You have already used several tools. Please provide your final answer now based on the information you have gathered. Do not call any more tools.",
-			})
-			nudgeInjected = true
-		}
-
-		toolsForThisIteration := chatTools
-		if i >= 6 {
-			toolsForThisIteration = []provider.ChatTool{}
-		}
-
-		// Call the ChatProvider
-		req := provider.ChatGenerateRequest{
-			RunID:    fmt.Sprintf("chat-%d", i),
-			Agent:    agentCfg.ID,
-			Model:    agentCfg.Model,
-			Messages: currentMessages,
-			Tools:    toolsForThisIteration,
-		}
-		response, err := chatProv.ChatGenerate(ctx, req)
-		if err != nil {
-			return "", summaries, fmt.Errorf("LLM call failed iteration %d: %w", i+1, err)
-		}
-
-		if response.Content != "" {
-			lastContent = response.Content
-		}
-
-		if !response.HasToolCalls() {
-			return response.Content, summaries, nil
-		}
-
-		currentMessages = append(currentMessages, provider.ChatMessage{
-			Role:      "assistant",
-			Content:   response.Content,
-			ToolCalls: response.ToolCalls,
-		})
-
-		for _, tc := range response.ToolCalls {
-			// Format tool call arguments for display
-			argsJSON, _ := json.Marshal(tc.Function.Arguments)
-			clearThinkingLine()
-			fmt.Printf("  🔧 %s(%s)\n", tc.Function.Name, string(argsJSON))
-			toolResult, summary := cc.executeChatToolCLI(ctx, tc, agentCfg)
-			fmt.Printf("     → %s\n", truncateStr(toolResult, 200))
-
-			currentMessages = append(currentMessages, provider.ChatMessage{
-				Role:    "tool",
-				Content: toolResult,
-				ToolID:  tc.ID,
-			})
-			summaries = append(summaries, summary)
-		}
+	result, err := toolloop.RunChatLoop(parentCtx, messages, chatTools, chatProv, agentCfg, cc.toolExec, sink, cfg, nil)
+	if err != nil {
+		return "", nil, err
 	}
-
-	if lastContent != "" {
-		return lastContent, summaries, nil
-	}
-	return "I gathered information but couldn't form a complete response. Please try again.", summaries, nil
+	return result.Content, result.Summaries, nil
 }
 
 // executeChatToolCLI executes a tool call and returns the result (CLI version).
