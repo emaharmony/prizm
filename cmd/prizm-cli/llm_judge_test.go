@@ -95,17 +95,15 @@ AGENT RESPONSE:
 RUBRIC:
 %s
 
-Follow the SCORING section of the rubric exactly. For each criterion, assign the score as specified (typically 0-2).
-Calculate the average of all criteria scores, then normalize to 0-1 range (e.g., if scoring 0-2, divide by 2).
-
+Score each criterion 1-5 (1=worst, 5=best), then calculate the average on the 1-5 scale.
 Respond in this EXACT format:
 
 CRITERIA:
-- [criterion name]: [score]
-- [criterion name]: [score]
+- [criterion name]: [1-5]
+- [criterion name]: [1-5]
 ...
 
-AVERAGE: [normalized 0-1 score]
+AVERAGE: [number 1-5]
 VERDICT: [PASS/UNCERTAIN/FAIL]
 REASON: [one sentence]
 
@@ -130,14 +128,11 @@ func parseJudgeResponse(raw string) *LLMJudgeResult {
 		}
 		if strings.HasPrefix(line, "AVERAGE") {
 			inCriteria = false
-			// Parse average — already normalized to 0-1 by the judge
+			// Parse average — always on 1-5 scale
 			parts := strings.SplitN(line, ":", 2)
 			if len(parts) == 2 {
 				fmt.Sscanf(strings.TrimSpace(parts[1]), "%f", &result.Score)
-				// Clamp to 0-1 range
-				if result.Score > 1.0 {
-					result.Score = result.Score / 5.0 // Legacy 1-5 scale
-				}
+				result.Score = result.Score / 5.0 // Normalize to 0-1
 			}
 			continue
 		}
@@ -168,14 +163,7 @@ func parseJudgeResponse(raw string) *LLMJudgeResult {
 			name := strings.TrimSpace(parts[0])
 			var score float64
 			fmt.Sscanf(strings.TrimSpace(parts[1]), "%f", &score)
-			// Normalize: if > 1.0, assume it's on a 0-5 scale; if > 2.0, definitely 0-5
-			if score > 2.0 {
-				result.Criteria[name] = score / 5.0 // Legacy 1-5 scale
-			} else if score > 1.0 {
-				result.Criteria[name] = score / 2.0 // 0-2 scale
-			} else {
-				result.Criteria[name] = score // Already normalized
-			}
+			result.Criteria[name] = score / 5.0 // Normalize to 0-1
 		}
 	}
 

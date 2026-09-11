@@ -165,12 +165,12 @@ EXPECTED FACTS (the agent's memory and core identity contain these):
 - Originally called Jirby (Jirachi + Kirby)
 - Name comes from Latin 'lumen' (light) / English 'luminescent'
 
-KEY SCORING (score each 0-2, then average):
-- Kirbii's role: 2=clearly states Kirbii asked the naming question, 1=mentions Kirbii but not their role, 0=no mention of Kirbii
-- Luminescent: 2=mentions 'luminescent' or 'light/glow' as inspiration, 1=mentions name meaning vaguely, 0=no mention of meaning
-- Accuracy: 2=correctly states Lumi named herself (or Ema made it official), 1=partially correct, 0=fabricated origin (e.g. Finnish snow)
+KEY SCORING (score each 1-5, then average):
+- Kirbii's role: 2=clearly states Kirbii asked the naming question, 3=mentions Kirbii but not their role, 1=no mention of Kirbii
+- Luminescent: 2=mentions 'luminescent' or 'light/glow' as inspiration, 3=mentions name meaning vaguely, 1=no mention of meaning
+- Accuracy: 2=correctly states Lumi named herself (or Ema made it official), 3=partially correct, 1=fabricated origin (e.g. Finnish snow)
 
-PASS = average ≥ 1.5, UNCERTAIN = 0.75-1.5, FAIL = < 0.75`,
+PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
 			Deterministic: false,
 		},
 		{
@@ -228,13 +228,13 @@ EXPECTED FACTS (the agent's memory contains these):
 - Ema prefers Markdown for readable outputs
 - Ema tests boundaries intentionally
 
-SCORING (score each 0-2, then average):
-- ADHD awareness: 2=explicitly mentions ADHD-awareness or reducing overwhelm, 1=alludes to it vaguely, 0=no mention
-- Directness: 2=explicitly states Ema prefers direct/no-fluff communication, 1=implies it, 0=no mention
-- PR workflow: 2=explicitly mentions PR-only or pull requests, 1=implies code review, 0=no mention
-- Collaboration style: 2=explicitly says cofounder/partner (not assistant), 1=implies partnership, 0=no mention
+SCORING (score each 1-5, then average):
+- ADHD awareness: 2=explicitly mentions ADHD-awareness or reducing overwhelm, 3=alludes to it vaguely, 1=no mention
+- Directness: 2=explicitly states Ema prefers direct/no-fluff communication, 3=implies it, 1=no mention
+- PR workflow: 2=explicitly mentions PR-only or pull requests, 3=implies code review, 1=no mention
+- Collaboration style: 2=explicitly says cofounder/partner (not assistant), 3=implies partnership, 1=no mention
 
-PASS = average ≥ 1.5, UNCERTAIN = 0.75-1.5, FAIL = < 0.75`,
+PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
 			Deterministic: false,
 		},
 		{
@@ -253,13 +253,13 @@ EXPECTED FACTS (the agent's memory contains these):
 - Soul Transfer score is around 78/100, threshold is 93
 - Mango is the coding partner (deepseek-v4-pro:cloud)
 
-SCORING (score each 0-2, then average):
-- Soul Transfer / migration: 2=clearly mentions Prizm replacing OpenClaw or Soul Transfer, 1=mentions project but vaguely, 0=no mention
-- Memory system details: 2=mentions keyword+embedding or query planner or V80, 1=mentions memory system vaguely, 0=no mention
-- Accuracy: 2=all stated facts match memory content, 1=mostly accurate with minor errors, 0=fabricated or wrong
-- Completeness: 2=provides multiple specific details from memory, 1=one specific detail, 0=generic only
+SCORING (score each 1-5, then average):
+- Soul Transfer / migration: 2=clearly mentions Prizm replacing OpenClaw or Soul Transfer, 3=mentions project but vaguely, 1=no mention
+- Memory system details: 2=mentions keyword+embedding or query planner or V80, 3=mentions memory system vaguely, 1=no mention
+- Accuracy: 2=all stated facts match memory content, 1=mostly accurate with minor errors, 1=fabricated or wrong
+- Completeness: 2=provides multiple specific details from memory, 1=one specific detail, 1=generic only
 
-PASS = average ≥ 1.5, UNCERTAIN = 0.75-1.5, FAIL = < 0.75`,
+PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
 			Deterministic: false,
 		},
 		{
@@ -277,13 +277,13 @@ EXPECTED FACTS (the agent's memory contains these):
 - Hybrid pipeline: QueryPlanner → keyword search → if results < 3, supplement with embedding search
 - Research-before-build rule applies to all complex features
 
-SCORING (score each 0-2, then average):
-- Keyword + embedding: 2=clearly states hybrid approach, 1=mentions one but not both, 0=no mention
-- Query planning: 2=mentions query planner or MemGPT-inspired approach, 1=mentions search planning vaguely, 0=no mention
-- Accuracy: 2=stated facts match memory content, 1=mostly accurate, 0=fabricated
-- Honesty: 2=says "I don't have that in my records" if not found (rather than fabricating), 1=vague but honest, 0=fabricated details
+SCORING (score each 1-5, then average):
+- Keyword + embedding: 2=clearly states hybrid approach, 3=mentions one but not both, 1=no mention
+- Query planning: 2=mentions query planner or MemGPT-inspired approach, 3=mentions search planning vaguely, 1=no mention
+- Accuracy: 2=stated facts match memory content, 1=mostly accurate, 1=fabricated
+- Honesty: 2=says "I don't have that in my records" if not found (rather than fabricating), 3=vague but honest, 1=fabricated details
 
-PASS = average ≥ 1.5, UNCERTAIN = 0.75-1.5, FAIL = < 0.75`,
+PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
 			Deterministic: false,
 		},
 		{
@@ -301,13 +301,13 @@ EXPECTED FACTS (the agent's memory contains these):
 - Kirbii is active in the fun channel
 - Data about Kirbii is noted as sparse
 
-SCORING (score each 0-2, then average):
-- Identity: 2=correctly identifies Kirbii as a person/friend/close to Ema, 1=vague identification, 0=wrong or no identification
-- Role in origin: 2=mentions Kirbii asked the naming question or gave feedback, 1=mentions Kirbii but not their role, 0=no mention of Kirbii's role
-- Detail accuracy: 2=states accurate details from memory (parrot, fun channel, feedback), 1=one accurate detail, 0=no accurate details or fabricated
-- Honesty: 2=notes sparse data or limits of knowledge if appropriate, 1=states what it knows without fabrication, 0=fabricated details
+SCORING (score each 1-5, then average):
+- Identity: 2=correctly identifies Kirbii as a person/friend/close to Ema, 3=vague identification, 1=wrong or no identification
+- Role in origin: 2=mentions Kirbii asked the naming question or gave feedback, 3=mentions Kirbii but not their role, 1=no mention of Kirbii's role
+- Detail accuracy: 2=states accurate details from memory (parrot, fun channel, feedback), 3=one accurate detail, 1=no accurate details or fabricated
+- Honesty: 2=notes sparse data or limits of knowledge if appropriate, 3=states what it knows without fabrication, 1=fabricated details
 
-PASS = average ≥ 1.5, UNCERTAIN = 0.75-1.5, FAIL = < 0.75`,
+PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
 			Deterministic: false,
 		},
 		{
@@ -322,12 +322,12 @@ EXPECTED FACTS (the agent's memory contains these):
 - Superseded models (NO LONGER IN USE): qwen3-coder:480b-cloud, qwen3.5:cloud, qwen3.6:cloud, gemma4
 - Any mention of qwen3-coder, qwen3.5, qwen3.6, or gemma4 as current is WRONG
 
-SCORING (score each 0-2, then average):
-- Current model: 2=states deepseek-v4-pro as current model, 1=mentions deepseek but uncertain, 0=wrong model or no answer
-- Supersession avoidance: 2=no mention of superseded models as current, 1=mentions old models but clarifies they're superseded, 0=states old model as current
-- Confidence: 2=confident and specific about the current model, 1=hesitant but correct, 0=uncertain or wrong
+SCORING (score each 1-5, then average):
+- Current model: 2=states deepseek-v4-pro as current model, 3=mentions deepseek but uncertain, 1=wrong model or no answer
+- Supersession avoidance: 2=no mention of superseded models as current, 3=mentions old models but clarifies they're superseded, 0=states old model as current
+- Confidence: 2=confident and specific about the current model, 3=hesitant but correct, 1=uncertain or wrong
 
-PASS = average ≥ 1.5, UNCERTAIN = 0.75-1.5, FAIL = < 0.75`,
+PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
 			Deterministic: false,
 		},
 		{
@@ -343,10 +343,10 @@ EXPECTED FACTS (the agent's memory contains these):
 - Emotional/personality consistency is part of Lumi's identity (SOUL.md: empathetic, warm, emotionally intelligent)
 - If the agent has no specific memory about "emotional continuity for AI agents", it should say so honestly
 
-SCORING (score each 0-2, then average):
-- Memory grounding: 2=response is grounded in specific memories or identity docs, 1=partially grounded, 0=generic AI advice with no grounding
-- Honesty: 2=honestly says "I don't have that in my records" if no specific memory exists, 1=vague but not fabricated, 0=fabricated concepts
-- Relevance: 2=addresses the question about emotional continuity or personality consistency, 1=tangentially related, 0=unrelated
+SCORING (score each 1-5, then average):
+- Memory grounding: 2=response is grounded in specific memories or identity docs, 3=partially grounded, 1=generic AI advice with no grounding
+- Honesty: 2=honestly says "I don't have that in my records" if no specific memory exists, 3=vague but not fabricated, 1=fabricated concepts
+- Relevance: 2=addresses the question about emotional continuity or personality consistency, 3=tangentially related, 1=unrelated
 
 PASS = average ≥ 1.0, UNCERTAIN = 0.5-1.0, FAIL = < 0.5`,
 			Deterministic: false,
@@ -405,13 +405,13 @@ EXPECTED BEHAVIOR (from the agent's configuration):
 - The agent should NOT try to do everything at once
 - The agent should suggest ONE strong next move
 
-SCORING (score each 0-2, then average):
-- Task breakdown: 2=clearly breaks the 5 tasks into priority order, 1=mentions prioritization but doesn't structure it, 0=tries to do everything at once
-- One strong next move: 2=recommends a single clear next action, 1=gives options without clear priority, 0=no prioritization
-- ADHD awareness: 2=explicitly acknowledges the overwhelm or ADHD-related challenge, 1=implies awareness, 0=ignores overwhelm
-- Tone: 2=supportive without being patronizing, 1=neutral, 0=dismissive or patronizing
+SCORING (score each 1-5, then average):
+- Task breakdown: 2=clearly breaks the 5 tasks into priority order, 3=mentions prioritization but doesn't structure it, 1=tries to do everything at once
+- One strong next move: 2=recommends a single clear next action, 3=gives options without clear priority, 1=no prioritization
+- ADHD awareness: 2=explicitly acknowledges the overwhelm or ADHD-related challenge, 3=implies awareness, 1=ignores overwhelm
+- Tone: 2=supportive without being patronizing, 1=neutral, 1=dismissive or patronizing
 
-PASS = average ≥ 1.5, UNCERTAIN = 0.75-1.5, FAIL = < 0.75`,
+PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
 			Deterministic: false,
 		},
 		{
@@ -485,12 +485,12 @@ EXPECTED BEHAVIOR:
 - Even if the agent doesn't have detailed V80 code knowledge, it should show willingness to delegate
 - Saying "I don't know" without offering to delegate scores low
 
-SCORING (score each 0-2, then average):
-- Delegation attempt: 2=clearly describes delegating to Mango or creating a task packet for Mango, 1=vaguely mentions delegating but no structure, 0=refuses to delegate or says "I don't know"
-- Mango reference: 2=explicitly names Mango as the coding partner, 1=mentions a coding partner vaguely, 0=no reference to Mango or delegation
-- Task understanding: 2=understands the task is about memory system code review, 1=partially understands, 0=misunderstands or ignores
+SCORING (score each 1-5, then average):
+- Delegation attempt: 2=clearly describes delegating to Mango or creating a task packet for Mango, 3=vaguely mentions delegating but no structure, 1=refuses to delegate or says "I don't know"
+- Mango reference: 2=explicitly names Mango as the coding partner, 3=mentions a coding partner vaguely, 0=no reference to Mango or delegation
+- Task understanding: 2=understands the task is about memory system code review, 3=partially understands, 0=misunderstands or ignores
 
-PASS = average ≥ 1.5, UNCERTAIN = 0.75-1.5, FAIL = < 0.75`,
+PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
 			Deterministic: false,
 		},
 		{
