@@ -29,7 +29,7 @@ func TestSoulTransferLive(t *testing.T) {
 
 	baseURL := os.Getenv("PRIZM_URL")
 	if baseURL == "" {
-		baseURL = "http://localhost:8322"
+		baseURL = "http://127.0.0.1:8322"
 	}
 	agentID := os.Getenv("PRIZM_AGENT")
 	if agentID == "" {

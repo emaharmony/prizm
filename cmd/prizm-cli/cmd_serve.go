@@ -1280,6 +1280,8 @@ func executeServe(args []string) {
 		RemClient:             remClient,
 		CtxBuilder:            ctxBuildr,
 		MemStoreForInvoke:    memoryStore,
+		MemInjectorForInvoke:  memInjector,
+		CoreIdentityForInvoke: coreIdentity,
 	})
 	go func() {
 		if err := apiServer.Start(); err != nil {

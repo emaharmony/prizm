@@ -54,6 +54,13 @@ func newPlannerResultCache() *plannerResultCache {
 	}
 }
 
+// InjectMemoriesInt is the int-parameter version of InjectMemories,
+// satisfying the api.MemoryInjectorInterface (which uses int for mode
+// since it can't reference the main package's InjectMode type).
+func (mi *MemoryInjector) InjectMemoriesInt(ctx context.Context, mode int, userMessage string, sessionMsgCount int, maxTokens int) string {
+	return mi.InjectMemories(ctx, InjectMode(mode), userMessage, sessionMsgCount, maxTokens)
+}
+
 func (c *plannerResultCache) get(key string) *memory.QueryPlanResult {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

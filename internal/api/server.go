@@ -80,6 +80,20 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// MemoryInjectorInterface is the interface for smart memory injection.
+// The cmd/prizm-cli package provides the concrete MemoryInjector implementation
+// with query planning, embedding search, and grounding-aware formatting.
+// The API package uses this interface to avoid importing cmd types.
+type MemoryInjectorInterface interface {
+	InjectMemoriesInt(ctx contextctx.Context, mode int, userMessage string, sessionMsgCount int, maxTokens int) string
+}
+
+// CoreIdentityInterface is the interface for the permanent core identity block.
+// The cmd/prizm-cli package provides the concrete CoreIdentityBlock implementation.
+type CoreIdentityInterface interface {
+	Build(memStore *memory.MarkdownStore) string
+}
+
 // Server provides the Prizm HTTP API.
 type Server struct {
 	addr        string
@@ -117,6 +131,11 @@ type Server struct {
 
 	// memStoreForInvoke is the MarkdownStore used for memory injection in invokes.
 	memStoreForInvoke *memory.MarkdownStore
+	// memInjectorForInvoke is the smart memory injector (query planner + embedding + grounding).
+	// Falls back to memStoreForInvoke.Search when nil.
+	memInjectorForInvoke MemoryInjectorInterface
+	// coreIdentityForInject is the permanent core identity block for invoke prompts.
+	coreIdentityForInject CoreIdentityInterface
 
 	// memStore is the local MarkdownStore for the memories API.
 	memStore *memory.MarkdownStore
@@ -204,6 +223,14 @@ type Config struct {
 	// MemStoreForInvoke is the local MarkdownStore for memory injection in invokes.
 	MemStoreForInvoke *memory.MarkdownStore
 
+	// MemInjectorForInvoke is the smart memory injector (query planner + embedding + grounding).
+	// When nil, falls back to MemStoreForInvoke.Search (keyword only, no grounding).
+	MemInjectorForInvoke MemoryInjectorInterface
+
+	// CoreIdentityForInvoke is the core identity block for permanent facts in the system prompt.
+	// When nil, no core identity block is injected.
+	CoreIdentityForInvoke CoreIdentityInterface
+
 	// MemStore is the local MarkdownStore for the memories API. Nil → memories endpoints return empty.
 	MemStore *memory.MarkdownStore
 
@@ -248,8 +275,10 @@ func NewServer(cfg Config) *Server {
 		maxWorkspaceFileBytes: cfg.MaxWorkspaceFileBytes,
 		memStore:             cfg.MemStore,
 		remClient:            cfg.RemClient,
-		ctxBuilder:           cfg.CtxBuilder,
-		memStoreForInvoke:    cfg.MemStoreForInvoke,
+		ctxBuilder:              cfg.CtxBuilder,
+		memStoreForInvoke:        cfg.MemStoreForInvoke,
+		memInjectorForInvoke:    cfg.MemInjectorForInvoke,
+		coreIdentityForInject:   cfg.CoreIdentityForInvoke,
 	}
 	if s.maxRequestBytes <= 0 {
 		s.maxRequestBytes = 1 << 20 // 1 MiB
@@ -720,9 +749,17 @@ func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig, sear
 	sb.WriteString("## Who You Are\n")
 	sb.WriteString(identityContent + "\n\n")
 
+	// V83: Core Identity Block — permanent identity facts always in prompt.
+	if s.coreIdentityForInject != nil {
+		coreBlock := s.coreIdentityForInject.Build(s.memStoreForInvoke)
+		if coreBlock != "" {
+			sb.WriteString(coreBlock + "\n\n")
+		}
+	}
+
 	// Layer 2: Context files (USER.md, HEARTBEAT.md, AGENTS.md, etc.)
 	if len(agentCfg.Context) > 0 {
-		budget := 4000 // default token budget
+		budget := 4000
 		if s.orch != nil && s.orch.Config.Prizm.ContextTokenBudget > 0 {
 			budget = s.orch.Config.Prizm.ContextTokenBudget
 		}
@@ -735,7 +772,7 @@ func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig, sear
 		if len(otherContexts) > 0 {
 			ctxBuilder := context.NewBuilder(s.ctxBuilder.WorkspaceRoot).
 				WithNamedContexts(otherContexts).
-				WithTokenBudget(budget)
+			WithTokenBudget(budget)
 			if injected, err := ctxBuilder.BuildCached(); err == nil && injected.FormattedString != "" {
 				sb.WriteString("## Context\n")
 				sb.WriteString(injected.FormattedString + "\n")
@@ -743,9 +780,16 @@ func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig, sear
 		}
 	}
 
-	// Layer 3: Memory injection
-	if s.memStoreForInvoke != nil {
-		// Inject recent memories as context
+	// V83: Memory injection — use smart injector with grounding-aware format when available.
+	// Falls back to bare keyword search when injector is nil.
+	if s.memInjectorForInvoke != nil {
+		// Smart path: query planner + embedding + grounding-aware format
+		memBlock := s.memInjectorForInvoke.InjectMemoriesInt(contextctx.Background(), 0, searchQuery, 1, 300)
+		if memBlock != "" {
+			sb.WriteString(memBlock + "\n")
+		}
+	} else if s.memStoreForInvoke != nil {
+		// Legacy fallback: bare keyword search, no grounding
 		ctx := contextctx.Background()
 		memories, err := s.memStoreForInvoke.Search(ctx, searchQuery, 10)
 		if err == nil && len(memories) > 0 {
