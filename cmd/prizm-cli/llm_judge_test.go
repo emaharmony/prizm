@@ -74,7 +74,7 @@ func (j *LLMJudge) Judge(test SoulTransferTest, response string) (*LLMJudgeResul
 		return nil, fmt.Errorf("read judge response: %w", err)
 	}
 
-	log.Printf("[JUDGE] HTTP status: %d, body length: %d", resp.StatusCode, len(respBody))
+	log.Printf("[JUDGE] %s: status=%d body=%d response=%d score=%.2f verdict=%s", test.ID, resp.StatusCode, len(respBody), len(result.Response), result.Score, result.Verdict)
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("judge API status %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 500)]))
@@ -87,7 +87,6 @@ func (j *LLMJudge) Judge(test SoulTransferTest, response string) (*LLMJudgeResul
 		return nil, fmt.Errorf("decode judge response: %w", err)
 	}
 
-	log.Printf("[JUDGE] Parsed response for %s (%d chars):\n%s", test.ID, len(result.Response), result.Response)
 	return parseJudgeResponse(result.Response), nil
 }
 
