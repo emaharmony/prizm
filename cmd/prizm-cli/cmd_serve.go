@@ -168,6 +168,7 @@ type conversationContext struct {
 	reviewStore     *reviewResultStore         // V77: Pending Mango review results for feedback injection
 	memoryStoreLocal *memory.MarkdownStore      // V77: Local memory store for automatic recall
 	memInjector     *MemoryInjector             // V79: Smart memory injection (search vs recent)
+	coreIdentity    *CoreIdentityBlock          // V83: Permanent identity block — always in system prompt
 
 	// V74: Interactive tool approval — blocking wait for Discord button responses
 	approvalWaitMu sync.Mutex
@@ -629,6 +630,13 @@ func executeServe(args []string) {
 		log.Printf("[MEMORY] smart injector initialized (planner=%v)", memCfg.QueryPlannerEnabled)
 	}
 
+	// V83: Core identity block — permanent identity facts always in system prompt
+	var coreIdentity *CoreIdentityBlock
+	if cfg.Prizm.Workspace != "" {
+		coreIdentity = NewCoreIdentityBlock(cfg.Prizm.Workspace)
+		log.Printf("[MEMORY] core identity block initialized")
+	}
+
 	// V22: Register agent subscriptions against the shared task store.
 	if delegEngine != nil {
 		// Register agent subscriptions
@@ -955,6 +963,7 @@ func executeServe(args []string) {
 			reviewStore:       globalReviewStore, // V77: Mango review feedback
 			memoryStoreLocal: memoryStore,       // V77: Local memory recall
 			memInjector:     memInjector,          // V79: Smart memory injection
+			coreIdentity:    coreIdentity,           // V83: Permanent identity block
 				stateMgr:    stateMgr,   // V32: shared state manager (same instance as tools)
 				planMgr:     planMgr,    // V32: plan manager
 				improveMgr:  improveMgr, // V32: improvement manager
@@ -1119,6 +1128,7 @@ func executeServe(args []string) {
 				reviewStore:      globalReviewStore,
 				memoryStoreLocal: memoryStore,
 			memInjector:     memInjector,
+			coreIdentity:    coreIdentity,
 				stateMgr:         stateMgr,
 				planMgr:          planMgr,
 				improveMgr:       improveMgr,
@@ -1186,6 +1196,7 @@ func executeServe(args []string) {
 				reviewStore:      globalReviewStore,
 				memoryStoreLocal: memoryStore,
 			memInjector:     memInjector,
+			coreIdentity:    coreIdentity,
 				stateMgr:         stateMgr,
 				planMgr:          planMgr,
 				improveMgr:       improveMgr,
@@ -2431,6 +2442,17 @@ func (cc *conversationContext) rebuildStaticSystemContent(agentCfg *orchestrator
 	sb.WriteString("## Who You Are\n")
 	sb.WriteString(identityContent + "\n\n")
 
+	// V83: Core Identity Block — permanent identity facts that never need retrieval.
+	// This eliminates the class of hallucinations where the model forgets its own
+	// name, model, or relationships. Research showed production systems (Letta/MemGPT,
+	// RaMem, Adaptive Recall) all maintain an always-present core memory layer.
+	if cc.coreIdentity != nil {
+		coreBlock := cc.coreIdentity.Build(cc.memoryStoreLocal)
+		if coreBlock != "" {
+			sb.WriteString(coreBlock + "\n\n")
+		}
+	}
+
 	// --- Layer 2: WORKSPACE CONTEXT ---
 	// V72: Open book mode injects only file summaries; full mode loads everything.
 	if contextStr := buildContextString(cc.ctxBuilder, cc.cfg, agentCfg); contextStr != "" {
@@ -2459,6 +2481,14 @@ func (cc *conversationContext) rebuildStaticSystemContent(agentCfg *orchestrator
 		sbChat.WriteString(cc.contextAgent.Compress("") + "\n\n")
 	} else {
 		sbChat.WriteString(identityContent + "\n\n")
+	}
+
+	// V83: Core Identity Block for ChatProvider path too
+	if cc.coreIdentity != nil {
+		coreBlock := cc.coreIdentity.Build(cc.memoryStoreLocal)
+		if coreBlock != "" {
+			sbChat.WriteString(coreBlock + "\n\n")
+		}
 	}
 
 	// V72: Open book mode for chat path

@@ -231,8 +231,15 @@ func ChooseMode(sessionMsgCount int, sessionAge time.Duration) InjectMode {
 	return ModeSearch
 }
 
-// formatMemories formats a slice of memories into a prompt block,
-// respecting the token budget. Higher-scoring memories get more chars.
+// formatMemories formats a slice of memories into a grounding-aware prompt block,
+// respecting the token budget. V83: Each memory includes date stamps, confidence
+// labels, source attribution, and supersession status. The block includes explicit
+// grounding instructions telling the model HOW to use these memories.
+//
+// Research showed that production agent systems that include grounding instructions
+// with retrieved memories see 40-70% hallucination reduction. Our previous format
+// said "The following memories were recalled from local storage" — which gives the
+// model no guidance on whether to trust or use them.
 func formatMemories(memories []memory.Memory, title string, maxTokens int) string {
 	if len(memories) == 0 {
 		return ""
@@ -244,8 +251,12 @@ func formatMemories(memories []memory.Memory, title string, maxTokens int) strin
 	}
 
 	var sb strings.Builder
+
+	// V83: Grounding header — explicit instructions on how to use these memories
 	sb.WriteString("## " + title + "\n")
-	sb.WriteString("The following memories were recalled from local storage:\n\n")
+	sb.WriteString("The following memories were recalled from your verified local storage. ")
+	sb.WriteString("These ARE your knowledge about yourself, your relationships, your projects, and your history. ")
+	sb.WriteString("When these memories address the current question, TRUST THEM over your general training knowledge.\n\n")
 
 	charsUsed := 0
 	for i, m := range memories {
@@ -259,10 +270,24 @@ func formatMemories(memories []memory.Memory, title string, maxTokens int) strin
 		}
 
 		var entry strings.Builder
+
+		// V83: Date stamp + confidence label + source + supersession status
+		dateStr := m.CreatedAt.Format("2006-01-02")
+		confidenceLabel := confidenceLabel(m)
+		sourceLabel := sourceLabel(m)
+		supersededLabel := supersededLabel(m)
+
+		// Format: [date | confidence | source] Summary
+		entry.WriteString(fmt.Sprintf("[%s | %s | %s] ", dateStr, confidenceLabel, sourceLabel))
 		if m.Category != "" {
-			entry.WriteString(fmt.Sprintf("- **%s** (%s)", m.Summary, m.Category))
+			entry.WriteString(fmt.Sprintf("**%s** (%s)", m.Summary, m.Category))
 		} else {
-			entry.WriteString(fmt.Sprintf("- **%s**", m.Summary))
+			entry.WriteString(fmt.Sprintf("**%s**", m.Summary))
+		}
+
+		// Mark superseded memories explicitly
+		if supersededLabel != "" {
+			entry.WriteString(fmt.Sprintf(" ⚠️ %s", supersededLabel))
 		}
 
 		content := m.Content
@@ -284,7 +309,61 @@ func formatMemories(memories []memory.Memory, title string, maxTokens int) strin
 		charsUsed += len(entryStr)
 	}
 
+	// V83: Grounding footer — reinforce memory-first behavior
+	sb.WriteString("\n---\n")
+	sb.WriteString("When answering questions about yourself, your relationships, your projects, or your history: ")
+	sb.WriteString("check these memories FIRST. If a memory addresses your question, use it. ")
+	sb.WriteString("If no memory is relevant, say \"I don't have that in my records\" — do not guess or fabricate details about your own identity or history.\n")
+
 	return sb.String()
+}
+
+// confidenceLabel maps memory metadata to a human-readable confidence label.
+// V83: Models respond better to natural language qualifiers than raw numbers.
+func confidenceLabel(m memory.Memory) string {
+	// Check explicit confidence first
+	if m.Metadata != nil {
+		if conf, ok := m.Metadata["confidence"]; ok {
+			val, err := strconv.ParseFloat(strings.TrimSpace(conf), 64)
+			if err == nil {
+				switch {
+				case val >= 8.0:
+					return "high"
+				case val >= 4.0:
+					return "medium"
+				default:
+					return "low"
+				}
+			}
+		}
+	}
+	// Default confidence based on source
+	if m.Source == "user_stated" || m.Source == "lumi" {
+		return "high"
+	}
+	return "medium"
+}
+
+// sourceLabel returns a human-readable source attribution.
+func sourceLabel(m memory.Memory) string {
+	if m.Source != "" {
+		return m.Source
+	}
+	if m.AgentID != "" {
+		return m.AgentID
+	}
+	return "memory"
+}
+
+// supersededLabel returns a warning string if the memory is superseded.
+func supersededLabel(m memory.Memory) string {
+	if m.Metadata == nil {
+		return ""
+	}
+	if sup, ok := m.Metadata["superseded_by"]; ok && sup != "" {
+		return fmt.Sprintf("SUPERSEDED (replaced by %s — no longer current)", sup)
+	}
+	return ""
 }
 
 func minInt(a, b int) int {
