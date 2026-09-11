@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -52,7 +53,7 @@ func (j *LLMJudge) Judge(test SoulTransferTest, response string) (*LLMJudgeResul
 		"stream": false,
 		"options": map[string]any{
 			"temperature": 0.1, // Low temp for consistent scoring
-			"num_predict": 512,
+			"num_predict": 8192,
 		},
 	}
 
@@ -68,18 +69,25 @@ func (j *LLMJudge) Judge(test SoulTransferTest, response string) (*LLMJudgeResul
 	}
 	defer resp.Body.Close()
 
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read judge response: %w", err)
+	}
+
+	log.Printf("[JUDGE] HTTP status: %d, body length: %d", resp.StatusCode, len(respBody))
+
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("judge API status %d: %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("judge API status %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 500)]))
 	}
 
 	var result struct {
 		Response string `json:"response"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("decode judge response: %w", err)
 	}
 
+	log.Printf("[JUDGE] Parsed response for %s (%d chars):\n%s", test.ID, len(result.Response), result.Response)
 	return parseJudgeResponse(result.Response), nil
 }
 
@@ -166,6 +174,8 @@ func parseJudgeResponse(raw string) *LLMJudgeResult {
 			result.Criteria[name] = score / 5.0 // Normalize to 0-1
 		}
 	}
+
+	log.Printf("[JUDGE] Parsed: score=%.2f verdict=%s reason=%s criteria=%v", result.Score, result.Verdict, result.Reason, result.Criteria)
 
 	if result.Verdict == "" {
 		if result.Score >= 0.8 {
