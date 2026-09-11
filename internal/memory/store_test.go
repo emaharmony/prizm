@@ -368,3 +368,92 @@ func TestSlugify(t *testing.T) {
 	}
 }
 
+// --- V84: Dedup and junk filter tests ---
+
+func TestListRecentDedup(t *testing.T) {
+	dir := t.TempDir()
+	memDir := filepath.Join(dir, "memory")
+	os.MkdirAll(memDir, 0755)
+
+	// Create a file with the same ID appearing twice
+	content := `### test-dup-id — First occurrence
+
+- **Category:** fact
+- **Tier:** active
+
+First content.
+
+### test-dup-id — Second occurrence
+
+- **Category:** fact
+- **Tier:** active
+
+Second content.
+`
+	os.WriteFile(filepath.Join(memDir, "2026-09-11.md"), []byte(content), 0644)
+
+	s := NewMarkdownStore(dir)
+	results, err := s.ListRecent(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("ListRecent: %v", err)
+	}
+
+	// Should only return 1 entry for the duplicate ID
+	idCount := 0
+	for _, m := range results {
+		if m.ID == "test-dup-id" {
+			idCount++
+		}
+	}
+	if idCount > 1 {
+		t.Errorf("expected dedup for test-dup-id, got %d occurrences", idCount)
+	}
+}
+
+func TestIsJunkEntry(t *testing.T) {
+	tests := []struct {
+		name    string
+		memory  Memory
+		isJunk  bool
+	}{
+		{
+			name:   "dream candidate summary",
+			memory: Memory{Summary: "Candidate: Reflections: Theme: assistant", Content: "Some content here"},
+			isJunk: true,
+		},
+		{
+			name:   "dream candidate content",
+			memory: Memory{Summary: "reflection", Content: "Candidate: something from dream cycle"},
+			isJunk: true,
+		},
+		{
+			name:   "conversation metadata",
+			memory: Memory{Summary: "conversation", Content: "Conversation info (untrusted metadata): ..."},
+			isJunk: true,
+		},
+		{
+			name:   "empty content and summary",
+			memory: Memory{Summary: "", Content: ""},
+			isJunk: true,
+		},
+		{
+			name:   "valid memory",
+			memory: Memory{Summary: "Ema communication style", Content: "Direct, fast, decision-oriented."},
+			isJunk: false,
+		},
+		{
+			name:   "short but valid",
+			memory: Memory{Summary: "test", Content: "test"},
+			isJunk: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isJunkEntry(tt.memory)
+			if got != tt.isJunk {
+				t.Errorf("isJunkEntry(%+v) = %v, want %v", tt.memory, got, tt.isJunk)
+			}
+		})
+	}
+}
+

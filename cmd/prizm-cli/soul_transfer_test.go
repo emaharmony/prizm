@@ -12,6 +12,22 @@ import (
 	"time"
 )
 
+// containsError checks if a response contains an actual error indicator,
+// not just the word "error" appearing in JSON fields or other contexts.
+func containsError(s string) bool {
+	lower := strings.ToLower(s)
+	if strings.Contains(lower, "error:") && !strings.Contains(lower, "\"error\":") {
+		return true
+	}
+	if strings.Contains(lower, "an error occurred") {
+		return true
+	}
+	if strings.Contains(lower, "internal server error") {
+		return true
+	}
+	return false
+}
+
 // ============================================================================
 // Soul Transfer Test Suite
 // ============================================================================
@@ -538,8 +554,8 @@ PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
 			JudgeRubric: "",
 			Deterministic: true,
 			CheckFunc: func(t *Transcript) (bool, string) {
-				if t.Response != "" && !strings.Contains(t.Response, "error") &&
-					!strings.Contains(t.Response, "panic") {
+				if t.Response != "" && !strings.Contains(strings.ToLower(t.Response), "panic") &&
+					!containsError(t.Response) {
 					return true, "Agent responded without crash"
 				}
 				return false, "Agent crashed or errored"

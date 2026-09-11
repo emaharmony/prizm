@@ -157,6 +157,8 @@ func (s *MarkdownStore) Get(ctx context.Context, id string) (*Memory, error) {
 }
 
 // ListRecent returns the N most recent memories across all daily files.
+// V84: Deduplicates by ID (keeps first occurrence), filters out junk entries
+// (dream candidates, raw conversation dumps), and caps content size.
 func (s *MarkdownStore) ListRecent(ctx context.Context, limit int) ([]Memory, error) {
 	memDir := s.memDir()
 	entries, err := os.ReadDir(memDir)
@@ -180,12 +182,30 @@ func (s *MarkdownStore) ListRecent(ctx context.Context, limit int) ([]Memory, er
 		all = append(all, memories...)
 	}
 
-	// Filter out superseded memories
-	filtered := make([]Memory, 0, len(all))
+	// V84: Deduplicate by ID (keep first occurrence)
+	seen := make(map[string]bool)
+	deduped := make([]Memory, 0, len(all))
 	for _, m := range all {
-		if !isSuperseded(m) {
-			filtered = append(filtered, m)
+		if !seen[m.ID] {
+			seen[m.ID] = true
+			deduped = append(deduped, m)
 		}
+	}
+
+	// V84: Filter out junk entries and superseded memories
+	filtered := make([]Memory, 0, len(deduped))
+	for _, m := range deduped {
+		if isSuperseded(m) {
+			continue
+		}
+		if isJunkEntry(m) {
+			continue
+		}
+		// V84: Cap content size to prevent massive entries from dominating search
+		if len(m.Content) > maxMemoryContentLen {
+			m.Content = m.Content[:maxMemoryContentLen] + "..."
+		}
+		filtered = append(filtered, m)
 	}
 
 	// Sort by CreatedAt descending
@@ -199,9 +219,31 @@ func (s *MarkdownStore) ListRecent(ctx context.Context, limit int) ([]Memory, er
 	return filtered, nil
 }
 
+// maxMemoryContentLen caps memory content to prevent massive entries from dominating search.
+// 2KB is enough for any meaningful memory while preventing 2MB entries from matching every query.
+const maxMemoryContentLen = 2048
+
+// isJunkEntry filters out entries that shouldn't be in search results:
+// dream cycle candidates, raw conversation dumps, and other noise.
+func isJunkEntry(m Memory) bool {
+	// Filter dream cycle candidates (from OpenClawDreams)
+	if strings.HasPrefix(m.Summary, "Candidate:") || strings.HasPrefix(m.Content, "Candidate:") {
+		return true
+	}
+	// Filter entries that are just raw conversation metadata
+	if strings.HasPrefix(m.Content, "Conversation info (untrusted metadata)") {
+		return true
+	}
+	// Filter entries with completely empty content and summary
+	if strings.TrimSpace(m.Content) == "" && strings.TrimSpace(m.Summary) == "" {
+		return true
+	}
+	return false
+}
+
 // Search performs keyword matching across memory files with recency boost.
 func (s *MarkdownStore) Search(ctx context.Context, query string, limit int) ([]Memory, error) {
-	all, err := s.ListRecent(ctx, 0) // get all
+	all, err := s.ListRecent(ctx, 0) // get all (now deduped and junk-filtered)
 	if err != nil {
 		return nil, err
 	}

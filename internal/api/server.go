@@ -784,7 +784,7 @@ func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig, sear
 	// Falls back to bare keyword search when injector is nil.
 	if s.memInjectorForInvoke != nil {
 		// Smart path: query planner + embedding + grounding-aware format
-		memBlock := s.memInjectorForInvoke.InjectMemoriesInt(contextctx.Background(), 0, searchQuery, 1, 300)
+		memBlock := s.memInjectorForInvoke.InjectMemoriesInt(contextctx.Background(), 0, searchQuery, 1, 800)
 		if memBlock != "" {
 			sb.WriteString(memBlock + "\n")
 		}

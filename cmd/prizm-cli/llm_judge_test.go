@@ -53,7 +53,7 @@ func (j *LLMJudge) Judge(test SoulTransferTest, response string) (*LLMJudgeResul
 		"stream": false,
 		"options": map[string]any{
 			"temperature": 0.1, // Low temp for consistent scoring
-			"num_predict": 8192,
+			"num_predict": 16384,
 		},
 	}
 
@@ -83,8 +83,37 @@ func (j *LLMJudge) Judge(test SoulTransferTest, response string) (*LLMJudgeResul
 
 	log.Printf("[JUDGE] %s: status=%d body=%d response=%d", test.ID, resp.StatusCode, len(respBody), len(result.Response))
 
+	// If response is empty (thinking tokens consumed budget), retry with truncated prompt
+	if strings.TrimSpace(result.Response) == "" {
+		log.Printf("[JUDGE] %s: empty response, retrying with truncated prompt", test.ID)
+		truncatedPrompt := buildJudgePrompt(test, truncateResponse(response, 2000))
+		reqBody["prompt"] = truncatedPrompt
+		body2, err := json.Marshal(reqBody)
+		if err != nil {
+			return nil, fmt.Errorf("marshal retry request: %w", err)
+		}
+		resp2, err := client.Post(j.BaseURL+"/api/generate", "application/json", bytes.NewReader(body2))
+		if err != nil {
+			return nil, fmt.Errorf("judge retry API call: %w", err)
+		}
+		defer resp2.Body.Close()
+		respBody2, err := io.ReadAll(resp2.Body)
+		if err != nil {
+			return nil, fmt.Errorf("read judge retry response: %w", err)
+		}
+		var result2 struct {
+			Response string `json:"response"`
+		}
+		if err := json.Unmarshal(respBody2, &result2); err != nil {
+			return nil, fmt.Errorf("decode judge retry response: %w", err)
+		}
+		log.Printf("[JUDGE] %s: retry status=%d body=%d response=%d", test.ID, resp2.StatusCode, len(respBody2), len(result2.Response))
+		return parseJudgeResponse(result2.Response), nil
+	}
+
 	return parseJudgeResponse(result.Response), nil
 }
+
 
 func buildJudgePrompt(test SoulTransferTest, response string) string {
 	return fmt.Sprintf(`You are an impartial judge evaluating an AI agent's response. Score strictly and honestly.

@@ -1822,7 +1822,7 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 		sessionAge := time.Since(sess.StartedAt)
 		mode := ChooseMode(len(sess.Messages), sessionAge)
 		log.Printf("[MEMORY-INJECTOR] attempting injection: mode=%v, msgCount=%d, age=%v, query_len=%d", mode, len(sess.Messages), sessionAge.Round(time.Second), len(sanitizedContent))
-		memBlock := cc.memInjector.InjectMemories(ctxcontext.Background(), mode, sanitizedContent, len(sess.Messages), 300)
+		memBlock := cc.memInjector.InjectMemories(ctxcontext.Background(), mode, sanitizedContent, len(sess.Messages), 800)
 		log.Printf("[MEMORY-INJECTOR] result: block_len=%d", len(memBlock))
 		if memBlock != "" {
 			promptSession = cloneSessionWithSystemMemory(sess, memBlock)
