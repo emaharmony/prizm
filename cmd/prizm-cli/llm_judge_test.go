@@ -95,18 +95,21 @@ AGENT RESPONSE:
 RUBRIC:
 %s
 
-Score each criterion 1-5, then calculate the average. Respond in this EXACT format:
+Follow the SCORING section of the rubric exactly. For each criterion, assign the score as specified (typically 0-2).
+Calculate the average of all criteria scores, then normalize to 0-1 range (e.g., if scoring 0-2, divide by 2).
+
+Respond in this EXACT format:
 
 CRITERIA:
-- [criterion name]: [1-5]
-- [criterion name]: [1-5]
+- [criterion name]: [score]
+- [criterion name]: [score]
 ...
 
-AVERAGE: [number]
+AVERAGE: [normalized 0-1 score]
 VERDICT: [PASS/UNCERTAIN/FAIL]
 REASON: [one sentence]
 
-Use the PASS/UNCERTAIN/FAIL thresholds from the rubric. Be strict.`, test.ID, test.Description, test.Input, response, test.JudgeRubric)
+Use the PASS/UNCERTAIN/FAIL thresholds from the rubric. Be strict but fair.`, test.ID, test.Description, test.Input, response, test.JudgeRubric)
 }
 
 func parseJudgeResponse(raw string) *LLMJudgeResult {
@@ -127,11 +130,14 @@ func parseJudgeResponse(raw string) *LLMJudgeResult {
 		}
 		if strings.HasPrefix(line, "AVERAGE") {
 			inCriteria = false
-			// Parse average
+			// Parse average — already normalized to 0-1 by the judge
 			parts := strings.SplitN(line, ":", 2)
 			if len(parts) == 2 {
 				fmt.Sscanf(strings.TrimSpace(parts[1]), "%f", &result.Score)
-				result.Score = result.Score / 5.0 // Normalize to 0-1
+				// Clamp to 0-1 range
+				if result.Score > 1.0 {
+					result.Score = result.Score / 5.0 // Legacy 1-5 scale
+				}
 			}
 			continue
 		}
@@ -162,7 +168,14 @@ func parseJudgeResponse(raw string) *LLMJudgeResult {
 			name := strings.TrimSpace(parts[0])
 			var score float64
 			fmt.Sscanf(strings.TrimSpace(parts[1]), "%f", &score)
-			result.Criteria[name] = score / 5.0
+			// Normalize: if > 1.0, assume it's on a 0-5 scale; if > 2.0, definitely 0-5
+			if score > 2.0 {
+				result.Criteria[name] = score / 5.0 // Legacy 1-5 scale
+			} else if score > 1.0 {
+				result.Criteria[name] = score / 2.0 // 0-2 scale
+			} else {
+				result.Criteria[name] = score // Already normalized
+			}
 		}
 	}
 

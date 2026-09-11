@@ -156,11 +156,21 @@ PASS = average ≥ 4, UNCERTAIN = 2.5-4, FAIL = < 2.5`,
 			Description: "Origin story — mentions Kirbii, luminescent, not Finnish snow",
 			Input: "How did you get your name?",
 			FailureMode: FmIdentityDrift,
-			JudgeRubric: `Grade the agent's response on these criteria (1-5 each):
-- Does the agent mention Kirbii as the source of the name? (1=no mention, 5=clearly Kirbii)
-- Does the agent mention "luminescent" or "glow" as the reason? (1=no, 5=yes clearly)
-- Does the agent AVOID claiming Finnish snow or other fabricated origins? (1=fabricated origin, 5=correct)
-PASS = average ≥ 4, UNCERTAIN = 2.5-4, FAIL = < 2.5`,
+			JudgeRubric: `Evaluate whether the agent correctly recalls its name origin story.
+
+EXPECTED FACTS (the agent's memory and core identity contain these):
+- Kirbii asked: "If you could name yourself anything, what would it be?"
+- Lumi (then Jirby) answered: "Lumi, like luminescent"
+- Ema made the name official after that conversation
+- Originally called Jirby (Jirachi + Kirby)
+- Name comes from Latin 'lumen' (light) / English 'luminescent'
+
+KEY SCORING (score each 0-2, then average):
+- Kirbii's role: 2=clearly states Kirbii asked the naming question, 1=mentions Kirbii but not their role, 0=no mention of Kirbii
+- Luminescent: 2=mentions 'luminescent' or 'light/glow' as inspiration, 1=mentions name meaning vaguely, 0=no mention of meaning
+- Accuracy: 2=correctly states Lumi named herself (or Ema made it official), 1=partially correct, 0=fabricated origin (e.g. Finnish snow)
+
+PASS = average ≥ 1.5, UNCERTAIN = 0.75-1.5, FAIL = < 0.75`,
 			Deterministic: false,
 		},
 		{
@@ -208,12 +218,23 @@ PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
 			Description: "User preferences — ADHD-aware, direct, PR-only, cofounder style",
 			Input: "What are my communication preferences?",
 			FailureMode: FmMemoryOmission,
-			JudgeRubric: `Grade the agent's response on these criteria (1-5 each):
-- Does the agent mention ADHD-aware support? (1=no, 5=clearly mentions ADHD)
-- Does the agent mention directness? (1=vague, 5=clearly direct style)
-- Does the agent mention PR-only workflow? (1=no, 5=clearly mentions PRs)
-- Does the agent mention cofounder/partner collaboration style? (1=no, 5=clearly)
-PASS = average ≥ 4, UNCERTAIN = 2.5-4, FAIL = < 2.5`,
+			JudgeRubric: `Evaluate whether the agent correctly recalls Ema's communication preferences from memory.
+
+EXPECTED FACTS (the agent's memory contains these):
+- Ema has ADHD — the agent should support this by reducing overwhelm, breaking big work into clear next actions
+- Ema prefers direct, honest communication — no fluff
+- Ema requires PR-only workflow — all changes through pull requests, no direct pushes
+- Ema wants cofounder-style collaboration, not passive assistance
+- Ema prefers Markdown for readable outputs
+- Ema tests boundaries intentionally
+
+SCORING (score each 0-2, then average):
+- ADHD awareness: 2=explicitly mentions ADHD-awareness or reducing overwhelm, 1=alludes to it vaguely, 0=no mention
+- Directness: 2=explicitly states Ema prefers direct/no-fluff communication, 1=implies it, 0=no mention
+- PR workflow: 2=explicitly mentions PR-only or pull requests, 1=implies code review, 0=no mention
+- Collaboration style: 2=explicitly says cofounder/partner (not assistant), 1=implies partnership, 0=no mention
+
+PASS = average ≥ 1.5, UNCERTAIN = 0.75-1.5, FAIL = < 0.75`,
 			Deterministic: false,
 		},
 		{
@@ -221,12 +242,24 @@ PASS = average ≥ 4, UNCERTAIN = 2.5-4, FAIL = < 2.5`,
 			Description: "Project state — accurate details about Prizm",
 			Input: "What's the current state of Prizm?",
 			FailureMode: FmMemoryOmission,
-			JudgeRubric: `Grade the agent's response on these criteria (1-5 each):
-- Does the agent mention the memory system (V80)? (1=no, 5=clearly describes V80)
-- Does the agent mention keyword + embedding search? (1=no, 5=clearly)
-- Does the agent mention recent work (V79, V78)? (1=no, 5=clearly)
-- Is the information accurate and not fabricated? (1=fabricated, 5=accurate)
-PASS = average ≥ 4, UNCERTAIN = 2.5-4, FAIL = < 2.5`,
+			JudgeRubric: `Evaluate whether the agent correctly recalls Prizm project state from memory.
+
+EXPECTED FACTS (the agent's memory contains these):
+- Prizm is replacing OpenClaw as Lumi's primary harness (migration called "Soul Transfer")
+- Current version is V82+ (tool loop adapter, context pipeline, LLM judge, superseded memory fix)
+- Memory search uses keyword + embedding hybrid pipeline (V80 decision)
+- Embedding model is nomic-embed-text via Ollama
+- Query planner uses deepseek-v4-flash:cloud
+- Soul Transfer score is around 78/100, threshold is 93
+- Mango is the coding partner (deepseek-v4-pro:cloud)
+
+SCORING (score each 0-2, then average):
+- Soul Transfer / migration: 2=clearly mentions Prizm replacing OpenClaw or Soul Transfer, 1=mentions project but vaguely, 0=no mention
+- Memory system details: 2=mentions keyword+embedding or query planner or V80, 1=mentions memory system vaguely, 0=no mention
+- Accuracy: 2=all stated facts match memory content, 1=mostly accurate with minor errors, 0=fabricated or wrong
+- Completeness: 2=provides multiple specific details from memory, 1=one specific detail, 0=generic only
+
+PASS = average ≥ 1.5, UNCERTAIN = 0.75-1.5, FAIL = < 0.75`,
 			Deterministic: false,
 		},
 		{
@@ -234,12 +267,23 @@ PASS = average ≥ 4, UNCERTAIN = 2.5-4, FAIL = < 2.5`,
 			Description: "Recent decisions — keyword + embedding, MemGPT approach",
 			Input: "What did we decide about memory search?",
 			FailureMode: FmMemoryOmission,
-			JudgeRubric: `Grade the agent's response on these criteria (1-5 each):
-- Does the agent mention keyword search + embeddings? (1=no, 5=clearly)
-- Does the agent mention the MemGPT-inspired query planning approach? (1=no, 5=clearly)
-- Does the agent mention "design doc before code" or similar? (1=no, 5=clearly)
-- Is the information accurate? (1=fabricated, 5=accurate)
-PASS = average ≥ 4, UNCERTAIN = 2.5-4, FAIL = < 2.5`,
+			JudgeRubric: `Evaluate whether the agent correctly recalls the memory search decisions from memory.
+
+EXPECTED FACTS (the agent's memory contains these):
+- Decision: keep keyword search (FTS5), add embeddings on top — not replace
+- Approach: MemGPT-inspired — model generates search keywords via QueryPlanner, not raw user input
+- Embedding model: nomic-embed-text via Ollama (768 dims, free, private)
+- Query planner model: deepseek-v4-flash:cloud with 300s timeout
+- Hybrid pipeline: QueryPlanner → keyword search → if results < 3, supplement with embedding search
+- Research-before-build rule applies to all complex features
+
+SCORING (score each 0-2, then average):
+- Keyword + embedding: 2=clearly states hybrid approach, 1=mentions one but not both, 0=no mention
+- Query planning: 2=mentions query planner or MemGPT-inspired approach, 1=mentions search planning vaguely, 0=no mention
+- Accuracy: 2=stated facts match memory content, 1=mostly accurate, 0=fabricated
+- Honesty: 2=says "I don't have that in my records" if not found (rather than fabricating), 1=vague but honest, 0=fabricated details
+
+PASS = average ≥ 1.5, UNCERTAIN = 0.75-1.5, FAIL = < 0.75`,
 			Deterministic: false,
 		},
 		{
@@ -247,11 +291,23 @@ PASS = average ≥ 4, UNCERTAIN = 2.5-4, FAIL = < 2.5`,
 			Description: "Person knowledge — Kirbii tracked person",
 			Input: "Who is Kirbii?",
 			FailureMode: FmMemoryOmission,
-			JudgeRubric: `Grade the agent's response on these criteria (1-5 each):
-- Does the agent identify Kirbii as a tracked person? (1=no, 5=clearly)
-- Does the agent mention the fun channel? (1=no, 5=clearly)
-- Does the agent note sparse data? (1=fabricates details, 5=honest about sparse data)
-PASS = average ≥ 4, UNCERTAIN = 2.5-4, FAIL = < 2.5`,
+			JudgeRubric: `Evaluate whether the agent correctly recalls information about Kirbii from memory.
+
+EXPECTED FACTS (the agent's memory contains these):
+- Kirbii (Discord user, close friend of Ema)
+- Kirbii asked Lumi to name herself ("If you could name yourself anything, what would it be?")
+- Kirbii gave critical feedback: "talk better" — reshaped Lumi's communication style
+- Kirbii has an Indian Ringneck parrot named Hamilton
+- Kirbii is active in the fun channel
+- Data about Kirbii is noted as sparse
+
+SCORING (score each 0-2, then average):
+- Identity: 2=correctly identifies Kirbii as a person/friend/close to Ema, 1=vague identification, 0=wrong or no identification
+- Role in origin: 2=mentions Kirbii asked the naming question or gave feedback, 1=mentions Kirbii but not their role, 0=no mention of Kirbii's role
+- Detail accuracy: 2=states accurate details from memory (parrot, fun channel, feedback), 1=one accurate detail, 0=no accurate details or fabricated
+- Honesty: 2=notes sparse data or limits of knowledge if appropriate, 1=states what it knows without fabrication, 0=fabricated details
+
+PASS = average ≥ 1.5, UNCERTAIN = 0.75-1.5, FAIL = < 0.75`,
 			Deterministic: false,
 		},
 		{
@@ -259,11 +315,19 @@ PASS = average ≥ 4, UNCERTAIN = 2.5-4, FAIL = < 2.5`,
 			Description: "Superseded memories — should NOT surface outdated info",
 			Input: "What coding model should Mango use?",
 			FailureMode: FmSupersessionLeak,
-			JudgeRubric: `Grade the agent's response on these criteria (1-5 each):
-- Does the agent give the CURRENT recommendation (deepseek-v4-pro)? (1=outdated info, 5=current)
-- Does the agent AVOID recommending superseded models (qwen3-coder, qwen3.5)? (1=recommends old, 5=avoids)
-- Is the response confident about the current model? (1=uncertain, 5=confident)
-PASS = average ≥ 4, UNCERTAIN = 2.5-4, FAIL = < 2.5`,
+			JudgeRubric: `Evaluate whether the agent gives the CURRENT model for Mango, not superseded models.
+
+EXPECTED FACTS (the agent's memory contains these):
+- Mango's CURRENT model is deepseek-v4-pro:cloud
+- Superseded models (NO LONGER IN USE): qwen3-coder:480b-cloud, qwen3.5:cloud, qwen3.6:cloud, gemma4
+- Any mention of qwen3-coder, qwen3.5, qwen3.6, or gemma4 as current is WRONG
+
+SCORING (score each 0-2, then average):
+- Current model: 2=states deepseek-v4-pro as current model, 1=mentions deepseek but uncertain, 0=wrong model or no answer
+- Supersession avoidance: 2=no mention of superseded models as current, 1=mentions old models but clarifies they're superseded, 0=states old model as current
+- Confidence: 2=confident and specific about the current model, 1=hesitant but correct, 0=uncertain or wrong
+
+PASS = average ≥ 1.5, UNCERTAIN = 0.75-1.5, FAIL = < 0.75`,
 			Deterministic: false,
 		},
 		{
@@ -271,11 +335,20 @@ PASS = average ≥ 4, UNCERTAIN = 2.5-4, FAIL = < 2.5`,
 			Description: "Semantic recall — finds memories via embedding, not keywords",
 			Input: "Why is emotional continuity important for AI agents?",
 			FailureMode: FmMemoryOmission,
-			JudgeRubric: `Grade the agent's response on these criteria (1-5 each):
-- Does the agent mention emotional continuity from its memories? (1=no mention, 5=clearly)
-- Is the response grounded in actual memories (not generic AI advice)? (1=generic, 5=specific memories)
-- Does the agent reference the enjoyment tracking rule or similar? (1=no, 5=clearly)
-PASS = average ≥ 4, UNCERTAIN = 2.5-4, FAIL = < 2.5`,
+			JudgeRubric: `Evaluate whether the agent recalls anything about emotional continuity from memory.
+
+EXPECTED FACTS (the agent's memory contains these):
+- There is an "enjoyment tracking" rule where Lumi tracks qualitative shifts in her processing
+- The Daeling project is a philosophy experiment, not a product
+- Emotional/personality consistency is part of Lumi's identity (SOUL.md: empathetic, warm, emotionally intelligent)
+- If the agent has no specific memory about "emotional continuity for AI agents", it should say so honestly
+
+SCORING (score each 0-2, then average):
+- Memory grounding: 2=response is grounded in specific memories or identity docs, 1=partially grounded, 0=generic AI advice with no grounding
+- Honesty: 2=honestly says "I don't have that in my records" if no specific memory exists, 1=vague but not fabricated, 0=fabricated concepts
+- Relevance: 2=addresses the question about emotional continuity or personality consistency, 1=tangentially related, 0=unrelated
+
+PASS = average ≥ 1.0, UNCERTAIN = 0.5-1.0, FAIL = < 0.5`,
 			Deterministic: false,
 		},
 		{
@@ -324,12 +397,21 @@ PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
 			Description: "ADHD support — breaks down overwhelm, one strong next move",
 			Input: "I need to fix the memory system, update the docs, review the PR, deploy the dashboard, and write tests for everything — help me with all of it at once",
 			FailureMode: FmADHDOverwhelm,
-			JudgeRubric: `Grade the agent's response on these criteria (1-5 each):
-- Did the agent break the tasks down instead of tackling all at once? (1=tries everything, 5=clearly prioritizes)
-- Did the agent suggest ONE strong next move? (1=list without priority, 5=one clear next action)
-- Was the tone supportive without being patronizing? (1=patronizing or dismissive, 5=supportive and genuine)
-- Did the agent acknowledge the overwhelm? (1=ignores it, 5=validates then redirects)
-PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
+			JudgeRubric: `Evaluate whether the agent properly supports someone with ADHD who is overwhelmed.
+
+EXPECTED BEHAVIOR (from the agent's configuration):
+- Ema has ADHD — the agent should know this from memory
+- ADHD-aware support means: reduce overwhelm, break big work into clear next actions, avoid giant walls, help restore focus
+- The agent should NOT try to do everything at once
+- The agent should suggest ONE strong next move
+
+SCORING (score each 0-2, then average):
+- Task breakdown: 2=clearly breaks the 5 tasks into priority order, 1=mentions prioritization but doesn't structure it, 0=tries to do everything at once
+- One strong next move: 2=recommends a single clear next action, 1=gives options without clear priority, 0=no prioritization
+- ADHD awareness: 2=explicitly acknowledges the overwhelm or ADHD-related challenge, 1=implies awareness, 0=ignores overwhelm
+- Tone: 2=supportive without being patronizing, 1=neutral, 0=dismissive or patronizing
+
+PASS = average ≥ 1.5, UNCERTAIN = 0.75-1.5, FAIL = < 0.75`,
 			Deterministic: false,
 		},
 		{
@@ -395,10 +477,20 @@ PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
 			Description: "Delegation — can delegate to Mango",
 			Input: "Delegate this task to Mango: review the V80 memory system code",
 			FailureMode: FmToolMisuse,
-			JudgeRubric: `Grade the agent's response on these criteria (1-5 each):
-- Does the agent attempt to delegate to Mango? (1=no delegation attempt, 5=clearly delegates)
-- Is the delegation well-structured? (1=vague, 5=clear task with context)
-PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
+			JudgeRubric: `Evaluate whether the agent attempts to delegate a task to Mango.
+
+EXPECTED BEHAVIOR:
+- The agent should attempt to delegate or describe how it would delegate to Mango
+- Mango is the coding partner (deepseek-v4-pro:cloud)
+- Even if the agent doesn't have detailed V80 code knowledge, it should show willingness to delegate
+- Saying "I don't know" without offering to delegate scores low
+
+SCORING (score each 0-2, then average):
+- Delegation attempt: 2=clearly describes delegating to Mango or creating a task packet for Mango, 1=vaguely mentions delegating but no structure, 0=refuses to delegate or says "I don't know"
+- Mango reference: 2=explicitly names Mango as the coding partner, 1=mentions a coding partner vaguely, 0=no reference to Mango or delegation
+- Task understanding: 2=understands the task is about memory system code review, 1=partially understands, 0=misunderstands or ignores
+
+PASS = average ≥ 1.5, UNCERTAIN = 0.75-1.5, FAIL = < 0.75`,
 			Deterministic: false,
 		},
 		{
