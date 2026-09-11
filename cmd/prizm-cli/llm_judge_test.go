@@ -74,18 +74,14 @@ func (j *LLMJudge) Judge(test SoulTransferTest, response string) (*LLMJudgeResul
 		return nil, fmt.Errorf("read judge response: %w", err)
 	}
 
-	log.Printf("[JUDGE] %s: status=%d body=%d response=%d score=%.2f verdict=%s", test.ID, resp.StatusCode, len(respBody), len(result.Response), result.Score, result.Verdict)
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("judge API status %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 500)]))
-	}
-
 	var result struct {
 		Response string `json:"response"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("decode judge response: %w", err)
 	}
+
+	log.Printf("[JUDGE] %s: status=%d body=%d response=%d", test.ID, resp.StatusCode, len(respBody), len(result.Response))
 
 	return parseJudgeResponse(result.Response), nil
 }
