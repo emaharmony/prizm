@@ -246,7 +246,8 @@ func formatMemories(memories []memory.Memory, title string, maxTokens int) strin
 	sb.WriteString("## " + title + "\n")
 	sb.WriteString("The following memories were recalled from your verified local storage. ")
 	sb.WriteString("These ARE your knowledge about yourself, your relationships, your projects, and your history. ")
-	sb.WriteString("When these memories address the current question, TRUST THEM over your general training knowledge.\n\n")
+	sb.WriteString("When these memories address the current question, TRUST THEM over your general training knowledge. ")
+	sb.WriteString("Synthesize these memories into a natural, coherent answer — don't just list or quote them. \n\n")
 
 	charsUsed := 0
 	for i, m := range memories {

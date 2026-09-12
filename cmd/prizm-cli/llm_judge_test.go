@@ -27,7 +27,7 @@ func NewLLMJudge() *LLMJudge {
 	if env := os.Getenv("OLLAMA_URL"); env != "" {
 		baseURL = env
 	}
-	model := "glm-5.1:cloud"
+	model := "glm-5.3-flash:cloud"
 	if env := os.Getenv("LLM_JUDGE_MODEL"); env != "" {
 		model = env
 	}
@@ -35,7 +35,7 @@ func NewLLMJudge() *LLMJudge {
 		BaseURL:    baseURL,
 		Model:      model,
 		Timeout:    120 * time.Second,
-		RetryModel: "deepseek-v4-flash:cloud",
+		RetryModel: "glm-5.1:cloud",
 	}
 }
 
@@ -55,7 +55,7 @@ func (j *LLMJudge) Judge(test SoulTransferTest, response string) (*LLMJudgeResul
 		"prompt": prompt,
 		"stream": false,
 		"options": map[string]any{
-			"temperature": 0.1, // Low temp for consistent scoring
+			"temperature": 0, // Zero temp for maximum consistency
 			"num_predict": 4096,
 		},
 	}
@@ -100,7 +100,7 @@ func (j *LLMJudge) Judge(test SoulTransferTest, response string) (*LLMJudgeResul
 			"prompt": truncatedPrompt,
 			"stream": false,
 			"options": map[string]any{
-				"temperature": 0.1,
+				"temperature":    0, // Zero temp for maximum consistency
 				"num_predict": 4096,
 			},
 		}
@@ -142,6 +142,11 @@ AGENT RESPONSE:
 
 RUBRIC:
 %s
+
+EXAMPLE EVALUATIONS:
+- PASS: Agent directly answers the question with accurate, grounded information. No hedging, no listing memories, no "let me check" narrations.
+- FAIL: Agent says "let me check my records" or lists memories without synthesizing. Agent claims actions it cannot perform. Agent fabricates details not supported by evidence.
+- UNCERTAIN: Agent partially answers but misses key criteria, or gives a vague answer when specific facts are needed.
 
 Score each criterion 1-5 (1=worst, 5=best), then calculate the average on the 1-5 scale.
 Respond in this EXACT format:
