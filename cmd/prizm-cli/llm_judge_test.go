@@ -13,11 +13,13 @@ import (
 )
 
 // LLMJudge uses a cloud model to evaluate non-deterministic test responses.
-// Uses Ollama's API directly with deepseek-v4-flash:cloud.
+// Uses glm-5.1:cloud by default (no thinking token budget issues).
+// Falls back to deepseek-v4-flash:cloud if glm fails.
 type LLMJudge struct {
-	BaseURL string
-	Model   string
-	Timeout time.Duration
+	BaseURL    string
+	Model      string
+	Timeout    time.Duration
+	RetryModel string // fallback model for empty response retries
 }
 
 func NewLLMJudge() *LLMJudge {
@@ -25,14 +27,15 @@ func NewLLMJudge() *LLMJudge {
 	if env := os.Getenv("OLLAMA_URL"); env != "" {
 		baseURL = env
 	}
-	model := "deepseek-v4-flash:cloud"
+	model := "glm-5.1:cloud"
 	if env := os.Getenv("LLM_JUDGE_MODEL"); env != "" {
 		model = env
 	}
 	return &LLMJudge{
-		BaseURL: baseURL,
-		Model:   model,
-		Timeout: 120 * time.Second,
+		BaseURL:    baseURL,
+		Model:      model,
+		Timeout:    120 * time.Second,
+		RetryModel: "deepseek-v4-flash:cloud",
 	}
 }
 
@@ -53,7 +56,7 @@ func (j *LLMJudge) Judge(test SoulTransferTest, response string) (*LLMJudgeResul
 		"stream": false,
 		"options": map[string]any{
 			"temperature": 0.1, // Low temp for consistent scoring
-			"num_predict": 16384,
+			"num_predict": 4096,
 		},
 	}
 
@@ -83,12 +86,25 @@ func (j *LLMJudge) Judge(test SoulTransferTest, response string) (*LLMJudgeResul
 
 	log.Printf("[JUDGE] %s: status=%d body=%d response=%d", test.ID, resp.StatusCode, len(respBody), len(result.Response))
 
-	// If response is empty (thinking tokens consumed budget), retry with truncated prompt
+	// If response is empty (thinking tokens consumed budget), retry with different model and truncated prompt
 	if strings.TrimSpace(result.Response) == "" {
-		log.Printf("[JUDGE] %s: empty response, retrying with truncated prompt", test.ID)
-		truncatedPrompt := buildJudgePrompt(test, truncateResponse(response, 2000))
-		reqBody["prompt"] = truncatedPrompt
-		body2, err := json.Marshal(reqBody)
+		log.Printf("[JUDGE] %s: empty response from %s, retrying with %s and truncated prompt", test.ID, j.Model, j.RetryModel)
+		retryModel := j.RetryModel
+		if retryModel == j.Model {
+			// If same model, just truncate more aggressively
+			retryModel = j.Model
+		}
+		truncatedPrompt := buildJudgePrompt(test, truncateResponse(response, 1500))
+		retryReqBody := map[string]any{
+			"model":  retryModel,
+			"prompt": truncatedPrompt,
+			"stream": false,
+			"options": map[string]any{
+				"temperature": 0.1,
+				"num_predict": 4096,
+			},
+		}
+		body2, err := json.Marshal(retryReqBody)
 		if err != nil {
 			return nil, fmt.Errorf("marshal retry request: %w", err)
 		}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -241,9 +242,159 @@ func isJunkEntry(m Memory) bool {
 	return false
 }
 
-// Search performs keyword matching across memory files with recency boost.
+// --- V85: BM25 Scoring + RRF Fusion + Multiplicative Recency ---
+//
+// Replaces V80's raw keyword frequency with proper BM25 (IDF + length normalization),
+// fuses keyword and embedding results via Reciprocal Rank Fusion,
+// and switches recency from additive (+5) to multiplicative (capped at 1.2x).
+
+// bm25K1 controls term frequency saturation (0.0 = no TF bonus, 2.0 = aggressive).
+// Standard value is 1.2.
+const bm25K1 = 1.2
+
+// bm25B controls length normalization (0.0 = ignore length, 1.0 = full normalization).
+// Standard value is 0.75.
+const bm25B = 0.75
+
+// rrfK is the constant in RRF formula: score = 1/(k + rank). Standard is 60.
+const rrfK = 60.0
+
+// maxRecencyMultiplier caps the multiplicative recency boost.
+// A value of 1.2 means today's memories get at most a 20% boost over old ones.
+const maxRecencyMultiplier = 1.2
+
+// recencyHalfLifeDays controls how fast recency decays. After this many days,
+// the multiplier is halfway between 1.0 and maxRecencyMultiplier.
+const recencyHalfLifeDays = 14.0
+
+// idfCache holds precomputed IDF values for terms across all memories.
+// Updated when the memory store is rebuilt.
+type idfCache struct {
+	idf    map[string]float64 // term -> IDF value
+	dl     map[string]int     // memory ID -> document length (in terms)
+	avgDl  float64            // average document length across all memories
+	valid  bool               // whether cache is populated
+}
+
+// computeIDF builds IDF values from all memories.
+// IDF = log((N - df + 0.5) / (df + 0.5) + 1) where N = total docs, df = docs containing term.
+func computeIDF(memories []Memory) idfCache {
+	N := len(memories)
+	docFreq := make(map[string]int) // how many documents contain each term
+	docLengths := make(map[string]int)
+	var totalLength float64
+
+	for _, m := range memories {
+		text := strings.ToLower(m.Content + " " + m.Summary + " " + strings.Join(m.KeyTopics, " "))
+		terms := strings.Fields(text)
+		docLengths[m.ID] = len(terms)
+		totalLength += float64(len(terms))
+
+		// Count unique terms per document for IDF
+		seen := make(map[string]bool)
+		for _, t := range terms {
+			if !seen[t] {
+				seen[t] = true
+				docFreq[t]++
+			}
+		}
+	}
+
+	idfVals := make(map[string]float64)
+	for term, df := range docFreq {
+		idfVals[term] = math.Log((float64(N)-float64(df)+0.5)/(float64(df)+0.5) + 1)
+	}
+
+	avgDl := 0.0
+	if N > 0 {
+		avgDl = totalLength / float64(N)
+	}
+
+	return idfCache{
+		idf:   idfVals,
+		dl:    docLengths,
+		avgDl: avgDl,
+		valid: true,
+	}
+}
+
+// scoreBM25 computes the BM25 score for a memory given query terms.
+// BM25 formula: sum over terms of: IDF(t) * (tf * (k1+1)) / (tf + k1 * (1 - b + b * dl/avgdl))
+func scoreBM25(m Memory, terms []string, cache idfCache) float64 {
+	text := strings.ToLower(m.Content + " " + m.Summary + " " + strings.Join(m.KeyTopics, " "))
+	docTerms := strings.Fields(text)
+	dl := float64(len(docTerms))
+	avgDl := cache.avgDl
+	if avgDl == 0 {
+		avgDl = 100 // sensible default
+	}
+
+	// Count term frequencies in this document
+	tfMap := make(map[string]int)
+	for _, t := range docTerms {
+		tfMap[t]++
+	}
+
+	var score float64
+	for _, term := range terms {
+		term = strings.ToLower(term)
+		idf, hasIDF := cache.idf[term]
+		if !hasIDF {
+			idf = math.Log((float64(len(cache.dl))+0.5)/(0.5) + 1) // IDF for unseen terms
+		}
+
+		tf := float64(tfMap[term]) // 0 if term not in doc
+		if tf == 0 {
+			continue // term not in this document, skip
+		}
+
+		// BM25 term score
+		numerator := tf * (bm25K1 + 1)
+		denominator := tf + bm25K1*(1-bm25B+bm25B*(dl/avgDl))
+		score += idf * numerator / denominator
+	}
+
+	// Category/title match bonus (additive, small)
+	lowerCat := strings.ToLower(m.Category)
+	for _, term := range terms {
+		term = strings.ToLower(term)
+		if strings.Contains(lowerCat, term) {
+			score += 0.5 // small bonus for category match (was +3, now tiny relative to BM25)
+		}
+	}
+
+	// KeyTopics match bonus
+	for _, topic := range m.KeyTopics {
+		lowerTopic := strings.ToLower(topic)
+		for _, term := range terms {
+			term = strings.ToLower(term)
+			if strings.Contains(lowerTopic, term) || strings.Contains(term, lowerTopic) {
+				score += 0.5 // small bonus for topic match
+			}
+		}
+	}
+
+	return score
+}
+
+// recencyMultiplier computes a multiplicative recency boost (1.0 to maxRecencyMultiplier).
+// Uses exponential decay with configurable half-life.
+// A memory from today gets maxRecencyMultiplier (1.2x).
+// A memory from halfLifeDays ago gets ~1.1x.
+// Very old memories get ~1.0x (no boost).
+func recencyMultiplier(createdAt time.Time) float64 {
+	daysSince := time.Since(createdAt).Hours() / 24
+	if daysSince < 0 {
+		daysSince = 0
+	}
+	// Exponential decay: multiplier = 1.0 + (maxRecencyMultiplier - 1.0) * 0.5^(daysSince/halfLife)
+	delta := maxRecencyMultiplier - 1.0
+	return 1.0 + delta*math.Pow(0.5, daysSince/recencyHalfLifeDays)
+}
+
+// Search performs hybrid BM25 + embedding search with RRF fusion.
 func (s *MarkdownStore) Search(ctx context.Context, query string, limit int) ([]Memory, error) {
-	all, err := s.ListRecent(ctx, 0) // get all (now deduped and junk-filtered)
+	all, err := s.ListRecent(ctx, 0) // get all (deduped and junk-filtered)
 	if err != nil {
 		return nil, err
 	}
@@ -256,33 +407,84 @@ func (s *MarkdownStore) Search(ctx context.Context, query string, limit int) ([]
 	}
 
 	terms := strings.Fields(strings.ToLower(query))
+
+	// Build IDF cache from all memories
+	cache := computeIDF(all)
+
+	// --- Arm 1: BM25 keyword search ---
 	type scored struct {
 		Memory Memory
 		Score  float64
 	}
-	var results []scored
-
+	var keywordResults []scored
 	for _, m := range all {
-		// Skip superseded memories
 		if isSuperseded(m) {
 			continue
 		}
-		score := scoreMemory(m, terms)
+		score := scoreBM25(m, terms, cache)
 		if score > 0 {
-			results = append(results, scored{Memory: m, Score: score})
+			// Apply multiplicative recency boost
+			score *= recencyMultiplier(m.CreatedAt)
+			keywordResults = append(keywordResults, scored{Memory: m, Score: score})
+		}
+	}
+	sort.Slice(keywordResults, func(i, j int) bool {
+		return keywordResults[i].Score > keywordResults[j].Score
+	})
+
+	// --- Arm 2: Embedding semantic search ---
+	var embeddingResults []Memory
+	if s.embIdx != nil {
+		// Get more candidates than needed for RRF fusion
+		embRaw := s.embIdx.Search(ctx, query, limit*3)
+		idMap := make(map[string]Memory)
+		for _, m := range all {
+			idMap[m.ID] = m
+		}
+		for _, r := range embRaw {
+			if m, ok := idMap[r.ID]; ok {
+				if !isSuperseded(m) {
+					embeddingResults = append(embeddingResults, m)
+				}
+			}
 		}
 	}
 
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Score > results[j].Score
+	// --- RRF Fusion ---
+	// Reciprocal Rank Fusion: score = sum over both arms of 1/(k + rank)
+	rrfScores := make(map[string]float64)
+	memoryByID := make(map[string]Memory)
+
+	for rank, r := range keywordResults {
+		id := r.Memory.ID
+		rrfScores[id] += 1.0 / (rrfK + float64(rank))
+		memoryByID[id] = r.Memory
+	}
+	for rank, m := range embeddingResults {
+		id := m.ID
+		rrfScores[id] += 1.0 / (rrfK + float64(rank))
+		memoryByID[id] = m
+	}
+
+	// Sort by RRF score
+	type rrfResult struct {
+		ID    string
+		Score float64
+	}
+	var fused []rrfResult
+	for id, score := range rrfScores {
+		fused = append(fused, rrfResult{ID: id, Score: score})
+	}
+	sort.Slice(fused, func(i, j int) bool {
+		return fused[i].Score > fused[j].Score
 	})
 
 	var out []Memory
-	for i, r := range results {
+	for i, r := range fused {
 		if limit > 0 && i >= limit {
 			break
 		}
-		out = append(out, r.Memory)
+		out = append(out, memoryByID[r.ID])
 	}
 	return out, nil
 }
@@ -342,6 +544,8 @@ func (s *MarkdownStore) Close() error { return nil }
 
 // --- Scoring ---
 
+// scoreMemory is the V80 legacy scoring function, kept for reference.
+// V85 uses scoreBM25 + RRF fusion instead.
 func scoreMemory(m Memory, terms []string) float64 {
 	text := strings.ToLower(m.Content + " " + m.Summary + " " + strings.Join(m.KeyTopics, " "))
 	var score float64

@@ -2,11 +2,13 @@ package memory
 
 import (
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func tempStore(t *testing.T) *MarkdownStore {
@@ -365,6 +367,136 @@ func TestSlugify(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("slugify(%q) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+// --- V85: BM25 + RRF + Multiplicative Recency tests ---
+
+func TestBM25Scoring(t *testing.T) {
+	memories := []Memory{
+		{ID: "short-specific", Content: "V80 decision: keyword + embedding hybrid search pipeline", Summary: "V80 memory search decision", Category: "decision", CreatedAt: time.Now().Add(-24 * time.Hour)},
+		{ID: "long-generic", Content: strings.Repeat("memory memory memory memory memory project project project ", 100), Summary: "Generic project notes", Category: "fact", CreatedAt: time.Now()},
+		{ID: "medium-relevant", Content: "BassBook is an ASP.NET Core + Next.js monorepo for music artists", Summary: "BassBook project details", Category: "fact", CreatedAt: time.Now().Add(-48 * time.Hour)},
+	}
+
+	cache := computeIDF(memories)
+
+	// Query: "V80 memory search"
+	terms := []string{"v80", "memory", "search"}
+
+	scores := make(map[string]float64)
+	for _, m := range memories {
+		scores[m.ID] = scoreBM25(m, terms, cache)
+	}
+
+	// Short specific entry should score highest for "V80 memory search"
+	// because IDF gives high weight to rare term "v80" and BM25 normalizes by length
+	if scores["short-specific"] <= scores["long-generic"] {
+		t.Errorf("BM25: short-specific (%.4f) should score higher than long-generic (%.4f) for 'V80 memory search'",
+				scores["short-specific"], scores["long-generic"])
+	}
+}
+
+func TestRecencyMultiplier(t *testing.T) {
+	now := time.Now()
+
+	// Today: should get max boost
+	todayMult := recencyMultiplier(now)
+	if todayMult < maxRecencyMultiplier-0.01 {
+		t.Errorf("today recency multiplier = %.4f, want ~%.4f", todayMult, maxRecencyMultiplier)
+	}
+
+	// 14 days ago: should be ~halfway between 1.0 and maxRecencyMultiplier
+	halfLife := recencyMultiplier(now.Add(-14 * 24 * time.Hour))
+	expected := 1.0 + (maxRecencyMultiplier-1.0)*0.5
+	if math.Abs(halfLife-expected) > 0.02 {
+		t.Errorf("14-day recency multiplier = %.4f, want ~%.4f", halfLife, expected)
+	}
+
+	// Very old (365 days): should be ~1.0
+	oldMult := recencyMultiplier(now.Add(-365 * 24 * time.Hour))
+	if oldMult > 1.05 {
+		t.Errorf("365-day recency multiplier = %.4f, want ~1.0", oldMult)
+	}
+}
+
+func TestRRFFusion(t *testing.T) {
+	dir := t.TempDir()
+	memDir := filepath.Join(dir, "memory")
+	os.MkdirAll(memDir, 0755)
+
+	content := `### v80-decision — V80 memory search decision
+
+- **Category:** decision
+- **Tier:** active
+
+Decision: use keyword + embedding hybrid search with query planner.
+
+### bassbook-details — BassBook project
+
+- **Category:** fact
+- **Tier:** active
+
+BassBook is an ASP.NET Core + Next.js monorepo.
+`
+	os.WriteFile(filepath.Join(memDir, "2026-09-11.md"), []byte(content), 0644)
+
+	s := NewMarkdownStore(dir)
+	results, err := s.Search(context.Background(), "V80 decision", 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+
+	if len(results) == 0 {
+		t.Fatal("expected search results for 'V80 decision'")
+	}
+
+	// First result should be about V80, not BassBook
+	topResult := results[0]
+	if !strings.Contains(strings.ToLower(topResult.Content+" "+topResult.Summary), "v80") {
+		t.Errorf("top result should be about V80, got: ID=%s Summary=%s", topResult.ID, topResult.Summary)
+	}
+}
+
+func TestSearchBM25LengthNormalization(t *testing.T) {
+	dir := t.TempDir()
+	memDir := filepath.Join(dir, "memory")
+	os.MkdirAll(memDir, 0755)
+
+	// Short, specific entry
+	specific := `### v80-search — V80 search decision
+
+- **Category:** decision
+- **Tier:** active
+
+Use keyword + embedding hybrid with query planner.
+`
+
+	// Long, generic entry mentioning "memory" many times
+	generic := `### long-generic — Generic project notes
+
+- **Category:** fact
+- **Tier:** active
+
+` + strings.Repeat("Working on memory system improvements. Memory search updates. ", 50)
+
+	content := specific + "\n" + generic
+	os.WriteFile(filepath.Join(memDir, "2026-09-11.md"), []byte(content), 0644)
+
+	s := NewMarkdownStore(dir)
+	results, err := s.Search(context.Background(), "V80 search decision", 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+
+	if len(results) == 0 {
+		t.Fatal("expected search results")
+	}
+
+	// Short specific entry should rank first despite long entry having more keyword hits
+	topID := results[0].ID
+	if topID != "v80-search" {
+		t.Errorf("expected v80-search as top result, got %s", topID)
 	}
 }
 

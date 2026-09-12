@@ -156,27 +156,10 @@ func (mi *MemoryInjector) injectPlannedSearch(ctx context.Context, userMessage s
 	}
 
 	results, err := mi.store.Search(ctx, searchQuery, 20)
-	log.Printf("[MEMORY-INJECTOR] keyword search results: count=%d, err=%v, query=%q", len(results), err, searchQuery)
+	log.Printf("[MEMORY-INJECTOR] hybrid BM25+RRF search results: count=%d, err=%v, query=%q", len(results), err, searchQuery)
 
-	// Step 3: If keyword results are weak, try embedding search
-	if (len(results) < 3 || err != nil) && mi.store != nil {
-		embResults, embErr := mi.store.EmbeddingSearch(ctx, searchQuery, 10)
-		if embErr == nil && len(embResults) > 0 {
-			log.Printf("[MEMORY-INJECTOR] embedding search returned %d results, supplementing keyword results", len(embResults))
-			seen := make(map[string]bool)
-			for _, m := range results {
-				seen[m.ID] = true
-			}
-			for _, m := range embResults {
-				if !seen[m.ID] {
-					results = append(results, m)
-					seen[m.ID] = true
-				}
-			}
-		} else if embErr != nil {
-			log.Printf("[MEMORY-INJECTOR] embedding search failed: %v (keyword-only fallback)", embErr)
-		}
-	}
+	// V85: Search now does BM25 + embedding RRF fusion internally.
+	// No separate EmbeddingSearch fallback needed.
 
 	if err != nil && len(results) == 0 {
 		log.Printf("[MEMORY-SEARCH] search failed: %v", err)
