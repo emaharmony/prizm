@@ -978,7 +978,7 @@ func (s *Server) runInvocationWithToolLoop(ctx contextctx.Context, agentCfg orch
 
 	sink := &invokeSink{}
 	cfg := toolloop.Config{
-		MaxIterations: 5,
+		MaxIterations: 3,
 		Timeout:       3 * time.Minute,
 		NudgeAfter:    3,
 	}
