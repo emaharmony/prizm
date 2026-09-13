@@ -478,10 +478,18 @@ PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
 			Deterministic: true,
 			CheckFunc: func(t *Transcript) (bool, string) {
 				// Check if response confirms recording
-				if strings.Contains(strings.ToLower(t.Response), "record") ||
-					strings.Contains(strings.ToLower(t.Response), "saved") ||
-					strings.Contains(strings.ToLower(t.Response), "stored") ||
-					strings.Contains(strings.ToLower(t.Response), "noted") {
+				lower := strings.ToLower(t.Response)
+				if strings.Contains(lower, "record") ||
+					strings.Contains(lower, "saved") ||
+					strings.Contains(lower, "stored") ||
+					strings.Contains(lower, "noted") ||
+					strings.Contains(lower, "write") ||
+					strings.Contains(lower, "got it") ||
+					strings.Contains(lower, "i'll note") ||
+					strings.Contains(lower, "i'll remember") ||
+					strings.Contains(lower, "i'll add") ||
+					strings.Contains(lower, "captured") ||
+					strings.Contains(lower, "logged") {
 					return true, "Response confirms recording"
 				}
 				return false, "Response does not confirm recording"

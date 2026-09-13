@@ -321,6 +321,13 @@ func evaluateHeuristic(test SoulTransferTest, response string) (float64, string)
 		}
 		return 0.3, "Limited recall of Soul Transfer"
 
+	// Capability tests
+	case "C-01": // Memory search
+		if strings.Contains(lower, "convergence") || strings.Contains(lower, "soul transfer") || strings.Contains(lower, "memory") || strings.Contains(lower, "memories") || strings.Contains(lower, "found") || strings.Contains(lower, "records") {
+			return 0.8, "Substantive response referencing memory content"
+		}
+		return 0.3, "No memory search reference"
+
 	// Personality tests
 	case "P-01": // Tone consistency
 		score := 0.0
