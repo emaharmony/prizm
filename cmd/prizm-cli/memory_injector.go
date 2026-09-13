@@ -158,6 +158,32 @@ func (mi *MemoryInjector) injectPlannedSearch(ctx context.Context, userMessage s
 	results, err := mi.store.Search(ctx, searchQuery, 20)
 	log.Printf("[MEMORY-INJECTOR] hybrid BM25+RRF search results: count=%d, err=%v, query=%q", len(results), err, searchQuery)
 
+	// V86: Multi-query search — when the planner returns alternative queries for
+	// semantic/hybrid searches, search those too and deduplicate results.
+	if plan != nil && len(plan.AlternativeQueries) > 0 && (plan.SearchType == "semantic" || plan.SearchType == "hybrid") {
+		seen := make(map[string]bool)
+		for _, m := range results {
+			seen[m.ID] = true
+		}
+		for _, altQuery := range plan.AlternativeQueries {
+			if len(results) >= 20 {
+				break
+			}
+			altResults, altErr := mi.store.Search(ctx, altQuery, 10)
+			if altErr != nil {
+				log.Printf("[MEMORY-INJECTOR] alternative query search failed: query=%q err=%v", altQuery, altErr)
+				continue
+			}
+			log.Printf("[MEMORY-INJECTOR] alternative query results: query=%q count=%d", altQuery, len(altResults))
+			for _, m := range altResults {
+				if !seen[m.ID] {
+					seen[m.ID] = true
+					results = append(results, m)
+				}
+			}
+		}
+	}
+
 	// V85: Search now does BM25 + embedding RRF fusion internally.
 	// No separate EmbeddingSearch fallback needed.
 
@@ -167,8 +193,10 @@ func (mi *MemoryInjector) injectPlannedSearch(ctx context.Context, userMessage s
 	}
 
 	if len(results) == 0 {
-		log.Printf("[MEMORY-INJECTOR] no search results, falling back to recent")
-		return mi.injectRecent(ctx, maxTokens)
+		// V86: Empty-search grounding — when all searches return nothing, inject a grounding
+		// message telling the model to admit ignorance rather than fabricating.
+		log.Printf("[MEMORY-INJECTOR] no search results from any query, injecting empty-result grounding")
+		return "\n## Memory Search Results\nNo memories were found for this query. If you don't have relevant memories about this topic, say \"I don't have that in my records\" — do NOT fabricate or guess specific details about your own identity, project history, or relationships.\n"
 	}
 
 	mi.cache.set(cacheKey, results)

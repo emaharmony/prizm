@@ -1282,6 +1282,8 @@ func executeServe(args []string) {
 		MemStoreForInvoke:    memoryStore,
 		MemInjectorForInvoke:  memInjector,
 		CoreIdentityForInvoke: coreIdentity,
+		ToolRegForInvoke:      toolReg,
+		ToolExecForInvoke:     toolExec,
 	})
 	go func() {
 		if err := apiServer.Start(); err != nil {

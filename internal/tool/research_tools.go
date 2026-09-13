@@ -79,11 +79,21 @@ func (t *MemorySearchTool) Execute(ctx context.Context, input map[string]any) (T
 		memories, err := t.LocalStore.Search(ctx, query, limit)
 		if err != nil {
 			log.Printf("[MEMORY-SEARCH] local store search error: %v", err)
-		} else {
+		} else if len(memories) > 0 {
 			output := map[string]any{
 				"source":  "local",
 				"results": memories,
 				"count":   len(memories),
+			}
+			return ToolResult{Success: true, Output: output}, nil
+		} else {
+			// Empty search grounding: when search returns no results, tell the agent
+			// to admit ignorance rather than fabricating details.
+			output := map[string]any{
+				"source":  "local",
+				"results": []any{},
+				"count":   0,
+				"guidance": "No memories found for this query. If you don't have relevant memories about this topic, say 'I don't have that in my records' — do NOT fabricate or guess specific details about your own identity, project history, or relationships.",
 			}
 			return ToolResult{Success: true, Output: output}, nil
 		}

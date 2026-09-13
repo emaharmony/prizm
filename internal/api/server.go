@@ -76,6 +76,8 @@ import (
 	"github.com/emaharmony/prizm/internal/usage"
 	"github.com/emaharmony/prizm/internal/workflow"
 	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
+	"github.com/emaharmony/prizm/internal/toolloop"
+	"github.com/emaharmony/prizm/internal/tool"
 	"github.com/emaharmony/prizm/internal/workstart"
 	"github.com/nats-io/nats.go"
 )
@@ -136,6 +138,13 @@ type Server struct {
 	memInjectorForInvoke MemoryInjectorInterface
 	// coreIdentityForInject is the permanent core identity block for invoke prompts.
 	coreIdentityForInject CoreIdentityInterface
+
+	// toolRegForInvoke is the tool registry for invoke tool loops.
+	// When set, the invoke path uses toolloop.RunChatLoop so the agent can call
+	// tools (memory_search, etc.) instead of a single-shot LLM call.
+	toolRegForInvoke *tool.Registry
+	// toolExecForInvoke is the tool executor for invoke tool loops.
+	toolExecForInvoke *tool.Executor
 
 	// memStore is the local MarkdownStore for the memories API.
 	memStore *memory.MarkdownStore
@@ -231,6 +240,12 @@ type Config struct {
 	// When nil, no core identity block is injected.
 	CoreIdentityForInvoke CoreIdentityInterface
 
+	// ToolRegForInvoke is the tool registry for invoke tool loops. When nil, invoke
+	// falls back to a single-shot LLM call with no tool support.
+	ToolRegForInvoke *tool.Registry
+	// ToolExecForInvoke is the tool executor for invoke tool loops.
+	ToolExecForInvoke *tool.Executor
+
 	// MemStore is the local MarkdownStore for the memories API. Nil → memories endpoints return empty.
 	MemStore *memory.MarkdownStore
 
@@ -279,6 +294,8 @@ func NewServer(cfg Config) *Server {
 		memStoreForInvoke:        cfg.MemStoreForInvoke,
 		memInjectorForInvoke:    cfg.MemInjectorForInvoke,
 		coreIdentityForInject:   cfg.CoreIdentityForInvoke,
+		toolRegForInvoke:        cfg.ToolRegForInvoke,
+		toolExecForInvoke:       cfg.ToolExecForInvoke,
 	}
 	if s.maxRequestBytes <= 0 {
 		s.maxRequestBytes = 1 << 20 // 1 MiB
@@ -855,13 +872,33 @@ func (s *Server) invokeSessionMessages(agentCfg orchestrator.AgentConfig, sess *
 	return messages
 }
 
+// invokeSink is a toolloop.Sink that captures the final response for invoke.
+// It silently absorbs progress and tool results, keeping only the last content.
+type invokeSink struct {
+	mu      sync.Mutex
+	content string
+}
+
+func (s *invokeSink) OnToolCall(name string, args map[string]any) {}
+func (s *invokeSink) OnProgress(content string) {
+	s.mu.Lock()
+	s.content = content
+	s.mu.Unlock()
+}
+func (s *invokeSink) OnToolResult(name string, result string, summary toolloop.CallSummary) {}
+func (s *invokeSink) OnError(err error)                    {}
+func (s *invokeSink) OnComplete(content string, modelInfo toolloop.ModelInfo) {
+	s.mu.Lock()
+	s.content = content
+	s.mu.Unlock()
+}
+
 // runInvocation performs the LLM call in the background and records the outcome.
-// It is the lightweight call path: a resolved provider/model, no tool loop, no
-// approval gate. When sessionID is non-empty the call is part of a stateful
-// conversation, so the assistant reply is persisted back to that session for the
-// next turn; when empty the call is single-shot and nothing is saved.
+// When toolRegForInvoke is set, it uses toolloop.RunChatLoop so the agent can call
+// tools (memory_search, etc.) instead of a single-shot LLM call. When nil, it falls
+// back to the original single-shot behavior.
 func (s *Server) runInvocation(agentCfg orchestrator.AgentConfig, invocationID string, messages []provider.ChatMessage, sessionID string, maxTokens int) {
-	ctx, cancel := contextctx.WithTimeout(contextctx.Background(), 2*time.Minute)
+	ctx, cancel := contextctx.WithTimeout(contextctx.Background(), 5*time.Minute)
 	defer cancel()
 
 	chatProv, err := s.providers.GetChatProviderForAgent(agentCfg.ID, agentCfg.Model)
@@ -871,6 +908,13 @@ func (s *Server) runInvocation(agentCfg orchestrator.AgentConfig, invocationID s
 		return
 	}
 
+	// Tool loop path: agent can call memory_search and other tools
+	if s.toolRegForInvoke != nil && s.toolExecForInvoke != nil {
+		s.runInvocationWithToolLoop(ctx, agentCfg, invocationID, messages, sessionID, maxTokens, chatProv)
+		return
+	}
+
+	// Fallback: original single-shot path (no tool support)
 	resp, err := chatProv.ChatGenerate(ctx, provider.ChatGenerateRequest{
 		RunID:     "invoke-" + invocationID,
 		Agent:     agentCfg.ID,
@@ -893,6 +937,75 @@ func (s *Server) runInvocation(agentCfg orchestrator.AgentConfig, invocationID s
 	result := invocation.ParseResult(resp.Content)
 	s.invocations.Complete(invocationID, result)
 	s.publishInvocationEvent(agentCfg.ID, invocationID, invocation.StatusCompleted, result, "")
+}
+
+// runInvocationWithToolLoop uses toolloop.RunChatLoop so the agent can call tools.
+func (s *Server) runInvocationWithToolLoop(ctx contextctx.Context, agentCfg orchestrator.AgentConfig, invocationID string, messages []provider.ChatMessage, sessionID string, maxTokens int, chatProv provider.ChatProvider) {
+	// Build tool definitions from the registry
+	toolInfos := s.toolRegForInvoke.ListWithDescriptions()
+	chatTools := make([]provider.ChatTool, 0, len(toolInfos))
+
+	for _, ti := range toolInfos {
+		params := map[string]any{
+			"type":       "object",
+			"properties": make(map[string]any),
+		}
+		required := make([]string, 0)
+
+		for pname, spec := range ti.Schema.Input {
+			props := map[string]any{
+				"type":        spec.Type,
+				"description": spec.Description,
+			}
+			params["properties"].(map[string]any)[pname] = props
+			if spec.Required {
+				required = append(required, pname)
+			}
+		}
+		if len(required) > 0 {
+			params["required"] = required
+		}
+
+		chatTools = append(chatTools, provider.ChatTool{
+			Type: "function",
+			Function: provider.FunctionDef{
+				Name:        ti.Name,
+				Description: ti.Description,
+				Parameters:  params,
+			},
+		})
+	}
+
+	sink := &invokeSink{}
+	cfg := toolloop.Config{
+		MaxIterations: 5,
+		Timeout:       3 * time.Minute,
+		NudgeAfter:    3,
+	}
+
+	result, err := toolloop.RunChatLoop(ctx, messages, chatTools, chatProv, &agentCfg, s.toolExecForInvoke, sink, cfg, nil)
+	if err != nil {
+		s.invocations.Fail(invocationID, err.Error())
+		s.publishInvocationEvent(agentCfg.ID, invocationID, invocation.StatusFailed, nil, err.Error())
+		return
+	}
+
+	finalContent := result.Content
+	if finalContent == "" {
+		sink.mu.Lock()
+		finalContent = sink.content
+		sink.mu.Unlock()
+	}
+
+	if sessionID != "" && s.sessions != nil {
+		if _, aerr := s.sessions.AddMessage(sessionID, "agent", finalContent, agentCfg.ID); aerr != nil {
+			log.Printf("[API] persist invoke agent reply: %v", aerr)
+		}
+	}
+
+	invResult := invocation.ParseResult(finalContent)
+	s.invocations.Complete(invocationID, invResult)
+	s.publishInvocationEvent(agentCfg.ID, invocationID, invocation.StatusCompleted, invResult, "")
 }
 
 // publishInvocationEvent re-broadcasts completion on <agent-id>.invocation.completed

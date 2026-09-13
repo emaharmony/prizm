@@ -34,11 +34,12 @@ type QueryPlanner struct {
 
 // queryPlanResult is the structured output from the LLM query planner.
 type QueryPlanResult struct {
-	Intent           string   `json:"intent"`
-	Keywords         []string `json:"keywords"`
-	SearchType       string   `json:"search_type"`       // "keyword", "semantic", "hybrid"
-	RecencyPreference string  `json:"recency_preference"` // "recent", "all_time"
-	RawResponse      string   `json:"-"`                  // for logging
+	Intent             string   `json:"intent"`
+	Keywords           []string `json:"keywords"`
+	SearchType         string   `json:"search_type"`        // "keyword", "semantic", "hybrid"
+	RecencyPreference  string   `json:"recency_preference"` // "recent", "all_time"
+	AlternativeQueries []string `json:"alternative_queries"` // 2-3 alternative search queries for semantic questions
+	RawResponse        string   `json:"-"`                   // for logging
 }
 
 // QueryPlanConfig holds configuration for the query planner.
@@ -120,7 +121,8 @@ Respond with ONLY a JSON object (no markdown, no thinking, no explanation):
   "intent": "brief description of what the user is asking about",
   "keywords": ["word1", "word2", "word3"],
   "search_type": "keyword" | "semantic" | "hybrid",
-  "recency_preference": "recent" | "all_time"
+  "recency_preference": "recent" | "all_time",
+  "alternative_queries": ["query2", "query3"]
 }
 
 Rules for keywords:
@@ -141,6 +143,13 @@ Rules for search_type:
 Rules for recency_preference:
 - "recent" if the user is asking about something that just happened or is in progress
 - "all_time" if the user is asking about history, identity, or anything that could be old
+
+Rules for alternative_queries:
+- Generate 2-3 alternative search queries that express the same intent using DIFFERENT words
+- These help find memories that use different terminology than the user's question
+- "Why is emotional continuity important?" → ["enjoyment tracking Lumi", "personality consistency AI agent", "SOUL.md empathetic warm"]
+- "What did we decide about memory search?" → ["V80 memory architecture decision", "BM25 RRF hybrid search", "embedding keyword search choice"]
+- Only include if search_type is "semantic" or "hybrid"; leave empty for "keyword"
 
 Conversation context: %d messages, session age %s
 User message: %s`, msgCount, age.Round(time.Second), userMessage)
