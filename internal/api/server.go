@@ -751,7 +751,13 @@ func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig, sear
 
 	var sb strings.Builder
 
-	// Layer 1: Identity (SOUL.md)
+	// V24: Reordered prompt layers for authoritative memory framing.
+	// Research (Knowledge Contamination, CK-PLUG) shows that RoPE positional decay
+	// causes lower attention on tokens in the middle of the context window.
+	// Memories should come EARLY — after identity, before context and behavior.
+	// Order: 1. Identity → 2. Core Identity Facts → 3. OFFICIAL RECORD (memories) → 4. Context → 5. Behavior
+
+	// Layer 1: Identity (SOUL.md) — who you are
 	identityContent := ""
 	hasSoul := false
 	builder := context.NewBuilder(s.ctxBuilder.WorkspaceRoot).WithNamedContexts([]string{"soul", "identity"})
@@ -769,7 +775,7 @@ func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig, sear
 	sb.WriteString("## Who You Are\n")
 	sb.WriteString(identityContent + "\n\n")
 
-	// V83: Core Identity Block — permanent identity facts always in prompt.
+	// Layer 2: Core Identity Facts — permanent facts, always present
 	if s.coreIdentityForInject != nil {
 		coreBlock := s.coreIdentityForInject.Build(s.memStoreForInvoke)
 		if coreBlock != "" {
@@ -777,7 +783,32 @@ func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig, sear
 		}
 	}
 
-	// Layer 2: Context files (USER.md, HEARTBEAT.md, AGENTS.md, etc.)
+	// Layer 3 (V24: MOVED UP): OFFICIAL RECORD — memories injected BEFORE context
+	// to leverage positional attention. Research shows retrieved context in the
+	// middle-to-end of prompts gets lower attention due to RoPE decay.
+	if s.memInjectorForInvoke != nil {
+		// Smart path: query planner + embedding + grounding-aware format
+		memBlock := s.memInjectorForInvoke.InjectMemoriesInt(contextctx.Background(), 0, searchQuery, 1, 800)
+		if memBlock != "" {
+			sb.WriteString(memBlock + "\n")
+		}
+	} else if s.memStoreForInvoke != nil {
+		// Legacy fallback: bare keyword search, no grounding
+		ctx := contextctx.Background()
+		memories, err := s.memStoreForInvoke.Search(ctx, searchQuery, 10)
+		if err == nil && len(memories) > 0 {
+			sb.WriteString("## OFFICIAL RECORD (Authoritative)\n")
+			for i, mem := range memories {
+				if i >= 5 {
+					break
+			}
+				sb.WriteString(fmt.Sprintf("- %s\n", mem.Content))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	// Layer 4: Context files (USER.md, HEARTBEAT.md, AGENTS.md, etc.)
 	if len(agentCfg.Context) > 0 {
 		budget := 4000
 		if s.orch != nil && s.orch.Config.Prizm.ContextTokenBudget > 0 {
@@ -792,7 +823,7 @@ func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig, sear
 		if len(otherContexts) > 0 {
 			ctxBuilder := context.NewBuilder(s.ctxBuilder.WorkspaceRoot).
 				WithNamedContexts(otherContexts).
-			WithTokenBudget(budget)
+				WithTokenBudget(budget)
 			if injected, err := ctxBuilder.BuildCached(); err == nil && injected.FormattedString != "" {
 				sb.WriteString("## Context\n")
 				sb.WriteString(injected.FormattedString + "\n")
@@ -800,31 +831,7 @@ func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig, sear
 		}
 	}
 
-	// V83: Memory injection — use smart injector with grounding-aware format when available.
-	// Falls back to bare keyword search when injector is nil.
-	if s.memInjectorForInvoke != nil {
-		// Smart path: query planner + embedding + grounding-aware format
-		memBlock := s.memInjectorForInvoke.InjectMemoriesInt(contextctx.Background(), 0, searchQuery, 1, 800)
-		if memBlock != "" {
-			sb.WriteString(memBlock + "\n")
-		}
-	} else if s.memStoreForInvoke != nil {
-		// Legacy fallback: bare keyword search, no grounding
-		ctx := contextctx.Background()
-		memories, err := s.memStoreForInvoke.Search(ctx, searchQuery, 10)
-		if err == nil && len(memories) > 0 {
-			sb.WriteString("## Memories\n")
-			for i, mem := range memories {
-				if i >= 5 {
-					break
-				}
-				sb.WriteString(fmt.Sprintf("- %s\n", mem.Content))
-			}
-			sb.WriteString("\n")
-		}
-	}
-
-	// Layer 4: Conversation postfix (behavior)
+	// Layer 5: Conversation postfix (behavior) — last, as framing instructions
 	postfix := resolveConversationPostfixForInvoke(agentCfg, hasSoul)
 	if postfix != "" {
 		sb.WriteString("## How You Respond\n")

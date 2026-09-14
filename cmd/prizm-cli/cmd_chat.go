@@ -883,8 +883,31 @@ func (cc *chatContext) buildChatPrompt(sess *session.Session, agentCfg *orchestr
 	var sb strings.Builder
 
 	// Static system content (cached, built once at startup)
-	// Layers 1-2: Identity, Context
+	// Layers 1-2: Identity, Context (static, cached)
 	sb.WriteString(cc.staticSystemText)
+
+	// V24: OFFICIAL RECORD — memories injected BEFORE behavior/tools/state
+	// to leverage positional attention (RoPE decay hits middle-to-end harder).
+	if cc.memInjector != nil {
+		sessionAge := time.Since(sess.StartedAt)
+		mode := ChooseMode(len(sess.Messages), sessionAge)
+		memBlock := cc.memInjector.InjectMemories(ctxcontext.Background(), mode, lastUserInput, len(sess.Messages), 300)
+		if memBlock != "" {
+			sb.WriteString(memBlock + "\n")
+		}
+	} else if cc.memoryStore != nil {
+		// Legacy fallback: inject recent memories
+		recentMemories, memErr := cc.memoryStore.ListRecent(ctxcontext.Background(), 5)
+		if memErr == nil && len(recentMemories) > 0 {
+			var memSb strings.Builder
+			memSb.WriteString("## OFFICIAL RECORD (Authoritative)\n")
+			memSb.WriteString("The following records were recalled from your verified local memory system.\n\n")
+			for _, m := range recentMemories {
+				memSb.WriteString(fmt.Sprintf("- %s\n", m.Content))
+			}
+			sb.WriteString(memSb.String() + "\n")
+		}
+	}
 
 	// --- Layer 3: BEHAVIOR ---
 	sb.WriteString("## How You Respond\n" + resolveConversationPostfix(agentCfg, channelRole, cc.hasSoulContent) + "\n\n")
@@ -930,28 +953,6 @@ func (cc *chatContext) buildChatPrompt(sess *session.Session, agentCfg *orchestr
 		}
 	}
 
-	// V79: Smart memory injection
-	if cc.memInjector != nil {
-		sessionAge := time.Since(sess.StartedAt)
-		mode := ChooseMode(len(sess.Messages), sessionAge)
-		memBlock := cc.memInjector.InjectMemories(ctxcontext.Background(), mode, lastUserInput, len(sess.Messages), 300)
-		if memBlock != "" {
-			sb.WriteString(memBlock + "\n")
-		}
-	} else if cc.memoryStore != nil {
-		// Legacy fallback: inject recent memories
-		recentMemories, memErr := cc.memoryStore.ListRecent(ctxcontext.Background(), 5)
-		if memErr == nil && len(recentMemories) > 0 {
-			var memSb strings.Builder
-			memSb.WriteString("## Recent memories\n")
-			memSb.WriteString("The following memories were automatically recalled from local storage:\n\n")
-			for _, m := range recentMemories {
-				memSb.WriteString(fmt.Sprintf("- %s\n", m.Content))
-			}
-			sb.WriteString(memSb.String() + "\n")
-		}
-	}
-
 	// Dynamic session awareness
 	sessionAge := time.Since(sess.StartedAt).Round(time.Second)
 	sessionMsgCount := len(sess.Messages)
@@ -981,6 +982,28 @@ func (cc *chatContext) buildChatMessages(sess *session.Session, agentCfg *orches
 	// Layers 1-2: Identity, Context
 	var systemContent string
 	systemContent += cc.staticSystemChat
+
+	// V24: OFFICIAL RECORD — memories injected BEFORE behavior/tools/state
+	// to leverage positional attention (RoPE decay hits middle-to-end harder).
+	if cc.memInjector != nil {
+		sessionAge := time.Since(sess.StartedAt)
+		mode := ChooseMode(len(sess.Messages), sessionAge)
+		memBlock := cc.memInjector.InjectMemories(ctxcontext.Background(), mode, lastUserInput, len(sess.Messages), 300)
+		if memBlock != "" {
+			systemContent += memBlock + "\n"
+		}
+	} else if cc.memoryStore != nil {
+		// Legacy fallback: inject recent memories
+		recentMemories, memErr := cc.memoryStore.ListRecent(ctxcontext.Background(), 5)
+		if memErr == nil && len(recentMemories) > 0 {
+			systemContent += "## OFFICIAL RECORD (Authoritative)\n"
+			systemContent += "The following records were recalled from your verified local memory system.\n\n"
+			for _, m := range recentMemories {
+				systemContent += fmt.Sprintf("- %s\n", m.Content)
+			}
+			systemContent += "\n"
+		}
+	}
 
 	// --- Layer 3: BEHAVIOR ---
 	systemContent += "\n## How You Respond\n" + resolveConversationPostfix(agentCfg, channelRole, cc.hasSoulContent) + "\n"
@@ -1020,26 +1043,6 @@ func (cc *chatContext) buildChatMessages(sess *session.Session, agentCfg *orches
 		// Backward compatibility: fall back to state_actions.inject
 		if sa := cc.cfg.ResolveStateAction(agentCfg.ID, stateActionKey); sa != nil && sa.Inject != "" {
 			systemContent += "\n## Context\n" + sa.Inject + "\n\n"
-		}
-	}
-
-	// V79: Smart memory injection
-	if cc.memInjector != nil {
-		sessionAge := time.Since(sess.StartedAt)
-		mode := ChooseMode(len(sess.Messages), sessionAge)
-		memBlock := cc.memInjector.InjectMemories(ctxcontext.Background(), mode, lastUserInput, len(sess.Messages), 300)
-		if memBlock != "" {
-			systemContent += memBlock + "\n"
-		}
-	} else if cc.memoryStore != nil {
-		// Legacy fallback: inject recent memories
-		recentMemories, memErr := cc.memoryStore.ListRecent(ctxcontext.Background(), 5)
-		if memErr == nil && len(recentMemories) > 0 {
-			systemContent += "## Recent memories\nThe following memories were automatically recalled from local storage:\n\n"
-			for _, m := range recentMemories {
-				systemContent += fmt.Sprintf("- %s\n", m.Content)
-			}
-			systemContent += "\n"
 		}
 	}
 

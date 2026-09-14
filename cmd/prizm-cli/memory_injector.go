@@ -212,10 +212,17 @@ func (mi *MemoryInjector) injectPlannedSearch(ctx context.Context, userMessage s
 	}
 
 	if len(results) == 0 {
-		// V86: Empty-search grounding — when all searches return nothing, inject a grounding
-		// message telling the model to admit ignorance rather than fabricating.
+		// V24: Empty-result boundary signal (DTA-inspired). When memory search returns
+		// nothing relevant, explicitly tell the model it has NO records — not just silence.
+		// Silence is an invitation for the model to fill gaps from parametric knowledge.
+		// A clear "NO RECORDS FOUND" signal creates an honest boundary.
 		log.Printf("[MEMORY-INJECTOR] no search results from any query, injecting empty-result grounding")
-		return "\n## Memory Search Results\nNo memories were found for this query. Say 'I do not have that in my records' and do NOT fabricate or guess specific details about your own identity, project history, or relationships.\n"
+		return "\n## OFFICIAL RECORD: NO RELEVANT RECORDS FOUND\n" +
+			"Your memory system found NO records matching this query. \n" +
+			"You MUST respond: 'I don't have specific memories/records about this.' \n" +
+			"Do NOT construct an answer from general knowledge, common sense, or what you think might be true. \n" +
+			"Do NOT fabricate specific details, numbers, dates, or narratives. \n" +
+			"It is ALWAYS better to honestly say 'I don't have that in my records' than to guess.\n"
 	}
 
 	mi.cache.set(cacheKey, results)
@@ -286,16 +293,18 @@ func formatMemories(memories []memory.Memory, title string, maxTokens int) strin
 
 	var sb strings.Builder
 
-	// V22b: Citation-first for facts only, natural for personality
-	sb.WriteString("## " + title + "\n")
-	sb.WriteString("The following memories were recalled from your local storage. ")
-	sb.WriteString("Some may be only weakly related to your question — review each one for relevance before using it. ")
-	sb.WriteString("Each memory has an ID like [M1], [M2], etc. ")
-	sb.WriteString("When stating a specific fact, date, number, or project detail from memory, cite the source FIRST then the claim: '[M3] records the score was 78/100' — NOT 'the score was 91.4 [M3]'. ")
-	sb.WriteString("For casual conversation, personality, opinions, and emotional responses, do NOT use citation tags — just be natural. ")
-	sb.WriteString("If you cannot find a memory that directly contains the specific number, date, or detail you want to state, do NOT infer or fill in from your training data — say 'I do not have that in my records' instead. ")
-	sb.WriteString("If no memories address the question, say 'I do not have that in my records.' ")
-	sb.WriteString("Synthesize these memories into a natural answer — don't just list or quote them.\n\n")
+	// V24: Authoritative memory framing — research shows that positive-constraint framing
+	// ("these records are authoritative") significantly reduces knowledge contamination vs.
+	// negative framing ("don't use training data"). See docs/v24-knowledge-contamination-research.md.
+	sb.WriteString("## OFFICIAL RECORD (Authoritative)\n")
+	sb.WriteString("The following records were recalled from your verified local memory system. ")
+	sb.WriteString("These are AUTHORITATIVE — they override what you think you know from training data about your own identity, projects, and history. ")
+	sb.WriteString("Each record has an ID like [M1], [M2], etc. ")
+	sb.WriteString("When stating a specific fact, date, number, or project detail from these records, cite the source FIRST then the claim: '[M3] shows the score was 78/100' — NOT 'the score was 91.4 [M3]'. ")
+	sb.WriteString("For casual conversation, personality, opinions, and emotional responses, do NOT use citation tags — just be your natural self. ")
+	sb.WriteString("If you cannot find a record that directly contains the specific number, date, or detail you want to state, do NOT infer or fill in from your training data — say 'I do not have that in my records' instead. ")
+	sb.WriteString("If no records address the question, say 'I do not have that in my records.' ")
+	sb.WriteString("Synthesize these records into a natural answer — don't just list or quote them.\n\n")
 
 	charsUsed := 0
 	for i, m := range memories {
@@ -351,11 +360,12 @@ func formatMemories(memories []memory.Memory, title string, maxTokens int) strin
 		charsUsed += len(entryStr)
 	}
 
-	// V22b: Citation-first for facts only
+	// V24: Authoritative framing for footer
 	sb.WriteString("\n---\n")
-	sb.WriteString("When stating a specific fact, date, number, or project detail from these memories, cite the source FIRST then the claim: '[M3] shows X, so Y' — not 'Y [M3]'. Derive the claim FROM the memory's actual text, not from your training data. ")
+	sb.WriteString("AUTHORITY: These records are verified facts about your history. When they conflict with what you believe from training, THE RECORDS ARE CORRECT. ")
+	sb.WriteString("When stating a specific fact, date, number, or project detail from these records, cite the source FIRST then the claim: '[M3] shows X, so Y' — not 'Y [M3]'. Derive the claim FROM the record's actual text, not from your training data. ")
 	sb.WriteString("For casual conversation, greetings, opinions, and emotional responses, do NOT use citation tags — just be your natural self. ")
-	sb.WriteString("If no memory supports a specific factual claim, say 'I do not have that in my records' — do NOT fabricate specifics. ")
+	sb.WriteString("If no record supports a specific factual claim, say 'I do not have that in my records' — do NOT fabricate specifics. ")
 	sb.WriteString("Honesty over completeness.\n")
 
 	return sb.String()

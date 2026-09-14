@@ -25,8 +25,8 @@ func TestFormatMemories_GroundingHeader(t *testing.T) {
 	if !strings.Contains(result, "cite the source FIRST") && !strings.Contains(result, "FIRST state which memory") {
 		t.Error("formatMemories should include citation-first instruction")
 	}
-	if !strings.Contains(result, "local storage") {
-		t.Error("formatMemories should reference local storage")
+	if !strings.Contains(result, "local") {
+		t.Error("formatMemories should reference local memory system")
 	}
 }
 
