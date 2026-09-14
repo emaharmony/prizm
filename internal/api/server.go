@@ -1034,6 +1034,35 @@ func (s *Server) runInvocationWithToolLoop(ctx contextctx.Context, agentCfg orch
 				}
 			}
 		}
+
+		// V24d: Tagless claim verification — catch fabricated claims WITHOUT citation tags
+		// This catches the M-06 failure mode: model fabricates narratives without [M1] tags.
+		if s.memInjectorForInvoke != nil {
+			memories := s.memInjectorForInvoke.GetLastMemories()
+			if len(memories) > 0 {
+				taglessEntries := make([]toolloop.MemoryEntry, len(memories))
+				for i, m := range memories {
+					taglessEntries[i] = toolloop.MemoryEntry{
+						ID:      fmt.Sprintf("M%d", i+1),
+						Summary: m.Summary,
+						Content: m.Content,
+					}
+				}
+				taglessVerification := toolloop.VerifyTaglessClaims(finalContent, taglessEntries)
+				if len(taglessVerification.Flags) > 0 {
+					log.Printf("[API] V24d tagless verification: %d claims flagged (%d patches, %d rewrites)",
+						len(taglessVerification.Flags), taglessVerification.PatchCount, taglessVerification.RewriteCount)
+					for _, flag := range taglessVerification.Flags {
+						log.Printf("[API] V24d %s: %s", flag.Tier, flag.Issue)
+					}
+					if taglessVerification.PatchCount > 0 || taglessVerification.RewriteCount > 0 {
+						log.Printf("[API] V24d applied %d tagless patches and %d tagless rewrites",
+							taglessVerification.PatchCount, taglessVerification.RewriteCount)
+						finalContent = taglessVerification.Verified
+					}
+				}
+			}
+		}
 	}
 
 	if sessionID != "" && s.sessions != nil {
