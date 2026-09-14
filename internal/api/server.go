@@ -1050,16 +1050,15 @@ func (s *Server) runInvocationWithToolLoop(ctx contextctx.Context, agentCfg orch
 				}
 				taglessVerification := toolloop.VerifyTaglessClaims(finalContent, taglessEntries)
 				if len(taglessVerification.Flags) > 0 {
-					log.Printf("[API] V24d tagless verification: %d claims flagged (%d patches, %d rewrites)",
-						len(taglessVerification.Flags), taglessVerification.PatchCount, taglessVerification.RewriteCount)
+					log.Printf("[API] V24d tagless verification: %d claims flagged (%d patches, %d rewrites, %d flags)",
+						len(taglessVerification.Flags), taglessVerification.PatchCount, taglessVerification.RewriteCount, taglessVerification.FlagCount)
 					for _, flag := range taglessVerification.Flags {
 						log.Printf("[API] V24d %s: %s", flag.Tier, flag.Issue)
 					}
-					if taglessVerification.PatchCount > 0 || taglessVerification.RewriteCount > 0 {
-						log.Printf("[API] V24d applied %d tagless patches and %d tagless rewrites",
-							taglessVerification.PatchCount, taglessVerification.RewriteCount)
-						finalContent = taglessVerification.Verified
-					}
+					// V24d: Tagless verification is LOGGING ONLY. Auto-correction of
+					// uncited claims has too many false positives (flagging casual
+					// conversation as fabrication). V24's authoritative framing is
+					// the primary defense. We log but don't modify the response.
 				}
 			}
 		}
