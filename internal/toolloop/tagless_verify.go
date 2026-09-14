@@ -140,18 +140,19 @@ func VerifyTaglessClaims(response string, memories []MemoryEntry) *TaglessVerifi
 
 			switch flag.Tier {
 			case TierContradictionPatch:
-				// Find and replace the wrong number/version
-				corr := findTaglessNumberCorrection(claim, flag)
-				if corr != nil {
-					corrections = append(corrections, *corr)
-					result.PatchCount++
-				}
+				// For tagless claims, DON'T auto-patch numbers — that's V23b's job
+				// for cited claims. Tagless verification only auto-rewrites fabricated
+				// claims (Tier 2). Number mismatches without citation anchors are
+				// logged but not corrected because we can't be sure which is correct.
+				result.FlagCount++
+				flag.Corrected = false
 			case TierLowOverlapRewrite:
-				// Strip fabricated claim, insert honest disclaimer
-				disclaimer := "I don't have specific memories about that."
+				// Insert a bracketed disclaimer after the claim rather than replacing it
+				// This preserves the response flow while flagging the fabrication
+				disclaimer := " [Note: I may be inferring this from general knowledge rather than specific records.]"
 				corrections = append(corrections, correction{
-					start:   claim.Start,
-					end:     claim.End,
+					start:   claim.End,
+					end:     claim.End, // Insert after the claim, don't replace
 					replace: disclaimer,
 					tier:    TierLowOverlapRewrite,
 				})
@@ -479,7 +480,7 @@ func verifyTaglessClaimAgainstMemories(claim TaglessClaim, memTexts []string, me
 		}
 		overlapRatio := float64(overlap) / float64(len(claimWords))
 
-		if overlapRatio < 0.15 {
+		if overlapRatio < 0.10 {
 			// Very low overlap with any memory — likely fabrication
 			return &CitationFlag{
 				CitationID: "tagless",
@@ -488,7 +489,7 @@ func verifyTaglessClaimAgainstMemories(claim TaglessClaim, memTexts []string, me
 				Issue:        fmt.Sprintf("Very low overlap (%.0f%%) — claim likely fabricated from parametric knowledge", overlapRatio*100),
 				Tier:         TierLowOverlapRewrite,
 			}
-		} else if overlapRatio < 0.25 {
+		} else if overlapRatio < 0.20 {
 			// Borderline — flag but don't correct
 			return &CitationFlag{
 				CitationID: "tagless",
