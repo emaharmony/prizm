@@ -88,6 +88,9 @@ import (
 // The API package uses this interface to avoid importing cmd types.
 type MemoryInjectorInterface interface {
 	InjectMemoriesInt(ctx contextctx.Context, mode int, userMessage string, sessionMsgCount int, maxTokens int) string
+	// V23: GetLastMemories returns the memories from the most recent injection call.
+	// Used for post-hoc citation verification.
+	GetLastMemories() []memory.Memory
 }
 
 // CoreIdentityInterface is the interface for the permanent core identity block.
@@ -995,6 +998,35 @@ func (s *Server) runInvocationWithToolLoop(ctx contextctx.Context, agentCfg orch
 		sink.mu.Lock()
 		finalContent = sink.content
 		sink.mu.Unlock()
+	}
+
+	// V23: Post-hoc citation verification with tiered auto-correction
+	if s.memInjectorForInvoke != nil && finalContent != "" {
+		memories := s.memInjectorForInvoke.GetLastMemories()
+		if len(memories) > 0 {
+			entries := make([]toolloop.MemoryEntry, len(memories))
+			for i, m := range memories {
+				entries[i] = toolloop.MemoryEntry{
+					ID:      fmt.Sprintf("M%d", i+1),
+					Summary: m.Summary,
+					Content: m.Content,
+				}
+			}
+			verification := toolloop.VerifyCitations(finalContent, entries)
+			if verification.FlaggedCount > 0 {
+				log.Printf("[API] V23 citation verification: %d/%d citations flagged (%d patches, %d rewrites)",
+					verification.FlaggedCount, verification.TotalCitations, verification.PatchCount, verification.RewriteCount)
+				for _, flag := range verification.Flags {
+					log.Printf("[API] V23 %s: %s — %s", flag.Tier, flag.CitationID, flag.Issue)
+				}
+				// Apply corrections — replace the response with the verified version
+				if verification.PatchCount > 0 || verification.RewriteCount > 0 {
+					log.Printf("[API] V23 applied %d contradiction patches and %d low-overlap rewrites",
+						verification.PatchCount, verification.RewriteCount)
+					finalContent = verification.Verified
+				}
+			}
+		}
 	}
 
 	if sessionID != "" && s.sessions != nil {

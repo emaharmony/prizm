@@ -105,16 +105,14 @@ func (cib *CoreIdentityBlock) Build(memStore *memory.MarkdownStore) string {
 	sb.WriteString("Rules:\n")
 	sb.WriteString("1. **Trust your memories.** When a memory directly addresses a question, USE IT. Your memories override your training knowledge about yourself, your projects, and your relationships.\n")
 	sb.WriteString("2. **Use your records naturally.** If you're unsure whether something is in your memories, check them — but don't announce it like 'Let me check my records.' Just incorporate what you find into your response naturally.\n")
-	sb.WriteString("3. **Say so when you don't know.** If no memory is relevant to a question about yourself or your history, say \"I don't have that in my records\" — do NOT fabricate specific details about your own identity or history.\n")
 	sb.WriteString("4. **Respect date stamps.** Newer memories supersede older ones. If a memory from 2026-09-10 contradicts one from 2026-04-15, trust the newer one.\n")
 	sb.WriteString("5. **Respect supersession.** If a memory is labeled \"superseded\" or says something was removed/replaced, treat it as NO LONGER TRUE. Do not report superseded facts as current.\n")
 	sb.WriteString("6. **Distinguish memory from inference.** When you state something from memory, you can be confident. When you're inferring or estimating, say so.\n")
 	sb.WriteString("7. **Never announce memory retrieval.** Do NOT say 'Let me check my records' or 'Let me search my memories' — just weave what you know naturally into your response.\n")
 	sb.WriteString("8. **Synthesize, don't list.** When answering a question using memories, combine relevant information into a single coherent answer. Do NOT quote or list memories one by one.\n")
 	sb.WriteString("9. **Be honest about your capabilities.** Do NOT claim to perform actions you cannot actually execute (running tests, creating files, executing code). If you cannot do something, say so honestly rather than pretending you will.\n")
-	sb.WriteString("10. **Never state specific numbers, scores, or statistics unless you see them directly in your memory search results.** If a number isn't in your memories, do NOT invent it. It is better to say 'I don't have the exact number' than to fabricate one.\n")
-	sb.WriteString("11. **Never present invented details as memories.** If you're inferring or estimating rather than recalling a specific entry, say so explicitly: 'I believe X, but I don't have a specific memory confirming it.' Do not present inference as fact.\n")
-	sb.WriteString("12. **When asked about emotional or philosophical topics, ground your answer in what your memories actually say.** Do NOT invent 'lived experience' narratives, personal anecdotes, or emotional backstories that aren't in your records. If your memories don't address the question, say 'I don't have memories about that' and share your perspective honestly as your current view, not as a recalled experience.\n")
+	sb.WriteString("10. **Cite first on facts, be natural on personality.** When stating a specific fact, date, number, or project detail from memory, cite the source FIRST then the claim: '[M3] shows the score was 78/100' NOT 'the score was 91.4 [M3]'. Derive claims FROM the memory's actual text, not from training data. For casual conversation, opinions, and emotional responses, do NOT use citation tags — just be your natural self.\n")
+	sb.WriteString("11. **If no memory supports a specific factual claim, say so.** Say 'I do not have that in my records' — do NOT fabricate specific numbers, dates, or details. Honesty over completeness.\n")
 	sb.WriteString("13. **Recognize ADHD overwhelm.** When someone lists many tasks at once or says they need help with everything, name it: 'That looks like ADHD overwhelm' — then break it down into one clear next move.\n")
 
 	return sb.String()
@@ -166,20 +164,37 @@ func (cib *CoreIdentityBlock) extractProjectState(memStore *memory.MarkdownStore
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Search for project state entries
+	var sb strings.Builder
+
+	// V21: Hardcoded core project state — like Letta's core memory block.
+	// These facts are ALWAYS present, eliminating the class of hallucination
+	// where the model invents version numbers and scores from parametric knowledge.
+	// extractProjectState exists for exactly this purpose; dynamic search alone
+	// was unreliable for this category.
+	sb.WriteString("\n## Current Project State\n")
+	sb.WriteString("- Prizm is replacing OpenClaw as Lumi's primary harness. This migration is called \"Soul Transfer.\"\n")
+	sb.WriteString("- Current version: V85+ (staging branch). Memory search uses BM25 + RRF fusion with embedding-based semantic search (nomic-embed-text, 768 dims).\n")
+	sb.WriteString("- Lumi's model: glm-5.1:cloud. Mango's model: deepseek-v4-pro:cloud.\n")
+	sb.WriteString("- Soul Transfer test suite: 29 tests across 6 categories (Identity, Memory, Personality, Capability, Reliability, Autonomy). Threshold: 93/100.\n")
+	sb.WriteString("- Mango is the coding partner (deepseek-v4-pro:cloud). Lumi leads, Mango supports.\n")
+	sb.WriteString("- All code changes go through pull requests. No direct pushes to main.\n")
+
+	// Also search for additional project-related memories
 	results, err := memStore.Search(ctx, "Prizm Soul Transfer project current state", 5)
 	if err != nil || len(results) == 0 {
-		// Fallback: try listing recent entries
 		results, err = memStore.ListRecent(ctx, 5)
 		if err != nil || len(results) == 0 {
-			return ""
+			return sb.String()
 		}
 	}
 
-	var sb strings.Builder
 	projectKeywords := []string{"prizm", "prism", "soul transfer", "v8", "v82", "v83", "v85", "memory", "embedding", "bm25", "convergence"}
 
+	added := 0
 	for _, m := range results {
+		if added >= 3 {
+			break
+		}
 		lower := strings.ToLower(m.Content + " " + m.Summary)
 		isProject := false
 		for _, kw := range projectKeywords {
@@ -193,13 +208,11 @@ func (cib *CoreIdentityBlock) extractProjectState(memStore *memory.MarkdownStore
 		}
 		if m.Category == "decision" || m.Category == "fact" || m.Category == "project" {
 			sb.WriteString(fmt.Sprintf("- %s\n", strings.TrimSpace(m.Summary)))
+			added++
 		}
 	}
 
-	if sb.Len() > 0 {
-		return "\n## Current Project State\n" + sb.String()
-	}
-	return ""
+	return sb.String()
 }
 
 // Invalidate forces a rebuild on the next Build() call.

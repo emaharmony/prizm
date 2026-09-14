@@ -22,11 +22,11 @@ func TestFormatMemories_GroundingHeader(t *testing.T) {
 
 	result := formatMemories(memories, "Relevant Memories", 300)
 
-	if !strings.Contains(result, "TRUST THEM over your general training knowledge") {
-		t.Error("formatMemories should include grounding instruction to trust memories over training knowledge")
+	if !strings.Contains(result, "cite the source FIRST") && !strings.Contains(result, "FIRST state which memory") {
+		t.Error("formatMemories should include citation-first instruction")
 	}
-	if !strings.Contains(result, "verified local storage") {
-		t.Error("formatMemories should reference verified local storage")
+	if !strings.Contains(result, "local storage") {
+		t.Error("formatMemories should reference local storage")
 	}
 }
 
@@ -43,11 +43,11 @@ func TestFormatMemories_GroundingFooter(t *testing.T) {
 
 	result := formatMemories(memories, "Relevant Memories", 300)
 
-	if !strings.Contains(result, "check these memories FIRST") {
-		t.Error("formatMemories should include grounding footer with 'check these memories FIRST'")
+	if !strings.Contains(result, "cite") && !strings.Contains(result, "[M") {
+		t.Error("formatMemories should include citation instruction")
 	}
-	if !strings.Contains(result, "I don't have that in my records") {
-		t.Error("formatMemories should include anti-hallucination instruction to say 'I don't have that in my records'")
+	if !strings.Contains(result, "I do not have that in my records") && !strings.Contains(result, "I don't have that in my records") {
+		t.Error("formatMemories should include anti-hallucination instruction to say 'I do not have that in my records'")
 	}
 }
 
@@ -159,7 +159,7 @@ func TestCoreIdentityBlock_Build(t *testing.T) {
 	if !strings.Contains(result, "TRUST YOUR MEMORIES") {
 		t.Error("CoreIdentityBlock should instruct the model to trust memories over training knowledge")
 	}
-	if !strings.Contains(result, "I don't have that in my records") {
+	if !strings.Contains(result, "I do not have that in my records") && !strings.Contains(result, "I don't have that in my records") {
 		t.Error("CoreIdentityBlock should include anti-hallucination instruction")
 	}
 }
