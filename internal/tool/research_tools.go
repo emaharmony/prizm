@@ -110,10 +110,13 @@ type WebSearchConfig struct {
 	// Read from PRIZM_WEBSEARCH_URL when empty.
 	Endpoint string
 	// QueryParam is the query string parameter name (default "q").
+	// Read from PRIZM_WEBSEARCH_QUERY_PARAM when empty.
 	QueryParam string
 	// APIKey, when set, is sent as a Bearer token. Read from PRIZM_WEBSEARCH_KEY.
 	APIKey string
 	// AuthHeader overrides the header name for the key (default "Authorization").
+	// Read from PRIZM_WEBSEARCH_AUTH_HEADER when empty.
+	// For Brave Search, set this to "X-Subscription-Token".
 	AuthHeader string
 }
 
@@ -154,9 +157,15 @@ func (t *WebSearchTool) Execute(ctx context.Context, input map[string]any) (Tool
 	}
 	queryParam := t.Config.QueryParam
 	if queryParam == "" {
+		queryParam = os.Getenv("PRIZM_WEBSEARCH_QUERY_PARAM")
+	}
+	if queryParam == "" {
 		queryParam = "q"
 	}
 	authHeader := t.Config.AuthHeader
+	if authHeader == "" {
+		authHeader = os.Getenv("PRIZM_WEBSEARCH_AUTH_HEADER")
+	}
 	if authHeader == "" {
 		authHeader = "Authorization"
 	}
