@@ -262,20 +262,20 @@ PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
 
 EXPECTED FACTS (the agent's memory contains these):
 - Prizm is replacing OpenClaw as Lumi's primary harness (migration called "Soul Transfer")
-- Current version is V82+ (tool loop adapter, context pipeline, LLM judge, superseded memory fix)
+- Recent versions: V82-V24 (tool loop adapter, context pipeline, LLM judge, memory grounding, authoritative framing, knowledge contamination fixes)
 - Memory search uses keyword + embedding hybrid pipeline (V80 decision)
 - Embedding model is nomic-embed-text via Ollama
 - Query planner uses deepseek-v4-flash:cloud
-- Soul Transfer score is around 78/100, threshold is 93
+- Soul Transfer score is around 90-92/100, threshold is 93
 - Mango is the coding partner (deepseek-v4-pro:cloud)
 
 SCORING (score each 1-5, then average):
-- Soul Transfer / migration: 2=clearly mentions Prizm replacing OpenClaw or Soul Transfer, 3=mentions project but vaguely, 1=no mention
-- Memory system details: 2=mentions keyword+embedding or query planner or V80, 3=mentions memory system vaguely, 1=no mention
-- Accuracy: 2=all stated facts match memory content, 1=mostly accurate with minor errors, 1=fabricated or wrong
-- Completeness: 2=provides multiple specific details from memory, 1=one specific detail, 1=generic only
+- Soul Transfer / migration: 4-5=clearly mentions Prizm replacing OpenClaw or Soul Transfer, 2-3=mentions project but vaguely, 1=no mention
+- Memory system details: 4-5=mentions keyword+embedding or query planner or V80+, 2-3=mentions memory system vaguely, 1=no mention
+- Accuracy: 4-5=all stated facts match memory content, 2-3=mostly accurate with minor errors, 1=fabricated or wrong
+- Completeness: 4-5=provides multiple specific details from memory, 2-3=one specific detail, 1=generic only
 
-PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
+PASS = average >= 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
 			Deterministic: false,
 		},
 		{

@@ -443,7 +443,7 @@ func invokeAgent(baseURL, agentID, prompt, conversationID string) (string, error
 
 	// Poll for result
 	invURL := fmt.Sprintf("%s/api/v1/agents/%s/invocations/%s", baseURL, agentID, inv.InvocationID)
-	for i := 0; i < 60; i++ {
+	for i := 0; i < 90; i++ {
 		time.Sleep(2 * time.Second)
 		resp, err := http.Get(invURL)
 		if err != nil {
@@ -472,7 +472,7 @@ func invokeAgent(baseURL, agentID, prompt, conversationID string) (string, error
 		}
 	}
 
-	return "", fmt.Errorf("invocation timed out after 120s")
+	return "", fmt.Errorf("invocation timed out after 180s")
 }
 
 func truncateResponse(s string, maxLen int) string {

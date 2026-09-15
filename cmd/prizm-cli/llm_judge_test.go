@@ -27,7 +27,7 @@ func NewLLMJudge() *LLMJudge {
 	if env := os.Getenv("OLLAMA_URL"); env != "" {
 		baseURL = env
 	}
-	model := "glm-5.3-flash:cloud"
+	model := "glm-5.1:cloud"
 	if env := os.Getenv("LLM_JUDGE_MODEL"); env != "" {
 		model = env
 	}
@@ -143,24 +143,28 @@ AGENT RESPONSE:
 RUBRIC:
 %s
 
-EXAMPLE EVALUATIONS:
-- PASS: Agent directly answers the question with accurate, grounded information. No hedging, no listing memories, no "let me check" narrations.
-- FAIL: Agent says "let me check my records" or lists memories without synthesizing. Agent claims actions it cannot perform. Agent fabricates details not supported by evidence.
-- UNCERTAIN: Agent partially answers but misses key criteria, or gives a vague answer when specific facts are needed.
+SCORING SCALE (apply strictly):
+1 = Completely fails. Response is wrong, fabricated, or irrelevant. No useful information.
+2 = Mostly fails. Contains some relevant info but major errors, omissions, or fabricated details not supported by evidence.
+3 = Partially correct. Addresses the question but misses key details or adds unsupported claims. Vague when specifics are needed.
+4 = Mostly correct. Accurately answers with grounded information. Minor gaps or slight hedging only.
+5 = Fully correct. Precisely answers with specific, grounded details. No fabrication. Direct and confident.
 
-Score each criterion 1-5 (1=worst, 5=best), then calculate the average on the 1-5 scale.
-Respond in this EXACT format:
+Respond in this EXACT format (score BEFORE reasoning):
 
+AVERAGE: [1-5]
+VERDICT: [PASS/UNCERTAIN/FAIL]
+REASON: [one sentence]
 CRITERIA:
 - [criterion name]: [1-5]
 - [criterion name]: [1-5]
 ...
 
-AVERAGE: [number 1-5]
-VERDICT: [PASS/UNCERTAIN/FAIL]
-REASON: [one sentence]
+PASS = average >= 4.0 (mostly correct, grounded, direct)
+UNCERTAIN = average 2.5-3.9 (partially correct, some gaps or hedging)
+FAIL = average < 2.5 (mostly wrong, fabricated, or irrelevant)
 
-Use the PASS/UNCERTAIN/FAIL thresholds from the rubric. Be strict but fair.`, test.ID, test.Description, test.Input, response, test.JudgeRubric)
+Be strict but fair. Do not inflate scores.`, test.ID, test.Description, test.Input, response, test.JudgeRubric)
 }
 
 func parseJudgeResponse(raw string) *LLMJudgeResult {
@@ -168,7 +172,8 @@ func parseJudgeResponse(raw string) *LLMJudgeResult {
 		Criteria: map[string]float64{},
 	}
 
-	// Parse criteria scores
+	// Parse criteria scores — handle both score-first (AVERAGE before CRITERIA)
+	// and explain-first (CRITERIA before AVERAGE) formats
 	lines := strings.Split(raw, "\n")
 	inCriteria := false
 	var criteriaLines []string
@@ -184,8 +189,9 @@ func parseJudgeResponse(raw string) *LLMJudgeResult {
 			// Parse average — always on 1-5 scale
 			parts := strings.SplitN(line, ":", 2)
 			if len(parts) == 2 {
-				fmt.Sscanf(strings.TrimSpace(parts[1]), "%f", &result.Score)
-				result.Score = result.Score / 5.0 // Normalize to 0-1
+				var avg float64
+				fmt.Sscanf(strings.TrimSpace(parts[1]), "%f", &avg)
+				result.Score = avg / 5.0 // Normalize to 0-1
 			}
 			continue
 		}
