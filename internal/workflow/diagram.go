@@ -1,8 +1,8 @@
-// Package workflow generates visual SVG diagrams of Prism workflows.
+// Package workflow generates visual SVG diagrams of Prizm workflows.
 //
 // V24: Visual Workflow Representations
 //
-// Generates SVG diagrams from Prism configuration and runtime state:
+// Generates SVG diagrams from Prizm configuration and runtime state:
 //   - Agent Topology: agents, roles, capabilities, delegation paths
 //   - Feedback Loops: Lumi×Mango review cycles
 //   - Delegation Flow: task lifecycle pipeline
@@ -16,7 +16,7 @@ import (
 	"strings"
 
 	svg "github.com/ajstarks/svgo"
-	"github.com/emaharmony/prism/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/orchestrator"
 )
 
 // DiagramConfig holds configuration for diagram generation.
@@ -591,15 +591,15 @@ func EventFlow(w io.Writer, agents []orchestrator.AgentConfig, cfg DiagramConfig
 	// System events below the bus
 	sysY := busY + 60
 	systemEvents := []string{
-		"prism.task.created",
-		"prism.cost.tracked",
-		"prism.session.created",
-		"prism.channel.received",
+		"prizm.task.created",
+		"prizm.cost.tracked",
+		"prizm.session.created",
+		"prizm.channel.received",
 	}
 
 	canvas.Rect(50, sysY, cfg.Width-100, 80,
 		fmt.Sprintf("fill:%s;stroke:%s;stroke-width:1;rx:8", p.box, p.system))
-	canvas.Text(cfg.Width/2, sysY+20, "System Events (prism.*)",
+	canvas.Text(cfg.Width/2, sysY+20, "System Events (prizm.*)",
 		fmt.Sprintf("text-anchor:middle;font-family:system-ui,sans-serif;font-size:12px;font-weight:bold;fill:%s", p.text))
 
 	for i, event := range systemEvents {

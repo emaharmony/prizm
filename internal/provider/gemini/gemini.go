@@ -18,8 +18,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/emaharmony/prism/internal/provider"
-	"github.com/emaharmony/prism/internal/retry"
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/retry"
 )
 
 const (

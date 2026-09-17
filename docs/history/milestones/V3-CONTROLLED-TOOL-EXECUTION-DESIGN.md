@@ -4,7 +4,7 @@
 
 Give agents safe, observable, policy-gated hands. V3 introduces a tool registry,
 deterministic permission policy, four safe built-in tools, and full tool lifecycle
-events. The agent can now request tool execution in its output, and Prism decides
+events. The agent can now request tool execution in its output, and Prizm decides
 whether to allow, deny, or escalate before running anything.
 
 **Tools are the only way an agent can affect the outside world.**
@@ -33,16 +33,16 @@ whether to allow, deny, or escalate before running anything.
 - One tool call per run in V3 (sequential execution)
 
 ### Tool Lifecycle Events
-- `prism.tool.requested` — agent requested a tool call
-- `prism.tool.approved` — policy approved the tool call
-- `prism.tool.denied` — policy denied the tool call
-- `prism.tool.started` — tool execution has begun
-- `prism.tool.completed` — tool execution finished successfully
-- `prism.tool.failed` — tool execution returned an error
+- `prizm.tool.requested` — agent requested a tool call
+- `prizm.tool.approved` — policy approved the tool call
+- `prizm.tool.denied` — policy denied the tool call
+- `prizm.tool.started` — tool execution has begun
+- `prizm.tool.completed` — tool execution finished successfully
+- `prizm.tool.failed` — tool execution returned an error
 
 ### CLI Commands
-- `prism tool list` — list all registered tools with descriptions
-- `prism tool run <name> --input '{...}' --project <name>` — execute a tool directly
+- `prizm tool list` — list all registered tools with descriptions
+- `prizm tool run <name> --input '{...}' --project <name>` — execute a tool directly
 
 ### Artifacts
 - `tool_result.json` — persisted per tool execution
@@ -120,13 +120,13 @@ whether to allow, deny, or escalate before running anything.
 
 ```
 Agent output → ParseAgentOutput()
-  → ToolRequest? Yes → emit(prism.tool.requested)
+  → ToolRequest? Yes → emit(prizm.tool.requested)
     → Policy.Evaluate(tool, input)
-    → Approved → emit(prism.tool.approved)
-      → emit(prism.tool.started)
+    → Approved → emit(prizm.tool.approved)
+      → emit(prizm.tool.started)
       → Tool.Execute(ctx, input)
-      → Success → emit(prism.tool.completed) → tool_result.json
-      → Failure → emit(prism.tool.failed)
-    → Denied → emit(prism.tool.denied) → agent output = denial reason
-  → Final answer → emit(prism.agent.output) → output.md
+      → Success → emit(prizm.tool.completed) → tool_result.json
+      → Failure → emit(prizm.tool.failed)
+    → Denied → emit(prizm.tool.denied) → agent output = denial reason
+  → Final answer → emit(prizm.agent.output) → output.md
 ```

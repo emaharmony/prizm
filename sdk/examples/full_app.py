@@ -1,5 +1,5 @@
 """
-Prism Example App — demonstrates the full SDK with Discord and Telegram adapters.
+Prizm Example App — demonstrates the full SDK with Discord and Telegram adapters.
 
 Usage:
     export DISCORD_TOKEN="your-bot-token"
@@ -13,21 +13,21 @@ import asyncio
 import logging
 import os
 
-import prism
-from prism.agents.echo import EchoAgent
-from prism.channels.discord import DiscordAdapter
-from prism.channels.telegram import TelegramAdapter
-from prism.tools.time_tool import TimeTool
+import prizm
+from prizm.agents.echo import EchoAgent
+from prizm.channels.discord import DiscordAdapter
+from prizm.channels.telegram import TelegramAdapter
+from prizm.tools.time_tool import TimeTool
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-logger = logging.getLogger("prism-example")
+logger = logging.getLogger("prizm-example")
 
 
 async def main():
-    # ── Connect to Prism bus ─────────────────────────────────────
-    client = await prism.connect(
+    # ── Connect to Prizm bus ─────────────────────────────────────
+    client = await prizm.connect(
         nats_url=os.getenv("NATS_URL", "nats://localhost:4222"),
-        name="prism-example",
+        name="prizm-example",
     )
 
     # ── Register agents ──────────────────────────────────────────
@@ -40,7 +40,7 @@ async def main():
     await time_tool.register()
 
     # ── Register custom handler ──────────────────────────────────
-    @prism.on("prism.channel.received.discord")
+    @prizm.on("prizm.channel.received.discord")
     async def handle_discord(event):
         """Handle incoming Discord messages."""
         logger.info(f"📣 Discord message from {event.payload.get('sender_name', 'unknown')}: "
@@ -49,18 +49,18 @@ async def main():
         # Simple echo response (replace with LLM call)
         text = event.payload.get("text", "")
         if text.strip():
-            await prism.emit(
-                "prism.channel.sent.discord",
+            await prizm.emit(
+                "prizm.channel.sent.discord",
                 {
                     "channel_id": event.payload.get("channel_id"),
-                    "text": f"💎 Prism received: {text[:200]}",
+                    "text": f"💎 Prizm received: {text[:200]}",
                 },
-                source="prism-example",
+                source="prizm-example",
                 correlation_id=event.correlation_id,
                 parent_id=event.id,
             )
 
-    @prism.on("prism.channel.received.telegram")
+    @prizm.on("prizm.channel.received.telegram")
     async def handle_telegram(event):
         """Handle incoming Telegram messages."""
         logger.info(f"📨 Telegram message from {event.payload.get('sender_name', 'unknown')}: "
@@ -71,13 +71,13 @@ async def main():
         text = event.payload.get("text", "")
         if text.strip():
             privacy_note = "🔒 E2E" if encryption == "e2e" else "🔓 Transport"
-            await prism.emit(
-                "prism.channel.sent.telegram",
+            await prizm.emit(
+                "prizm.channel.sent.telegram",
                 {
                     "chat_id": event.payload.get("chat_id"),
-                    "text": f"💎 Prism received [{privacy_note}]: {text[:200]}",
+                    "text": f"💎 Prizm received [{privacy_note}]: {text[:200]}",
                 },
-                source="prism-example",
+                source="prizm-example",
                 correlation_id=event.correlation_id,
                 parent_id=event.id,
             )
@@ -89,20 +89,20 @@ async def main():
     if discord_token:
         discord_adapter = DiscordAdapter(client, discord_token=discord_token)
         adapters.append(("discord", discord_adapter))
-        logger.info("prism: Discord adapter configured")
+        logger.info("prizm: Discord adapter configured")
     else:
-        logger.info("prism: No DISCORD_TOKEN, skipping Discord adapter")
+        logger.info("prizm: No DISCORD_TOKEN, skipping Discord adapter")
 
     telegram_token = os.getenv("TELEGRAM_TOKEN")
     if telegram_token:
         telegram_adapter = TelegramAdapter(client, bot_token=telegram_token)
         adapters.append(("telegram", telegram_adapter))
-        logger.info("prism: Telegram adapter configured")
+        logger.info("prizm: Telegram adapter configured")
     else:
-        logger.info("prism: No TELEGRAM_TOKEN, skipping Telegram adapter")
+        logger.info("prizm: No TELEGRAM_TOKEN, skipping Telegram adapter")
 
     # ── Run everything ────────────────────────────────────────────
-    logger.info("prism: all adapters ready, starting event loop...")
+    logger.info("prizm: all adapters ready, starting event loop...")
 
     # Start channel adapters as concurrent tasks
     adapter_tasks = []
@@ -110,11 +110,11 @@ async def main():
         task = asyncio.create_task(adapter.start(), name=f"adapter-{name}")
         adapter_tasks.append(task)
 
-    # Also start the Prism event loop
+    # Also start the Prizm event loop
     try:
-        await prism.run()
+        await prizm.run()
     except KeyboardInterrupt:
-        logger.info("prism: shutting down...")
+        logger.info("prizm: shutting down...")
         for name, adapter in adapters:
             if hasattr(adapter, "stop"):
                 await adapter.stop()

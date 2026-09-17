@@ -4,11 +4,46 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"strings"
+	"sync"
 
-	"github.com/emaharmony/prism/internal/retry"
+	"github.com/emaharmony/prizm/internal/retry"
 )
+
+// exhaustedTargets tracks (provider, model) pairs that have hit an
+// account-level usage quota (ErrQuotaExhausted), for the lifetime of this
+// process. Package-level and shared across every FailoverProvider instance,
+// since quota exhaustion is a fact about the (provider, model) pair itself,
+// not about any one FailoverProvider object — instances may be constructed
+// fresh per call in some code paths. Cleared only by a process restart
+// ("the end of the session"); there is deliberately no time-based expiry,
+// since a weekly quota won't reset on a schedule this process can predict.
+var (
+	exhaustedMu      sync.Mutex
+	exhaustedTargets = map[string]bool{}
+)
+
+func targetKey(t FailoverTarget) string {
+	return t.ProviderName + ":" + t.Model
+}
+
+func isTargetExhausted(t FailoverTarget) bool {
+	exhaustedMu.Lock()
+	defer exhaustedMu.Unlock()
+	return exhaustedTargets[targetKey(t)]
+}
+
+func markTargetExhausted(t FailoverTarget) {
+	exhaustedMu.Lock()
+	defer exhaustedMu.Unlock()
+	if !exhaustedTargets[targetKey(t)] {
+		exhaustedTargets[targetKey(t)] = true
+		log.Printf("provider/failover: %s/%s hit its usage quota — skipping it for the rest of this session", t.ProviderName, t.Model)
+	}
+}
 
 // FailoverTarget identifies one concrete provider/model attempt.
 type FailoverTarget struct {
@@ -31,6 +66,9 @@ func NewFailoverProvider(targets []FailoverTarget) *FailoverProvider {
 func (p *FailoverProvider) Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
 	var lastErr error
 	for index, target := range p.targets {
+		if isTargetExhausted(target) {
+			continue
+		}
 		for attempt := 0; attempt < 2; attempt++ {
 			if err := ctx.Err(); err != nil {
 				return GenerateResponse{}, err
@@ -42,10 +80,19 @@ func (p *FailoverProvider) Generate(ctx context.Context, req GenerateRequest) (G
 				return annotateGenerate(resp, target, index > 0), nil
 			}
 			lastErr = err
-			if !retry.IsRetryable(err) {
+			if errors.Is(err, ErrQuotaExhausted) {
+				markTargetExhausted(target)
 				break
 			}
+			if !retry.IsRetryable(err) {
+				log.Printf("provider/failover: %s/%s failed (%v) — not retryable, trying next target", target.ProviderName, target.Model, err)
+				break
+			}
+			log.Printf("provider/failover: %s/%s attempt %d failed (%v), retrying", target.ProviderName, target.Model, attempt+1, err)
 		}
+	}
+	if lastErr == nil {
+		return GenerateResponse{}, fmt.Errorf("all model targets are exhausted (quota) or none configured")
 	}
 	return GenerateResponse{}, fmt.Errorf("all model targets failed: %w", lastErr)
 }
@@ -54,6 +101,9 @@ func (p *FailoverProvider) ChatGenerate(ctx context.Context, req ChatGenerateReq
 	var lastErr error
 	compacted := false
 	for index, target := range p.targets {
+		if isTargetExhausted(target) {
+			continue
+		}
 		for attempt := 0; attempt < 2; attempt++ {
 			if err := ctx.Err(); err != nil {
 				return ChatGenerateResponse{}, err
@@ -68,13 +118,22 @@ func (p *FailoverProvider) ChatGenerate(ctx context.Context, req ChatGenerateReq
 				return annotateChat(resp, target, index > 0, compacted), nil
 			}
 			lastErr = err
+			if errors.Is(err, ErrQuotaExhausted) {
+				markTargetExhausted(target)
+				break
+			}
 			if isContextLimit(err) {
 				compacted = true
 			}
 			if !retry.IsRetryable(err) {
+				log.Printf("provider/failover: %s/%s failed (%v) — not retryable, trying next target", target.ProviderName, target.Model, err)
 				break
 			}
+			log.Printf("provider/failover: %s/%s attempt %d failed (%v), retrying", target.ProviderName, target.Model, attempt+1, err)
 		}
+	}
+	if lastErr == nil {
+		return ChatGenerateResponse{}, fmt.Errorf("all model targets are exhausted (quota) or none configured")
 	}
 	return ChatGenerateResponse{}, fmt.Errorf("all model targets failed: %w", lastErr)
 }
@@ -105,7 +164,7 @@ func flattenChatRequest(req ChatGenerateRequest) string {
 		fmt.Fprintf(&b, "[%s] %s\n", message.Role, message.Content)
 	}
 	if len(req.Tools) > 0 {
-		b.WriteString("\nAvailable Prism tools:\n")
+		b.WriteString("\nAvailable Prizm tools:\n")
 		for _, tool := range req.Tools {
 			schema, _ := json.Marshal(tool.Function.Parameters)
 			fmt.Fprintf(&b, "- %s: %s Parameters: %s\n", tool.Function.Name, tool.Function.Description, schema)

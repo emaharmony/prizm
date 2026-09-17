@@ -4,7 +4,7 @@
 //
 //   - Render() - a terminal string view.
 //   - Snapshot() - a plain, concurrency-safe value copy for GUI consumers such
-//     as the desktop panel (`cmd/prism-panel`).
+//     as the desktop panel (`cmd/prizm-panel`).
 //
 // The model is decoupled from any transport so update and render logic stays
 // unit-testable and reusable across terminal and GUI front-ends. All exported

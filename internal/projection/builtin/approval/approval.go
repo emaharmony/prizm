@@ -1,6 +1,6 @@
 // Package approval provides a projection that tracks approval state transitions.
 //
-// It subscribes to prism.approval.* events and produces a snapshot showing
+// It subscribes to prizm.approval.* events and produces a snapshot showing
 // all approvals in a run, their current statuses, and aggregate counts.
 //
 // Example snapshot:
@@ -21,8 +21,8 @@
 package approval
 
 import (
-	"github.com/emaharmony/prism/internal/event"
-	"github.com/emaharmony/prism/internal/projection"
+	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/projection"
 )
 
 // ApprovalEntry represents a single approval in the projection state.

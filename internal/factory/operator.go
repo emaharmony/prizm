@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/crossprism"
+	"github.com/emaharmony/prizm/internal/crossprizm"
 )
 
 // Config controls Roblox Factory task handoff.
@@ -28,7 +28,7 @@ type Config struct {
 	UIGenerationDryRun bool
 }
 
-// Operator writes cross-Prism task requests into the Factory inbox.
+// Operator writes cross-Prizm task requests into the Factory inbox.
 type Operator struct {
 	cfg Config
 }
@@ -56,10 +56,10 @@ func NewOperator(cfg Config) (*Operator, error) {
 	return &Operator{cfg: cfg}, nil
 }
 
-// HandleCrossPrismTask handles a verified cross-Prism task_request message.
-func (o *Operator) HandleCrossPrismTask(ctx context.Context, msg crossprism.Message) (*crossprism.Message, error) {
+// HandleCrossPrizmTask handles a verified cross-Prizm task_request message.
+func (o *Operator) HandleCrossPrizmTask(ctx context.Context, msg crossprizm.Message) (*crossprizm.Message, error) {
 	_ = ctx
-	if msg.MessageType != crossprism.TypeTaskRequest {
+	if msg.MessageType != crossprizm.TypeTaskRequest {
 		return nil, nil
 	}
 	taskID := taskIDFromMessage(msg)
@@ -73,8 +73,8 @@ func (o *Operator) HandleCrossPrismTask(ctx context.Context, msg crossprism.Mess
 		return nil, err
 	}
 
-	return &crossprism.Message{
-		MessageType: crossprism.TypeTaskResponse,
+	return &crossprizm.Message{
+		MessageType: crossprizm.TypeTaskResponse,
 		Response: map[string]any{
 			"status":       "accepted",
 			"task_id":      taskID,
@@ -87,7 +87,7 @@ func (o *Operator) HandleCrossPrismTask(ctx context.Context, msg crossprism.Mess
 	}, nil
 }
 
-func (o *Operator) writeTaskFiles(taskID, requestText string, msg crossprism.Message) (string, string, error) {
+func (o *Operator) writeTaskFiles(taskID, requestText string, msg crossprizm.Message) (string, string, error) {
 	root, err := filepath.Abs(o.cfg.Root)
 	if err != nil {
 		return "", "", fmt.Errorf("factory: resolve root: %w", err)
@@ -118,7 +118,7 @@ func (o *Operator) writeTaskFiles(taskID, requestText string, msg crossprism.Mes
 		"ui_generation_dry_run": o.cfg.UIGenerationDryRun,
 		"created_by":            msg.From,
 		"created_at":            time.Now().UTC().Format(time.RFC3339Nano),
-		"source":                "prism-cross",
+		"source":                "prizm-cross",
 		"correlation_id":        msg.CorrelationID,
 	}
 	if o.cfg.ProjectPath != "" {
@@ -135,11 +135,11 @@ func (o *Operator) writeTaskFiles(taskID, requestText string, msg crossprism.Mes
 	return requestPath, taskPath, nil
 }
 
-func buildRequestMarkdown(msg crossprism.Message, requestText string) string {
+func buildRequestMarkdown(msg crossprizm.Message, requestText string) string {
 	var b strings.Builder
-	b.WriteString("# Prism Factory Request\n\n")
+	b.WriteString("# Prizm Factory Request\n\n")
 	b.WriteString(requestText)
-	b.WriteString("\n\n## Cross-Prism Metadata\n\n")
+	b.WriteString("\n\n## Cross-Prizm Metadata\n\n")
 	b.WriteString("- From: " + msg.From + "\n")
 	b.WriteString("- To: " + msg.To + "\n")
 	if msg.CorrelationID != "" {
@@ -148,7 +148,7 @@ func buildRequestMarkdown(msg crossprism.Message, requestText string) string {
 	return b.String()
 }
 
-func requestTextFromMessage(msg crossprism.Message) string {
+func requestTextFromMessage(msg crossprizm.Message) string {
 	for _, key := range []string{"prompt", "task", "content", "request", "summary"} {
 		if value, ok := msg.Request[key].(string); ok && strings.TrimSpace(value) != "" {
 			return value
@@ -161,7 +161,7 @@ func requestTextFromMessage(msg crossprism.Message) string {
 	return ""
 }
 
-func taskIDFromMessage(msg crossprism.Message) string {
+func taskIDFromMessage(msg crossprizm.Message) string {
 	base := msg.CorrelationID
 	if base == "" {
 		base = msg.Nonce
@@ -177,7 +177,7 @@ func taskIDFromMessage(msg crossprism.Message) string {
 	if len(base) > 80 {
 		base = base[:80]
 	}
-	return "prism-" + base
+	return "prizm-" + base
 }
 
 func relativeToRoot(root, path string) string {

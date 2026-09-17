@@ -96,11 +96,11 @@ tag or GitHub Release has been created.
 
 - Idle guard for scheduled tasks — `hasWorkToDo()` checks locally before calling
   cloud LLM, achieving ~93 % token reduction on idle runs
-  ([29fed19](https://github.com/emaharmony/prism/commit/29fed19)).
+  ([29fed19](https://github.com/emaharmony/prizm/commit/29fed19)).
 - Per-skill work detection: `project_work` inspects `PROJECT_STATE.md` and
   `git status`; `auto_patch` checks failing tests, open PRs, and Remembrance
   tasks; `review_improvements` checks for active proposals
-  ([29fed19](https://github.com/emaharmony/prism/commit/29fed19)).
+  ([29fed19](https://github.com/emaharmony/prizm/commit/29fed19)).
 
 ### Fixed
 
@@ -108,25 +108,25 @@ tag or GitHub Release has been created.
   `POST /v2/search` branch with `sources:["images"]` and hardened
   `downloadImage` to validate content-type and magic bytes, rejecting anti-bot
   HTML responses
-  ([2eb8d28](https://github.com/emaharmony/prism/commit/2eb8d28)).
+  ([2eb8d28](https://github.com/emaharmony/prizm/commit/2eb8d28)).
 
 ### Changed
 
 - Schedule intervals tuned: `project_work` 10 → 15 min, `pr-check` 10 → 30 min,
   `auto_patch` 4 → 6 h
-  ([29fed19](https://github.com/emaharmony/prism/commit/29fed19)).
+  ([29fed19](https://github.com/emaharmony/prizm/commit/29fed19)).
 - README updated with sub-agent delegation, worktree isolation, skill-use, and
   Claude Code provider documentation
-  ([9010cf8](https://github.com/emaharmony/prism/commit/9010cf8)).
+  ([9010cf8](https://github.com/emaharmony/prizm/commit/9010cf8)).
 
 ### Removed
 
 - Outdated `checksum_test.go` (replaced by current test coverage)
-  ([9010cf8](https://github.com/emaharmony/prism/commit/9010cf8)).
+  ([9010cf8](https://github.com/emaharmony/prizm/commit/9010cf8)).
 
-[0.1.0]: https://github.com/emaharmony/prism/commit/41c1d4f
-[0.2.0-preview.1]: https://github.com/emaharmony/prism/compare/41c1d4f...9a21215
-[Unreleased]: https://github.com/emaharmony/prism/compare/9a21215...main
+[0.1.0]: https://github.com/emaharmony/prizm/commit/41c1d4f
+[0.2.0-preview.1]: https://github.com/emaharmony/prizm/compare/41c1d4f...9a21215
+[Unreleased]: https://github.com/emaharmony/prizm/compare/9a21215...main
 
 Note: neither `v0.1.0` nor `v0.2.0-preview.1` has an actual Git tag or GitHub
 Release yet, so the links above compare commit SHAs directly rather than tags.

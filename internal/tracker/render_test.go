@@ -23,7 +23,7 @@ func TestRenderFrameStrictASCIIAndAnimation(t *testing.T) {
 
 	out0 := RenderFrame(s, 0)
 	out1 := RenderFrame(s, 1)
-	for _, want := range []string{"PRISM PANEL", "gated-loop", "Budget", "25%", "PLAN", "EXECUTION", "gate 0.91", "read_file", "retry 2", "Delegations", "T2"} {
+	for _, want := range []string{"PRIZM PANEL", "gated-loop", "Budget", "25%", "PLAN", "EXECUTION", "gate 0.91", "read_file", "retry 2", "Delegations", "T2"} {
 		if !strings.Contains(out0, want) {
 			t.Fatalf("render missing %q:\n%s", want, out0)
 		}

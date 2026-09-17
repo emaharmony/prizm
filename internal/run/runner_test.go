@@ -16,14 +16,14 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 
-	"github.com/emaharmony/prism/internal/approval"
-	"github.com/emaharmony/prism/internal/event"
-	"github.com/emaharmony/prism/internal/mutation"
-	mockpkg "github.com/emaharmony/prism/internal/provider/mock"
-	"github.com/emaharmony/prism/internal/review"
-	"github.com/emaharmony/prism/internal/run"
-	"github.com/emaharmony/prism/internal/tool"
-	"github.com/emaharmony/prism/internal/validation"
+	"github.com/emaharmony/prizm/internal/approval"
+	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/mutation"
+	mockpkg "github.com/emaharmony/prizm/internal/provider/mock"
+	"github.com/emaharmony/prizm/internal/review"
+	"github.com/emaharmony/prizm/internal/run"
+	"github.com/emaharmony/prizm/internal/tool"
+	"github.com/emaharmony/prizm/internal/validation"
 )
 
 // startTestServer starts an embedded NATS server for testing.
@@ -66,7 +66,7 @@ func TestV1LifecycleWithoutMemory(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:          "Test V1 event lifecycle",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: false,
@@ -113,8 +113,8 @@ func TestV1LifecycleWithoutMemory(t *testing.T) {
 		if !strings.HasPrefix(evt.ID, "evt_") {
 			t.Errorf("line %d: event ID doesn't start with evt_: %s", i, evt.ID)
 		}
-		if !strings.HasPrefix(evt.Type, "prism.") {
-			t.Errorf("line %d: event type doesn't start with prism.: %s", i, evt.Type)
+		if !strings.HasPrefix(evt.Type, "prizm.") {
+			t.Errorf("line %d: event type doesn't start with prizm.: %s", i, evt.Type)
 		}
 		if evt.CorrelationID == "" {
 			t.Errorf("line %d: event has no correlation_id", i)
@@ -148,7 +148,7 @@ func TestV1LifecycleWithMemoryFailure(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:          "Test with memory failure",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: true,
@@ -180,7 +180,7 @@ func TestV1LifecycleRequireMemoryFailure(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:          "Test require-memory failure",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: true,
@@ -211,7 +211,7 @@ func TestV1EventCorrelationID(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:          "Test correlation ID propagation",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: false,
@@ -261,7 +261,7 @@ func TestV1EventTypesInOrder(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:          "Test event order",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: false,
@@ -332,8 +332,8 @@ func TestV1NATSPublishAndSubscribe(t *testing.T) {
 
 	// Create stream
 	_, _ = js.AddStream(&nats.StreamConfig{
-		Name:      "PRISM",
-		Subjects:  []string{"prism.>"},
+		Name:      "PRIZM",
+		Subjects:  []string{"prizm.>"},
 		Retention: nats.LimitsPolicy,
 		MaxMsgs:   1000000,
 		Storage:   nats.MemoryStorage,
@@ -342,7 +342,7 @@ func TestV1NATSPublishAndSubscribe(t *testing.T) {
 	// Subscribe to all events
 	received := make([]event.Event, 0)
 	var receivedMu sync.Mutex
-	sub, err := js.Subscribe("prism.>", func(msg *nats.Msg) {
+	sub, err := js.Subscribe("prizm.>", func(msg *nats.Msg) {
 		var evt event.Event
 		if err := json.Unmarshal(msg.Data, &evt); err == nil {
 			receivedMu.Lock()
@@ -363,7 +363,7 @@ func TestV1NATSPublishAndSubscribe(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := run.RunConfig{
 		Task:          "Test NATS pub/sub",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: false,
@@ -406,7 +406,7 @@ func TestV1Remembrance404(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := run.RunConfig{
 		Task:          "Test remembrance 404",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: true,
@@ -440,19 +440,19 @@ func TestV1Remembrance404(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &evt); err != nil {
 			continue
 		}
-		if evt.Type == "prism.memory.context_requested" {
+		if evt.Type == "prizm.memory.context_requested" {
 			foundContextRequested = true
 		}
-		if evt.Type == "prism.memory.context_failed" {
+		if evt.Type == "prizm.memory.context_failed" {
 			foundContextFailed = true
 		}
 	}
 
 	if !foundContextRequested {
-		t.Error("expected prism.memory.context_requested event")
+		t.Error("expected prizm.memory.context_requested event")
 	}
 	if !foundContextFailed {
-		t.Error("expected prism.memory.context_failed event for 404 response")
+		t.Error("expected prizm.memory.context_failed event for 404 response")
 	}
 }
 
@@ -465,7 +465,7 @@ func TestV1ParentIDInNATS(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := run.RunConfig{
 		Task:          "Test parent_id in NATS",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: false,
@@ -504,7 +504,7 @@ func TestV1ParentIDInNATS(t *testing.T) {
 	// task.started should have parent = task.created
 	taskCreatedID := ""
 	for _, evt := range events {
-		if evt.Type == "prism.task.created" {
+		if evt.Type == "prizm.task.created" {
 			taskCreatedID = evt.ID
 		}
 	}
@@ -514,19 +514,19 @@ func TestV1ParentIDInNATS(t *testing.T) {
 	}
 
 	// task.started should be parented to task.created
-	if parentIDs["prism.task.started"] != taskCreatedID {
-		t.Errorf("task.started parent_id = %q, want %q (task.created ID)", parentIDs["prism.task.started"], taskCreatedID)
+	if parentIDs["prizm.task.started"] != taskCreatedID {
+		t.Errorf("task.started parent_id = %q, want %q (task.created ID)", parentIDs["prizm.task.started"], taskCreatedID)
 	}
 
 	// agent.started should be parented to task.started
 	taskStartedID := ""
 	for _, evt := range events {
-		if evt.Type == "prism.task.started" {
+		if evt.Type == "prizm.task.started" {
 			taskStartedID = evt.ID
 		}
 	}
-	if parentIDs["prism.agent.started"] != taskStartedID {
-		t.Errorf("agent.started parent_id = %q, want %q (task.started ID)", parentIDs["prism.agent.started"], taskStartedID)
+	if parentIDs["prizm.agent.started"] != taskStartedID {
+		t.Errorf("agent.started parent_id = %q, want %q (task.started ID)", parentIDs["prizm.agent.started"], taskStartedID)
 	}
 }
 
@@ -585,7 +585,7 @@ func TestV2MockProviderSuccess(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:          "Test V2 event lifecycle",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: false,
@@ -741,7 +741,7 @@ func TestV2MockProviderWithMemory(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:          "Test V2 with memory",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: true,
@@ -843,7 +843,7 @@ func TestV2LLMFailure(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:          "Test V2 LLM failure",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: false,
@@ -934,7 +934,7 @@ func TestV2DryRunPrompt(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:          "Test dry run",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: false,
@@ -1016,7 +1016,7 @@ func TestV2OutputArtifacts(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:          "Test output artifacts",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: false,
@@ -1052,7 +1052,7 @@ func TestV2OutputArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read prompt.md: %v", err)
 	}
-	if !strings.Contains(string(promptData), "# Prism Agent Task") {
+	if !strings.Contains(string(promptData), "# Prizm Agent Task") {
 		t.Error("prompt.md missing expected content")
 	}
 	if !strings.Contains(string(promptData), "Test output artifacts") {
@@ -1081,7 +1081,7 @@ func TestV2ContextInjectionInPrompt(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:          "Test context injection",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: true,
@@ -1146,7 +1146,7 @@ func TestV2MemoryFailureGraceful(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:          "Test memory failure graceful",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: true,
@@ -1208,7 +1208,7 @@ func TestV2MemoryFailureStrict(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:          "Test memory failure strict",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: true,
@@ -1281,7 +1281,7 @@ func startMockMemoryServer(t *testing.T) *mockMemoryServer {
 	mux.HandleFunc("/v1/context/build", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		resp := `{"project_id": "prism", "agent_id": "lumi", "task": "test", "selected_memories": ["test-doc-1", "test-doc-2"], "context_markdown": "# Retrieved Remembrance Context\n\n## Task\ntest\n\n## Relevant Context\n- **Test context for unit test** \u2014 test snippet one\n- **Another test** \u2014 test snippet two\n", "context_json": {"project_id": "prism", "agent_id": "lumi", "task": "test", "selected_memories": [{"memory_id": "test-doc-1", "title": "Test context for unit test", "summary": "test snippet one", "score": 0.95, "reason": "test"}, {"memory_id": "test-doc-2", "title": "Another test", "summary": "test snippet two", "score": 0.85, "reason": "test"}], "total_memories": 2}, "token_count": 150}`
+		resp := `{"project_id": "prizm", "agent_id": "lumi", "task": "test", "selected_memories": ["test-doc-1", "test-doc-2"], "context_markdown": "# Retrieved Remembrance Context\n\n## Task\ntest\n\n## Relevant Context\n- **Test context for unit test** \u2014 test snippet one\n- **Another test** \u2014 test snippet two\n", "context_json": {"project_id": "prizm", "agent_id": "lumi", "task": "test", "selected_memories": [{"memory_id": "test-doc-1", "title": "Test context for unit test", "summary": "test snippet one", "score": 0.95, "reason": "test"}, {"memory_id": "test-doc-2", "title": "Another test", "summary": "test snippet two", "score": 0.85, "reason": "test"}], "total_memories": 2}, "token_count": 150}`
 		w.Write([]byte(resp))
 	})
 	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
@@ -1322,7 +1322,7 @@ func TestV3ToolCallSummaryInSummary(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:          "Test V3 tool call",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: false,
@@ -1387,11 +1387,11 @@ func TestV3ToolResultFileWritten(t *testing.T) {
 	executor := tool.NewExecutor(registry, &policyConfig)
 
 	// Create test file
-	os.WriteFile(filepath.Join(tmpDir, "hello.txt"), []byte("hello from prism"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "hello.txt"), []byte("hello from prizm"), 0644)
 
 	cfg := run.RunConfig{
 		Task:          "Test V3 tool result file",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: false,
@@ -1431,8 +1431,8 @@ func TestV3ToolResultFileWritten(t *testing.T) {
 	if !toolResult.Success {
 		t.Errorf("expected tool_result.Success=true, got false: %s", toolResult.Error)
 	}
-	if toolResult.Output["content"] != "hello from prism" {
-		t.Errorf("expected content 'hello from prism', got %v", toolResult.Output["content"])
+	if toolResult.Output["content"] != "hello from prizm" {
+		t.Errorf("expected content 'hello from prizm', got %v", toolResult.Output["content"])
 	}
 }
 
@@ -1449,7 +1449,7 @@ func TestV3ToolEventsInEventLog(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:          "Test V3 tool events",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: false,
@@ -1521,7 +1521,7 @@ func TestV3ToolDeniedPolicy(t *testing.T) {
 	// Use a truly unknown tool name to test the denied path.
 	cfg := run.RunConfig{
 		Task:          "Test V3 tool denied",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: false,
@@ -1586,7 +1586,7 @@ func TestV3NoToolExecutor(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:          "Test V3 no tool executor",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		BusURL:        busURL,
 		MemoryEnabled: false,
@@ -1610,7 +1610,7 @@ func TestV3NoToolExecutor(t *testing.T) {
 	// Verify no tool events in the event log
 	events := parseEventsFile(t, filepath.Join(tmpDir, "runs", result.RunID, "events.jsonl"))
 	for _, evt := range events {
-		if strings.HasPrefix(evt.Type, "prism.tool.") {
+		if strings.HasPrefix(evt.Type, "prizm.tool.") {
 			t.Errorf("expected no tool events when ToolExecutor is nil, found %s", evt.Type)
 		}
 	}
@@ -1646,7 +1646,7 @@ func TestV5RunValidation(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:               "V5 validation test",
-		Project:            "prism",
+		Project:            "prizm",
 		Agent:              "lumi",
 		BusURL:             busURL,
 		RunDir:             tmpDir,
@@ -1699,7 +1699,7 @@ func TestV5RunReview(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:               "V5 review test",
-		Project:            "prism",
+		Project:            "prizm",
 		Agent:              "lumi",
 		BusURL:             busURL,
 		RunDir:             tmpDir,
@@ -1773,7 +1773,7 @@ func TestV5ValidationEvents(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:               "V5 events test",
-		Project:            "prism",
+		Project:            "prizm",
 		Agent:              "lumi",
 		BusURL:             busURL,
 		RunDir:             tmpDir,
@@ -1820,8 +1820,8 @@ func TestV5ValidationEvents(t *testing.T) {
 
 	// Check for validation events
 	validationEvents := []string{
-		"prism.validation.requested",
-		"prism.validation.started",
+		"prizm.validation.requested",
+		"prizm.validation.started",
 	}
 	for _, evtType := range validationEvents {
 		if !strings.Contains(eventStr, evtType) {
@@ -1831,9 +1831,9 @@ func TestV5ValidationEvents(t *testing.T) {
 
 	// Check for review events
 	reviewEvents := []string{
-		"prism.review.requested",
-		"prism.review.started",
-		"prism.review.completed",
+		"prizm.review.requested",
+		"prizm.review.started",
+		"prizm.review.completed",
 	}
 	for _, evtType := range reviewEvents {
 		if !strings.Contains(eventStr, evtType) {
@@ -1842,8 +1842,8 @@ func TestV5ValidationEvents(t *testing.T) {
 	}
 
 	// Verify the validation completed or failed event exists
-	hasCompletion := strings.Contains(eventStr, "prism.validation.completed") ||
-		strings.Contains(eventStr, "prism.validation.failed")
+	hasCompletion := strings.Contains(eventStr, "prizm.validation.completed") ||
+		strings.Contains(eventStr, "prizm.validation.failed")
 	if !hasCompletion {
 		t.Error("expected validation completed or failed event")
 	}
@@ -1859,7 +1859,7 @@ func TestV5ReviewWithFailedValidation(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:               "V5 failed validation review test",
-		Project:            "prism",
+		Project:            "prizm",
 		Agent:              "lumi",
 		BusURL:             busURL,
 		RunDir:             tmpDir,
@@ -1925,7 +1925,7 @@ func TestV5ApprovalApproveWithValidate(t *testing.T) {
 		"correlation_id": event.NewCorrelationID(),
 		"status":         "pending",
 		"requested_by":   "lumi",
-		"project":        "prism",
+		"project":        "prizm",
 		"mutation_type":  "write_file",
 		"target_path":    targetPath,
 		"content":        "Hello V5!",
@@ -1942,7 +1942,7 @@ func TestV5ApprovalApproveWithValidate(t *testing.T) {
 	summaryData, _ := json.Marshal(map[string]any{
 		"run_id":  runID,
 		"status":  "pending_approval",
-		"project": "prism",
+		"project": "prizm",
 		"agent":   "lumi",
 	})
 	os.WriteFile(filepath.Join(runDir, "summary.json"), append(summaryData, '\n'), 0644)
@@ -2042,7 +2042,7 @@ func TestV5ValidationUnknownProfile(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:               "V5 unknown profile test",
-		Project:            "prism",
+		Project:            "prizm",
 		Agent:              "lumi",
 		BusURL:             busURL,
 		RunDir:             tmpDir,
@@ -2088,7 +2088,7 @@ func TestV5ReviewSummaryMetadata(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:               "V5 summary metadata test",
-		Project:            "prism",
+		Project:            "prizm",
 		Agent:              "lumi",
 		BusURL:             busURL,
 		RunDir:             tmpDir,
@@ -2193,7 +2193,7 @@ func TestV5PublishEventWithoutNATS(t *testing.T) {
 
 	cfg := run.RunConfig{
 		Task:         "V5 nil NATS test",
-		Project:      "prism",
+		Project:      "prizm",
 		Agent:        "lumi",
 		BusURL:       "",
 		RunDir:       tmpDir,
@@ -2207,8 +2207,8 @@ func TestV5PublishEventWithoutNATS(t *testing.T) {
 	// publishEvent should not panic even though js is nil
 	evt := event.Event{
 		ID:        event.NewID(),
-		Type:      "prism.validation.completed",
-		Source:    "prism-test",
+		Type:      "prizm.validation.completed",
+		Source:    "prizm-test",
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 

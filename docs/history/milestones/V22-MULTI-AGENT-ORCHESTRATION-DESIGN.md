@@ -29,7 +29,7 @@ User message arrives
   → Lumi (primary agent) processes
   → Lumi decides: "Mango should code this"
   → Lumi publishes mango.task.created event on NATS
-  → Mango (second Prism agent) subscribes to mango.task.created
+  → Mango (second Prizm agent) subscribes to mango.task.created
   → Mango processes the task
   → Mango publishes mango.task.completed event
   → Lumi receives result via mango.task.completed subscription
@@ -41,12 +41,12 @@ User message arrives
 The existing `internal/action` package already supports event-triggered actions. We extend it:
 
 ```yaml
-# prism.yaml
+# prizm.yaml
 agents:
   - id: lumi
     role: lead
     provider: ollama
-    model: glm-5.1:cloud
+    model: glm-5.3-flash:cloud
     primary: true
     subscriptions:
       - "mango.task.completed"  # Lumi receives Mango's results
@@ -209,8 +209,8 @@ Roles constrain what an agent can do. The policy engine checks `capabilities` be
 Discord-based approval:
 1. Agent sends approval request via `publishEvent`
 2. Discord adapter renders message with ✅/❌ reactions
-3. User clicks reaction → Discord gateway event → Prism
-4. Prism publishes approval result
+3. User clicks reaction → Discord gateway event → Prizm
+4. Prizm publishes approval result
 5. Delegated task resumes or cancels
 
 ## File Structure
@@ -227,7 +227,7 @@ internal/
     store_test.go
     task.go            # Task struct
     task_test.go
-cmd/prism-cli/
+cmd/prizm-cli/
   cmd_serve.go         # Wire delegation engine, subscription handlers
 ```
 
@@ -235,7 +235,7 @@ cmd/prism-cli/
 
 1. **M3.1a: Task Store** — `internal/task` package, SQLite schema, CRUD
 2. **M3.1b: Delegation Engine** — `internal/delegation` package, NATS pub/sub
-3. **M3.1c: Agent Subscriptions** — Wire subscriptions from `prism.yaml` config
+3. **M3.1c: Agent Subscriptions** — Wire subscriptions from `prizm.yaml` config
 4. **M3.1d: DelegationStage** — Pipeline stage that detects delegation intent
 5. **M3.1e: Integration test** — Full delegation flow through NATS
 

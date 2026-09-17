@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Prism Workflow Editor</title>
+<title>Prizm Workflow Editor</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a0a0f;color:#e0e0e8;overflow:hidden}
@@ -454,11 +454,11 @@ async function saveConfig() {
 
 function saveLocal() {
   // Persist to localStorage for now
-  localStorage.setItem('prism-editor-state', JSON.stringify(state));
+  localStorage.setItem('prizm-editor-state', JSON.stringify(state));
 }
 
 function loadLocal() {
-  const saved = localStorage.getItem('prism-editor-state');
+  const saved = localStorage.getItem('prizm-editor-state');
   if (saved) {
     try {
       state = JSON.parse(saved);

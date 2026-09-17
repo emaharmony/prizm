@@ -4,9 +4,9 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/provider"
-	"github.com/emaharmony/prism/internal/provider/ollama"
-	"github.com/emaharmony/prism/internal/tool"
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/provider/ollama"
+	"github.com/emaharmony/prizm/internal/tool"
 )
 
 func TestConvertToolsToOllamaBasic(t *testing.T) {

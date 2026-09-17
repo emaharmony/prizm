@@ -1,4 +1,4 @@
-// Package retry provides exponential backoff retry logic for Prism.
+// Package retry provides exponential backoff retry logic for Prizm.
 //
 // This is a shared package used by both the stage pipeline and provider chain.
 // It defines what errors are retryable and provides a generic retry-with-backoff

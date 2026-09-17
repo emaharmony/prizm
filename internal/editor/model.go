@@ -2,9 +2,9 @@
 //
 // V25: Visual Workflow Editor
 //
-// The editor model represents Prism's agent configuration as a directed graph
+// The editor model represents Prizm's agent configuration as a directed graph
 // of nodes (agents, approvals, processes) and edges (delegation, review,
-// approval, event flows). Changes to the graph write back to prism.yaml.
+// approval, event flows). Changes to the graph write back to prizm.yaml.
 package editor
 
 import (
@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/emaharmony/prism/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/orchestrator"
 	"gopkg.in/yaml.v3"
 )
 
@@ -59,7 +59,7 @@ type EditorState struct {
 	Edges []EditorEdge `json:"edges"`
 }
 
-// ConfigToEditorState converts Prism agent config into an EditorState.
+// ConfigToEditorState converts Prizm agent config into an EditorState.
 // It creates nodes for each agent and edges based on subscriptions.
 func ConfigToEditorState(config *orchestrator.Config) *EditorState {
 	state := &EditorState{}
@@ -154,7 +154,7 @@ func ConfigToEditorState(config *orchestrator.Config) *EditorState {
 	return state
 }
 
-// EditorStateToConfig converts an EditorState back into a Prism config.
+// EditorStateToConfig converts an EditorState back into a Prizm config.
 // Only agent-type nodes are written to the config.
 func EditorStateToConfig(state *EditorState) *orchestrator.Config {
 	config := &orchestrator.Config{}
@@ -534,7 +534,7 @@ func WriteConfigToFile(state *EditorState, path string, allowedDir string) error
 
 	// Write atomically using os.CreateTemp in the target directory
 	dir := filepath.Dir(path)
-	tmpFile, err := os.CreateTemp(dir, "prism-editor-*.yaml.tmp")
+	tmpFile, err := os.CreateTemp(dir, "prizm-editor-*.yaml.tmp")
 	if err != nil {
 		return fmt.Errorf("create temp file error: %w", err)
 	}

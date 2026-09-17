@@ -2,12 +2,12 @@
 
 ## Mission
 
-Compose Prism's independently-callable capabilities (tools, gates, dispatch)
+Compose Prizm's independently-callable capabilities (tools, gates, dispatch)
 into named, repeatable workflows. A workflow is a YAML-defined sequence of
-steps that Prism executes in order, automatically emitting lifecycle events
+steps that Prizm executes in order, automatically emitting lifecycle events
 at every stage.
 
-**Before V7: call one thing at a time. After V7: define a workflow and Prism runs**
+**Before V7: call one thing at a time. After V7: define a workflow and Prizm runs**
 **the full sequence.**
 
 ## What Changed
@@ -19,7 +19,7 @@ at every stage.
 - Validation: name required, at least one step required
 
 ### Step Types
-- `tool.execute` — execute a registered Prism tool
+- `tool.execute` — execute a registered Prizm tool
 - `gate.evaluate` — evaluate a domain gate (domain-agnostic callback)
 - `dispatch.run` — run a dispatch adapter
 - `workflow.stop` — halt the workflow
@@ -32,15 +32,15 @@ at every stage.
 ### Workflow Runner (`internal/workflow/runner.go`)
 - `Runner.Run(ctx, workflow, input)` — execute all steps in order
 - `StepHandlers` — function-based callbacks: `ToolExecuteFunc`, `GateEvaluateFunc`, `DispatchRunFunc`
-- Prism stays domain-agnostic: no gate/dispatch concrete imports in workflow package
+- Prizm stays domain-agnostic: no gate/dispatch concrete imports in workflow package
 - Automatic lifecycle events for workflow and steps
 - State persistence: `workflow_state.json`, `workflow_summary.json`
 - Pause/resume foundation: `paused` state when approval needed
 
 ### Workflow Events
-- `prism.workflow.started/completed/failed` — workflow lifecycle
-- `prism.workflow.paused/resumed` — pause/resume support
-- `prism.workflow.step.started/completed/failed/skipped` — per-step lifecycle
+- `prizm.workflow.started/completed/failed` — workflow lifecycle
+- `prizm.workflow.paused/resumed` — pause/resume support
+- `prizm.workflow.step.started/completed/failed/skipped` — per-step lifecycle
 
 ### Condition Support (`internal/workflow/condition.go`)
 - Simple conditions: `step_id.field == "value"` expressions
@@ -55,10 +55,10 @@ at every stage.
 - End-to-end example of workflow definition, registration, and execution
 
 ### CLI Commands
-- `prism workflow list` — list all registered workflows
-- `prism workflow show <name>` — show workflow definition
-- `prism workflow run <name> --input '{...}'` — execute a workflow
-- `prism workflow status <run_id>` — check workflow run status
+- `prizm workflow list` — list all registered workflows
+- `prizm workflow show <name>` — show workflow definition
+- `prizm workflow run <name> --input '{...}'` — execute a workflow
+- `prizm workflow status <run_id>` — check workflow run status
 
 ## Key Packages/Files
 
@@ -72,14 +72,14 @@ at every stage.
 | `internal/workflow/events.go` | 9 workflow event type constants |
 | `internal/workflow/state.go` | WorkflowState persistence |
 | `internal/workflow/artifacts.go` | Artifact generation |
-| `cmd/prism-cli/main.go` | Workflow CLI commands |
+| `cmd/prizm-cli/main.go` | Workflow CLI commands |
 | `examples/workflows/demo-echo.yaml` | Demo workflow definition |
 
 ## Design Decisions
 
 1. **Function-based handlers, not concrete imports** — The workflow package doesn't
    import `internal/tool` or any gate/dispatch packages. Instead, it accepts
-   `ToolExecuteFunc` callbacks at runner construction. This keeps Prism domain-agnostic
+   `ToolExecuteFunc` callbacks at runner construction. This keeps Prizm domain-agnostic
    and prevents circular dependencies. Domain repos provide their own handlers.
 
 2. **YAML definitions, not code** — Workflows are data, not code. A YAML file
@@ -103,9 +103,9 @@ at every stage.
    example. This serves as documentation, a smoke test, and a template for new
    workflows.
 
-7. **Domain-agnostic core** — V6 (Gate System) was moved to AI-Hedge-Prism.
+7. **Domain-agnostic core** — V6 (Gate System) was moved to AI-Hedge-Prizm.
    V7's `gate.evaluate` step keeps the door open for domain repos to implement
-   their own gates through function callbacks. Prism provides the runtime;
+   their own gates through function callbacks. Prizm provides the runtime;
    domains provide the logic.
 
 ## Test Coverage
@@ -121,16 +121,16 @@ at every stage.
 ## Workflow Execution Flow
 
 ```
-prism workflow run demo.echo_tool --input '{"message": "hello"}'
+prizm workflow run demo.echo_tool --input '{"message": "hello"}'
   → Registry.Resolve("demo.echo_tool")
   → Runner.Run(ctx, workflow, input)
-    → emit(prism.workflow.started)
+    → emit(prizm.workflow.started)
     → for each step:
-        → emit(prism.workflow.step.started)
+        → emit(prizm.workflow.step.started)
         → handler(ctx, step.input)
-        → Success → emit(prism.workflow.step.completed)
-        → Failure → emit(prism.workflow.step.failed)
-        → Condition → emit(prism.workflow.step.skipped)
-    → emit(prism.workflow.completed)
+        → Success → emit(prizm.workflow.step.completed)
+        → Failure → emit(prizm.workflow.step.failed)
+        → Condition → emit(prizm.workflow.step.skipped)
+    → emit(prizm.workflow.completed)
     → Artifacts: workflow_state.json, workflow_summary.json
 ```

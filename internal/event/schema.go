@@ -1,4 +1,4 @@
-// Package event provides lightweight payload validation for Prism events.
+// Package event provides lightweight payload validation for Prizm events.
 // Schema validation is opt-in: call Validate(evt) before persisting in development
 // to catch missing required fields early. In production, it can be disabled.
 package event
@@ -13,108 +13,116 @@ type Schema struct {
 // Unknown event types are allowed (no schema enforcement).
 var Schemas = map[string]Schema{
 	// Task lifecycle
-	"prism.task.created":   {Required: []string{"task"}, Optional: []string{"provider", "model", "agent"}},
-	"prism.task.started":   {Required: []string{"task"}, Optional: []string{"run_id"}},
-	"prism.task.completed": {Required: []string{"status"}, Optional: []string{"duration_ms", "output_path"}},
-	"prism.task.failed":    {Required: []string{"error"}, Optional: []string{"status"}},
+	"prizm.task.created":   {Required: []string{"task"}, Optional: []string{"provider", "model", "agent"}},
+	"prizm.task.started":   {Required: []string{"task"}, Optional: []string{"run_id"}},
+	"prizm.task.completed": {Required: []string{"status"}, Optional: []string{"duration_ms", "output_path"}},
+	"prizm.task.failed":    {Required: []string{"error"}, Optional: []string{"status"}},
 
 	// Agent lifecycle
-	"prism.agent.started":   {Required: []string{"agent"}, Optional: []string{"model"}},
-	"prism.agent.output":    {Required: []string{"content"}, Optional: []string{"tokens"}},
-	"prism.agent.completed": {Required: []string{"status"}, Optional: []string{"duration_ms"}},
-	"prism.agent.failed":    {Required: []string{"error"}, Optional: []string{}},
+	"prizm.agent.started":   {Required: []string{"agent"}, Optional: []string{"model"}},
+	"prizm.agent.output":    {Required: []string{"content"}, Optional: []string{"tokens"}},
+	"prizm.agent.completed": {Required: []string{"status"}, Optional: []string{"duration_ms"}},
+	"prizm.agent.failed":    {Required: []string{"error"}, Optional: []string{}},
 
 	// LLM
-	"prism.llm.requested": {Required: []string{"provider", "model"}, Optional: []string{"prompt_tokens"}},
-	"prism.llm.completed": {Required: []string{"provider", "model"}, Optional: []string{"completion_tokens", "total_tokens", "latency_ms", "duration_ms"}},
-	"prism.llm.failed":    {Required: []string{"error"}, Optional: []string{"provider"}},
+	"prizm.llm.requested": {Required: []string{"provider", "model"}, Optional: []string{"prompt_tokens"}},
+	"prizm.llm.completed": {Required: []string{"provider", "model"}, Optional: []string{"completion_tokens", "total_tokens", "latency_ms", "duration_ms"}},
+	"prizm.llm.failed":    {Required: []string{"error"}, Optional: []string{"provider"}},
 
 	// Tool execution (V3)
-	"prism.tool.requested": {Required: []string{"tool_name"}, Optional: []string{"args", "policy_decision"}},
-	"prism.tool.approved":  {Required: []string{"tool_name"}, Optional: []string{"policy"}},
-	"prism.tool.denied":    {Required: []string{"tool_name"}, Optional: []string{"reason"}},
-	"prism.tool.started":   {Required: []string{"tool_name"}, Optional: []string{}},
-	"prism.tool.completed": {Required: []string{"tool_name"}, Optional: []string{"result"}},
-	"prism.tool.failed":    {Required: []string{"tool_name"}, Optional: []string{"error"}},
+	"prizm.tool.requested": {Required: []string{"tool_name"}, Optional: []string{"args", "policy_decision"}},
+	"prizm.tool.approved":  {Required: []string{"tool_name"}, Optional: []string{"policy"}},
+	"prizm.tool.denied":    {Required: []string{"tool_name"}, Optional: []string{"reason"}},
+	"prizm.tool.started":   {Required: []string{"tool_name"}, Optional: []string{}},
+	"prizm.tool.completed": {Required: []string{"tool_name"}, Optional: []string{"result"}},
+	"prizm.tool.failed":    {Required: []string{"tool_name"}, Optional: []string{"error"}},
 
 	// Approval gates (V4)
-	"prism.approval.requested": {Required: []string{"approval_id", "mutation_type"}, Optional: []string{"target_path"}},
-	"prism.approval.granted":   {Required: []string{"approval_id"}, Optional: []string{"approved_by"}},
-	"prism.approval.denied":    {Required: []string{"approval_id"}, Optional: []string{"reason"}},
-	"prism.approval.expired":   {Required: []string{"approval_id"}, Optional: []string{}},
+	"prizm.approval.requested": {Required: []string{"approval_id", "mutation_type"}, Optional: []string{"target_path"}},
+	"prizm.approval.granted":   {Required: []string{"approval_id"}, Optional: []string{"approved_by"}},
+	"prizm.approval.denied":    {Required: []string{"approval_id"}, Optional: []string{"reason"}},
+	"prizm.approval.expired":   {Required: []string{"approval_id"}, Optional: []string{}},
 
 	// Mutations (V4)
-	"prism.mutation.proposed":  {Required: []string{"mutation_type", "target_path"}, Optional: []string{"diff", "approval_id"}},
-	"prism.mutation.validated": {Required: []string{"approval_id"}, Optional: []string{"validation_status"}},
-	"prism.mutation.applied":   {Required: []string{"target_path"}, Optional: []string{"success", "approval_id"}},
-	"prism.mutation.failed":    {Required: []string{"target_path"}, Optional: []string{"error"}},
+	"prizm.mutation.proposed":  {Required: []string{"mutation_type", "target_path"}, Optional: []string{"diff", "approval_id"}},
+	"prizm.mutation.validated": {Required: []string{"approval_id"}, Optional: []string{"validation_status"}},
+	"prizm.mutation.applied":   {Required: []string{"target_path"}, Optional: []string{"success", "approval_id"}},
+	"prizm.mutation.failed":    {Required: []string{"target_path"}, Optional: []string{"error"}},
 
 	// Validation (V5)
-	"prism.validation.requested": {Required: []string{"profile"}, Optional: []string{"command"}},
-	"prism.validation.started":   {Required: []string{"profile"}, Optional: []string{"working_dir"}},
-	"prism.validation.completed": {Required: []string{"profile"}, Optional: []string{"exit_code", "duration_ms"}},
-	"prism.validation.failed":    {Required: []string{"profile"}, Optional: []string{"error"}},
-	"prism.validation.skipped":   {Required: []string{"profile"}, Optional: []string{"reason"}},
-	"prism.validation.timeout":   {Required: []string{"profile"}, Optional: []string{"timeout_seconds"}},
+	"prizm.validation.requested": {Required: []string{"profile"}, Optional: []string{"command"}},
+	"prizm.validation.started":   {Required: []string{"profile"}, Optional: []string{"working_dir"}},
+	"prizm.validation.completed": {Required: []string{"profile"}, Optional: []string{"exit_code", "duration_ms"}},
+	"prizm.validation.failed":    {Required: []string{"profile"}, Optional: []string{"error"}},
+	"prizm.validation.skipped":   {Required: []string{"profile"}, Optional: []string{"reason"}},
+	"prizm.validation.timeout":   {Required: []string{"profile"}, Optional: []string{"timeout_seconds"}},
 
 	// Review (V5)
-	"prism.review.requested": {Required: []string{"run_id"}, Optional: []string{"mutation_id"}},
-	"prism.review.started":   {Required: []string{"reviewer"}, Optional: []string{}},
-	"prism.review.completed": {Required: []string{"recommendation"}, Optional: []string{"artifact_path"}},
-	"prism.review.failed":    {Required: []string{"error"}, Optional: []string{}},
+	"prizm.review.requested": {Required: []string{"run_id"}, Optional: []string{"mutation_id"}},
+	"prizm.review.started":   {Required: []string{"reviewer"}, Optional: []string{}},
+	"prizm.review.completed": {Required: []string{"recommendation"}, Optional: []string{"artifact_path"}},
+	"prizm.review.failed":    {Required: []string{"error"}, Optional: []string{}},
 
 	// Policy (V8)
-	"prism.policy.requested":         {Required: []string{"action", "resource"}, Optional: []string{}},
-	"prism.policy.evaluated":         {Required: []string{"decision"}, Optional: []string{"rules_matched"}},
-	"prism.policy.allowed":           {Required: []string{"action", "resource"}, Optional: []string{"rule"}},
-	"prism.policy.denied":            {Required: []string{"action", "resource"}, Optional: []string{"reason"}},
-	"prism.policy.approval_required": {Required: []string{"action", "resource"}, Optional: []string{"rule"}},
-	"prism.policy.failed":            {Required: []string{"error"}, Optional: []string{}},
+	"prizm.policy.requested":         {Required: []string{"action", "resource"}, Optional: []string{}},
+	"prizm.policy.evaluated":         {Required: []string{"decision"}, Optional: []string{"rules_matched"}},
+	"prizm.policy.allowed":           {Required: []string{"action", "resource"}, Optional: []string{"rule"}},
+	"prizm.policy.denied":            {Required: []string{"action", "resource"}, Optional: []string{"reason"}},
+	"prizm.policy.approval_required": {Required: []string{"action", "resource"}, Optional: []string{"rule"}},
+	"prizm.policy.failed":            {Required: []string{"error"}, Optional: []string{}},
 
 	// Context (V2)
-	"prism.context.requested": {Required: []string{"task"}, Optional: []string{"project"}},
-	"prism.context.failed":    {Required: []string{"error"}, Optional: []string{}},
+	"prizm.context.requested": {Required: []string{"task"}, Optional: []string{"project"}},
+	"prizm.context.failed":    {Required: []string{"error"}, Optional: []string{}},
 
 	// Memory (V1)
-	"prism.memory.context_requested": {Required: []string{"task"}, Optional: []string{"project", "agent"}},
-	"prism.memory.context_built":     {Required: []string{}, Optional: []string{"memories_count", "entities_count"}},
-	"prism.memory.context_failed":    {Required: []string{"error"}, Optional: []string{}},
+	"prizm.memory.context_requested": {Required: []string{"task"}, Optional: []string{"project", "agent"}},
+	"prizm.memory.context_built":     {Required: []string{}, Optional: []string{"memories_count", "entities_count"}},
+	"prizm.memory.context_failed":    {Required: []string{"error"}, Optional: []string{}},
+
+	// Memory write lifecycle (Phase 1)
+	"prizm.memory.gate_passed":   {Required: []string{"memory_id"}, Optional: []string{"reasoning", "model"}},
+	"prizm.memory.gate_rejected": {Required: []string{}, Optional: []string{"reasoning", "model"}},
+	"prizm.memory.extracted":     {Required: []string{"memory_id"}, Optional: []string{"category", "tier", "model"}},
+	"prizm.memory.persisted":      {Required: []string{"memory_id"}, Optional: []string{"category", "tier", "source"}},
+	"prizm.memory.synced":         {Required: []string{"memory_id"}, Optional: []string{"recall_id"}},
+	"prizm.memory.sync_failed":   {Required: []string{"memory_id"}, Optional: []string{"error"}},
 
 	// Adapter (V9)
-	"prism.adapter.registered": {Required: []string{"adapter_id"}, Optional: []string{"capabilities"}},
-	"prism.adapter.health":     {Required: []string{"adapter_id"}, Optional: []string{"status"}},
-	"prism.adapter.execute":    {Required: []string{"adapter_id", "action"}, Optional: []string{"payload"}},
-	"prism.adapter.success":    {Required: []string{"adapter_id"}, Optional: []string{"result"}},
-	"prism.adapter.failed":     {Required: []string{"adapter_id"}, Optional: []string{"error"}},
+	"prizm.adapter.registered": {Required: []string{"adapter_id"}, Optional: []string{"capabilities"}},
+	"prizm.adapter.health":     {Required: []string{"adapter_id"}, Optional: []string{"status"}},
+	"prizm.adapter.execute":    {Required: []string{"adapter_id", "action"}, Optional: []string{"payload"}},
+	"prizm.adapter.success":    {Required: []string{"adapter_id"}, Optional: []string{"result"}},
+	"prizm.adapter.failed":     {Required: []string{"adapter_id"}, Optional: []string{"error"}},
 
 	// Projection (V10)
-	"prism.projection.started":   {Required: []string{"projection_id"}, Optional: []string{"event_type"}},
-	"prism.projection.completed": {Required: []string{"projection_id"}, Optional: []string{"state"}},
-	"prism.projection.failed":    {Required: []string{"projection_id"}, Optional: []string{"error"}},
+	"prizm.projection.started":   {Required: []string{"projection_id"}, Optional: []string{"event_type"}},
+	"prizm.projection.completed": {Required: []string{"projection_id"}, Optional: []string{"state"}},
+	"prizm.projection.failed":    {Required: []string{"projection_id"}, Optional: []string{"error"}},
 
 	// Workflow (V7)
-	"prism.workflow.started":        {Required: []string{"workflow_id", "name"}, Optional: []string{"steps"}},
-	"prism.workflow.step.started":   {Required: []string{"step_id"}, Optional: []string{"step_name"}},
-	"prism.workflow.step.completed": {Required: []string{"step_id"}, Optional: []string{"result"}},
-	"prism.workflow.step.failed":    {Required: []string{"step_id"}, Optional: []string{"error"}},
-	"prism.workflow.step.skipped":   {Required: []string{"step_id"}, Optional: []string{"reason"}},
-	"prism.workflow.paused":         {Required: []string{"workflow_id"}, Optional: []string{"pending_approval_id"}},
-	"prism.workflow.resumed":        {Required: []string{"workflow_id"}, Optional: []string{"approval_id"}},
-	"prism.workflow.completed":      {Required: []string{"workflow_id"}, Optional: []string{"status"}},
-	"prism.workflow.failed":         {Required: []string{"workflow_id"}, Optional: []string{"error"}},
+	"prizm.workflow.started":        {Required: []string{"workflow_id", "name"}, Optional: []string{"steps"}},
+	"prizm.workflow.step.started":   {Required: []string{"step_id"}, Optional: []string{"step_name"}},
+	"prizm.workflow.step.completed": {Required: []string{"step_id"}, Optional: []string{"result"}},
+	"prizm.workflow.step.failed":    {Required: []string{"step_id"}, Optional: []string{"error"}},
+	"prizm.workflow.step.skipped":   {Required: []string{"step_id"}, Optional: []string{"reason"}},
+	"prizm.workflow.paused":         {Required: []string{"workflow_id"}, Optional: []string{"pending_approval_id"}},
+	"prizm.workflow.resumed":        {Required: []string{"workflow_id"}, Optional: []string{"approval_id"}},
+	"prizm.workflow.completed":      {Required: []string{"workflow_id"}, Optional: []string{"status"}},
+	"prizm.workflow.failed":         {Required: []string{"workflow_id"}, Optional: []string{"error"}},
 
 	// Cost (V16)
-	"prism.cost.tracked":  {Required: []string{"provider", "model"}, Optional: []string{"prompt_tokens", "completion_tokens", "estimated_cost_usd"}},
-	"prism.cost.reported": {Required: []string{"run_id"}, Optional: []string{"total_tokens", "estimated_cost_usd"}},
+	"prizm.cost.tracked":  {Required: []string{"provider", "model"}, Optional: []string{"prompt_tokens", "completion_tokens", "estimated_cost_usd"}},
+	"prizm.cost.reported": {Required: []string{"run_id"}, Optional: []string{"total_tokens", "estimated_cost_usd"}},
 
 	// Context injection (V19)
-	"prism.context.file_read": {Required: []string{"file", "source"}, Optional: []string{"size_bytes", "estimated_tokens"}},
-	"prism.context.injected":  {Required: []string{"run_id"}, Optional: []string{"files", "total_tokens", "truncated", "truncation_applied"}},
+	"prizm.context.file_read": {Required: []string{"file", "source"}, Optional: []string{"size_bytes", "estimated_tokens"}},
+	"prizm.context.injected":  {Required: []string{"run_id"}, Optional: []string{"files", "total_tokens", "truncated", "truncation_applied"}},
 
 	// System
-	"prism.system.health":         {Required: []string{"status"}, Optional: []string{"version", "uptime"}},
-	"prism.persistence.completed": {Required: []string{"run_id"}, Optional: []string{"stage", "checkpoint_id"}},
-	"prism.output.written":        {Required: []string{"path"}, Optional: []string{"size_bytes"}},
+	"prizm.system.health":         {Required: []string{"status"}, Optional: []string{"version", "uptime"}},
+	"prizm.persistence.completed": {Required: []string{"run_id"}, Optional: []string{"stage", "checkpoint_id"}},
+	"prizm.output.written":        {Required: []string{"path"}, Optional: []string{"size_bytes"}},
 }
 
 // ValidationError represents a schema validation failure.

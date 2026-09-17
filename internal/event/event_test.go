@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 func TestNewID(t *testing.T) {
@@ -53,15 +53,15 @@ func TestNewSessionID(t *testing.T) {
 }
 
 func TestNewEvent(t *testing.T) {
-	evt := event.NewEvent(event.V1EventTypes.TaskCreated, "prism-cli", map[string]any{
+	evt := event.NewEvent(event.V1EventTypes.TaskCreated, "prizm-cli", map[string]any{
 		"task": "test task",
 	})
 
-	if evt.Type != "prism.task.created" {
-		t.Errorf("expected type 'prism.task.created', got %s", evt.Type)
+	if evt.Type != "prizm.task.created" {
+		t.Errorf("expected type 'prizm.task.created', got %s", evt.Type)
 	}
-	if evt.Source != "prism-cli" {
-		t.Errorf("expected source 'prism-cli', got %s", evt.Source)
+	if evt.Source != "prizm-cli" {
+		t.Errorf("expected source 'prizm-cli', got %s", evt.Source)
 	}
 	if evt.ID == "" {
 		t.Error("expected non-empty ID")
@@ -80,7 +80,7 @@ func TestNewEvent(t *testing.T) {
 }
 
 func TestEventWithCorrelationID(t *testing.T) {
-	evt := event.NewEvent(event.V1EventTypes.TaskStarted, "prism-cli", nil)
+	evt := event.NewEvent(event.V1EventTypes.TaskStarted, "prizm-cli", nil)
 	evt = evt.WithCorrelationID("corr_test123")
 	if evt.CorrelationID != "corr_test123" {
 		t.Errorf("expected correlation_id='corr_test123', got %s", evt.CorrelationID)
@@ -88,7 +88,7 @@ func TestEventWithCorrelationID(t *testing.T) {
 }
 
 func TestEventWithParentID(t *testing.T) {
-	evt := event.NewEvent(event.V1EventTypes.AgentStarted, "prism-cli", nil)
+	evt := event.NewEvent(event.V1EventTypes.AgentStarted, "prizm-cli", nil)
 	evt = evt.WithParentID("evt_parent123")
 	if evt.ParentID != "evt_parent123" {
 		t.Errorf("expected parent_id='evt_parent123', got %s", evt.ParentID)
@@ -96,11 +96,11 @@ func TestEventWithParentID(t *testing.T) {
 }
 
 func TestEventWithMetadata(t *testing.T) {
-	evt := event.NewEvent(event.V1EventTypes.TaskCreated, "prism-cli", nil)
+	evt := event.NewEvent(event.V1EventTypes.TaskCreated, "prizm-cli", nil)
 	evt = evt.WithMetadata(event.EventMetadata{
 		RunID:     "run_abc",
 		SessionID: "sess_xyz",
-		Project:   "prism",
+		Project:   "prizm",
 		Agent:     "lumi",
 	})
 	if evt.Metadata.RunID != "run_abc" {
@@ -112,7 +112,7 @@ func TestEventWithMetadata(t *testing.T) {
 }
 
 func TestEventJSONRoundTrip(t *testing.T) {
-	original := event.NewEvent(event.V1EventTypes.AgentOutput, "prism-cli", map[string]any{
+	original := event.NewEvent(event.V1EventTypes.AgentOutput, "prizm-cli", map[string]any{
 		"status":  "completed",
 		"summary": "Task executed",
 	})
@@ -120,7 +120,7 @@ func TestEventJSONRoundTrip(t *testing.T) {
 	original = original.WithParentID("evt_parent")
 	original = original.WithMetadata(event.EventMetadata{
 		RunID:   "run_test",
-		Project: "prism",
+		Project: "prizm",
 		Agent:   "lumi",
 	})
 
@@ -156,21 +156,21 @@ func TestV1EventTypes(t *testing.T) {
 		name     string
 		expected string
 	}{
-		{"TaskCreated", "prism.task.created"},
-		{"TaskStarted", "prism.task.started"},
-		{"TaskCompleted", "prism.task.completed"},
-		{"TaskFailed", "prism.task.failed"},
-		{"MemoryContextRequested", "prism.memory.context_requested"},
-		{"MemoryContextBuilt", "prism.memory.context_built"},
-		{"MemoryContextFailed", "prism.memory.context_failed"},
-		{"AgentStarted", "prism.agent.started"},
-		{"AgentOutput", "prism.agent.output"},
-		{"AgentCompleted", "prism.agent.completed"},
-		{"AgentFailed", "prism.agent.failed"},
-		{"ToolCalled", "prism.tool.called"},
-		{"ToolResult", "prism.tool.result"},
-		{"ToolFailed", "prism.tool.failed"},
-		{"SystemHealth", "prism.system.health"},
+		{"TaskCreated", "prizm.task.created"},
+		{"TaskStarted", "prizm.task.started"},
+		{"TaskCompleted", "prizm.task.completed"},
+		{"TaskFailed", "prizm.task.failed"},
+		{"MemoryContextRequested", "prizm.memory.context_requested"},
+		{"MemoryContextBuilt", "prizm.memory.context_built"},
+		{"MemoryContextFailed", "prizm.memory.context_failed"},
+		{"AgentStarted", "prizm.agent.started"},
+		{"AgentOutput", "prizm.agent.output"},
+		{"AgentCompleted", "prizm.agent.completed"},
+		{"AgentFailed", "prizm.agent.failed"},
+		{"ToolCalled", "prizm.tool.called"},
+		{"ToolResult", "prizm.tool.result"},
+		{"ToolFailed", "prizm.tool.failed"},
+		{"SystemHealth", "prizm.system.health"},
 	}
 
 	for _, tc := range types {
@@ -217,9 +217,9 @@ func TestV1EventTypes(t *testing.T) {
 }
 
 func TestEventNoSecretsInPayload(t *testing.T) {
-	evt := event.NewEvent(event.V1EventTypes.TaskCreated, "prism-cli", map[string]any{
+	evt := event.NewEvent(event.V1EventTypes.TaskCreated, "prizm-cli", map[string]any{
 		"task":    "test",
-		"project": "prism",
+		"project": "prizm",
 	})
 	// Verify no common secret keys appear in JSON
 	data, _ := json.Marshal(evt)

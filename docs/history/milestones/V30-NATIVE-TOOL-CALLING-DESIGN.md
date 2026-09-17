@@ -2,7 +2,7 @@
 
 ## Problem
 
-Prism's current tool system uses **text-based tool requests** — the model must emit JSON like `{"type": "tool_request", "tool": "read_file", "input": {"path": "MEMORY.md"}}` in its text response, and `ParseAgentOutput` regex-scans to detect it. This is fragile because:
+Prizm's current tool system uses **text-based tool requests** — the model must emit JSON like `{"type": "tool_request", "tool": "read_file", "input": {"path": "MEMORY.md"}}` in its text response, and `ParseAgentOutput` regex-scans to detect it. This is fragile because:
 
 1. Models often **talk about** using tools instead of actually calling them ("Let me search for that!" → final response, not tool_request)
 2. Different models format tool calls differently, making parsing unreliable
@@ -153,7 +153,7 @@ type ollamaFunction struct {
 
 #### 4. Tool Schema Conversion (`internal/provider/ollama/tools.go`)
 
-Convert Prism's `tool.ToolInfo` to Ollama's function schema format.
+Convert Prizm's `tool.ToolInfo` to Ollama's function schema format.
 
 **Security note (Mango fix #9):** Only expose public metadata (names, descriptions, parameter schemas). Never include workspace paths, implementation details, or file contents in tool schemas.
 
@@ -216,7 +216,7 @@ Handling:
 
 **Mango fix #6 (batch tool execution):** When `tool_calls` has multiple entries, execute them all and count as 1 iteration. Read-only tools can be executed in parallel; mutation tools execute sequentially.
 
-#### 6. Two-Path Tool Loop (`cmd/prism-cli/tool_loop.go`)
+#### 6. Two-Path Tool Loop (`cmd/prizm-cli/tool_loop.go`)
 
 **Mango fix #4:** Refactor into two distinct paths.
 
@@ -252,7 +252,7 @@ func (cc *conversationContext) runToolLoopText(
 - Bad arguments → feed error back: "Error: invalid arguments for tool 'read_file': ..."
 - Tool execution failure → feed error back: "Error: tool 'read_file' failed: ..."
 
-#### 7. Pipeline Changes (`cmd/prism-cli/cmd_serve.go`)
+#### 7. Pipeline Changes (`cmd/prizm-cli/cmd_serve.go`)
 
 ```go
 // In handleDiscordMessage, after LLM response:
@@ -320,14 +320,14 @@ For now (V30), streaming is handled the same way as the current sync path: send 
 - `internal/provider/ollama/tools.go` — Tool schema conversion (ToolInfo → ollamaFunction)
 - `internal/provider/ollama/chat_test.go` — Unit tests for chat provider
 - `internal/provider/ollama/tools_test.go` — Unit tests for schema conversion
-- `cmd/prism-cli/tool_loop_chat.go` — Native tool loop path
-- `cmd/prism-cli/messages.go` — buildMessages() and buildSystemPrompt()
+- `cmd/prizm-cli/tool_loop_chat.go` — Native tool loop path
+- `cmd/prizm-cli/messages.go` — buildMessages() and buildSystemPrompt()
 
 **Modified:**
 - `internal/provider/provider.go` — Add ChatProvider, ChatGenerateRequest, ChatGenerateResponse, ChatMessage, ToolCall, FunctionCall types
 - `internal/provider/ollama/ollama.go` — Register as ChatProvider via interface assertion
-- `cmd/prism-cli/cmd_serve.go` — Branch on ChatProvider vs Provider in handleDiscordMessage
-- `cmd/prism-cli/tool_loop.go` — Rename to runToolLoopText, add runToolLoopChat
+- `cmd/prizm-cli/cmd_serve.go` — Branch on ChatProvider vs Provider in handleDiscordMessage
+- `cmd/prizm-cli/tool_loop.go` — Rename to runToolLoopText, add runToolLoopChat
 - `internal/tool/registry.go` — Add ListAsOllamaFunctions() method
 
 ### Testing Plan (Mango fixes #5-8)
@@ -341,7 +341,7 @@ For now (V30), streaming is handled the same way as the current sync path: send 
 | 5 | Unit: Bad arguments error recovery — malformed args → error message | ✅ Done (tool_loop_chat.go: executeChatTool handles execution errors) |
 | 6 | Unit: Batch tool execution — multiple tool_calls in one response | ✅ Done (`chat_test.go`: TestMultipleToolCalls) |
 | 7 | Integration: Mock Ollama chat server — full round-trip | ✅ Done (`chat_test.go`: all tests use httptest mock server) |
-| 8 | E2E: read_file trigger — native tool call triggers read_file | 🔲 Needs live Prism instance |
+| 8 | E2E: read_file trigger — native tool call triggers read_file | 🔲 Needs live Prizm instance |
 | 9 | E2E: Fallback path — provider without ChatProvider → text parsing | ✅ Verified (cmd_serve.go branches on GetChatProvider) |
 | 10 | Security: Tool schema audit — only public metadata in schemas | ✅ Done (`tools_test.go`: TestConvertToolsToOllamaSecurity) |
 

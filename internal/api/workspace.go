@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	prismctx "github.com/emaharmony/prism/internal/context"
-	"github.com/emaharmony/prism/internal/safety"
+	prizmctx "github.com/emaharmony/prizm/internal/context"
+	"github.com/emaharmony/prizm/internal/safety"
 )
 
 // This file implements the shared-workspace markdown editor: the *.md context
@@ -17,7 +17,7 @@ import (
 // their `context:` selection. All paths are jailed under the workspace root with
 // safety.ResolveAndContain and restricted to .md, and writes are atomic
 // (temp + rename). Context is read cached at runtime, so edits apply on the next
-// context build / `prism serve` restart.
+// context build / `prizm serve` restart.
 
 type workspaceFileInfo struct {
 	Name      string `json:"name"`   // file name relative to workspace root
@@ -41,7 +41,7 @@ func (s *Server) handleWorkspaceFiles(w http.ResponseWriter, r *http.Request) {
 
 	// filename -> named key ("" if not a NamedSource)
 	seen := map[string]string{}
-	for key, fname := range prismctx.NamedSources {
+	for key, fname := range prizmctx.NamedSources {
 		seen[fname] = key
 	}
 

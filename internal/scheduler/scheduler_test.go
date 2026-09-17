@@ -225,7 +225,7 @@ func TestAddJob(t *testing.T) {
 	err := s.AddJob(&Job{
 		Name:     "daily-review",
 		Schedule: schedule,
-		Event:    "prism.task.scheduled",
+		Event:    "prizm.task.scheduled",
 		Payload:  map[string]any{"action": "daily_review"},
 		Enabled:  true,
 	})
@@ -247,7 +247,7 @@ func TestAddJobValidation(t *testing.T) {
 	s := NewScheduler(pub)
 
 	// Empty name
-	err := s.AddJob(&Job{Name: "", Event: "prism.task.scheduled"})
+	err := s.AddJob(&Job{Name: "", Event: "prizm.task.scheduled"})
 	if err == nil {
 		t.Error("expected error for empty job name")
 	}
@@ -267,7 +267,7 @@ func TestFireJob(t *testing.T) {
 	s.AddJob(&Job{
 		Name:     "test-job",
 		Schedule: schedule,
-		Event:    "prism.task.scheduled",
+		Event:    "prizm.task.scheduled",
 		Payload:  map[string]any{"action": "test"},
 		Enabled:  true,
 	})
@@ -278,8 +278,8 @@ func TestFireJob(t *testing.T) {
 	if len(pub.events) != 1 {
 		t.Fatalf("expected 1 published event, got %d", len(pub.events))
 	}
-	if pub.events[0].subject != "prism.task.scheduled" {
-		t.Errorf("event subject = %q, want %q", pub.events[0].subject, "prism.task.scheduled")
+	if pub.events[0].subject != "prizm.task.scheduled" {
+		t.Errorf("event subject = %q, want %q", pub.events[0].subject, "prizm.task.scheduled")
 	}
 	if pub.events[0].data["action"] != "test" {
 		t.Errorf("payload action = %v, want %q", pub.events[0].data["action"], "test")
@@ -300,7 +300,7 @@ func TestDisabledJobNotFired(t *testing.T) {
 	s.AddJob(&Job{
 		Name:     "disabled-job",
 		Schedule: schedule,
-		Event:    "prism.task.scheduled",
+		Event:    "prizm.task.scheduled",
 		Payload:  map[string]any{"action": "test"},
 		Enabled:  false,
 	})
@@ -320,7 +320,7 @@ func TestSchedulerStartStop(t *testing.T) {
 	s.AddJob(&Job{
 		Name:     "test-job",
 		Schedule: schedule,
-		Event:    "prism.task.scheduled",
+		Event:    "prizm.task.scheduled",
 		Payload:  map[string]any{"action": "test"},
 		Enabled:  true,
 	})
@@ -343,8 +343,8 @@ func TestMultipleJobs(t *testing.T) {
 	sched1, _ := ParseCron("0 3 * * *")
 	sched2, _ := ParseCron("0 3 * * 0")
 
-	s.AddJob(&Job{Name: "daily-review", Schedule: sched1, Event: "prism.task.scheduled", Payload: map[string]any{"action": "daily_review"}, Enabled: true})
-	s.AddJob(&Job{Name: "weekly-consolidation", Schedule: sched2, Event: "prism.task.scheduled", Payload: map[string]any{"action": "weekly_consolidation"}, Enabled: true})
+	s.AddJob(&Job{Name: "daily-review", Schedule: sched1, Event: "prizm.task.scheduled", Payload: map[string]any{"action": "daily_review"}, Enabled: true})
+	s.AddJob(&Job{Name: "weekly-consolidation", Schedule: sched2, Event: "prizm.task.scheduled", Payload: map[string]any{"action": "weekly_consolidation"}, Enabled: true})
 
 	jobs := s.Jobs()
 	if len(jobs) != 2 {
@@ -381,7 +381,7 @@ func TestNilPublisher(t *testing.T) {
 	s.AddJob(&Job{
 		Name:     "test-job",
 		Schedule: schedule,
-		Event:    "prism.task.scheduled",
+		Event:    "prizm.task.scheduled",
 		Payload:  map[string]any{"action": "test"},
 		Enabled:  true,
 	})
@@ -395,7 +395,7 @@ func TestDoubleStart(t *testing.T) {
 	s := NewScheduler(pub)
 
 	schedule, _ := ParseCron("0 3 * * *") // 3 AM — won't fire during test
-	s.AddJob(&Job{Name: "double-start", Schedule: schedule, Event: "prism.task.scheduled", Enabled: true})
+	s.AddJob(&Job{Name: "double-start", Schedule: schedule, Event: "prizm.task.scheduled", Enabled: true})
 
 	// Start twice — second call should be a no-op
 	var fired atomic.Int32
@@ -414,7 +414,7 @@ func TestStopWaitsForInFlight(t *testing.T) {
 
 	// Use a wildcard schedule so it fires immediately
 	schedule, _ := ParseCron("* * * * *")
-	s.AddJob(&Job{Name: "inflight", Schedule: schedule, Event: "prism.task.scheduled", Payload: map[string]any{"action": "test"}, Enabled: true})
+	s.AddJob(&Job{Name: "inflight", Schedule: schedule, Event: "prizm.task.scheduled", Payload: map[string]any{"action": "test"}, Enabled: true})
 
 	// Start and fire a job, then stop
 	go s.Start()

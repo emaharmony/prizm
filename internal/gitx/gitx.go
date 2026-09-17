@@ -109,8 +109,8 @@ func DeleteBranch(ctx context.Context, root, branch string) {
 
 // EnsureExcluded appends pattern to the repo's .git/info/exclude (repo-local
 // ignore, never committed) unless already present. Used so run worktrees under
-// .prism/ don't make the parent repo read as dirty in target repos that don't
-// gitignore .prism themselves.
+// .prizm/ don't make the parent repo read as dirty in target repos that don't
+// gitignore .prizm themselves.
 func EnsureExcluded(ctx context.Context, root, pattern string) error {
 	gitDir, err := RunCommand(ctx, root, "", "git", "rev-parse", "--git-common-dir")
 	if err != nil {

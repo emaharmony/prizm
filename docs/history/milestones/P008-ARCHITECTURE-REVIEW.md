@@ -65,7 +65,7 @@ The gate doesn't ADD new risk — it only reduces unnecessary tool exposure. If 
 ### 6. Implementation Concerns
 
 **a) Keyword list must be configurable**
-Hardcoded keywords will age. Allow `tool_gate.keywords` in prism.yaml so we can tune without redeploying.
+Hardcoded keywords will age. Allow `tool_gate.keywords` in prizm.yaml so we can tune without redeploying.
 
 **b) Agent messages should bypass the gate**
 Already noted in design. Agent-to-agent messages are task-oriented by definition. Confirm: the bypass should check `isAgentBot()` or the `msg.IsBot` field.
@@ -81,8 +81,8 @@ Every gate decision should log: message (truncated), decision, reason, tools inc
 Design is sound. Proceed to implementation with these action items:
 1. Gate receives raw user message only, not framed context
 2. Both code paths (chat + text) gated
-3. Keyword list configurable via prism.yaml
+3. Keyword list configurable via prizm.yaml
 4. Agent messages bypass gate
 5. Log every gate decision for observability
 
-**Mango review pending** — when available, have Mango read `/Users/ema/projects/repos/prism/docs/P008-TOOL-GATE-DESIGN.md` and this review.
+**Mango review pending** — when available, have Mango read `/Users/ema/projects/repos/prizm/docs/P008-TOOL-GATE-DESIGN.md` and this review.

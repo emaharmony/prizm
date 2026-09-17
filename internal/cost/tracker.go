@@ -1,4 +1,4 @@
-// Package cost provides token usage aggregation and cost reporting for Prism runs.
+// Package cost provides token usage aggregation and cost reporting for Prizm runs.
 // It subscribes to LLM events and accumulates per-provider, per-model, and per-agent costs.
 package cost
 

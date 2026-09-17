@@ -1,8 +1,8 @@
-# Prism Event Manual
+# Prizm Event Manual
 
-> Complete reference for all canonical Prism events, their namespaces, payloads, and causal chains.
+> Complete reference for all canonical Prizm events, their namespaces, payloads, and causal chains.
 
-Every meaningful action in Prism becomes a **canonical event** — an immutable, timestamped record that flows through the event bus. Events are Prism's universal language. They enable observability, replay, auditing, and extensibility.
+Every meaningful action in Prizm becomes a **canonical event** — an immutable, timestamped record that flows through the event bus. Events are Prizm's universal language. They enable observability, replay, auditing, and extensibility.
 
 ---
 
@@ -11,7 +11,7 @@ Every meaningful action in Prism becomes a **canonical event** — an immutable,
 ```json
 {
   "id": "evt_01JXXXXXXXXXXXX",
-  "type": "prism.task.started",
+  "type": "prizm.task.started",
   "source": "runner",
   "timestamp": "2026-05-19T17:00:00.000Z",
   "correlation_id": "corr_01JXXXXXXXXXXXX",
@@ -32,7 +32,7 @@ Every meaningful action in Prism becomes a **canonical event** — an immutable,
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Unique ULID-based ID (`evt_`) |
-| `type` | string | Namespace-qualified event type (e.g., `prism.task.started`) |
+| `type` | string | Namespace-qualified event type (e.g., `prizm.task.started`) |
 | `source` | string | Component that emitted the event |
 | `timestamp` | string | RFC 3339 Nano timestamp |
 | `correlation_id` | string | Groups all events from the same logical request |
@@ -44,265 +44,265 @@ Every meaningful action in Prism becomes a **canonical event** — an immutable,
 
 ## Event Namespaces
 
-Prism events are organized into **15 namespaces**, each representing a domain:
+Prizm events are organized into **15 namespaces**, each representing a domain:
 
 | Namespace | Domain | Since |
 |-----------|--------|-------|
-| `prism.task` | Task lifecycle | V1 |
-| `prism.agent` | Agent lifecycle | V1 |
-| `prism.tool` | Tool execution | V1/V3 |
-| `prism.memory` | Memory context | V1 |
-| `prism.llm` | LLM calls | V2 |
-| `prism.context` | Context injection | 14 (V2 had `prism.context.requested/injected/failed`, V19 adds `prism.context.file_read` and redefines `prism.context.injected` with richer payload) |
-| `prism.approval` | Approval gates | V4 |
-| `prism.mutation` | File mutations | V4 |
-| `prism.validation` | Validation profiles | V5 |
-| `prism.review` | Deterministic review | V5 |
-| `prism.policy` | Policy decisions | V8 |
-| `prism.adapter` | Adapter lifecycle | V9 |
-| `prism.projection` | State projections | V10 |
-| `prism.workflow` | Workflow orchestration | V7 |
-| `prism.cost` | Cost tracking | V16 |
-| `prism.context` | Context injection | V19 |
-| `prism.system` | System health | V1 |
-| `prism.persistence` | WAL checkpoint | V14d |
-| `prism.output` | Output artifacts | V2 |
+| `prizm.task` | Task lifecycle | V1 |
+| `prizm.agent` | Agent lifecycle | V1 |
+| `prizm.tool` | Tool execution | V1/V3 |
+| `prizm.memory` | Memory context | V1 |
+| `prizm.llm` | LLM calls | V2 |
+| `prizm.context` | Context injection | 14 (V2 had `prizm.context.requested/injected/failed`, V19 adds `prizm.context.file_read` and redefines `prizm.context.injected` with richer payload) |
+| `prizm.approval` | Approval gates | V4 |
+| `prizm.mutation` | File mutations | V4 |
+| `prizm.validation` | Validation profiles | V5 |
+| `prizm.review` | Deterministic review | V5 |
+| `prizm.policy` | Policy decisions | V8 |
+| `prizm.adapter` | Adapter lifecycle | V9 |
+| `prizm.projection` | State projections | V10 |
+| `prizm.workflow` | Workflow orchestration | V7 |
+| `prizm.cost` | Cost tracking | V16 |
+| `prizm.context` | Context injection | V19 |
+| `prizm.system` | System health | V1 |
+| `prizm.persistence` | WAL checkpoint | V14d |
+| `prizm.output` | Output artifacts | V2 |
 
 ---
 
 ## Complete Event Reference
 
-### Task Lifecycle (`prism.task.*`)
+### Task Lifecycle (`prizm.task.*`)
 
 The root of every run. A task is the top-level unit of work.
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.task.created` | Run initialized | `task`, `provider`, `model` |
-| `prism.task.started` | Execution begins | `task`, `run_id` |
-| `prism.task.completed` | Run finished successfully | `status`, `duration_ms` |
-| `prism.task.failed` | Run failed | `error`, `status` |
+| `prizm.task.created` | Run initialized | `task`, `provider`, `model` |
+| `prizm.task.started` | Execution begins | `task`, `run_id` |
+| `prizm.task.completed` | Run finished successfully | `status`, `duration_ms` |
+| `prizm.task.failed` | Run failed | `error`, `status` |
 
 **Causal chain:** `task.created → task.started → ... → task.completed | task.failed`
 
 ---
 
-### Agent Lifecycle (`prism.agent.*`)
+### Agent Lifecycle (`prizm.agent.*`)
 
 An agent processes a task. Events track when the agent starts, produces output, and finishes.
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.agent.started` | Agent begins processing | `agent`, `model` |
-| `prism.agent.output` | Agent produces intermediate output | `content`, `tokens` |
-| `prism.agent.completed` | Agent finishes | `status`, `duration_ms` |
-| `prism.agent.failed` | Agent errors out | `error` |
+| `prizm.agent.started` | Agent begins processing | `agent`, `model` |
+| `prizm.agent.output` | Agent produces intermediate output | `content`, `tokens` |
+| `prizm.agent.completed` | Agent finishes | `status`, `duration_ms` |
+| `prizm.agent.failed` | Agent errors out | `error` |
 
 **Causal chain:** `task.started → agent.started → [agent.output...] → agent.completed | agent.failed`
 
 ---
 
-### LLM Calls (`prism.llm.*`)
+### LLM Calls (`prizm.llm.*`)
 
 Each LLM call produces a request/completion pair. Streaming responses produce intermediate chunks via SSE.
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.llm.requested` | LLM API call initiated | `provider`, `model`, `prompt_tokens` |
-| `prism.llm.completed` | LLM response received | `completion_tokens`, `latency_ms` |
-| `prism.llm.failed` | LLM call failed | `error`, `provider` |
+| `prizm.llm.requested` | LLM API call initiated | `provider`, `model`, `prompt_tokens` |
+| `prizm.llm.completed` | LLM response received | `completion_tokens`, `latency_ms` |
+| `prizm.llm.failed` | LLM call failed | `error`, `provider` |
 
 **Causal chain:** `agent.started → llm.requested → llm.completed | llm.failed`
 
 ---
 
-### Tool Execution (`prism.tool.*`)
+### Tool Execution (`prizm.tool.*`)
 
 V1 defined basic tool events. V3 added the full tool lifecycle with policy gates.
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.tool.called` | Tool invoked (V1 basic) | `tool_name`, `args` |
-| `prism.tool.result` | Tool returned result (V1 basic) | `result` |
-| `prism.tool.failed` | Tool errored (V1 basic) | `error` |
-| `prism.tool.requested` | Tool execution requested (V3) | `tool_name`, `args`, `policy_decision` |
-| `prism.tool.approved` | Policy allows tool (V3) | `tool_name`, `policy` |
-| `prism.tool.denied` | Policy blocks tool (V3) | `tool_name`, `reason` |
-| `prism.tool.started` | Tool execution begins (V3) | `tool_name` |
-| `prism.tool.completed` | Tool execution succeeds (V3) | `tool_name`, `result` |
+| `prizm.tool.called` | Tool invoked (V1 basic) | `tool_name`, `args` |
+| `prizm.tool.result` | Tool returned result (V1 basic) | `result` |
+| `prizm.tool.failed` | Tool errored (V1 basic) | `error` |
+| `prizm.tool.requested` | Tool execution requested (V3) | `tool_name`, `args`, `policy_decision` |
+| `prizm.tool.approved` | Policy allows tool (V3) | `tool_name`, `policy` |
+| `prizm.tool.denied` | Policy blocks tool (V3) | `tool_name`, `reason` |
+| `prizm.tool.started` | Tool execution begins (V3) | `tool_name` |
+| `prizm.tool.completed` | Tool execution succeeds (V3) | `tool_name`, `result` |
 
 **Causal chain (V3):** `tool.requested → [tool.approved | tool.denied] → tool.started → tool.completed | tool.failed`
 
 ---
 
-### Context Injection (`prism.context.*`)
+### Context Injection (`prizm.context.*`)
 
 Context events track memory/context injection before LLM calls.
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.context.requested` | Context lookup initiated | `task`, `project` |
-| `prism.context.injected` | Context added to prompt | `context_size`, `source` |
-| `prism.context.failed` | Context lookup failed | `error` |
+| `prizm.context.requested` | Context lookup initiated | `task`, `project` |
+| `prizm.context.injected` | Context added to prompt | `context_size`, `source` |
+| `prizm.context.failed` | Context lookup failed | `error` |
 
 ---
 
-### Memory Context (`prism.memory.*`)
+### Memory Context (`prizm.memory.*`)
 
-Remembrance integration events. Emitted when Prism connects to the Remembrance memory service.
+Remembrance integration events. Emitted when Prizm connects to the Remembrance memory service.
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.memory.context_requested` | Memory lookup started | `task`, `project`, `agent` |
-| `prism.memory.context_built` | Memory context assembled | `memories_count`, `entities_count` |
-| `prism.memory.context_failed` | Memory lookup failed | `error` |
+| `prizm.memory.context_requested` | Memory lookup started | `task`, `project`, `agent` |
+| `prizm.memory.context_built` | Memory context assembled | `memories_count`, `entities_count` |
+| `prizm.memory.context_failed` | Memory lookup failed | `error` |
 
 ---
 
-### Approval Gates (`prism.approval.*`)
+### Approval Gates (`prizm.approval.*`)
 
 V4 approval-gated mutations. Human-in-the-loop for file writes and other risky operations.
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.approval.requested` | Mutation needs approval | `approval_id`, `mutation_type`, `target_path` |
-| `prism.approval.granted` | Human approved | `approval_id`, `approved_by` |
-| `prism.approval.denied` | Human denied | `approval_id`, `reason` |
-| `prism.approval.expired` | Approval timed out | `approval_id` |
+| `prizm.approval.requested` | Mutation needs approval | `approval_id`, `mutation_type`, `target_path` |
+| `prizm.approval.granted` | Human approved | `approval_id`, `approved_by` |
+| `prizm.approval.denied` | Human denied | `approval_id`, `reason` |
+| `prizm.approval.expired` | Approval timed out | `approval_id` |
 
 **Causal chain:** `mutation.proposed → approval.requested → [approval.granted | approval.denied | approval.expired]`
 
 ---
 
-### Mutations (`prism.mutation.*`)
+### Mutations (`prizm.mutation.*`)
 
 File mutations after approval.
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.mutation.proposed` | File change proposed | `mutation_type`, `target_path`, `diff` |
-| `prism.mutation.validated` | Validation passed | `approval_id`, `validation_status` |
-| `prism.mutation.applied` | File change written | `target_path`, `success` |
-| `prism.mutation.failed` | File write failed | `target_path`, `error` |
+| `prizm.mutation.proposed` | File change proposed | `mutation_type`, `target_path`, `diff` |
+| `prizm.mutation.validated` | Validation passed | `approval_id`, `validation_status` |
+| `prizm.mutation.applied` | File change written | `target_path`, `success` |
+| `prizm.mutation.failed` | File write failed | `target_path`, `error` |
 
 ---
 
-### Validation (`prism.validation.*`)
+### Validation (`prizm.validation.*`)
 
 V5 validation pipeline. Allowlisted command profiles run after mutations.
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.validation.requested` | Validation profile requested | `profile`, `command` |
-| `prism.validation.started` | Command execution begins | `profile`, `working_dir` |
-| `prism.validation.completed` | Command finished | `profile`, `exit_code`, `duration_ms` |
-| `prism.validation.failed` | Command errored | `profile`, `error` |
-| `prism.validation.skipped` | Profile skipped (not allowlisted) | `profile`, `reason` |
-| `prism.validation.timeout` | Command exceeded timeout | `profile`, `timeout_seconds` |
+| `prizm.validation.requested` | Validation profile requested | `profile`, `command` |
+| `prizm.validation.started` | Command execution begins | `profile`, `working_dir` |
+| `prizm.validation.completed` | Command finished | `profile`, `exit_code`, `duration_ms` |
+| `prizm.validation.failed` | Command errored | `profile`, `error` |
+| `prizm.validation.skipped` | Profile skipped (not allowlisted) | `profile`, `reason` |
+| `prizm.validation.timeout` | Command exceeded timeout | `profile`, `timeout_seconds` |
 
 ---
 
-### Review (`prism.review.*`)
+### Review (`prizm.review.*`)
 
 V5 deterministic review. Generates a review artifact from mutation + validation results.
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.review.requested` | Review initiated | `run_id`, `mutation_id` |
-| `prism.review.started` | Review generation begins | `reviewer` |
-| `prism.review.completed` | Review artifact written | `recommendation`, `artifact_path` |
-| `prism.review.failed` | Review generation failed | `error` |
+| `prizm.review.requested` | Review initiated | `run_id`, `mutation_id` |
+| `prizm.review.started` | Review generation begins | `reviewer` |
+| `prizm.review.completed` | Review artifact written | `recommendation`, `artifact_path` |
+| `prizm.review.failed` | Review generation failed | `error` |
 
 ---
 
-### Policy Engine (`prism.policy.*`)
+### Policy Engine (`prizm.policy.*`)
 
 V8 core policy engine. Determines whether actions are allowed, denied, or require approval.
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.policy.requested` | Policy evaluation requested | `action`, `resource` |
-| `prism.policy.evaluated` | Policy rules evaluated | `rules_matched`, `decision` |
-| `prism.policy.allowed` | Action allowed | `action`, `resource`, `rule` |
-| `prism.policy.denied` | Action denied | `action`, `resource`, `reason` |
-| `prism.policy.approval_required` | Action needs human approval | `action`, `resource`, `rule` |
-| `prism.policy.failed` | Policy evaluation errored | `error` |
+| `prizm.policy.requested` | Policy evaluation requested | `action`, `resource` |
+| `prizm.policy.evaluated` | Policy rules evaluated | `rules_matched`, `decision` |
+| `prizm.policy.allowed` | Action allowed | `action`, `resource`, `rule` |
+| `prizm.policy.denied` | Action denied | `action`, `resource`, `reason` |
+| `prizm.policy.approval_required` | Action needs human approval | `action`, `resource`, `rule` |
+| `prizm.policy.failed` | Policy evaluation errored | `error` |
 
 ---
 
-### Adapter Lifecycle (`prism.adapter.*`)
+### Adapter Lifecycle (`prizm.adapter.*`)
 
 V9 adapter contract system. Events emitted by built-in and custom adapters.
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.adapter.registered` | Adapter registered with bus | `adapter_id`, `capabilities` |
-| `prism.adapter.health` | Health check response | `adapter_id`, `status` |
-| `prism.adapter.execute` | Adapter executing action | `adapter_id`, `action`, `payload` |
-| `prism.adapter.success` | Adapter action succeeded | `adapter_id`, `action`, `result` |
-| `prism.adapter.failed` | Adapter action failed | `adapter_id`, `action`, `error` |
+| `prizm.adapter.registered` | Adapter registered with bus | `adapter_id`, `capabilities` |
+| `prizm.adapter.health` | Health check response | `adapter_id`, `status` |
+| `prizm.adapter.execute` | Adapter executing action | `adapter_id`, `action`, `payload` |
+| `prizm.adapter.success` | Adapter action succeeded | `adapter_id`, `action`, `result` |
+| `prizm.adapter.failed` | Adapter action failed | `adapter_id`, `action`, `error` |
 
 ---
 
-### State Projections (`prism.projection.*`)
+### State Projections (`prizm.projection.*`)
 
 V10 CQRS query layer. Projections maintain derived state from the event stream.
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.projection.started` | Projection update started | `projection_id`, `event_type` |
-| `prism.projection.completed` | Projection update finished | `projection_id`, `state` |
-| `prism.projection.failed` | Projection update failed | `projection_id`, `error` |
+| `prizm.projection.started` | Projection update started | `projection_id`, `event_type` |
+| `prizm.projection.completed` | Projection update finished | `projection_id`, `state` |
+| `prizm.projection.failed` | Projection update failed | `projection_id`, `error` |
 
 **Built-in projections:** RunStatus, AgentActivity, ToolHistory, ApprovalState
 
 ---
 
-### Workflow Orchestration (`prism.workflow.*`)
+### Workflow Orchestration (`prizm.workflow.*`)
 
-V7 workflow runtime. Named workflows compose Prism capabilities.
+V7 workflow runtime. Named workflows compose Prizm capabilities.
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.workflow.started` | Workflow begins | `workflow_id`, `name`, `steps` |
-| `prism.workflow.step.started` | Step execution begins | `step_id`, `step_name` |
-| `prism.workflow.step.completed` | Step finished successfully | `step_id`, `result` |
-| `prism.workflow.step.failed` | Step errored | `step_id`, `error` |
-| `prism.workflow.step.skipped` | Step skipped (condition not met) | `step_id`, `reason` |
-| `prism.workflow.paused` | Workflow paused at approval gate | `workflow_id`, `pending_approval_id` |
-| `prism.workflow.resumed` | Workflow resumed after approval | `workflow_id`, `approval_id` |
-| `prism.workflow.completed` | Workflow finished | `workflow_id`, `status` |
-| `prism.workflow.failed` | Workflow failed | `workflow_id`, `error` |
+| `prizm.workflow.started` | Workflow begins | `workflow_id`, `name`, `steps` |
+| `prizm.workflow.step.started` | Step execution begins | `step_id`, `step_name` |
+| `prizm.workflow.step.completed` | Step finished successfully | `step_id`, `result` |
+| `prizm.workflow.step.failed` | Step errored | `step_id`, `error` |
+| `prizm.workflow.step.skipped` | Step skipped (condition not met) | `step_id`, `reason` |
+| `prizm.workflow.paused` | Workflow paused at approval gate | `workflow_id`, `pending_approval_id` |
+| `prizm.workflow.resumed` | Workflow resumed after approval | `workflow_id`, `approval_id` |
+| `prizm.workflow.completed` | Workflow finished | `workflow_id`, `status` |
+| `prizm.workflow.failed` | Workflow failed | `workflow_id`, `error` |
 
 ---
 
-### System & Infrastructure (`prism.system.*`, `prism.persistence.*`, `prism.output.*`)
+### System & Infrastructure (`prizm.system.*`, `prizm.persistence.*`, `prizm.output.*`)
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.system.health` | Health check | `status`, `version`, `uptime` |
-| `prism.persistence.completed` | WAL checkpoint completed | `run_id`, `stage`, `checkpoint_id` |
-| `prism.output.written` | Output artifact written | `path`, `size_bytes` |
+| `prizm.system.health` | Health check | `status`, `version`, `uptime` |
+| `prizm.persistence.completed` | WAL checkpoint completed | `run_id`, `stage`, `checkpoint_id` |
+| `prizm.output.written` | Output artifact written | `path`, `size_bytes` |
 
-### Cost Tracking (`prism.cost.*`) — V16
-
-| Event | When | Key Payload |
-|-------|------|-------------|
-| `prism.cost.tracked` | Token usage recorded for an LLM call | `provider`, `model`, `prompt_tokens`, `completion_tokens`, `estimated_cost_usd` |
-| `prism.cost.reported` | Cost report generated for a run | `run_id`, `total_tokens`, `estimated_cost_usd` |
-
-### Context Injection (`prism.context.*`) — V19
+### Cost Tracking (`prizm.cost.*`) — V16
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.context.file_read` | Workspace file read for context injection | `file`, `source`, `size_bytes`, `estimated_tokens` |
-| `prism.context.injected` | Context injection complete for a run | `run_id`, `files`, `total_tokens`, `truncated`, `truncation_applied` |
+| `prizm.cost.tracked` | Token usage recorded for an LLM call | `provider`, `model`, `prompt_tokens`, `completion_tokens`, `estimated_cost_usd` |
+| `prizm.cost.reported` | Cost report generated for a run | `run_id`, `total_tokens`, `estimated_cost_usd` |
+
+### Context Injection (`prizm.context.*`) — V19
+
+| Event | When | Key Payload |
+|-------|------|-------------|
+| `prizm.context.file_read` | Workspace file read for context injection | `file`, `source`, `size_bytes`, `estimated_tokens` |
+| `prizm.context.injected` | Context injection complete for a run | `run_id`, `files`, `total_tokens`, `truncated`, `truncation_applied` |
 
 ---
 
 ## Causal Chains
 
-The most common event flows through Prism:
+The most common event flows through Prizm:
 
 ### Basic LLM Call
 ```
@@ -352,7 +352,7 @@ tool.requested → policy.requested → policy.evaluated
 ### Go (Embedded NATS)
 ```go
 bus := bus.NewEmbeddedBus()
-sub, _ := bus.Subscribe("prism.task.*")
+sub, _ := bus.Subscribe("prizm.task.*")
 for msg := range sub.C {
     fmt.Printf("Event: %s\n", msg.Subject)
 }
@@ -361,21 +361,21 @@ for msg := range sub.C {
 ### CLI
 ```bash
 # Watch all events
-prism events --watch
+prizm events --watch
 
 # Filter by type
-prism events --type "prism.task.*"
+prizm events --type "prizm.task.*"
 
 # Filter by run
-prism events --run run_01JXXXXXXXXXXXX
+prizm events --run run_01JXXXXXXXXXXXX
 
 # Export to JSONL
-prism events --export events.jsonl
+prizm events --export events.jsonl
 ```
 
 ### Dashboard
 ```bash
-prism dashboard
+prizm dashboard
 # Opens http://localhost:8080 with live event stream
 ```
 
@@ -398,7 +398,7 @@ prism dashboard
 | V16 | `cost.tracked`, `cost.reported`, enriched `EventMetadata` (`duration_ms`, `outcome`, `token_usage`) |
 | V17 | HNSW vector index, connection pooling, event store indexes |
 | V18 | OpenClaw config transfer (`--from-config`), ProviderRegistry, model metadata |
-| V19 | Smart context injection (pipeline stage, token budgeting, auto-discovery, `prism context show`) |
+| V19 | Smart context injection (pipeline stage, token budgeting, auto-discovery, `prizm context show`) |
 
 All V1 events remain backward compatible. Newer versions add events alongside V1, never replacing them.
 
@@ -421,18 +421,18 @@ runs/<run_id>/
 
 Query events from SQLite:
 ```go
-store, _ := event.NewSQLiteEventStore("prism-data/events.db")
+store, _ := event.NewSQLiteEventStore("prizm-data/events.db")
 events, _ := store.Query(ctx, event.EventFilter{
     RunID: "run_01JXXX",
-    Type:  "prism.task.",
+    Type:  "prizm.task.",
     Limit: 100,
 })
 ```
 
 Or use the CLI:
 ```bash
-prism db export <run_id>   # SQLite → JSONL
-prism db query --type "prism.approval.*" --limit 50
+prizm db export <run_id>   # SQLite → JSONL
+prizm db query --type "prizm.approval.*" --limit 50
 ```
 
 ## See Also

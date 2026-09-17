@@ -3,8 +3,8 @@ package agentactivity
 import (
 	"testing"
 
-	"github.com/emaharmony/prism/internal/agent"
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/agent"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 func TestAgentActivityName(t *testing.T) {

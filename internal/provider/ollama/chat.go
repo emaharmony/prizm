@@ -6,11 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/provider"
+	"github.com/emaharmony/prizm/internal/provider"
 )
 
 // ChatProvider implements provider.ChatProvider using Ollama's /api/chat endpoint
@@ -55,6 +56,7 @@ type chatRequest struct {
 	Messages []ollamaMessage  `json:"messages"`
 	Tools    []ollamaFunction `json:"tools,omitempty"`
 	Stream   bool             `json:"stream"`
+	Think    *bool            `json:"think,omitempty"`
 	Options  generateOptions  `json:"options,omitempty"`
 }
 
@@ -77,6 +79,7 @@ type chatResponse struct {
 	Message struct {
 		Role      string           `json:"role"`
 		Content   string           `json:"content"`
+		Thinking  string           `json:"thinking,omitempty"`
 		ToolCalls []ollamaToolCall `json:"tool_calls,omitempty"`
 	} `json:"message"`
 	Model           string `json:"model"`
@@ -138,6 +141,12 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 		Messages: ollamaMsgs,
 		Tools:    ollamaTools,
 		Stream:   false,
+		// Disable thinking, matching the /api/generate path (ollama.go).
+		// Reasoning-hybrid models (e.g. GLM, DeepSeek-R1, Qwen3) can absorb
+		// tool-call intent into a hidden reasoning channel instead of the
+		// structured tool_calls field when thinking is left at its default,
+		// producing a plain-text response with no tool call at all.
+		Think: boolPtr(false),
 		Options: generateOptions{
 			Temperature: req.Temperature,
 			NumPredict:  req.MaxTokens,
@@ -179,12 +188,21 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 		}
 
 		if resp.StatusCode != http.StatusOK {
+			bodyStr := strings.TrimSpace(string(respBody))
+			// A 429 caused by an account-level usage quota (as opposed to a
+			// transient per-request rate limit) won't clear up within a few
+			// seconds of backoff — retrying here just burns time. Fail fast
+			// and let FailoverProvider skip this target for the rest of the
+			// session instead of retrying it.
+			if resp.StatusCode == http.StatusTooManyRequests && isQuotaExhausted(bodyStr) {
+				return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: HTTP %d: %s: %w", resp.StatusCode, bodyStr, provider.ErrQuotaExhausted)
+			}
 			// Retry on transient errors
 			if isRetryableStatus(resp.StatusCode) && attempt < 3 {
 				time.Sleep(time.Duration(attempt+1) * time.Second)
 				continue
 			}
-			return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+			return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: HTTP %d: %s", resp.StatusCode, bodyStr)
 		}
 		break // success
 	}
@@ -196,6 +214,14 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 
 	if oResp.Error != "" {
 		return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: %s", oResp.Error)
+	}
+
+	// Diagnostic: if the model returned thinking content despite think:false,
+	// or returned no tool_calls while thinking is non-trivial, that's a clear
+	// signal tool-call intent may be getting absorbed into the reasoning
+	// channel instead of the structured tool_calls field.
+	if len(oResp.Message.Thinking) > 0 {
+		log.Printf("ollama/chat: model=%s returned thinking content (%d chars), tool_calls=%d", req.Model, len(oResp.Message.Thinking), len(oResp.Message.ToolCalls))
 	}
 
 	latency := time.Since(start).Milliseconds()
@@ -235,6 +261,15 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 			"total_duration_ns": oResp.TotalDuration,
 		},
 	}, nil
+}
+
+// isQuotaExhausted reports whether a 429 response body indicates an
+// account-level usage quota was hit (Ollama Cloud's phrasing: "you have
+// reached your weekly usage limit"), as opposed to a transient per-request
+// rate limit that's worth retrying.
+func isQuotaExhausted(body string) bool {
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "usage limit") || strings.Contains(lower, "quota")
 }
 
 // estimateTokens provides a rough token estimate for chat messages.

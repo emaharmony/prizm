@@ -2,11 +2,11 @@
 
 ## Mission
 
-Turn Prism's event history into queryable current state, without adding a database.
+Turn Prizm's event history into queryable current state, without adding a database.
 
 ## Problem
 
-Prism emits events for everything. Runs produce `events.jsonl` files. Right now, to answer questions like "what's the status of this run?" or "how many approvals are pending?", you have to read the entire event stream and reconstruct the state yourself.
+Prizm emits events for everything. Runs produce `events.jsonl` files. Right now, to answer questions like "what's the status of this run?" or "how many approvals are pending?", you have to read the entire event stream and reconstruct the state yourself.
 
 V10 introduces **projections** — functions that read events and produce queryable indexes. A projection is just: "given all events of type X, compute Y."
 
@@ -14,7 +14,7 @@ V10 introduces **projections** — functions that read events and produce querya
 
 Think of it like a database view, but file-based. Each projection:
 
-1. **Subscribes** to specific event types (e.g., `prism.task.*`, `prism.approval.*`)
+1. **Subscribes** to specific event types (e.g., `prizm.task.*`, `prizm.approval.*`)
 2. **Accumulates** state from those events
 3. **Writes** a snapshot to disk under `runs/<run_id>/projections/<name>.json`
 
@@ -52,11 +52,11 @@ Each projection:
 ### 1. Projection Interface (`internal/projection/projection.go`)
 
 ```go
-// Package projection provides state projections over Prism event streams.
+// Package projection provides state projections over Prizm event streams.
 //
 // A projection is a pure function of events: given a sequence of events,
 // it computes a read-only snapshot of some aspect of system state.
-// Projections are the "read side" of Prism's event-sourced architecture.
+// Projections are the "read side" of Prizm's event-sourced architecture.
 //
 // Why projections? Instead of querying a database, you project events
 // into pre-computed indexes. Each projection subscribes to specific event
@@ -64,7 +64,7 @@ Each projection:
 // get the same projection. No side effects, no external state.
 //
 // This is the CQRS/Event Sourcing pattern adapted for local-file-based
-// systems. Prism stores events; projections are derived views of those
+// systems. Prizm stores events; projections are derived views of those
 // events. You can always rebuild a projection from scratch by replaying
 // the event stream.
 package projection
@@ -127,10 +127,10 @@ it reads task lifecycle events and produces a status snapshot.
 // RunStatusProjection tracks the lifecycle state of a run.
 //
 // Subscribed events:
-//   - prism.task.created    → status: "created"
-//   - prism.task.started    → status: "running"
-//   - prism.task.completed  → status: "completed"
-//   - prism.task.failed      → status: "failed"
+//   - prizm.task.created    → status: "created"
+//   - prizm.task.started    → status: "running"
+//   - prizm.task.completed  → status: "completed"
+//   - prizm.task.failed      → status: "failed"
 //
 // The snapshot includes:
 //   - status: current lifecycle status
@@ -153,10 +153,10 @@ exist, and which ones are still pending?"
 // ApprovalStateProjection tracks approval state transitions.
 //
 // Subscribed events:
-//   - prism.approval.requested → new approval, status: "pending"
-//   - prism.approval.granted   → approval granted, status: "approved"
-//   - prism.approval.denied     → approval denied, status: "denied"
-//   - prism.approval.expired    → approval expired, status: "expired"
+//   - prizm.approval.requested → new approval, status: "pending"
+//   - prizm.approval.granted   → approval granted, status: "approved"
+//   - prizm.approval.denied     → approval denied, status: "denied"
+//   - prizm.approval.expired    → approval expired, status: "expired"
 //
 // The snapshot includes:
 //   - approvals: map of approval_id → {status, target_path, requested_by, ...}
@@ -174,12 +174,12 @@ what did policy decide, and what were the results?"
 // ToolHistoryProjection tracks tool call history.
 //
 // Subscribed events:
-//   - prism.tool.requested → new tool call, status: "requested"
-//   - prism.tool.approved  → tool approved by policy
-//   - prism.tool.denied     → tool denied by policy
-//   - prism.tool.started   → tool execution started
-//   - prism.tool.completed → tool execution succeeded
-//   - prism.tool.failed    → tool execution failed
+//   - prizm.tool.requested → new tool call, status: "requested"
+//   - prizm.tool.approved  → tool approved by policy
+//   - prizm.tool.denied     → tool denied by policy
+//   - prizm.tool.started   → tool execution started
+//   - prizm.tool.completed → tool execution succeeded
+//   - prizm.tool.failed    → tool execution failed
 //
 // The snapshot includes:
 //   - calls: ordered list of tool calls with status, policy, result
@@ -191,9 +191,9 @@ type ToolHistoryProjection struct { ... }
 
 ```go
 const (
-    EventTypeProjectionStarted   = "prism.projection.started"
-    EventTypeProjectionCompleted = "prism.projection.completed"
-    EventTypeProjectionFailed    = "prism.projection.failed"
+    EventTypeProjectionStarted   = "prizm.projection.started"
+    EventTypeProjectionCompleted = "prizm.projection.completed"
+    EventTypeProjectionFailed    = "prizm.projection.failed"
 )
 ```
 
@@ -201,16 +201,16 @@ const (
 
 ```bash
 # Rebuild all projections for a run (or all runs)
-./prism projection rebuild --run <run_id>
-./prism projection rebuild --all
+./prizm projection rebuild --run <run_id>
+./prizm projection rebuild --all
 
 # Query a specific projection
-./prism projection query run_status --run <run_id>
-./prism projection query approval_state --run <run_id>
-./prism projection query tool_history --run <run_id>
+./prizm projection query run_status --run <run_id>
+./prizm projection query approval_state --run <run_id>
+./prizm projection query tool_history --run <run_id>
 
 # List available projections
-./prism projection list
+./prizm projection list
 ```
 
 ### 6. Auto-projection
@@ -218,7 +218,7 @@ const (
 When a run completes, projections are automatically computed as part of the
 run lifecycle. This means `summary.json` and `projections/` are both written
 at run completion. You can also rebuild projections manually with
-`prism projection rebuild`.
+`prizm projection rebuild`.
 
 ## File Layout
 
@@ -297,9 +297,9 @@ not raw events.
 4. ApprovalStateProjection tracks approval state
 5. ToolHistoryProjection tracks tool call history
 6. Projections are written to runs/<run_id>/projections/
-7. CLI: `prism projection rebuild --run <run_id>`
-8. CLI: `prism projection query <name> --run <run_id>`
-9. CLI: `prism projection list`
+7. CLI: `prizm projection rebuild --run <run_id>`
+8. CLI: `prizm projection query <name> --run <run_id>`
+9. CLI: `prizm projection list`
 10. Auto-projection runs at run completion
 11. All existing tests pass (289+)
 12. README documents V10 truthfully

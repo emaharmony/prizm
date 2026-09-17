@@ -12,7 +12,7 @@ func TestNewApproval(t *testing.T) {
 	policy := PolicyDecision{Decision: "requires_approval", Reason: "file writes require approval"}
 	a := NewApproval(
 		"run_01KM", "corr_01KM", "test-cli",
-		"prism", "write_file", "test.txt",
+		"prizm", "write_file", "test.txt",
 		"hello world", policy,
 	)
 
@@ -45,7 +45,7 @@ func TestNewApprovalLongContentPreview(t *testing.T) {
 	for i := 0; i < 600; i++ {
 		longContent += "x"
 	}
-	a := NewApproval("run_01KM", "corr_01KM", "test", "prism", "write_file", "test.txt", longContent, policy)
+	a := NewApproval("run_01KM", "corr_01KM", "test", "prizm", "write_file", "test.txt", longContent, policy)
 
 	if len(a.Preview) != 503 { // 500 chars + "..."
 		t.Errorf("expected preview length 503, got %d", len(a.Preview))
@@ -66,7 +66,7 @@ func TestNewApprovalID(t *testing.T) {
 }
 
 func TestApprovalApprove(t *testing.T) {
-	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prism", "write_file", "test.txt", "content", PolicyDecision{Decision: "requires_approval", Reason: "test"})
+	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prizm", "write_file", "test.txt", "content", PolicyDecision{Decision: "requires_approval", Reason: "test"})
 
 	err := a.Approve("ema")
 	if err != nil {
@@ -84,7 +84,7 @@ func TestApprovalApprove(t *testing.T) {
 }
 
 func TestApprovalApproveAlreadyDenied(t *testing.T) {
-	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prism", "write_file", "test.txt", "content", PolicyDecision{Decision: "requires_approval", Reason: "test"})
+	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prizm", "write_file", "test.txt", "content", PolicyDecision{Decision: "requires_approval", Reason: "test"})
 	a.Deny("ema", "not needed")
 
 	err := a.Approve("ema")
@@ -94,7 +94,7 @@ func TestApprovalApproveAlreadyDenied(t *testing.T) {
 }
 
 func TestApprovalApproveAlreadyApproved(t *testing.T) {
-	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prism", "write_file", "test.txt", "content", PolicyDecision{Decision: "requires_approval", Reason: "test"})
+	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prizm", "write_file", "test.txt", "content", PolicyDecision{Decision: "requires_approval", Reason: "test"})
 	a.Approve("ema")
 
 	err := a.Approve("ema")
@@ -104,7 +104,7 @@ func TestApprovalApproveAlreadyApproved(t *testing.T) {
 }
 
 func TestApprovalDeny(t *testing.T) {
-	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prism", "write_file", "test.txt", "content", PolicyDecision{Decision: "requires_approval", Reason: "test"})
+	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prizm", "write_file", "test.txt", "content", PolicyDecision{Decision: "requires_approval", Reason: "test"})
 
 	err := a.Deny("ema", "not needed")
 	if err != nil {
@@ -125,7 +125,7 @@ func TestApprovalDeny(t *testing.T) {
 }
 
 func TestApprovalDenyAlreadyApproved(t *testing.T) {
-	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prism", "write_file", "test.txt", "content", PolicyDecision{Decision: "requires_approval", Reason: "test"})
+	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prizm", "write_file", "test.txt", "content", PolicyDecision{Decision: "requires_approval", Reason: "test"})
 	a.Approve("ema")
 
 	err := a.Deny("ema", "changed mind")
@@ -135,7 +135,7 @@ func TestApprovalDenyAlreadyApproved(t *testing.T) {
 }
 
 func TestApprovalDenyAlreadyDenied(t *testing.T) {
-	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prism", "write_file", "test.txt", "content", PolicyDecision{Decision: "requires_approval", Reason: "test"})
+	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prizm", "write_file", "test.txt", "content", PolicyDecision{Decision: "requires_approval", Reason: "test"})
 	a.Deny("ema", "not needed")
 
 	err := a.Deny("ema", "still not needed")
@@ -146,7 +146,7 @@ func TestApprovalDenyAlreadyDenied(t *testing.T) {
 
 func TestApprovalSerialize(t *testing.T) {
 	policy := PolicyDecision{Decision: "requires_approval", Reason: "file writes require approval"}
-	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prism", "write_file", "test.txt", "hello", policy)
+	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prizm", "write_file", "test.txt", "hello", policy)
 
 	data, err := json.Marshal(a)
 	if err != nil {
@@ -177,7 +177,7 @@ func TestApprovalStoreSaveAndLoad(t *testing.T) {
 	store := NewStore(tmpDir)
 
 	policy := PolicyDecision{Decision: "requires_approval", Reason: "test"}
-	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prism", "write_file", "test.txt", "hello world", policy)
+	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prizm", "write_file", "test.txt", "hello world", policy)
 
 	if err := store.Save(a); err != nil {
 		t.Fatalf("failed to save: %v", err)
@@ -215,8 +215,8 @@ func TestApprovalStoreList(t *testing.T) {
 
 	policy := PolicyDecision{Decision: "requires_approval", Reason: "test"}
 
-	a1 := NewApproval("run_01KM", "corr_01KM", "test-cli", "prism", "write_file", "test1.txt", "content1", policy)
-	a2 := NewApproval("run_01KM", "corr_01KM", "test-cli", "prism", "write_file", "test2.txt", "content2", policy)
+	a1 := NewApproval("run_01KM", "corr_01KM", "test-cli", "prizm", "write_file", "test1.txt", "content1", policy)
+	a2 := NewApproval("run_01KM", "corr_01KM", "test-cli", "prizm", "write_file", "test2.txt", "content2", policy)
 
 	store.Save(a1)
 	store.Save(a2)
@@ -258,7 +258,7 @@ func TestApprovalStoreSaveUpdatesExisting(t *testing.T) {
 	store := NewStore(tmpDir)
 
 	policy := PolicyDecision{Decision: "requires_approval", Reason: "test"}
-	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prism", "write_file", "test.txt", "hello", policy)
+	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prizm", "write_file", "test.txt", "hello", policy)
 
 	store.Save(a)
 
@@ -281,7 +281,7 @@ func TestApprovalStoreSaveUpdatesExisting(t *testing.T) {
 
 func TestApprovalTimestamps(t *testing.T) {
 	before := time.Now().UTC()
-	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prism", "write_file", "test.txt", "content", PolicyDecision{Decision: "requires_approval", Reason: "test"})
+	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prizm", "write_file", "test.txt", "content", PolicyDecision{Decision: "requires_approval", Reason: "test"})
 	after := time.Now().UTC()
 
 	if a.CreatedAt.Before(before) || a.CreatedAt.After(after) {

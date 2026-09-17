@@ -1,4 +1,4 @@
-// Package state provides persistent working state for Prism agents.
+// Package state provides persistent working state for Prizm agents.
 // The Manager reads and writes JSON state files in <workspace>/state/:
 //
 //   - active-task.json: current task, plan, scope, status

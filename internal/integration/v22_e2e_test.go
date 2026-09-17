@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/bus"
-	"github.com/emaharmony/prism/internal/delegation"
-	"github.com/emaharmony/prism/internal/stage"
-	"github.com/emaharmony/prism/internal/task"
+	"github.com/emaharmony/prizm/internal/bus"
+	"github.com/emaharmony/prizm/internal/delegation"
+	"github.com/emaharmony/prizm/internal/stage"
+	"github.com/emaharmony/prizm/internal/task"
 )
 
 // TestE2E_DelegationFlow tests the full delegation flow:

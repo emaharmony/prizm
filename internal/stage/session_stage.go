@@ -1,4 +1,4 @@
-// Package stage provides Prism's pipeline execution engine.
+// Package stage provides Prizm's pipeline execution engine.
 //
 // SessionStage manages conversation sessions: finding or creating a session
 // and recording the user's message. It's the second stage in the conversation
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // SessionStage finds or creates a conversation session and adds the user message.
@@ -81,7 +81,7 @@ func (s *SessionStage) Execute(ctx context.Context, rc *RunContext) (*RunContext
 	duration := time.Since(start).Milliseconds()
 
 	// Emit session resolved event
-	evt := event.NewEvent("prism.session.resolved", "session-stage", map[string]any{
+	evt := event.NewEvent("prizm.session.resolved", "session-stage", map[string]any{
 		"run_id":       rc.RunID,
 		"session_id":   sess.ID,
 		"agent_id":     rc.Agent,

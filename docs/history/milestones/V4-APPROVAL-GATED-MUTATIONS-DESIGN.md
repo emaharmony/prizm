@@ -2,7 +2,7 @@
 
 ## Mission
 
-Give agents the ability to propose file changes, but ensure Prism never applies
+Give agents the ability to propose file changes, but ensure Prizm never applies
 them without explicit human operator approval. Every step in the proposal →
 approval → application pipeline is evented and auditable.
 
@@ -29,24 +29,24 @@ approval → application pipeline is evented and auditable.
 - Replaces `write_file_dry_run` as the file mutation path
 - Validates path and content, creates pending approval
 - Returns `approval_id` to the CLI operator
-- Emits `prism.mutation.proposed` + `prism.approval.requested`
+- Emits `prizm.mutation.proposed` + `prizm.approval.requested`
 - Does NOT write to disk — only creates the approval record
 
 ### V4 Event Types
-- `prism.approval.requested` — approval created, awaiting decision
-- `prism.approval.granted` — human approved the mutation
-- `prism.approval.denied` — human denied the mutation
-- `prism.approval.expired` — approval timed out
-- `prism.mutation.proposed` — agent proposed a change
-- `prism.mutation.validated` — safety checks passed
-- `prism.mutation.applied` — file was written to disk
-- `prism.mutation.failed` — mutation execution failed
+- `prizm.approval.requested` — approval created, awaiting decision
+- `prizm.approval.granted` — human approved the mutation
+- `prizm.approval.denied` — human denied the mutation
+- `prizm.approval.expired` — approval timed out
+- `prizm.mutation.proposed` — agent proposed a change
+- `prizm.mutation.validated` — safety checks passed
+- `prizm.mutation.applied` — file was written to disk
+- `prizm.mutation.failed` — mutation execution failed
 
 ### CLI Approval Commands
-- `prism approval list` — list all approvals for a project
-- `prism approval show <id>` — view approval details and content preview
-- `prism approval approve <id>` — approve and apply the mutation
-- `prism approval deny <id> --reason "..."` — deny with reason
+- `prizm approval list` — list all approvals for a project
+- `prizm approval show <id>` — view approval details and content preview
+- `prizm approval approve <id>` — approve and apply the mutation
+- `prizm approval deny <id> --reason "..."` — deny with reason
 
 ### Runner Integration
 - `write_file_proposal` integrated into agent tool request parsing
@@ -67,7 +67,7 @@ approval → application pipeline is evented and auditable.
 | `internal/mutation/executor.go` | Disk-level mutation application with safety |
 | `internal/tool/builtins.go` | write_file_proposal tool implementation |
 | `internal/tool/policy.go` | Updated policy for V4 mutation types |
-| `cmd/prism-cli/main.go` | Approval CLI commands |
+| `cmd/prizm-cli/main.go` | Approval CLI commands |
 | `internal/run/runner.go` | Approval flow integration into lifecycle |
 | `internal/event/event.go` | 8 new approval + mutation event types |
 | `internal/agent/parser.go` | Tool request parsing updated for V4 |
@@ -76,7 +76,7 @@ approval → application pipeline is evented and auditable.
 
 1. **Propose-then-approve, never auto-apply** — The agent proposes a mutation.
    The proposal creates an approval record in `pending` status. Nothing is
-   written to disk until a human runs `prism approval approve`.
+   written to disk until a human runs `prizm approval approve`.
 
 2. **Approvals are file-based, not in-memory** — Approval records persist as
    JSON files under `runs/<run_id>/approvals/`. This means approvals survive
@@ -131,22 +131,22 @@ approval → application pipeline is evented and auditable.
 Agent tool_request = write_file_proposal
   → Tool.validateInput(path, content)
   → ApprovalStore.NewApproval(runID, project, path, content)
-  → emit(prism.mutation.proposed)
-  → emit(prism.approval.requested)
+  → emit(prizm.mutation.proposed)
+  → emit(prizm.approval.requested)
   → approval.pending ← WAIT FOR HUMAN ←
 
-[Human runs: prism approval approve <id>]
+[Human runs: prizm approval approve <id>]
   → ApprovalStore.Load(id)
   → approval.Approve(operator)
   → MutationExecutor.Apply(approval)
   → safety checks pass
   → file written to disk
-  → emit(prism.mutation.applied)
-  → emit(prism.approval.granted)
+  → emit(prizm.mutation.applied)
+  → emit(prizm.approval.granted)
   → approval.approved
 
-[OR Human runs: prism approval deny <id> --reason "..." ]
+[OR Human runs: prizm approval deny <id> --reason "..." ]
   → approval.Deny(operator, reason)
-  → emit(prism.approval.denied)
+  → emit(prizm.approval.denied)
   → approval.denied
 ```

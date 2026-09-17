@@ -1,4 +1,4 @@
-// Package review provides the deterministic review pipeline for Prism V5.
+// Package review provides the deterministic review pipeline for Prizm V5.
 // Reviews are generated from validation results and mutation info —
 // no LLM is used. The reviewer CANNOT approve or apply mutations.
 package review
@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // Recommendation is the reviewer's verdict.
@@ -55,13 +55,13 @@ var ReviewEventTypes = struct {
 	ReviewCompleted string
 	ReviewFailed    string
 }{
-	ReviewRequested: "prism.review.requested",
-	ReviewStarted:   "prism.review.started",
-	ReviewCompleted: "prism.review.completed",
-	ReviewFailed:    "prism.review.failed",
+	ReviewRequested: "prizm.review.requested",
+	ReviewStarted:   "prizm.review.started",
+	ReviewCompleted: "prizm.review.completed",
+	ReviewFailed:    "prizm.review.failed",
 }
 
-// EventEmitter is a callback for emitting Prism events.
+// EventEmitter is a callback for emitting Prizm events.
 type EventEmitter func(eventType, source string, payload map[string]any)
 
 // Reviewer generates deterministic reviews from validation results.
@@ -94,7 +94,7 @@ func (r *Reviewer) emit(eventType, source string, payload map[string]any) {
 // The reviewer CANNOT approve or apply mutations — it only reviews.
 func (r *Reviewer) Generate(runID, correlationID string, mutationStatus string, filesChanged []string, validationResults []ValidationInfo, mutationSummaries []event.MutationSummary) (*Review, error) {
 	// Emit review.requested
-	r.emit(ReviewEventTypes.ReviewRequested, "prism-review", map[string]any{
+	r.emit(ReviewEventTypes.ReviewRequested, "prizm-review", map[string]any{
 		"run_id":          runID,
 		"correlation_id":  correlationID,
 		"reviewer":        r.name,
@@ -102,7 +102,7 @@ func (r *Reviewer) Generate(runID, correlationID string, mutationStatus string, 
 	})
 
 	// Emit review.started
-	r.emit(ReviewEventTypes.ReviewStarted, "prism-review", map[string]any{
+	r.emit(ReviewEventTypes.ReviewStarted, "prizm-review", map[string]any{
 		"run_id":         runID,
 		"correlation_id": correlationID,
 		"reviewer":       r.name,
@@ -180,7 +180,7 @@ func (r *Reviewer) Generate(runID, correlationID string, mutationStatus string, 
 	}
 
 	// Emit review.completed
-	r.emit(ReviewEventTypes.ReviewCompleted, "prism-review", map[string]any{
+	r.emit(ReviewEventTypes.ReviewCompleted, "prizm-review", map[string]any{
 		"run_id":         runID,
 		"correlation_id": correlationID,
 		"reviewer":       r.name,

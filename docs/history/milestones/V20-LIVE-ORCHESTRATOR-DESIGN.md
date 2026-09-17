@@ -8,14 +8,14 @@
 
 ## Thesis
 
-Prism transitions from a batch CLI tool to a persistent live service. Instead of running `prism run` for individual tasks, `prism serve` starts a daemon that connects to Discord, maintains sessions, and responds to conversations in real time.
+Prizm transitions from a batch CLI tool to a persistent live service. Instead of running `prizm run` for individual tasks, `prizm serve` starts a daemon that connects to Discord, maintains sessions, and responds to conversations in real time.
 
 ---
 
 ## What Changed
 
-### M1.1: Persistent Daemon (`prism serve`)
-- Single `prism serve` subcommand — not a separate binary
+### M1.1: Persistent Daemon (`prizm serve`)
+- Single `prizm serve` subcommand — not a separate binary
 - Graceful shutdown on SIGINT/SIGTERM
 - Health check endpoint on configured port
 - Orchestrator lifecycle management
@@ -40,14 +40,14 @@ Prism transitions from a batch CLI tool to a persistent live service. Instead of
 ### M1.5-M1.6: Discord Adapter
 - Inbound: Discord messages → `*.channel.received` events
 - Outbound: `*.channel.sent` → Discord messages
-- Bot token from `prism.yaml`
+- Bot token from `prizm.yaml`
 - Message splitting for Discord's 2000-char limit
 - Threading/reply support
 
 ### M1.7: Registered Actions
 - `internal/action/registry.go` — event-triggered actions
 - Wildcard matching: `*.tool.completed`, `**.failed`
-- Configuration in `prism.yaml` actions section
+- Configuration in `prizm.yaml` actions section
 
 ### M1.8: End-to-End Test
 - Config → agents → session → router → action flow verified
@@ -58,9 +58,9 @@ Prism transitions from a batch CLI tool to a persistent live service. Instead of
 
 ## Key Decisions
 
-- **`prism serve` as CLI subcommand**: Single binary, consistent with Docker model
+- **`prizm serve` as CLI subcommand**: Single binary, consistent with Docker model
 - **`discordgo` for Discord**: Chosen for safety and reliability
-- **`prism.yaml` config**: Separate from OpenClaw entirely
+- **`prizm.yaml` config**: Separate from OpenClaw entirely
 - **Session compaction**: Truncate in Phase 1, summarize with Remembrance in Phase 2
 - **Primary agent**: `primary: true` in config, first agent as fallback
 - **Per-user debounce**: 3-second window per user to prevent duplicate messages
@@ -83,16 +83,16 @@ Prism transitions from a batch CLI tool to a persistent live service. Instead of
 ## Configuration
 
 ```yaml
-prism:
+prizm:
   nats_url: ""
-  data_dir: ".prism/data"
+  data_dir: ".prizm/data"
   port: 8321
 
 agents:
   - id: lumi
     role: "lead"
     provider: "ollama"
-    model: "glm-5.1:cloud"
+    model: "glm-5.3-flash:cloud"
     primary: true
     context: [soul, agents, user]
 

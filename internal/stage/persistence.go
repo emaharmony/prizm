@@ -1,4 +1,4 @@
-// Package stage provides Prism's pipeline execution engine (V14a).
+// Package stage provides Prizm's pipeline execution engine (V14a).
 //
 // PersistenceStage writes all accumulated artifacts to disk:
 // events.jsonl, summary.json, output.md, and prompt.md.
@@ -15,7 +15,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // PersistenceStage writes all run artifacts to disk.
@@ -93,7 +93,7 @@ func (s *PersistenceStage) Execute(ctx context.Context, rc *RunContext) (*RunCon
 	}
 
 	// Emit persistence completed event
-	evt := event.NewEvent("prism.persistence.completed", "persistence-stage", map[string]any{
+	evt := event.NewEvent("prizm.persistence.completed", "persistence-stage", map[string]any{
 		"run_id":       rc.RunID,
 		"events_path":  eventsPath,
 		"summary_path": summaryPath,

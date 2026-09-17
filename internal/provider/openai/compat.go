@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/emaharmony/prism/internal/provider"
+	"github.com/emaharmony/prizm/internal/provider"
 )
 
 // ---------- Together AI ----------

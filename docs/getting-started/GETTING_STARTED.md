@@ -1,10 +1,10 @@
-﻿# Getting Started with Prism
+﻿# Getting Started with Prizm
 
 This is the step-by-step setup guide for a new user. It is practical: by the end
-you will have built the Prism CLI, run the test suite, executed your first
+you will have built the Prizm CLI, run the test suite, executed your first
 workflow, and inspected the artifacts it produced.
 
-> Prism is source-available under an all-rights-reserved license. See
+> Prizm is source-available under an all-rights-reserved license. See
 > [LICENSE](../../LICENSE). It is a preview-stage project — some features are
 > experimental. See [Capability Status](../reference/CAPABILITY_STATUS.md).
 
@@ -12,7 +12,7 @@ workflow, and inspected the artifacts it produced.
 
 - Install the required tools.
 - Clone the repository.
-- Build the `prism` CLI from `cmd/prism-cli`.
+- Build the `prizm` CLI from `cmd/prizm-cli`.
 - Run the test suite.
 - Run your first workflow (the built-in echo demo).
 - Inspect the output artifacts a run produces.
@@ -21,7 +21,7 @@ workflow, and inspected the artifacts it produced.
 
 | Requirement | Required? | Recommended Version | Purpose |
 |---|---:|---|---|
-| Go | Yes | Go 1.26+ (module requires 1.26.2) | Build and test Prism |
+| Go | Yes | Go 1.26+ (module requires 1.26.2) | Build and test Prizm |
 | Git | Yes | Latest stable | Clone the repo; project/worktree/autopatch tools |
 | Make | Optional | Latest stable | Shortcut commands via the `Makefile` |
 | SQLite | Optional | Bundled | Persistence is built in (embedded); no separate install needed |
@@ -31,16 +31,16 @@ workflow, and inspected the artifacts it produced.
 | Claude CLI | Optional | Latest stable | Only for the `claude_code` provider / Claude reviewer |
 | Codex CLI | Optional | Latest stable | Only for the Codex worker |
 | `gh` CLI | Optional | Latest stable | Only for autopatch `"pr"` mode |
-| Node.js | Optional | LTS | Not required — the dashboard is served by `prism serve` |
+| Node.js | Optional | LTS | Not required — the dashboard is served by `prizm serve` |
 
-No external database or message broker is required for basic operation — Prism
+No external database or message broker is required for basic operation — Prizm
 embeds NATS JetStream and uses SQLite.
 
 ## Clone the Repository
 
 ```bash
-git clone https://github.com/emaharmony/prism.git
-cd prism
+git clone https://github.com/emaharmony/prizm.git
+cd prizm
 ```
 
 ## Install Dependencies
@@ -52,26 +52,26 @@ them ahead of time:
 go mod download
 ```
 
-## Build Prism
+## Build Prizm
 
 ```bash
-go build -o prism ./cmd/prism-cli
+go build -o prizm ./cmd/prizm-cli
 ```
 
 On Windows PowerShell:
 
 ```powershell
-go build -o .\prism-current.exe .\cmd\prism-cli
+go build -o .\prizm-current.exe .\cmd\prizm-cli
 ```
 
 For a static binary:
 
 ```bash
-CGO_ENABLED=0 go build -o prism ./cmd/prism-cli
+CGO_ENABLED=0 go build -o prizm ./cmd/prizm-cli
 ```
 
 > Local root binaries can lag behind source and are ignored by Git. Always build from
-> `cmd/prism-cli` and treat the source tree as authoritative.
+> `cmd/prizm-cli` and treat the source tree as authoritative.
 
 ## Run Tests
 
@@ -85,7 +85,7 @@ on CI for the required full race pass; do not report the race check as passed.
 Run the model-free preflight:
 
 ```bash
-go run ./cmd/prism-cli doctor --json
+go run ./cmd/prizm-cli doctor --json
 ```
 
 Or via Make:
@@ -102,19 +102,19 @@ locally, needs no model, and produces artifacts you can inspect.
 List available workflows:
 
 ```bash
-go run ./cmd/prism-cli workflow list
+go run ./cmd/prizm-cli workflow list
 ```
 
 Show the demo workflow's steps:
 
 ```bash
-go run ./cmd/prism-cli workflow show demo.echo_tool
+go run ./cmd/prizm-cli workflow show demo.echo_tool
 ```
 
 Run it:
 
 ```bash
-go run ./cmd/prism-cli workflow run demo.echo_tool
+go run ./cmd/prizm-cli workflow run demo.echo_tool
 ```
 
 The workflow definition lives at
@@ -122,13 +122,13 @@ The workflow definition lives at
 Passing input is optional; if you want to supply input, use a JSON file:
 
 ```bash
-go run ./cmd/prism-cli workflow run demo.echo_tool --input path/to/input.json
+go run ./cmd/prizm-cli workflow run demo.echo_tool --input path/to/input.json
 ```
 
 Check a run's status by its run id:
 
 ```bash
-go run ./cmd/prism-cli workflow status <run_id>
+go run ./cmd/prizm-cli workflow status <run_id>
 ```
 
 ## Inspect Output Artifacts
@@ -147,8 +147,8 @@ shape before running your own:
 Browse past runs and reports with:
 
 ```bash
-go run ./cmd/prism-cli runs
-go run ./cmd/prism-cli runs latest --json
+go run ./cmd/prizm-cli runs
+go run ./cmd/prizm-cli runs latest --json
 ```
 
 ## Next Steps
@@ -162,20 +162,20 @@ go run ./cmd/prism-cli runs latest --json
 To start the full daemon (API, dashboard, optional bot):
 
 ```bash
-cp prism.yaml.example prism.yaml
-go run ./cmd/prism-cli serve --config prism.yaml
+cp prizm.yaml.example prizm.yaml
+go run ./cmd/prizm-cli serve --config prizm.yaml
 ```
 
 ## Common Setup Problems
 
-- **`package cmd/prism-cli is not in std`** — use `go run ./cmd/prism-cli`
-  (with the leading `./`), not `go run cmd/prism-cli`.
+- **`package cmd/prizm-cli is not in std`** — use `go run ./cmd/prizm-cli`
+  (with the leading `./`), not `go run cmd/prizm-cli`.
 - **Wrong directory** — run Go commands from the repository root (the folder
   containing `go.mod`).
 - **`workflow not found`** — workflows load from `examples/workflows/`; run
   `workflow list` to see registered names and run from the repo root.
 - **Provider/model not configured** — the demo echo workflow needs no model.
-  For `prism run` with a real model, install and start Ollama (or configure a
+  For `prizm run` with a real model, install and start Ollama (or configure a
   provider) first.
 
 See [Troubleshooting](../operations/TROUBLESHOOTING.md) for the full list.

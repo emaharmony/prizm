@@ -28,16 +28,16 @@ mkdir -p "$covdata_dir"
 find "$covdata_dir" -maxdepth 1 -type f -delete
 
 go test -coverpkg=./... ./... -count=1 -args "-test.gocoverdir=$covdata_dir"
-coverage_binary="$PWD/test-results/coverage/prism-cover"
-go build -cover -coverpkg=./... -o "$coverage_binary" ./cmd/prism-cli
+coverage_binary="$PWD/test-results/coverage/prizm-cover"
+go build -cover -coverpkg=./... -o "$coverage_binary" ./cmd/prizm-cli
 
 smoke() { GOCOVERDIR="$covdata_dir" "$coverage_binary" "$@" >/dev/null; }
 smoke --help
 smoke version
-smoke config --config prism.yaml.example --json
-smoke doctor --config prism.yaml.example --json
+smoke config --config prizm.yaml.example --json
+smoke doctor --config prizm.yaml.example --json
 smoke preview --workflow examples/workflows/gated-loop.yaml
-smoke context show --workspace-root prism-workspace.example --context soul
+smoke context show --workspace-root prizm-workspace.example --context soul
 smoke workflow list
 smoke workflow show demo.echo_tool
 smoke workflow run demo.echo_tool --run-dir test-results/coverage/cli-runs
@@ -52,11 +52,11 @@ smoke adapter show echo
 smoke adapter health echo
 smoke projection list
 smoke skills --json
-smoke mcp --config prism.yaml.example --json
+smoke mcp --config prizm.yaml.example --json
 smoke scan --json
 smoke search --query coverage --provider mock
 smoke approval list
-smoke status --config prism.yaml.example
+smoke status --config prizm.yaml.example
 
 sample_dir=test-results/coverage/sample-data/run_01JR0SAMPLE0
 mkdir -p "$sample_dir"

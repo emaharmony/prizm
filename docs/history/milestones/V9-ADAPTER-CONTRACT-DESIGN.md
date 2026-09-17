@@ -2,17 +2,17 @@
 
 ## Mission
 
-Make external integrations first-class while keeping Prism Core generic.
+Make external integrations first-class while keeping Prizm Core generic.
 
 ## Problem
 
-Right now, Prism has no formal way to connect to external domains. The AI-Hedge-Prism fork exists because trading gates couldn't plug into Prism cleanly — they had to be bolted on. V7's `dispatch.run` step type references an `adapter` field, but there's nothing to dispatch *to*. V8's policy engine can deny `dispatch.run` with `context.mode: live`, but it can't actually *run* a dispatch.
+Right now, Prizm has no formal way to connect to external domains. The AI-Hedge-Prizm fork exists because trading gates couldn't plug into Prizm cleanly — they had to be bolted on. V7's `dispatch.run` step type references an `adapter` field, but there's nothing to dispatch *to*. V8's policy engine can deny `dispatch.run` with `context.mode: live`, but it can't actually *run* a dispatch.
 
-V9 formalizes how adapters plug into Prism. After V9, "trading adapter" is a config file and an interface implementation, not a fork.
+V9 formalizes how adapters plug into Prizm. After V9, "trading adapter" is a config file and an interface implementation, not a fork.
 
 ## Core Insight
 
-Adapters are the **only** way external domain logic enters Prism. Tools are internal. Gates are internal. Workflows are internal. Adapters are the seam between Prism Core and the outside world.
+Adapters are the **only** way external domain logic enters Prizm. Tools are internal. Gates are internal. Workflows are internal. Adapters are the seam between Prizm Core and the outside world.
 
 ## Design Decisions (Post-Review)
 
@@ -45,7 +45,7 @@ The workflow runner's `StepHandlers` now includes a `PolicyEvaluateFunc` for dis
 package adapter
 
 // Adapter is the contract that all domain adapters must implement.
-// Adapters connect Prism to external systems (trading, publishing, deployment, etc.)
+// Adapters connect Prizm to external systems (trading, publishing, deployment, etc.)
 // Adapter names must be alphanumeric + hyphens only (no dots).
 type Adapter interface {
     Name() string
@@ -120,11 +120,11 @@ Manifests are optional. Use them for declarative discovery. Register adapters pr
 
 ```go
 const (
-    EventTypeAdapterRegistered = "prism.adapter.registered"
-    EventTypeAdapterHealth     = "prism.adapter.health"
-    EventTypeAdapterExecute   = "prism.adapter.execute"
-    EventTypeAdapterSuccess   = "prism.adapter.success"
-    EventTypeAdapterFailed    = "prism.adapter.failed"
+    EventTypeAdapterRegistered = "prizm.adapter.registered"
+    EventTypeAdapterHealth     = "prizm.adapter.health"
+    EventTypeAdapterExecute   = "prizm.adapter.execute"
+    EventTypeAdapterSuccess   = "prizm.adapter.success"
+    EventTypeAdapterFailed    = "prizm.adapter.failed"
 )
 ```
 
@@ -166,9 +166,9 @@ The dispatch handler in the CLI resolves the adapter from the registry and evalu
 ### 7. CLI Commands
 
 ```bash
-./prism adapter list
-./prism adapter show <name>
-./prism adapter health <name>
+./prizm adapter list
+./prizm adapter show <name>
+./prizm adapter health <name>
 ```
 
 ### 8. Echo Adapter (Built-in)

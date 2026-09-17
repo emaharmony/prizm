@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/provider"
+	"github.com/emaharmony/prizm/internal/provider"
 )
 
 // Name is the provider name reported by MockProvider.

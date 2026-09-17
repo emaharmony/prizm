@@ -14,9 +14,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/emaharmony/prism/internal/provider"
-	"github.com/emaharmony/prism/internal/retry"
-	"github.com/emaharmony/prism/internal/sse"
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/retry"
+	"github.com/emaharmony/prizm/internal/sse"
 )
 
 // GenerateStream calls the Anthropic Messages API with streaming enabled.
@@ -27,6 +27,17 @@ func (p *Provider) GenerateStream(ctx context.Context, req provider.GenerateRequ
 		Messages:    []anthropicMessage{{Role: "user", Content: req.Prompt}},
 		Temperature: req.Temperature,
 		Stream:      true,
+	}
+
+	// V76: Use system blocks with cache_control for prompt caching (same as sync path)
+	if req.System != "" {
+		anthReq.System = []systemBlock{
+			{
+				Type:         "text",
+				Text:         req.System,
+				CacheControl: &cacheControl{Type: "ephemeral"},
+			},
+		}
 	}
 
 	body, err := json.Marshal(anthReq)

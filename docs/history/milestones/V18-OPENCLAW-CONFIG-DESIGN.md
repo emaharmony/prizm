@@ -5,7 +5,7 @@
 
 ## Mission
 
-Prism should read LLM provider configuration from OpenClaw's `openclaw.json`, so you configure providers once and both systems use them. No more duplicating API keys, base URLs, and model lists.
+Prizm should read LLM provider configuration from OpenClaw's `openclaw.json`, so you configure providers once and both systems use them. No more duplicating API keys, base URLs, and model lists.
 
 ## What Changed
 
@@ -15,13 +15,13 @@ New function `LoadFromOpenClaw(path)` that:
 
 1. Reads `~/.openclaw/openclaw.json` (or a specified path)
 2. Parses the `models.providers` section
-3. For each provider, creates the appropriate Prism `Provider`:
+3. For each provider, creates the appropriate Prizm `Provider`:
    - `api: "ollama"` → `ollama.New(baseUrl)`
    - `api: "openai"` → `openai.New(apiKey)` with optional `baseUrl` override
    - `api: "anthropic"` → `anthropic.New(apiKey)` with optional `baseUrl` override
    - `api: "gemini"` → `gemini.New(apiKey)`
 4. Returns a `ProviderRegistry` mapping model IDs to providers
-5. Merges model metadata (context window, cost) into Prism's pricing table
+5. Merges model metadata (context window, cost) into Prizm's pricing table
 
 ### 2. Provider Registry (`internal/provider/registry.go`)
 
@@ -44,14 +44,14 @@ Methods:
 
 ### 3. CLI Integration
 
-New `prism run` flags:
+New `prizm run` flags:
 - `--config <path>` — path to `openclaw.json` (default: `~/.openclaw/openclaw.json`)
 - `--from-config` — load provider configuration from OpenClaw config file
 
 When `--from-config` is set:
 1. Load `openclaw.json`
 2. Build `ProviderRegistry` from all configured providers
-3. `--model` selects from the registry (e.g., `glm-5.1:cloud`, `gpt-4o`)
+3. `--model` selects from the registry (e.g., `glm-5.3-flash:cloud`, `gpt-4o`)
 4. `--provider` is optional — inferred from config if `--model` is unique
 5. If `--provider` is specified, it filters to that provider's models
 
@@ -75,11 +75,11 @@ type ModelCost struct {
 }
 ```
 
-Model metadata flows from OpenClaw config → ProviderRegistry → CostTracker (V16). This means `prism cost` now shows accurate costs even for custom/Ollama models.
+Model metadata flows from OpenClaw config → ProviderRegistry → CostTracker (V16). This means `prizm cost` now shows accurate costs even for custom/Ollama models.
 
 ### 5. Config Discovery
 
-Prism searches for OpenClaw config in this order:
+Prizm searches for OpenClaw config in this order:
 1. `--config` flag path (explicit)
 2. `OPENCLAW_CONFIG` environment variable
 3. `~/.openclaw/openclaw.json` (default)
@@ -87,11 +87,11 @@ Prism searches for OpenClaw config in this order:
 
 ## Design Decisions
 
-1. **No OpenClaw dependency** — Prism reads a JSON file, it doesn't import OpenClaw packages. The config format is stable and well-known.
+1. **No OpenClaw dependency** — Prizm reads a JSON file, it doesn't import OpenClaw packages. The config format is stable and well-known.
 2. **Merge, don't replace** — OpenClaw config supplements manual flags. If you specify `--provider openai --model gpt-4o`, that takes precedence.
-3. **API keys from config** — OpenClaw stores API keys in `openclaw.json`. Prism reads them. No environment variable duplication needed.
-4. **Cost metadata flows through** — OpenClaw's `cost` per model feeds directly into Prism's V16 `CostTracker`. Accurate per-model pricing without manual entry.
-5. **Backward compatible** — All existing `prism run --provider mock --model mock-model` calls continue to work. `--from-config` is opt-in.
+3. **API keys from config** — OpenClaw stores API keys in `openclaw.json`. Prizm reads them. No environment variable duplication needed.
+4. **Cost metadata flows through** — OpenClaw's `cost` per model feeds directly into Prizm's V16 `CostTracker`. Accurate per-model pricing without manual entry.
+5. **Backward compatible** — All existing `prizm run --provider mock --model mock-model` calls continue to work. `--from-config` is opt-in.
 
 ## Packages
 
@@ -99,7 +99,7 @@ Prism searches for OpenClaw config in this order:
 |---------|---------|-------|
 | `internal/provider/openclaw.go` | OpenClaw config loader | New |
 | `internal/provider/registry.go` | Provider registry (model → provider) | New |
-| `cmd/prism-cli/cmd_run.go` | `--from-config` and `--config` flags | Modified |
+| `cmd/prizm-cli/cmd_run.go` | `--from-config` and `--config` flags | Modified |
 
 ## Test Coverage
 
@@ -115,4 +115,4 @@ Prism searches for OpenClaw config in this order:
 
 - **OpenClaw channel/agent config** — Only models/providers are transferred, not Discord/Signal channels or agent definitions
 - **Hot reload** — Config is read at startup. For hot reload, use SIGHUP or a future V.
-- **OpenClaw gateway integration** — Prism doesn't connect to the OpenClaw gateway daemon; it just reads the config file
+- **OpenClaw gateway integration** — Prizm doesn't connect to the OpenClaw gateway daemon; it just reads the config file

@@ -1,6 +1,6 @@
-// Package prompt builds deterministic prompts for Prism agent tasks.
+// Package prompt builds deterministic prompts for Prizm agent tasks.
 // It assembles agent name, project, task, and optional Remembrance context
-// into a structured prompt that Prism owns end-to-end.
+// into a structured prompt that Prizm owns end-to-end.
 package prompt
 
 import (
@@ -15,7 +15,7 @@ import (
 func BuildPrompt(agent, project, task, contextStr string) string {
 	var sb strings.Builder
 
-	sb.WriteString("# Prism Agent Task\n\n")
+	sb.WriteString("# Prizm Agent Task\n\n")
 	sb.WriteString("## Agent\n")
 	sb.WriteString(agent)
 	sb.WriteString("\n\n")
@@ -36,7 +36,7 @@ func BuildPrompt(agent, project, task, contextStr string) string {
 	sb.WriteString("- Follow the task directly.\n")
 	sb.WriteString("- Use retrieved context when relevant.\n")
 	sb.WriteString("- Do not invent files, commands, or results.\n")
-	sb.WriteString("- Do not claim work was performed unless Prism actually performed it.\n")
+	sb.WriteString("- Do not claim work was performed unless Prizm actually performed it.\n")
 	sb.WriteString("- If required context is missing, say what is missing.\n")
 	sb.WriteString("- Return concise, actionable output.\n")
 

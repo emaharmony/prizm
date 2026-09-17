@@ -1,4 +1,4 @@
-// Package stage provides the pipeline stages for a Prism run.
+// Package stage provides the pipeline stages for a Prizm run.
 //
 // The V19 Context stage reads workspace files and injects them into the
 // LLM prompt as labeled sections. It emits events for observability and
@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/emaharmony/prism/internal/context"
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/context"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // ContextStage reads workspace files and produces formatted context
@@ -63,7 +63,7 @@ func (cs *ContextStage) Execute(runID, correlationID string) (*ContextResult, er
 			cs.EventBus.Publish(event.Event{
 				ID:            event.NewID(),
 				Type:          event.V19EventTypes.ContextFileRead,
-				Source:        "prism.context",
+				Source:        "prizm.context",
 				Timestamp:     time.Now().Format(time.RFC3339),
 				CorrelationID: correlationID,
 				Payload: map[string]any{
@@ -90,7 +90,7 @@ func (cs *ContextStage) Execute(runID, correlationID string) (*ContextResult, er
 		cs.EventBus.Publish(event.Event{
 			ID:            event.NewID(),
 			Type:          event.V19EventTypes.ContextInjected,
-			Source:        "prism.context",
+			Source:        "prizm.context",
 			Timestamp:     time.Now().Format(time.RFC3339),
 			CorrelationID: correlationID,
 			Payload: map[string]any{

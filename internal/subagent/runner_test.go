@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	v2 "github.com/emaharmony/prism/internal/workflow/v2"
+	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 )
 
 // scriptBackend is a mock Backend that replays a scripted sequence of model
@@ -127,6 +127,23 @@ func TestLoopRunner_IterationBudgetExceeded(t *testing.T) {
 	}
 	if len(backend.toolCalls) != 3 {
 		t.Errorf("expected 3 tool calls before budget, got %d", len(backend.toolCalls))
+	}
+}
+
+func TestLoopRunner_RuntimeIterationBudgetNarrowsRunnerLimit(t *testing.T) {
+	backend := &scriptBackend{
+		parse: func(string) Action {
+			return Action{Tool: "read_file", Input: map[string]any{}}
+		},
+	}
+	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 10})
+	_, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T-role-limit"},
+		AgentRuntime{AgentID: "scout", MaxIterations: 2})
+	if err == nil || !strings.Contains(err.Error(), "did not complete within 2 iterations") {
+		t.Fatalf("expected role iteration-budget error, got %v", err)
+	}
+	if len(backend.toolCalls) != 2 {
+		t.Errorf("expected 2 tool calls before role budget, got %d", len(backend.toolCalls))
 	}
 }
 

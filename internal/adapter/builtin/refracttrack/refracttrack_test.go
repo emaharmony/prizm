@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/adapter"
+	"github.com/emaharmony/prizm/internal/adapter"
 )
 
 func TestRefractTrackName(t *testing.T) {

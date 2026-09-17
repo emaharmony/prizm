@@ -55,7 +55,7 @@ jobs:
       - name: Test (Basic)
         run: go test ./internal/safety/... ./internal/config/... ./internal/run/... -count=1
       - name: CLI Smoke Test
-        run: go run ./cmd/prism-cli doctor
+        run: go run ./cmd/prizm-cli help
 
   test-python:
     runs-on: ubuntu-latest
@@ -66,11 +66,10 @@ jobs:
         with:
           python-version: "3.11"
           cache: 'pip'
+          cache-dependency-path: remembrance/pyproject.toml
       - name: Install dependencies
-        run: |
-          cd remembrance
-          pip install -r requirements.txt
+        working-directory: remembrance
+        run: python -m pip install -e ".[dev]"
       - name: Test
-        run: |
-          cd remembrance
-          pytest tests/
+        working-directory: remembrance
+        run: pytest tests/

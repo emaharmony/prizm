@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/event"
-	"github.com/emaharmony/prism/internal/session"
+	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/session"
 )
 
 // mockSessionManager implements SessionManager for testing.
@@ -269,7 +269,7 @@ func TestEventPublishStage_PublishEvents(t *testing.T) {
 	rc := &RunContext{
 		RunID: "test-run",
 		Events: []event.Event{
-			{ID: "evt-1", Type: "prism.run.started", Source: "prism"},
+			{ID: "evt-1", Type: "prizm.run.started", Source: "prizm"},
 			{ID: "evt-2", Type: "lumi.llm.completed", Source: "lumi"},
 		},
 	}
@@ -298,7 +298,7 @@ func TestEventPublishStage_PartialFailure(t *testing.T) {
 	rc := &RunContext{
 		RunID: "test-run",
 		Events: []event.Event{
-			{ID: "evt-1", Type: "prism.run.started", Source: "prism"},
+			{ID: "evt-1", Type: "prizm.run.started", Source: "prizm"},
 			{ID: "evt-2", Type: "lumi.llm.completed", Source: "lumi"},
 		},
 	}

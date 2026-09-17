@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/usage"
+	"github.com/emaharmony/prizm/internal/usage"
 )
 
 // This file implements GET /api/v1/usage — the token-usage tracker surface. It

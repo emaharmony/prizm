@@ -19,8 +19,8 @@ import (
 	"strings"
 	"time"
 
-	contextpkg "github.com/emaharmony/prism/internal/context"
-	"github.com/emaharmony/prism/internal/plan"
+	contextpkg "github.com/emaharmony/prizm/internal/context"
+	"github.com/emaharmony/prizm/internal/plan"
 )
 
 // Decision represents the guard rail's decision.

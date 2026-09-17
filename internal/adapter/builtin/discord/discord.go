@@ -1,9 +1,9 @@
-// Package discord implements the Discord adapter for Prism (V14e).
+// Package discord implements the Discord adapter for Prizm (V14e).
 //
-// The Discord adapter is Prism's second real adapter. It posts run results,
+// The Discord adapter is Prizm's second real adapter. It posts run results,
 // alerts, and summaries to Discord channels via webhooks.
 //
-// When a `prism.run.completed` or `prism.run.failed` event fires, the Discord
+// When a `prizm.run.completed` or `prizm.run.failed` event fires, the Discord
 // adapter posts a rich embed with the run summary, status, and duration.
 // This IS the thesis in action: state changes trigger actions automatically.
 //
@@ -18,7 +18,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/emaharmony/prism/internal/adapter"
+	"github.com/emaharmony/prizm/internal/adapter"
 )
 
 // DiscordAdapter posts run results to Discord channels via webhooks.
@@ -171,7 +171,7 @@ func (d *DiscordAdapter) postRunSummary(input map[string]any) (*adapter.Result, 
 			{Name: "Project", Value: project, Inline: true},
 			{Name: "Duration", Value: durationStr, Inline: true},
 		},
-		Footer:    &discordEmbedFooter{Text: "Prism"},
+		Footer:    &discordEmbedFooter{Text: "Prizm"},
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -201,7 +201,7 @@ func (d *DiscordAdapter) postAlert(input map[string]any) (*adapter.Result, error
 			{Name: "Run ID", Value: runID, Inline: true},
 			{Name: "Severity", Value: severity, Inline: true},
 		},
-		Footer:    &discordEmbedFooter{Text: "Prism Alert"},
+		Footer:    &discordEmbedFooter{Text: "Prizm Alert"},
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 

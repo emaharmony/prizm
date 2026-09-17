@@ -1,5 +1,5 @@
-// Package config reads OpenClaw configuration and creates Prism provider instances.
-// It bridges between the OpenClaw config format and Prism's provider interface.
+// Package config reads OpenClaw configuration and creates Prizm provider instances.
+// It bridges between the OpenClaw config format and Prizm's provider interface.
 package config
 
 import (
@@ -8,11 +8,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/emaharmony/prism/internal/provider"
-	"github.com/emaharmony/prism/internal/provider/anthropic"
-	"github.com/emaharmony/prism/internal/provider/gemini"
-	"github.com/emaharmony/prism/internal/provider/ollama"
-	"github.com/emaharmony/prism/internal/provider/openai"
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/provider/anthropic"
+	"github.com/emaharmony/prizm/internal/provider/gemini"
+	"github.com/emaharmony/prizm/internal/provider/ollama"
+	"github.com/emaharmony/prizm/internal/provider/openai"
 )
 
 // OpenClawProviderConfig represents a single provider entry in openclaw.json.

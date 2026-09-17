@@ -31,7 +31,7 @@ fast_path:
 
 # Agent registry
 agents:
-  - name: prism
+  - name: prizm
     role: implementation
     capabilities: [write_code, git_operations, file_operations, code_review]
     provider: ollama

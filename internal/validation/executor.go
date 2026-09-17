@@ -1,4 +1,4 @@
-// Package validation implements Prism V5's validation pipeline — running allowlisted
+// Package validation implements Prizm V5's validation pipeline — running allowlisted
 // commands after a mutation to verify the change didn't break anything.
 //
 // Why allowlisted commands only? An LLM could propose running `rm -rf /` as a
@@ -13,7 +13,7 @@
 //	echo_test — runs `go version`, used for integration testing (5s timeout)
 //	go_test_all — runs `go test ./...`, used for Go projects (120s timeout)
 //
-// Validation events (prism.validation.requested/started/completed/failed/skipped/timeout)
+// Validation events (prizm.validation.requested/started/completed/failed/skipped/timeout)
 // track each step. Results are persisted as JSON artifacts under runs/<run_id>/validation/.
 package validation
 
@@ -34,7 +34,7 @@ var validationEnvironmentKeys = []string{
 	"TMP", "TEMP", "SystemRoot", "ComSpec", "PATHEXT", "LOCALAPPDATA",
 }
 
-// EventEmitter is a callback for emitting Prism events.
+// EventEmitter is a callback for emitting Prizm events.
 type EventEmitter func(eventType, source string, payload map[string]any)
 
 // Executor runs validation profiles safely.
@@ -72,7 +72,7 @@ func (e *Executor) Run(ctx context.Context, profileName, correlationID string) (
 	// Resolve the profile
 	profile, err := e.registry.Resolve(profileName)
 	if err != nil {
-		e.emit(V5EventTypes.ValidationFailed, "prism-validation", map[string]any{
+		e.emit(V5EventTypes.ValidationFailed, "prizm-validation", map[string]any{
 			"profile_name":   profileName,
 			"correlation_id": correlationID,
 			"error":          err.Error(),
@@ -81,14 +81,14 @@ func (e *Executor) Run(ctx context.Context, profileName, correlationID string) (
 	}
 
 	// Emit validation.requested
-	e.emit(V5EventTypes.ValidationRequested, "prism-validation", map[string]any{
+	e.emit(V5EventTypes.ValidationRequested, "prizm-validation", map[string]any{
 		"profile_name":   profile.Name,
 		"correlation_id": correlationID,
 	})
 
 	// Safety checks
 	if err := ValidateProfileSafety(profile, e.projectRoot); err != nil {
-		e.emit(V5EventTypes.ValidationFailed, "prism-validation", map[string]any{
+		e.emit(V5EventTypes.ValidationFailed, "prizm-validation", map[string]any{
 			"profile_name":   profile.Name,
 			"correlation_id": correlationID,
 			"error":          err.Error(),
@@ -101,7 +101,7 @@ func (e *Executor) Run(ctx context.Context, profileName, correlationID string) (
 	}
 
 	// Emit validation.started
-	e.emit(V5EventTypes.ValidationStarted, "prism-validation", map[string]any{
+	e.emit(V5EventTypes.ValidationStarted, "prizm-validation", map[string]any{
 		"profile_name":   profile.Name,
 		"correlation_id": correlationID,
 	})
@@ -109,7 +109,7 @@ func (e *Executor) Run(ctx context.Context, profileName, correlationID string) (
 	// Ensure validation artifact directory exists
 	validationDir := filepath.Join(e.artifactDir, "validation")
 	if err := os.MkdirAll(validationDir, 0755); err != nil {
-		e.emit(V5EventTypes.ValidationFailed, "prism-validation", map[string]any{
+		e.emit(V5EventTypes.ValidationFailed, "prizm-validation", map[string]any{
 			"profile_name":   profile.Name,
 			"correlation_id": correlationID,
 			"error":          err.Error(),
@@ -128,7 +128,7 @@ func (e *Executor) Run(ctx context.Context, profileName, correlationID string) (
 
 	stdoutFile, err := os.Create(stdoutPath)
 	if err != nil {
-		e.emit(V5EventTypes.ValidationFailed, "prism-validation", map[string]any{
+		e.emit(V5EventTypes.ValidationFailed, "prizm-validation", map[string]any{
 			"profile_name":   profile.Name,
 			"correlation_id": correlationID,
 			"error":          err.Error(),
@@ -143,7 +143,7 @@ func (e *Executor) Run(ctx context.Context, profileName, correlationID string) (
 
 	stderrFile, err := os.Create(stderrPath)
 	if err != nil {
-		e.emit(V5EventTypes.ValidationFailed, "prism-validation", map[string]any{
+		e.emit(V5EventTypes.ValidationFailed, "prizm-validation", map[string]any{
 			"profile_name":   profile.Name,
 			"correlation_id": correlationID,
 			"error":          err.Error(),
@@ -182,7 +182,7 @@ func (e *Executor) Run(ctx context.Context, profileName, correlationID string) (
 	// typical Go/toolchain operations are forwarded.
 	cmd.Env = validationEnvironment()
 
-	log.Printf("prism-validation: running %q in %s (timeout: %s)", profile.Name, workingDir, timeout)
+	log.Printf("prizm-validation: running %q in %s (timeout: %s)", profile.Name, workingDir, timeout)
 
 	startTime := time.Now()
 	runErr := cmd.Run()
@@ -206,7 +206,7 @@ func (e *Executor) Run(ctx context.Context, profileName, correlationID string) (
 
 	// Check if it was a timeout
 	if execCtx.Err() == context.DeadlineExceeded {
-		e.emit(V5EventTypes.ValidationTimeout, "prism-validation", map[string]any{
+		e.emit(V5EventTypes.ValidationTimeout, "prizm-validation", map[string]any{
 			"profile_name":         profile.Name,
 			"correlation_id":       correlationID,
 			"duration_ms":          durationMs,
@@ -245,7 +245,7 @@ func (e *Executor) Run(ctx context.Context, profileName, correlationID string) (
 	}
 
 	if status == "passed" {
-		e.emit(V5EventTypes.ValidationCompleted, "prism-validation", map[string]any{
+		e.emit(V5EventTypes.ValidationCompleted, "prizm-validation", map[string]any{
 			"profile_name":         profile.Name,
 			"correlation_id":       correlationID,
 			"exit_code":            exitCode,
@@ -255,7 +255,7 @@ func (e *Executor) Run(ctx context.Context, profileName, correlationID string) (
 			"result_artifact_path": resultPath,
 		})
 	} else {
-		e.emit(V5EventTypes.ValidationFailed, "prism-validation", map[string]any{
+		e.emit(V5EventTypes.ValidationFailed, "prizm-validation", map[string]any{
 			"profile_name":         profile.Name,
 			"correlation_id":       correlationID,
 			"exit_code":            exitCode,
@@ -294,11 +294,11 @@ func validationEnvironment() []string {
 func (e *Executor) writeResult(path string, result *Result) {
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
-		log.Printf("prism-validation: failed to marshal result: %v", err)
+		log.Printf("prizm-validation: failed to marshal result: %v", err)
 		return
 	}
 	if err := os.WriteFile(path, append(data, '\n'), 0644); err != nil {
-		log.Printf("prism-validation: failed to write result %s: %v", path, err)
+		log.Printf("prizm-validation: failed to write result %s: %v", path, err)
 	}
 }
 
@@ -312,10 +312,10 @@ var V5EventTypes = struct {
 	ValidationSkipped   string
 	ValidationTimeout   string
 }{
-	ValidationRequested: "prism.validation.requested",
-	ValidationStarted:   "prism.validation.started",
-	ValidationCompleted: "prism.validation.completed",
-	ValidationFailed:    "prism.validation.failed",
-	ValidationSkipped:   "prism.validation.skipped",
-	ValidationTimeout:   "prism.validation.timeout",
+	ValidationRequested: "prizm.validation.requested",
+	ValidationStarted:   "prizm.validation.started",
+	ValidationCompleted: "prizm.validation.completed",
+	ValidationFailed:    "prizm.validation.failed",
+	ValidationSkipped:   "prizm.validation.skipped",
+	ValidationTimeout:   "prizm.validation.timeout",
 }

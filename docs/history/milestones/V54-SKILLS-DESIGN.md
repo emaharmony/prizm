@@ -6,23 +6,23 @@
 
 ## Goal
 
-Let Prism agents discover and use **skills** — the `SKILL.md` "Agent Skills"
+Let Prizm agents discover and use **skills** — the `SKILL.md` "Agent Skills"
 convention used by Claude Code and OpenClaw. A skill is a named capability
 (frontmatter `name` + `description` + a markdown instruction body, optional
 `allowed-tools`, plus bundled scripts/resources) that the model invokes when
 relevant; invoking it loads the skill's instructions into context to steer
-behavior, and bundled scripts run through Prism's normal tool/policy path.
+behavior, and bundled scripts run through Prizm's normal tool/policy path.
 
 ## Starting rating: ~0/10
 
-Prism had **no skill concept** before this change — zero references in the Go
+Prizm had **no skill concept** before this change — zero references in the Go
 codebase; OpenClaw config covers only providers/models; the only `SKILL.md` files
 present were unrelated Python venv artifacts. So the ability to use Claude
 Code / OpenClaw skills was effectively nonexistent.
 
 ## Design (to reach 8.75+)
 
-A self-contained `internal/skill` package that reuses Prism's existing substrate
+A self-contained `internal/skill` package that reuses Prizm's existing substrate
 (tool registry, prompt builder, policy) with no gated-loop core change.
 
 ### This iteration (foundation) — `internal/skill`
@@ -60,7 +60,7 @@ A self-contained `internal/skill` package that reuses Prism's existing substrate
 
 ### Serve wiring (shipped — iteration 3)
 
-At `prism serve` startup (where the tool registry is built), after MCP
+At `prizm serve` startup (where the tool registry is built), after MCP
 registration: `skillReg = skill.NewRegistry(); skillReg.LoadDefault(workspaceRoot)`
 discovers the workspace's skills, `tool.RegisterSkillTool(toolReg, skillReg)` adds
 `use_skill` (only if ≥1 skill), and `wakeHandler.SetSkills(skillReg)` makes the
@@ -68,13 +68,13 @@ gated-loop system prompt append `skill.PromptSuffix(...)`. So the model sees the
 available skills and can invoke them; skill-bundled scripts run through the normal
 (already policy-gated) mutation tools. The load count is logged at startup.
 
-### Inspection: `prism skills` + doctor (shipped — iteration 4)
+### Inspection: `prizm skills` + doctor (shipped — iteration 4)
 
-- **`prism skills [--root .] [--json]`** lists discovered skills (name, source,
-  description); **`prism skills show <name>`** prints a skill's full instruction
-  payload. Same discovery `prism serve` uses, so it shows exactly what agents can
+- **`prizm skills [--root .] [--json]`** lists discovered skills (name, source,
+  description); **`prizm skills show <name>`** prints a skill's full instruction
+  payload. Same discovery `prizm serve` uses, so it shows exactly what agents can
   invoke. Verified end-to-end against a real on-disk `.claude/skills/<name>/SKILL.md`.
-- **`prism doctor`** gained a `skills` check reporting the discovered count
+- **`prizm doctor`** gained a `skills` check reporting the discovered count
   (informational/OK; WARN if a skills dir failed to parse).
 - Added to the grouped help under a "Skills" section.
 

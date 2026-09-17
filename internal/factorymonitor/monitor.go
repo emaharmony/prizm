@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	EventStatusChanged = "prism.factory.status.changed"
-	EventStatusDigest  = "prism.factory.status.digest"
-	EventStatusStuck   = "prism.factory.status.stuck"
+	EventStatusChanged = "prizm.factory.status.changed"
+	EventStatusDigest  = "prizm.factory.status.digest"
+	EventStatusStuck   = "prizm.factory.status.stuck"
 )
 
 var terminalStatuses = map[string]bool{
@@ -25,7 +25,7 @@ var terminalStatuses = map[string]bool{
 	"cancelled": true,
 }
 
-// Publisher publishes monitor events to the Prism bus.
+// Publisher publishes monitor events to the Prizm bus.
 type Publisher interface {
 	Publish(subject string, data []byte) error
 }

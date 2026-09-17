@@ -9,14 +9,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/orchestrator"
-	"github.com/emaharmony/prism/internal/usage"
+	"github.com/emaharmony/prizm/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/usage"
 )
 
-// sampleConfigYAML is a valid prism.yaml with comments and two agents, used to
+// sampleConfigYAML is a valid prizm.yaml with comments and two agents, used to
 // verify surgical per-agent edits preserve comments and untouched agents.
-const sampleConfigYAML = `# Prism config — top comment must survive edits.
-prism:
+const sampleConfigYAML = `# Prizm config — top comment must survive edits.
+prizm:
   instance_id: test
   workspace: ./ws
 agents:
@@ -56,7 +56,7 @@ func newEndpointTestServer(t *testing.T) (*Server, string, string) {
 	}
 
 	// Config file.
-	cfgPath := filepath.Join(dir, "prism.yaml")
+	cfgPath := filepath.Join(dir, "prizm.yaml")
 	if err := os.WriteFile(cfgPath, []byte(sampleConfigYAML), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

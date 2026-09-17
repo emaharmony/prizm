@@ -1,12 +1,12 @@
 # Loop Readiness State
 
-Cross-cycle state file for the `/prism-loop` autonomous cycle (see
-`.claude/commands/prism-loop.md`). The loop reads this file at the start of
+Cross-cycle state file for the `/prizm-loop` autonomous cycle (see
+`.claude/commands/prizm-loop.md`). The loop reads this file at the start of
 every cycle, works the topmost unchecked backlog item (BUILDER mode), and
-switches to driving Prism's own harness (OPERATOR mode) once the backlog is
+switches to driving Prizm's own harness (OPERATOR mode) once the backlog is
 empty. Appends one line to the cycle log per cycle.
 
-Origin: Lumi's "Loop Engineering: Core Concepts & Prism Readiness" report
+Origin: Lumi's "Loop Engineering: Core Concepts & Prizm Readiness" report
 (2026-07-04). Of its six gaps, four were already closed on `staging`
 (independent verifier V35, token budgets/retry V35, SKILL.md skills V54,
 MCP client V49). The backlog below is what remains.
@@ -20,14 +20,14 @@ MCP client V49). The backlog below is what remains.
   `max_verification_attempts`, `Engine.SetRollbackRunner`, three triggers,
   `workflow.rollback` event, `rolled_back` status;
   docs/V57-AUTO-ROLLBACK-DESIGN.md).
-- [x] **Wiring fix — `prism.ollama_url` in serve mode**: DONE 2026-07-04 as
+- [x] **Wiring fix — `prizm.ollama_url` in serve mode**: DONE 2026-07-04 as
   part of a 10-fix wiring sweep (shared `resolveOllamaURL` precedence:
   flag → OLLAMA_BASE_URL → config → default). Sweep also fixed: autopatch
   `pr` mode rejected at validation (V50 was unreachable), serve ignoring
-  `prism.port`, doctor missing `openai_responses`, provider-registry silent
-  overwrite, `prism run` context flags discarded, gemini `base_url` in
+  `prizm.port`, doctor missing `openai_responses`, provider-registry silent
+  overwrite, `prizm run` context flags discarded, gemini `base_url` in
   OpenClaw import, Remembrance default-URL drift, and undocumented
-  config sections in prism.yaml.example.
+  config sections in prizm.yaml.example.
 - [x] **Per-phase token budgets**: DONE 2026-07-04 (`phases[].max_tokens`,
   `phase.budget_exhausted`, per-phase token accounting in run state).
 - [ ] *(stretch)* **Enforce per-skill `allowed-tools`**: advisory-only in the

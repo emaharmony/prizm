@@ -2,9 +2,9 @@
 
 ## Project Status
 
-Prism is source-available and experimental. It is not production-ready.
+Prizm is source-available and experimental. It is not production-ready.
 
-Do not use Prism for unattended high-risk automation, live trading, deployment, destructive operations, or sensitive production workflows without independent review and hardening.
+Do not use Prizm for unattended high-risk automation, live trading, deployment, destructive operations, or sensitive production workflows without independent review and hardening.
 
 Security support is currently best-effort for the `main` branch.
 
@@ -23,7 +23,7 @@ Do not open public issues for vulnerabilities involving:
 
 ## Security Principles
 
-Prism is designed around these principles:
+Prizm is designed around these principles:
 
 - The framework controls lifecycle and policy.
 - Models may request actions but must not directly execute unsafe operations.

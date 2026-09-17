@@ -1,7 +1,7 @@
-// Package run provides Prism's execution runner, run locking, and concurrency management.
+// Package run provides Prizm's execution runner, run locking, and concurrency management.
 //
 // V14e adds the RunPool for concurrent run execution with semaphore-based
-// concurrency control. This allows multiple Prism runs to execute in parallel
+// concurrency control. This allows multiple Prizm runs to execute in parallel
 // while respecting resource limits.
 package run
 

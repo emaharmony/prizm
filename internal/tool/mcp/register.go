@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/emaharmony/prism/internal/tool"
+	"github.com/emaharmony/prizm/internal/tool"
 )
 
 // register.go wires declared MCP servers into a live tool.Registry at startup.
@@ -46,7 +46,7 @@ type RegisterResult struct {
 
 // ProbeServer connects to a single server via factory, performs the handshake,
 // and returns its tool definitions WITHOUT registering them — a live connectivity
-// check for `prism mcp probe`. The factory is injected so the connect→init→list
+// check for `prizm mcp probe`. The factory is injected so the connect→init→list
 // flow is unit-testable with a fake client.
 func ProbeServer(ctx context.Context, spec ServerSpec, factory ClientFactory) ([]ToolDef, error) {
 	if strings.TrimSpace(spec.Name) == "" || strings.TrimSpace(spec.Command) == "" {

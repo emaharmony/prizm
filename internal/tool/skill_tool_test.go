@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/skill"
+	"github.com/emaharmony/prizm/internal/skill"
 )
 
 func skillReg(t *testing.T) *skill.Registry {

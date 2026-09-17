@@ -1,6 +1,6 @@
 # Benchmarks
 
-Prism currently has a minimal vector-index benchmark suite:
+Prizm currently has a minimal vector-index benchmark suite:
 
 ```bash
 go test ./internal/vector -run '^$' -bench . -benchmem -count=5

@@ -1,11 +1,11 @@
 from datetime import datetime
 
-from prism.event import Event, EventMetadata
+from prizm.event import Event, EventMetadata
 
 
 def test_event_defaults_and_unique_ids():
-    first = Event(type="prism.test", source="pytest")
-    second = Event(type="prism.test", source="pytest")
+    first = Event(type="prizm.test", source="pytest")
+    second = Event(type="prizm.test", source="pytest")
 
     assert first.id.startswith("evt_")
     assert first.id != second.id
@@ -17,7 +17,7 @@ def test_event_defaults_and_unique_ids():
 def test_event_round_trip_preserves_extra_fields():
     event = Event.model_validate(
         {
-            "type": "prism.test",
+            "type": "prizm.test",
             "source": "pytest",
             "payload": {"ok": True},
             "future_schema_field": "preserved",

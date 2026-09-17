@@ -132,7 +132,7 @@ func (s *Service) ScanAndStart(ctx context.Context, scanner *Scanner) (*taskRef,
 		scanner = NewScanner()
 	}
 	issues, scanErr := scanner.Scan(ctx, s.cfg.Root)
-	s.emit("prism.autopatch.scanned", map[string]any{"issues": len(issues)})
+	s.emit("prizm.autopatch.scanned", map[string]any{"issues": len(issues)})
 	top, ok := TopIssue(issues)
 	if !ok {
 		return nil, issues, scanErr
@@ -169,7 +169,7 @@ func ParseSeverity(name string) IssueSeverity {
 
 // FilterBySeverity returns only the issues at or above min severity, preserving
 // order. With min == SeverityLow it returns everything. Pure and testable; lets
-// callers (e.g. `prism scan --severity high`) suppress low-severity noise such as
+// callers (e.g. `prizm scan --severity high`) suppress low-severity noise such as
 // CRLF/format findings without changing what detectors produce.
 func FilterBySeverity(issues []Issue, min IssueSeverity) []Issue {
 	if min <= SeverityLow {

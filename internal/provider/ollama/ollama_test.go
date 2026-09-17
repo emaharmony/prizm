@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/provider"
-	"github.com/emaharmony/prism/internal/provider/ollama"
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/provider/ollama"
 )
 
 func TestOllamaProviderImplementsInterface(t *testing.T) {
@@ -23,7 +23,7 @@ func TestOllamaProviderConnectionRefused(t *testing.T) {
 	req := provider.GenerateRequest{
 		RunID:   "run_conn",
 		Agent:   "lumi",
-		Project: "prism",
+		Project: "prizm",
 		Task:    "should fail",
 		Prompt:  "test",
 		Model:   "test-model",
@@ -64,7 +64,7 @@ func TestOllamaProviderSuccess(t *testing.T) {
 	req := provider.GenerateRequest{
 		RunID:   "run_test",
 		Agent:   "lumi",
-		Project: "prism",
+		Project: "prizm",
 		Task:    "Say hello",
 		Prompt:  "You are a helpful assistant.",
 		Model:   "test-model",

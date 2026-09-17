@@ -16,8 +16,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/emaharmony/prism/internal/provider"
-	"github.com/emaharmony/prism/internal/retry"
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/retry"
 )
 
 const (
@@ -74,9 +74,23 @@ type messagesRequest struct {
 	Model       string             `json:"model"`
 	MaxTokens   int                `json:"max_tokens"`
 	Messages    []anthropicMessage `json:"messages"`
-	System      string             `json:"system,omitempty"`
+	System      []systemBlock      `json:"system,omitempty"`
 	Temperature float64            `json:"temperature,omitempty"`
 	Stream      bool               `json:"stream,omitempty"`
+}
+
+// systemBlock enables Anthropic prompt caching. The system prompt is sent as
+// an array of blocks with cache_control markers so the static prefix (identity,
+// context, directives) is cached and only dynamic content is re-sent.
+type systemBlock struct {
+	Type         string        `json:"type"`          // "text"
+	Text         string        `json:"text"`
+	CacheControl *cacheControl `json:"cache_control,omitempty"`
+}
+
+// cacheControl tells Anthropic to cache this block.
+type cacheControl struct {
+	Type string `json:"type"` // "ephemeral"
 }
 
 type anthropicMessage struct {
@@ -115,6 +129,19 @@ func (p *Provider) Generate(ctx context.Context, req provider.GenerateRequest) (
 		MaxTokens:   req.MaxTokens,
 		Messages:    []anthropicMessage{{Role: "user", Content: req.Prompt}},
 		Temperature: req.Temperature,
+	}
+
+	// V76: Use system blocks with cache_control for prompt caching.
+	// The system prompt is split into a cached block (static identity/context/directives)
+	// so Anthropic caches it across turns. This saves ~90% of input tokens on long loops.
+	if req.System != "" {
+		anthReq.System = []systemBlock{
+			{
+				Type:         "text",
+				Text:         req.System,
+				CacheControl: &cacheControl{Type: "ephemeral"},
+			},
+		}
 	}
 
 	body, err := json.Marshal(anthReq)

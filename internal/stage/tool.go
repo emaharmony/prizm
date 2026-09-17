@@ -1,4 +1,4 @@
-// Package stage provides Prism's pipeline execution engine (V14a).
+// Package stage provides Prizm's pipeline execution engine (V14a).
 //
 // ToolStage executes tool calls requested by the LLM, with policy enforcement.
 // It checks the policy engine before executing each tool call and creates
@@ -9,8 +9,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/emaharmony/prism/internal/event"
-	"github.com/emaharmony/prism/internal/tool"
+	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/tool"
 )
 
 // ToolStage executes tool calls with policy enforcement.

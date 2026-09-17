@@ -4,13 +4,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/orchestrator"
 )
 
 func TestResolveUnknownProjectNeedsLocationWithRecommendation(t *testing.T) {
 	root := t.TempDir()
 	cfg := &orchestrator.Config{
-		Prism: orchestrator.PrismConfig{WriteRoots: []string{root}},
+		Prizm: orchestrator.PrizmConfig{WriteRoots: []string{root}},
 	}
 
 	res, err := Resolve(cfg, Request{Project: "GudEats", Prompt: "start a web app"})
@@ -29,7 +29,7 @@ func TestResolveUnknownProjectNeedsLocationWithRecommendation(t *testing.T) {
 func TestResolveExplicitRepoPathInsideWriteRoot(t *testing.T) {
 	root := t.TempDir()
 	cfg := &orchestrator.Config{
-		Prism: orchestrator.PrismConfig{WriteRoots: []string{root}},
+		Prizm: orchestrator.PrizmConfig{WriteRoots: []string{root}},
 	}
 	repoPath := filepath.Join(root, "GudEats")
 
@@ -49,7 +49,7 @@ func TestResolveExplicitRepoPathOutsideWriteRoot(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
 	cfg := &orchestrator.Config{
-		Prism: orchestrator.PrismConfig{WriteRoots: []string{root}},
+		Prizm: orchestrator.PrizmConfig{WriteRoots: []string{root}},
 	}
 
 	_, err := Resolve(cfg, Request{Project: "GudEats", RepoPath: filepath.Join(outside, "GudEats"), Prompt: "start a web app"})
@@ -62,7 +62,7 @@ func TestResolveConfiguredProjectFirst(t *testing.T) {
 	root := t.TempDir()
 	repoPath := filepath.Join(root, "Configured")
 	cfg := &orchestrator.Config{
-		Prism: orchestrator.PrismConfig{WriteRoots: []string{root}},
+		Prizm: orchestrator.PrizmConfig{WriteRoots: []string{root}},
 		Projects: []orchestrator.ProjectConfig{
 			{ID: "configured", RepoPath: repoPath, Channel: "channel-1"},
 		},
@@ -86,7 +86,7 @@ func TestResolveConfiguredProjectFirst(t *testing.T) {
 func TestResolveRequireLocationDoesNotUseDefaultProject(t *testing.T) {
 	root := t.TempDir()
 	cfg := &orchestrator.Config{
-		Prism: orchestrator.PrismConfig{WriteRoots: []string{root}},
+		Prizm: orchestrator.PrizmConfig{WriteRoots: []string{root}},
 		Projects: []orchestrator.ProjectConfig{
 			{ID: "default", RepoPath: filepath.Join(root, "Default"), Default: true},
 		},

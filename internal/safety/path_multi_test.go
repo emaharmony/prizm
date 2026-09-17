@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/safety"
+	"github.com/emaharmony/prizm/internal/safety"
 )
 
 func TestIsWithinAnyRoot_SingleRoot(t *testing.T) {

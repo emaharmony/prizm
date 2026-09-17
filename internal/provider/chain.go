@@ -1,15 +1,15 @@
-// Package provider implements Prism's LLM provider interface.
+// Package provider implements Prizm's LLM provider interface.
 //
 // V14c adds provider chaining with tier-based fallback. The ChainProvider
 // tries providers in order, skipping paid providers unless --allow-paid-fallback
-// is set. This gives Prism resilience: if Ollama is down, fall back to OpenAI.
+// is set. This gives Prizm resilience: if Ollama is down, fall back to OpenAI.
 package provider
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/emaharmony/prism/internal/retry"
+	"github.com/emaharmony/prizm/internal/retry"
 )
 
 // ChainProvider tries multiple providers in order with tier-based fallback.

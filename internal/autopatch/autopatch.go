@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/gitx"
-	"github.com/emaharmony/prism/internal/task"
-	"github.com/emaharmony/prism/internal/validation"
+	"github.com/emaharmony/prizm/internal/gitx"
+	"github.com/emaharmony/prizm/internal/task"
+	"github.com/emaharmony/prizm/internal/validation"
 	"github.com/rs/xid"
 )
 
@@ -150,10 +150,10 @@ func NormalizeConfig(cfg Config) Config {
 		cfg.Root = "."
 	}
 	if cfg.WorktreeRoot == "" {
-		cfg.WorktreeRoot = filepath.Join(".prism", "worktrees")
+		cfg.WorktreeRoot = filepath.Join(".prizm", "worktrees")
 	}
 	if cfg.ArtifactRoot == "" {
-		cfg.ArtifactRoot = filepath.Join(".prism", "data", "autopatch")
+		cfg.ArtifactRoot = filepath.Join(".prizm", "data", "autopatch")
 	}
 	if cfg.Registry == nil {
 		cfg.Registry = validation.NewRegistry()
@@ -210,7 +210,7 @@ func (s *Service) Start(ctx context.Context, req Request) (*task.Task, error) {
 	if err := s.cfg.Store.Create(t); err != nil {
 		return nil, err
 	}
-	s.emit("prism.autopatch.created", map[string]any{"task_id": taskID, "source": req.Source})
+	s.emit("prizm.autopatch.created", map[string]any{"task_id": taskID, "source": req.Source})
 	go s.runTask(taskID, req)
 	return t, nil
 }
@@ -225,21 +225,21 @@ func (s *Service) runTask(taskID string, req Request) {
 		result.Status = StatusFailed
 		result.Error = err.Error()
 		_ = s.cfg.Store.UpdateStatus(taskID, task.StatusFailed, resultToMap(result))
-		s.emit("prism.autopatch.failed", map[string]any{"task_id": taskID, "error": err.Error()})
+		s.emit("prizm.autopatch.failed", map[string]any{"task_id": taskID, "error": err.Error()})
 		return
 	}
 	if result.Status == StatusPROpened {
 		_ = s.cfg.Store.UpdateStatus(taskID, task.StatusCompleted, resultToMap(result))
-		s.emit("prism.autopatch.pr_opened", map[string]any{"task_id": taskID, "pr_url": result.PRURL, "branch": result.Branch})
+		s.emit("prizm.autopatch.pr_opened", map[string]any{"task_id": taskID, "pr_url": result.PRURL, "branch": result.Branch})
 		return
 	}
 	if result.Status == StatusProposed {
 		_ = s.cfg.Store.UpdateStatus(taskID, task.StatusCompleted, resultToMap(result))
-		s.emit("prism.autopatch.proposed", map[string]any{"task_id": taskID, "patch_path": result.PatchPath})
+		s.emit("prizm.autopatch.proposed", map[string]any{"task_id": taskID, "patch_path": result.PatchPath})
 		return
 	}
 	_ = s.cfg.Store.UpdateStatus(taskID, task.StatusFailed, resultToMap(result))
-	s.emit("prism.autopatch.validation_failed", map[string]any{"task_id": taskID, "patch_path": result.PatchPath})
+	s.emit("prizm.autopatch.validation_failed", map[string]any{"task_id": taskID, "patch_path": result.PatchPath})
 }
 
 // Run executes an autopatch task synchronously. Tests can call this directly.
@@ -401,7 +401,7 @@ func (s *Service) runFirstAvailableWorker(ctx context.Context, req WorkerRequest
 
 func (s *Service) emit(eventType string, payload map[string]any) {
 	if s.cfg.Emit != nil {
-		s.cfg.Emit(eventType, "prism-autopatch", payload)
+		s.cfg.Emit(eventType, "prizm-autopatch", payload)
 	}
 }
 

@@ -10,10 +10,10 @@ version=$(tr -d '[:space:]' < VERSION)
 grep -Fq "var Version = \"$version\"" internal/version/version.go
 grep -Fq "version = \"$version\"" sdk/pyproject.toml
 grep -Fq "version = \"$version\"" remembrance/pyproject.toml
-grep -Fq "__version__ = \"$version\"" sdk/prism/__init__.py
+grep -Fq "__version__ = \"$version\"" sdk/prizm/__init__.py
 grep -Fq "__version__ = \"$version\"" remembrance/src/remembrance/__init__.py
 grep -Fq "## [$version]" CHANGELOG.md
 
-actual=$(go run ./cmd/prism-cli version)
-[[ $actual == "prism v$version" ]] || { echo "CLI version mismatch: $actual" >&2; exit 1; }
+actual=$(go run ./cmd/prizm-cli version)
+[[ $actual == "prizm v$version" ]] || { echo "CLI version mismatch: $actual" >&2; exit 1; }
 echo "version contract: v$version"

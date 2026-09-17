@@ -1,4 +1,4 @@
-// Package api provides the Prism HTTP API server (REST + SSE).
+// Package api provides the Prizm HTTP API server (REST + SSE).
 //
 // Endpoints:
 //
@@ -30,21 +30,21 @@
 //	POST /api/v1/editor/save     — Validate + generate YAML
 //	GET /api/v1/costs             — Cost summary
 //	GET /api/v1/usage             — Token-usage time series + breakdowns (?range=)
-//	GET /api/v1/config            — Curated prism.yaml settings + scheduler jobs
+//	GET /api/v1/config            — Curated prizm.yaml settings + scheduler jobs
 //	GET /api/v1/config/agents     — Per-agent editable fields
 //	PUT /api/v1/config/agents/{id} — Surgically edit one agent's personality/rules
 //	GET /api/v1/workspace/files   — List shared workspace markdown files
 //	GET /api/v1/workspace/files/{name} — Read one workspace file
 //	PUT /api/v1/workspace/files/{name} — Write one workspace file (jailed, atomic)
-//	PUT /api/v1/config/settings   — Surgically edit curated prism.yaml settings
-//	PUT /api/v1/config/scheduler  — Surgically edit prism.scheduler jobs
+//	PUT /api/v1/config/settings   — Surgically edit curated prizm.yaml settings
+//	PUT /api/v1/config/scheduler  — Surgically edit prizm.scheduler jobs
 //	POST /api/v1/config/cron/validate — Validate a cron expression
 //	GET /api/v1/config/actions    — Known wake actions (cron presets)
 //	GET /                          — Embedded dashboard UI (when folded into serve)
 package api
 
 import (
-	"context"
+	contextctx "context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -59,25 +59,47 @@ import (
 	"sync"
 	"time"
 
-	"github.com/emaharmony/prism/internal/agentns"
-	"github.com/emaharmony/prism/internal/autopatch"
-	costpkg "github.com/emaharmony/prism/internal/cost"
-	"github.com/emaharmony/prism/internal/delegation"
-	"github.com/emaharmony/prism/internal/editor"
-	"github.com/emaharmony/prism/internal/invocation"
-	"github.com/emaharmony/prism/internal/orchestrator"
-	"github.com/emaharmony/prism/internal/provider"
-	"github.com/emaharmony/prism/internal/session"
-	"github.com/emaharmony/prism/internal/sessionreset"
-	"github.com/emaharmony/prism/internal/task"
-	"github.com/emaharmony/prism/internal/usage"
-	"github.com/emaharmony/prism/internal/workflow"
-	v2 "github.com/emaharmony/prism/internal/workflow/v2"
-	"github.com/emaharmony/prism/internal/workstart"
+	"github.com/emaharmony/prizm/internal/agentns"
+	"github.com/emaharmony/prizm/internal/autopatch"
+	costpkg "github.com/emaharmony/prizm/internal/cost"
+	"github.com/emaharmony/prizm/internal/context"
+	"github.com/emaharmony/prizm/internal/delegation"
+	"github.com/emaharmony/prizm/internal/editor"
+	"github.com/emaharmony/prizm/internal/invocation"
+	"github.com/emaharmony/prizm/internal/memory"
+	"github.com/emaharmony/prizm/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/remembrance"
+	"github.com/emaharmony/prizm/internal/session"
+	"github.com/emaharmony/prizm/internal/sessionreset"
+	"github.com/emaharmony/prizm/internal/task"
+	"github.com/emaharmony/prizm/internal/usage"
+	"github.com/emaharmony/prizm/internal/workflow"
+	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
+	"github.com/emaharmony/prizm/internal/toolloop"
+	"github.com/emaharmony/prizm/internal/tool"
+	"github.com/emaharmony/prizm/internal/workstart"
 	"github.com/nats-io/nats.go"
 )
 
-// Server provides the Prism HTTP API.
+// MemoryInjectorInterface is the interface for smart memory injection.
+// The cmd/prizm-cli package provides the concrete MemoryInjector implementation
+// with query planning, embedding search, and grounding-aware formatting.
+// The API package uses this interface to avoid importing cmd types.
+type MemoryInjectorInterface interface {
+	InjectMemoriesInt(ctx contextctx.Context, mode int, userMessage string, sessionMsgCount int, maxTokens int) string
+	// V23: GetLastMemories returns the memories from the most recent injection call.
+	// Used for post-hoc citation verification.
+	GetLastMemories() []memory.Memory
+}
+
+// CoreIdentityInterface is the interface for the permanent core identity block.
+// The cmd/prizm-cli package provides the concrete CoreIdentityBlock implementation.
+type CoreIdentityInterface interface {
+	Build(memStore *memory.MarkdownStore) string
+}
+
+// Server provides the Prizm HTTP API.
 type Server struct {
 	addr        string
 	orch        *orchestrator.Orchestrator
@@ -108,13 +130,37 @@ type Server struct {
 	// workflowConfigPath is the gated-loop workflow definition file the
 	// dashboard workflow editor reads and writes. Empty → read-only default.
 	workflowConfigPath string
-	// configPath is the prism.yaml file the config/scheduler editors read and
+
+	// CtxBuilder builds the system prompt (SOUL.md, USER.md, context files) for invoke.
+	ctxBuilder *context.Builder
+
+	// memStoreForInvoke is the MarkdownStore used for memory injection in invokes.
+	memStoreForInvoke *memory.MarkdownStore
+	// memInjectorForInvoke is the smart memory injector (query planner + embedding + grounding).
+	// Falls back to memStoreForInvoke.Search when nil.
+	memInjectorForInvoke MemoryInjectorInterface
+	// coreIdentityForInject is the permanent core identity block for invoke prompts.
+	coreIdentityForInject CoreIdentityInterface
+
+	// toolRegForInvoke is the tool registry for invoke tool loops.
+	// When set, the invoke path uses toolloop.RunChatLoop so the agent can call
+	// tools (memory_search, etc.) instead of a single-shot LLM call.
+	toolRegForInvoke *tool.Registry
+	// toolExecForInvoke is the tool executor for invoke tool loops.
+	toolExecForInvoke *tool.Executor
+
+	// memStore is the local MarkdownStore for the memories API.
+	memStore *memory.MarkdownStore
+
+	// remClient is the Remembrance client for the memories API.
+	remClient *remembrance.Client
+	// configPath is the prizm.yaml file the config/scheduler editors read and
 	// surgically write. Empty → config editing disabled (endpoints 400).
 	configPath string
 	// schedulerActions are the known wake actions offered as cron-job presets.
 	schedulerActions []SchedulerAction
 	// staticUI serves the embedded dashboard pages at / when non-nil (folded
-	// into `prism serve`).
+	// into `prizm serve`).
 	staticUI http.Handler
 	// usage is the token-usage store backing GET /api/v1/usage. Nil → 503.
 	usage *usage.Store
@@ -164,7 +210,7 @@ type Config struct {
 	ConfigDir string
 	// WorkflowConfigPath is the gated-loop workflow definition file path.
 	WorkflowConfigPath string
-	// ConfigPath is the prism.yaml path the config/scheduler editors read/write.
+	// ConfigPath is the prizm.yaml path the config/scheduler editors read/write.
 	ConfigPath string
 	// SchedulerActions are the known wake actions offered as cron-job presets.
 	SchedulerActions []SchedulerAction
@@ -182,12 +228,38 @@ type Config struct {
 	MaxRequestBytes int64
 	// MaxWorkspaceFileBytes caps a single workspace file write. 0 → 4 MiB.
 	MaxWorkspaceFileBytes int64
+	// CtxBuilder builds the system prompt (SOUL.md, USER.md, context files) for invoke.
+	// When nil, invokes use a minimal system prompt (ConversationPostfix only).
+	CtxBuilder *context.Builder
+
+	// MemStoreForInvoke is the local MarkdownStore for memory injection in invokes.
+	MemStoreForInvoke *memory.MarkdownStore
+
+	// MemInjectorForInvoke is the smart memory injector (query planner + embedding + grounding).
+	// When nil, falls back to MemStoreForInvoke.Search (keyword only, no grounding).
+	MemInjectorForInvoke MemoryInjectorInterface
+
+	// CoreIdentityForInvoke is the core identity block for permanent facts in the system prompt.
+	// When nil, no core identity block is injected.
+	CoreIdentityForInvoke CoreIdentityInterface
+
+	// ToolRegForInvoke is the tool registry for invoke tool loops. When nil, invoke
+	// falls back to a single-shot LLM call with no tool support.
+	ToolRegForInvoke *tool.Registry
+	// ToolExecForInvoke is the tool executor for invoke tool loops.
+	ToolExecForInvoke *tool.Executor
+
+	// MemStore is the local MarkdownStore for the memories API. Nil → memories endpoints return empty.
+	MemStore *memory.MarkdownStore
+
+	// RemClient is the Remembrance client for the memories API. Nil → Remembrance source disabled.
+	RemClient *remembrance.Client
 }
 
 // AutoPatchStarter is the API surface needed from the autopatch service.
 type AutoPatchStarter interface {
 	Enabled() bool
-	Start(ctx context.Context, req autopatch.Request) (*task.Task, error)
+	Start(ctx contextctx.Context, req autopatch.Request) (*task.Task, error)
 }
 
 // NewServer creates a new API server.
@@ -219,6 +291,14 @@ func NewServer(cfg Config) *Server {
 
 		maxRequestBytes:       cfg.MaxRequestBytes,
 		maxWorkspaceFileBytes: cfg.MaxWorkspaceFileBytes,
+		memStore:             cfg.MemStore,
+		remClient:            cfg.RemClient,
+		ctxBuilder:              cfg.CtxBuilder,
+		memStoreForInvoke:        cfg.MemStoreForInvoke,
+		memInjectorForInvoke:    cfg.MemInjectorForInvoke,
+		coreIdentityForInject:   cfg.CoreIdentityForInvoke,
+		toolRegForInvoke:        cfg.ToolRegForInvoke,
+		toolExecForInvoke:       cfg.ToolExecForInvoke,
 	}
 	if s.maxRequestBytes <= 0 {
 		s.maxRequestBytes = 1 << 20 // 1 MiB
@@ -262,7 +342,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/v1/costs", s.handleCosts)
 	s.mux.HandleFunc("/api/v1/usage", s.handleUsage)
 
-	// Config + scheduler editors (write prism.yaml surgically).
+	// Config + scheduler editors (write prizm.yaml surgically).
 	s.mux.HandleFunc("/api/v1/config", s.handleConfig)
 	s.mux.HandleFunc("/api/v1/config/settings", s.handleConfigSettings)
 	s.mux.HandleFunc("/api/v1/config/scheduler", s.handleConfigScheduler)
@@ -275,7 +355,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/v1/workspace/files", s.handleWorkspaceFiles)
 	s.mux.HandleFunc("/api/v1/workspace/files/", s.handleWorkspaceFile)
 
-	// Serve the embedded dashboard UI at / when wired (folded into `prism
+	// Memory visualizer API (local + optional Remembrance).
+	s.mux.HandleFunc("/api/v1/memories", s.handleMemories)
+	s.mux.HandleFunc("/api/v1/memories/categories", s.handleMemoriesCategories)
+	s.mux.HandleFunc("/api/v1/memories/stats", s.handleMemoriesStats)
+	s.mux.HandleFunc("/api/v1/memories/", s.handleMemoriesDetail)
+
+	// Serve the embedded dashboard UI at / when wired (folded into `prizm
 	// serve`). Specific /api/v1/... patterns above win under ServeMux
 	// longest-match, so this only catches UI/static paths.
 	if s.staticUI != nil {
@@ -485,7 +571,7 @@ func (s *Server) handleAgentGet(w http.ResponseWriter, r *http.Request, id strin
 //
 // A minimal, general "ask one configured agent one question, get a
 // structured result" primitive for external processes (addons) that can't
-// or shouldn't import Prism's internal Go packages. See internal/invocation
+// or shouldn't import Prizm's internal Go packages. See internal/invocation
 // for the rationale and the single-shot call shape (no session, no tool
 // loop — just a resolved provider/model, one prompt in, one result out).
 
@@ -555,7 +641,7 @@ func (s *Server) handleAgentInvoke(w http.ResponseWriter, r *http.Request, agent
 	// single-shot behavior — one prompt in, one result out, nothing persisted.
 	if conversationID == "" || s.sessions == nil {
 		inv := s.invocations.Create(agentID)
-		go s.runInvocation(*agentCfg, inv.ID, singleShotMessages(*agentCfg, req.Prompt), "", maxTokens)
+		go s.runInvocation(*agentCfg, inv.ID, s.singleShotMessages(*agentCfg, req.Prompt), "", maxTokens)
 		s.writeInvocationAccepted(w, inv)
 		return
 	}
@@ -590,7 +676,7 @@ func (s *Server) handleAgentInvoke(w http.ResponseWriter, r *http.Request, agent
 
 	// Build the message list synchronously (sess.Messages now includes this turn)
 	// so the background call doesn't race concurrent session mutation.
-	messages := invokeSessionMessages(*agentCfg, sess)
+	messages := s.invokeSessionMessages(*agentCfg, sess)
 
 	inv := s.invocations.Create(agentID)
 	go s.runInvocation(*agentCfg, inv.ID, messages, sess.ID, maxTokens)
@@ -639,24 +725,149 @@ func (s *Server) resolveInvokeSession(agentID, conversationID string, reset bool
 	return s.sessions.Create(agentID, invokeChannel, conversationID, conversationID)
 }
 
-// singleShotMessages builds the classic memoryless prompt: optional system
-// postfix + the single user turn.
-func singleShotMessages(agentCfg orchestrator.AgentConfig, prompt string) []provider.ChatMessage {
-	messages := make([]provider.ChatMessage, 0, 2)
+// resolveConversationPostfixForInvoke picks the behavior directive for invoke.
+// If SOUL.md was loaded (hasSoul=true), return "" — SOUL.md is the personality authority.
+// Otherwise fall back to the agent's conversation_postfix or a default.
+func resolveConversationPostfixForInvoke(agentCfg orchestrator.AgentConfig, hasSoul bool) string {
+	if hasSoul {
+		return ""
+	}
 	if agentCfg.ConversationPostfix != "" {
-		messages = append(messages, provider.ChatMessage{Role: "system", Content: agentCfg.ConversationPostfix})
+		return agentCfg.ConversationPostfix
+	}
+	return "Stay present in the conversation. Be engaged and responsive."
+}
+
+// singleShotMessages builds the full system prompt (SOUL.md, context files,
+// memory injection) plus the single user turn.
+// Falls back to minimal prompt (ConversationPostfix only) if ctxBuilder is nil.
+func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig, searchQuery string) string {
+	if s.ctxBuilder == nil {
+		if agentCfg.ConversationPostfix != "" {
+			return agentCfg.ConversationPostfix
+		}
+		return ""
+	}
+
+	var sb strings.Builder
+
+	// V24: Reordered prompt layers for authoritative memory framing.
+	// Research (Knowledge Contamination, CK-PLUG) shows that RoPE positional decay
+	// causes lower attention on tokens in the middle of the context window.
+	// Memories should come EARLY — after identity, before context and behavior.
+	// Order: 1. Identity → 2. Core Identity Facts → 3. OFFICIAL RECORD (memories) → 4. Context → 5. Behavior
+
+	// Layer 1: Identity (SOUL.md) — who you are
+	identityContent := ""
+	hasSoul := false
+	builder := context.NewBuilder(s.ctxBuilder.WorkspaceRoot).WithNamedContexts([]string{"soul", "identity"})
+	if injected, err := builder.Build(); err == nil {
+		for _, f := range injected.Files {
+			if f.Name == "soul" && f.Content != "" {
+				identityContent = f.Content
+				hasSoul = true
+			}
+		}
+	}
+	if identityContent == "" {
+		identityContent = fmt.Sprintf("You are %s, a %s assistant.", agentCfg.ID, agentCfg.Role)
+	}
+	sb.WriteString("## Who You Are\n")
+	sb.WriteString(identityContent + "\n\n")
+
+	// Layer 2: Core Identity Facts — permanent facts, always present
+	if s.coreIdentityForInject != nil {
+		coreBlock := s.coreIdentityForInject.Build(s.memStoreForInvoke)
+		if coreBlock != "" {
+			sb.WriteString(coreBlock + "\n\n")
+		}
+	}
+
+	// Layer 3 (V24: MOVED UP): OFFICIAL RECORD — memories injected BEFORE context
+	// to leverage positional attention. Research shows retrieved context in the
+	// middle-to-end of prompts gets lower attention due to RoPE decay.
+	if s.memInjectorForInvoke != nil {
+		// Smart path: query planner + embedding + grounding-aware format
+		memBlock := s.memInjectorForInvoke.InjectMemoriesInt(contextctx.Background(), 0, searchQuery, 1, 800)
+		if memBlock != "" {
+			sb.WriteString(memBlock + "\n")
+		}
+	} else if s.memStoreForInvoke != nil {
+		// Legacy fallback: bare keyword search, no grounding
+		ctx := contextctx.Background()
+		memories, err := s.memStoreForInvoke.Search(ctx, searchQuery, 10)
+		if err == nil && len(memories) > 0 {
+			sb.WriteString("## OFFICIAL RECORD (Authoritative)\n")
+			for i, mem := range memories {
+				if i >= 5 {
+					break
+			}
+				sb.WriteString(fmt.Sprintf("- %s\n", mem.Content))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	// Layer 4: Context files (USER.md, HEARTBEAT.md, AGENTS.md, etc.)
+	if len(agentCfg.Context) > 0 {
+		budget := 4000
+		if s.orch != nil && s.orch.Config.Prizm.ContextTokenBudget > 0 {
+			budget = s.orch.Config.Prizm.ContextTokenBudget
+		}
+		otherContexts := make([]string, 0, len(agentCfg.Context))
+		for _, c := range agentCfg.Context {
+			if c != "soul" && c != "identity" {
+				otherContexts = append(otherContexts, c)
+			}
+		}
+		if len(otherContexts) > 0 {
+			ctxBuilder := context.NewBuilder(s.ctxBuilder.WorkspaceRoot).
+				WithNamedContexts(otherContexts).
+				WithTokenBudget(budget)
+			if injected, err := ctxBuilder.BuildCached(); err == nil && injected.FormattedString != "" {
+				sb.WriteString("## Context\n")
+				sb.WriteString(injected.FormattedString + "\n")
+			}
+		}
+	}
+
+	// Layer 5: Conversation postfix (behavior) — last, as framing instructions
+	postfix := resolveConversationPostfixForInvoke(agentCfg, hasSoul)
+	if postfix != "" {
+		sb.WriteString("## How You Respond\n")
+		sb.WriteString(postfix + "\n\n")
+	}
+
+	return sb.String()
+}
+
+// singleShotMessages builds the full system prompt plus the single user turn.
+func (s *Server) singleShotMessages(agentCfg orchestrator.AgentConfig, prompt string) []provider.ChatMessage {
+	messages := make([]provider.ChatMessage, 0, 2)
+	systemPrompt := s.buildInvokeSystemPrompt(agentCfg, prompt)
+	if systemPrompt != "" {
+		messages = append(messages, provider.ChatMessage{Role: "system", Content: systemPrompt})
 	}
 	return append(messages, provider.ChatMessage{Role: "user", Content: prompt})
 }
 
-// invokeSessionMessages builds the prompt from persisted conversation history,
-// mapping session roles to chat roles the same way the built-in chat pipeline
-// does (see buildMessages in cmd/prism-cli/tool_loop_chat.go). The current user
-// turn is already the last message in sess.Messages.
-func invokeSessionMessages(agentCfg orchestrator.AgentConfig, sess *session.Session) []provider.ChatMessage {
-	messages := make([]provider.ChatMessage, 0, len(sess.Messages)+1)
-	if agentCfg.ConversationPostfix != "" {
-		messages = append(messages, provider.ChatMessage{Role: "system", Content: agentCfg.ConversationPostfix})
+// lastUserMessage returns the content of the last user message in the session,
+// or empty string if none.
+func lastUserMessage(sess *session.Session) string {
+	for i := len(sess.Messages) - 1; i >= 0; i-- {
+		if sess.Messages[i].Role == "user" {
+			return sess.Messages[i].Content
+		}
+	}
+	return ""
+}
+
+// invokeSessionMessages builds the full system prompt plus conversation history.
+func (s *Server) invokeSessionMessages(agentCfg orchestrator.AgentConfig, sess *session.Session) []provider.ChatMessage {
+	messages := make([]provider.ChatMessage, 0, len(sess.Messages)+2)
+	systemPrompt := s.buildInvokeSystemPrompt(agentCfg, lastUserMessage(sess))
+	if systemPrompt != "" {
+		messages = append(messages, provider.ChatMessage{Role: "system", Content: systemPrompt})
 	}
 	for _, m := range sess.Messages {
 		switch m.Role {
@@ -671,13 +882,33 @@ func invokeSessionMessages(agentCfg orchestrator.AgentConfig, sess *session.Sess
 	return messages
 }
 
+// invokeSink is a toolloop.Sink that captures the final response for invoke.
+// It silently absorbs progress and tool results, keeping only the last content.
+type invokeSink struct {
+	mu      sync.Mutex
+	content string
+}
+
+func (s *invokeSink) OnToolCall(name string, args map[string]any) {}
+func (s *invokeSink) OnProgress(content string) {
+	s.mu.Lock()
+	s.content = content
+	s.mu.Unlock()
+}
+func (s *invokeSink) OnToolResult(name string, result string, summary toolloop.CallSummary) {}
+func (s *invokeSink) OnError(err error)                    {}
+func (s *invokeSink) OnComplete(content string, modelInfo toolloop.ModelInfo) {
+	s.mu.Lock()
+	s.content = content
+	s.mu.Unlock()
+}
+
 // runInvocation performs the LLM call in the background and records the outcome.
-// It is the lightweight call path: a resolved provider/model, no tool loop, no
-// approval gate. When sessionID is non-empty the call is part of a stateful
-// conversation, so the assistant reply is persisted back to that session for the
-// next turn; when empty the call is single-shot and nothing is saved.
+// When toolRegForInvoke is set, it uses toolloop.RunChatLoop so the agent can call
+// tools (memory_search, etc.) instead of a single-shot LLM call. When nil, it falls
+// back to the original single-shot behavior.
 func (s *Server) runInvocation(agentCfg orchestrator.AgentConfig, invocationID string, messages []provider.ChatMessage, sessionID string, maxTokens int) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := contextctx.WithTimeout(contextctx.Background(), 5*time.Minute)
 	defer cancel()
 
 	chatProv, err := s.providers.GetChatProviderForAgent(agentCfg.ID, agentCfg.Model)
@@ -687,6 +918,13 @@ func (s *Server) runInvocation(agentCfg orchestrator.AgentConfig, invocationID s
 		return
 	}
 
+	// Tool loop path: agent can call memory_search and other tools
+	if s.toolRegForInvoke != nil && s.toolExecForInvoke != nil {
+		s.runInvocationWithToolLoop(ctx, agentCfg, invocationID, messages, sessionID, maxTokens, chatProv)
+		return
+	}
+
+	// Fallback: original single-shot path (no tool support)
 	resp, err := chatProv.ChatGenerate(ctx, provider.ChatGenerateRequest{
 		RunID:     "invoke-" + invocationID,
 		Agent:     agentCfg.ID,
@@ -709,6 +947,132 @@ func (s *Server) runInvocation(agentCfg orchestrator.AgentConfig, invocationID s
 	result := invocation.ParseResult(resp.Content)
 	s.invocations.Complete(invocationID, result)
 	s.publishInvocationEvent(agentCfg.ID, invocationID, invocation.StatusCompleted, result, "")
+}
+
+// runInvocationWithToolLoop uses toolloop.RunChatLoop so the agent can call tools.
+func (s *Server) runInvocationWithToolLoop(ctx contextctx.Context, agentCfg orchestrator.AgentConfig, invocationID string, messages []provider.ChatMessage, sessionID string, maxTokens int, chatProv provider.ChatProvider) {
+	// Build tool definitions from the registry
+	toolInfos := s.toolRegForInvoke.ListWithDescriptions()
+	chatTools := make([]provider.ChatTool, 0, len(toolInfos))
+
+	for _, ti := range toolInfos {
+		params := map[string]any{
+			"type":       "object",
+			"properties": make(map[string]any),
+		}
+		required := make([]string, 0)
+
+		for pname, spec := range ti.Schema.Input {
+			props := map[string]any{
+				"type":        spec.Type,
+				"description": spec.Description,
+			}
+			params["properties"].(map[string]any)[pname] = props
+			if spec.Required {
+				required = append(required, pname)
+			}
+		}
+		if len(required) > 0 {
+			params["required"] = required
+		}
+
+		chatTools = append(chatTools, provider.ChatTool{
+			Type: "function",
+			Function: provider.FunctionDef{
+				Name:        ti.Name,
+				Description: ti.Description,
+				Parameters:  params,
+			},
+		})
+	}
+
+	sink := &invokeSink{}
+	cfg := toolloop.Config{
+		MaxIterations: 3,
+		Timeout:       3 * time.Minute,
+		NudgeAfter:    3,
+	}
+
+	result, err := toolloop.RunChatLoop(ctx, messages, chatTools, chatProv, &agentCfg, s.toolExecForInvoke, sink, cfg, nil)
+	if err != nil {
+		s.invocations.Fail(invocationID, err.Error())
+		s.publishInvocationEvent(agentCfg.ID, invocationID, invocation.StatusFailed, nil, err.Error())
+		return
+	}
+
+	finalContent := result.Content
+	if finalContent == "" {
+		sink.mu.Lock()
+		finalContent = sink.content
+		sink.mu.Unlock()
+	}
+
+	// V23: Post-hoc citation verification with tiered auto-correction
+	if s.memInjectorForInvoke != nil && finalContent != "" {
+		memories := s.memInjectorForInvoke.GetLastMemories()
+		if len(memories) > 0 {
+			entries := make([]toolloop.MemoryEntry, len(memories))
+			for i, m := range memories {
+				entries[i] = toolloop.MemoryEntry{
+					ID:      fmt.Sprintf("M%d", i+1),
+					Summary: m.Summary,
+					Content: m.Content,
+				}
+			}
+			verification := toolloop.VerifyCitations(finalContent, entries)
+			if verification.FlaggedCount > 0 {
+				log.Printf("[API] V23 citation verification: %d/%d citations flagged (%d patches, %d rewrites)",
+					verification.FlaggedCount, verification.TotalCitations, verification.PatchCount, verification.RewriteCount)
+				for _, flag := range verification.Flags {
+					log.Printf("[API] V23 %s: %s — %s", flag.Tier.String(), flag.CitationID, flag.Issue)
+				}
+				// Apply corrections — replace the response with the verified version
+				if verification.PatchCount > 0 || verification.RewriteCount > 0 {
+					log.Printf("[API] V23 applied %d contradiction patches and %d low-overlap rewrites",
+						verification.PatchCount, verification.RewriteCount)
+					finalContent = verification.Verified
+				}
+			}
+		}
+
+		// V24d: Tagless claim verification — catch fabricated claims WITHOUT citation tags
+		// This catches the M-06 failure mode: model fabricates narratives without [M1] tags.
+		if s.memInjectorForInvoke != nil {
+			memories := s.memInjectorForInvoke.GetLastMemories()
+			if len(memories) > 0 {
+				taglessEntries := make([]toolloop.MemoryEntry, len(memories))
+				for i, m := range memories {
+					taglessEntries[i] = toolloop.MemoryEntry{
+						ID:      fmt.Sprintf("M%d", i+1),
+						Summary: m.Summary,
+						Content: m.Content,
+					}
+				}
+				taglessVerification := toolloop.VerifyTaglessClaims(finalContent, taglessEntries)
+				if len(taglessVerification.Flags) > 0 {
+					log.Printf("[API] V24d tagless verification: %d claims flagged (%d patches, %d rewrites, %d flags)",
+						len(taglessVerification.Flags), taglessVerification.PatchCount, taglessVerification.RewriteCount, taglessVerification.FlagCount)
+					for _, flag := range taglessVerification.Flags {
+						log.Printf("[API] V24d %s: %s", flag.Tier.String(), flag.Issue)
+					}
+					// V24d: Tagless verification is LOGGING ONLY. Auto-correction of
+					// uncited claims has too many false positives (flagging casual
+					// conversation as fabrication). V24's authoritative framing is
+					// the primary defense. We log but don't modify the response.
+				}
+			}
+		}
+	}
+
+	if sessionID != "" && s.sessions != nil {
+		if _, aerr := s.sessions.AddMessage(sessionID, "agent", finalContent, agentCfg.ID); aerr != nil {
+			log.Printf("[API] persist invoke agent reply: %v", aerr)
+		}
+	}
+
+	invResult := invocation.ParseResult(finalContent)
+	s.invocations.Complete(invocationID, invResult)
+	s.publishInvocationEvent(agentCfg.ID, invocationID, invocation.StatusCompleted, invResult, "")
 }
 
 // publishInvocationEvent re-broadcasts completion on <agent-id>.invocation.completed
@@ -874,7 +1238,7 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 // --- Autopatch ---
 
 // handleWorkflowStart triggers the gated loop for {project, prompt} by
-// publishing to prism.workflow.start, which the serve-mode WakeHandler consumes.
+// publishing to prizm.workflow.start, which the serve-mode WakeHandler consumes.
 func (s *Server) handleWorkflowStart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -920,7 +1284,7 @@ func (s *Server) handleWorkflowStart(w http.ResponseWriter, r *http.Request) {
 		req.Source = "api"
 	}
 	payload, _ := json.Marshal(req)
-	if err := s.nc.Publish("prism.workflow.start", payload); err != nil {
+	if err := s.nc.Publish("prizm.workflow.start", payload); err != nil {
 		writeJSONError(w, "failed to publish start request: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1050,7 +1414,7 @@ func (s *Server) handleWorkflowConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.loadWorkflowConfig())
 	case http.MethodPut:
 		if s.workflowConfigPath == "" {
-			writeJSONError(w, "no workflow_config path configured — set prism.workflow_config to enable editing", http.StatusBadRequest)
+			writeJSONError(w, "no workflow_config path configured — set prizm.workflow_config to enable editing", http.StatusBadRequest)
 			return
 		}
 		var cfg v2.WorkflowConfig
@@ -1122,7 +1486,7 @@ func (s *Server) handleWorkflowFeedback(w http.ResponseWriter, r *http.Request) 
 		"workflow_id": req.WorkflowID,
 		"dimensions":  req.Dimensions,
 	})
-	if err := s.nc.Publish("prism.workflow.feedback.response", payload); err != nil {
+	if err := s.nc.Publish("prizm.workflow.feedback.response", payload); err != nil {
 		writeJSONError(w, "publish failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1696,7 +2060,7 @@ func (s *Server) deleteEdge(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 // handleEditorSave validates and optionally writes config to disk.
-// POST with {"confirm": true, "path": "/path/to/prism.yaml"} to write.
+// POST with {"confirm": true, "path": "/path/to/prizm.yaml"} to write.
 // POST with just the state to validate and preview YAML.
 func (s *Server) handleEditorSave(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

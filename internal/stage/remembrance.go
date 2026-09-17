@@ -1,6 +1,6 @@
-// Package stage provides Prism's pipeline execution engine (V14a).
+// Package stage provides Prizm's pipeline execution engine (V14a).
 //
-// RemembranceStage integrates Prism with the Remembrance memory layer.
+// RemembranceStage integrates Prizm with the Remembrance memory layer.
 // It performs TWO operations:
 //  1. Capture: After agent output, sends the content to Remembrance for
 //     gate → extract → graph → store processing.
@@ -26,7 +26,7 @@ import (
 	"sync"
 	"time"
 
-	remcli "github.com/emaharmony/prism/internal/remembrance"
+	remcli "github.com/emaharmony/prizm/internal/remembrance"
 )
 
 // healthCheckTTL is how long a cached availability check is considered valid.
@@ -38,10 +38,10 @@ const healthCheckTTL = 30 * time.Second
 //   - Capture: sends agent output to Remembrance for processing
 //   - Context: fetches relevant memories before LLM calls
 //
-// This stage is the reusable pipeline component. The `prism serve` runtime
+// This stage is the reusable pipeline component. The `prizm serve` runtime
 // uses the same client but adds session-aware caching and prompt injection
 // that this generic stage can't provide. Both codepaths use the same source
-// format: "prism:<agent_id>".
+// format: "prizm:<agent_id>".
 //
 // If memory is disabled or unavailable, the pipeline continues without
 // memory context (graceful degradation).
@@ -161,7 +161,7 @@ func (s *RemembranceStage) Execute(ctx context.Context, rc *RunContext) (*RunCon
 
 	// Check availability (cached for 30s)
 	if !s.isAvailable() {
-		log.Printf("prism: remembrance service unavailable at %s", s.MemoryURL)
+		log.Printf("prizm: remembrance service unavailable at %s", s.MemoryURL)
 		if s.RequireMemory {
 			return rc, &StageResult{
 				StageName: s.Name(),
@@ -220,9 +220,9 @@ func (s *RemembranceStage) captureOutput(rc *RunContext) map[string]any {
 	}
 
 	// Source tag identifies where the capture came from
-	source := "prism:pipeline"
+	source := "prizm:pipeline"
 	if rc.Agent != "" {
-		source = fmt.Sprintf("prism:%s", rc.Agent)
+		source = fmt.Sprintf("prizm:%s", rc.Agent)
 	}
 
 	// Category from project name
@@ -230,13 +230,13 @@ func (s *RemembranceStage) captureOutput(rc *RunContext) map[string]any {
 
 	resp, err := s.client.Capture(content, source, category, "")
 	if err != nil {
-		log.Printf("prism: remembrance capture failed: %v", err)
+		log.Printf("prizm: remembrance capture failed: %v", err)
 		return map[string]any{"decision": "error", "error": err.Error()}
 	}
 
 	decision, _ := resp["decision"].(string)
 	id, _ := resp["id"].(string)
-	log.Printf("prism: remembrance capture: decision=%s, id=%s", decision, id)
+	log.Printf("prizm: remembrance capture: decision=%s, id=%s", decision, id)
 
 	return resp
 }
@@ -254,7 +254,7 @@ func (s *RemembranceStage) buildContext(rc *RunContext) (contextStr string, sour
 	ctxResp, ctxErr := s.client.BuildContext(query, rc.Project, rc.Agent, remcli.DefaultContextMaxTokens)
 	if ctxErr != nil {
 		ctxErr = fmt.Errorf("remembrance context build failed: %w", ctxErr)
-		log.Printf("prism: %v", ctxErr)
+		log.Printf("prizm: %v", ctxErr)
 		return "", "failed", nil, nil, ctxErr
 	}
 
@@ -264,7 +264,7 @@ func (s *RemembranceStage) buildContext(rc *RunContext) (contextStr string, sour
 
 	// Use context_markdown directly if available (Python ContextPack format)
 	if ctxResp.ContextMarkdown != "" {
-		log.Printf("prism: remembrance context built (%d memories, markdown)", len(ctxResp.SelectedMemories))
+		log.Printf("prizm: remembrance context built (%d memories, markdown)", len(ctxResp.SelectedMemories))
 		// Convert structured memories for return value
 		var memories []map[string]any
 		if ctxResp.ContextJSON != nil {
@@ -297,7 +297,7 @@ func (s *RemembranceStage) buildContext(rc *RunContext) (contextStr string, sour
 	}
 
 	contextStr = strings.Join(contextParts, "\n\n")
-	log.Printf("prism: remembrance context built (%d memories, structured)", len(memories))
+	log.Printf("prizm: remembrance context built (%d memories, structured)", len(memories))
 
 	return contextStr, "injected", memories, nil, nil
 }

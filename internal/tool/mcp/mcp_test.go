@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/tool"
+	"github.com/emaharmony/prizm/internal/tool"
 )
 
 // mockClient is an in-memory MCP server for tests.
@@ -58,7 +58,7 @@ func TestSchemaFromJSON(t *testing.T) {
 }
 
 // End-to-end: register a mock MCP server into a real Registry and execute a tool
-// through the registry, proving the remote tool is a first-class Prism tool.
+// through the registry, proving the remote tool is a first-class Prizm tool.
 func TestRegisterAndExecuteThroughRegistry(t *testing.T) {
 	mc := &mockClient{
 		tools: []ToolDef{

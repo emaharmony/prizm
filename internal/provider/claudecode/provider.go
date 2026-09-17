@@ -1,4 +1,4 @@
-// Package claudecode adapts the Claude Code CLI (`claude -p`) into a Prism
+// Package claudecode adapts the Claude Code CLI (`claude -p`) into a Prizm
 // provider.Provider so a Claude subscription can drive the gated loop as the
 // orchestrating "brain" — the same seam Ollama/OpenAI/Anthropic plug into.
 //
@@ -6,7 +6,7 @@
 // API key), this provider shells out to the local `claude` binary, which
 // carries the user's subscription auth. It runs in print mode with tools fully
 // disabled (`--allowedTools ""`), so the model only emits the next action as
-// text and Prism keeps owning tool execution, gates, and policy. It mirrors the
+// text and Prizm keeps owning tool execution, gates, and policy. It mirrors the
 // subprocess pattern in internal/claudeworker but is general (not review-only).
 package claudecode
 
@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/claudecli"
-	"github.com/emaharmony/prism/internal/provider"
+	"github.com/emaharmony/prizm/internal/claudecli"
+	"github.com/emaharmony/prizm/internal/provider"
 )
 
 const DefaultTimeoutMinutes = 10
@@ -96,7 +96,7 @@ func (p *Provider) Generate(ctx context.Context, req provider.GenerateRequest) (
 	cctx, cancel := context.WithTimeout(ctx, time.Duration(p.cfg.TimeoutMinutes)*time.Minute)
 	defer cancel()
 
-	// --allowedTools "" disables every tool: the brain emits only text, Prism
+	// --allowedTools "" disables every tool: the brain emits only text, Prizm
 	// executes tools under its own policy. (Verified against the installed CLI:
 	// empty allowlist yields num_turns=1 and no permission_denials.)
 	args := []string{"-p", "--output-format", "json", "--allowedTools", ""}

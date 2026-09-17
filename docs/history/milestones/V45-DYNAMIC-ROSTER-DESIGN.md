@@ -8,7 +8,7 @@
 Some gate-facing text strictly named specific personas regardless of how a project
 configured its roster. The FEEDBACK_POST review message always said
 `Reviewers needed: **Mango** (required) and **Lumi**`, and plan/report formatting
-used a hardcoded `switch` over `prism|mango|junie|lumi` for agent decoration. A
+used a hardcoded `switch` over `prizm|mango|junie|lumi` for agent decoration. A
 project with a different roster (or just different names) saw the wrong people
 named.
 
@@ -46,7 +46,7 @@ and `agentGlyph` default + override.
 ## Delegation timeouts (follow-up, same theme)
 
 `DelegationManager` previously baked per-persona timeouts into its constructor
-(`prism 30m, mango 15m, junie 20m, lumi 10m, custom 20m`). These are now:
+(`prizm 30m, mango 15m, junie 20m, lumi 10m, custom 20m`). These are now:
 
 - A single `defaultDelegationTimeout` (20m) fallback, applied to any agent without
   a specific override (`timeoutFor`).
@@ -61,9 +61,9 @@ with no persona names in code. See `examples/workflows/gated-loop.yaml` for the
 
 ## CLI default (follow-up)
 
-`prism run --agent` previously defaulted to the hardcoded persona `lumi`, so a run
+`prizm run --agent` previously defaulted to the hardcoded persona `lumi`, so a run
 without `--agent` referenced an agent that may not exist in the user's config. It
-now defaults to the neutral instance name `prism` (matching `--project`), and a
+now defaults to the neutral instance name `prizm` (matching `--project`), and a
 usage test (`TestCommandUsageNoHardcodedPersona`) guards the grouped help against
 reintroducing persona names.
 

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Prizm multi-agent run list">
+<title>Multi-Agent Runs · Prizm</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<a class="skip-link" href="#main-content">Skip to content</a>
+<nav class="nav"></nav>
+
+<main id="main-content" class="container" tabindex="-1">
+  <header class="page-header">
+    <div>
+      <p class="eyebrow">Multi-agent workflow observability</p>
+      <h1 class="page-title">Multi-agent runs</h1>
+      <p class="page-sub">Every durable multi-agent run Prizm can currently discover on disk. Open a run to inspect its execution graph and budget usage.</p>
+    </div>
+    <button class="btn secondary" id="refresh" type="button">Refresh</button>
+  </header>
+
+  <div id="banner" class="banner" role="alert"></div>
+
+  <section aria-labelledby="runs-heading">
+    <div class="section-heading">
+      <div><h2 id="runs-heading" class="section-title">Runs</h2><p class="section-copy">Newest activity first.</p></div>
+      <span id="run-count" class="meta" aria-live="polite"></span>
+    </div>
+    <div id="runs" class="loading-state" aria-live="polite" aria-busy="true">Loading runs…</div>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+<script>
+(() => {
+  const ui = window.PrizmUI;
+  const $ = selector => document.querySelector(selector);
+
+  function banner(message, kind) {
+    const el = $('#banner');
+    if (!message) { el.className = 'banner'; el.textContent = ''; return; }
+    el.textContent = message;
+    el.className = 'banner show ' + (kind || 'err');
+  }
+
+  function retryMarkup() {
+    return `<div class="retry"><button class="btn secondary small" id="retryRuns" type="button">Retry</button></div>`;
+  }
+
+  function renderError(message) {
+    const target = $('#runs');
+    target.removeAttribute('aria-busy');
+    target.className = 'error-state';
+    target.innerHTML = `<strong>Could not load runs</strong>${ui.escape(message)}${retryMarkup()}`;
+    const retry = document.getElementById('retryRuns');
+    if (retry) retry.addEventListener('click', load);
+  }
+
+  function renderEmpty() {
+    const target = $('#runs');
+    target.removeAttribute('aria-busy');
+    target.className = 'empty-state';
+    target.innerHTML = `<strong>No runs yet</strong>Start a multi-agent workflow run and it will appear here.`;
+  }
+
+  function renderRuns(runs) {
+    const target = $('#runs');
+    target.removeAttribute('aria-busy');
+    if (!runs.length) { renderEmpty(); return; }
+    target.className = '';
+    const sorted = [...runs].sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0));
+    target.innerHTML = `<div class="table-wrap"><table class="data-table">
+      <thead><tr><th>Run</th><th>Workflow</th><th>Status</th><th>Created</th><th>Updated</th></tr></thead>
+      <tbody>${sorted.map(run => `
+        <tr>
+          <td data-label="Run"><a href="/multiagent-run.html?run=${encodeURIComponent(run.run_id)}" class="mono">${ui.escape(run.run_id)}</a></td>
+          <td data-label="Workflow">${ui.escape(run.workflow_id || '—')}</td>
+          <td data-label="Status">${ui.badge(run.status)}</td>
+          <td data-label="Created"><span title="${ui.escape(ui.formatTime(run.created_at))}">${ui.escape(ui.relativeTime(run.created_at))}</span></td>
+          <td data-label="Updated"><span title="${ui.escape(ui.formatTime(run.updated_at))}">${ui.escape(ui.relativeTime(run.updated_at))}</span></td>
+        </tr>`).join('')}</tbody>
+    </table></div>`;
+  }
+
+  async function load() {
+    const target = $('#runs');
+    target.className = 'loading-state';
+    target.setAttribute('aria-busy', 'true');
+    target.textContent = 'Loading runs…';
+    banner('');
+    $('#run-count').textContent = '';
+    try {
+      const runs = await ui.request('/multiagent/runs');
+      const list = Array.isArray(runs) ? runs : [];
+      $('#run-count').textContent = `${list.length} run${list.length === 1 ? '' : 's'}`;
+      renderRuns(list);
+    } catch (err) {
+      renderError(err.message);
+    }
+  }
+
+  $('#refresh').addEventListener('click', load);
+  load();
+})();
+</script>
+</body>
+</html>

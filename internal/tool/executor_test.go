@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/approval"
+	"github.com/emaharmony/prizm/internal/approval"
 )
 
 func TestExecutorEchoApproved(t *testing.T) {
@@ -20,7 +20,7 @@ func TestExecutorEchoApproved(t *testing.T) {
 		events = append(events, eventType)
 	})
 
-	result, err := exec.ExecuteWithPolicy(context.Background(), "echo", "lumi", "prism", "corr_test", map[string]any{"text": "hello"})
+	result, err := exec.ExecuteWithPolicy(context.Background(), "echo", "lumi", "prizm", "corr_test", map[string]any{"text": "hello"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestExecutorEchoApproved(t *testing.T) {
 	}
 
 	// Should have: requested, approved, started, completed
-	expected := []string{"prism.tool.requested", "prism.tool.approved", "prism.tool.started", "prism.tool.completed"}
+	expected := []string{"prizm.tool.requested", "prizm.tool.approved", "prizm.tool.started", "prizm.tool.completed"}
 	if len(events) != len(expected) {
 		t.Fatalf("expected %d events, got %d: %v", len(expected), len(events), events)
 	}
@@ -56,7 +56,7 @@ func TestExecutorDeniedTool(t *testing.T) {
 
 	// V60: Shell tool now requires approval in gated mode, not denied.
 	// Use a truly unknown tool name to test the denied path.
-	result, err := exec.ExecuteWithPolicy(context.Background(), "nonexistent_tool", "lumi", "prism", "corr_test", map[string]any{})
+	result, err := exec.ExecuteWithPolicy(context.Background(), "nonexistent_tool", "lumi", "prizm", "corr_test", map[string]any{})
 	if err != nil {
 		t.Fatalf("denied tool should not return an error, just a denial result")
 	}
@@ -68,7 +68,7 @@ func TestExecutorDeniedTool(t *testing.T) {
 	}
 
 	// Should have: requested, denied
-	expected := []string{"prism.tool.requested", "prism.tool.denied"}
+	expected := []string{"prizm.tool.requested", "prizm.tool.denied"}
 	if len(events) != len(expected) {
 		t.Fatalf("expected %d events, got %d: %v", len(expected), len(events), events)
 	}
@@ -91,7 +91,7 @@ func TestExecutorPathTraversalDenied(t *testing.T) {
 		events = append(events, eventType)
 	})
 
-	result, err := exec.ExecuteWithPolicy(context.Background(), "read_file", "lumi", "prism", "corr_test", map[string]any{"path": "../../../etc/passwd"})
+	result, err := exec.ExecuteWithPolicy(context.Background(), "read_file", "lumi", "prizm", "corr_test", map[string]any{"path": "../../../etc/passwd"})
 	if err != nil {
 		t.Fatalf("denied tool should not return an error")
 	}
@@ -103,10 +103,10 @@ func TestExecutorPathTraversalDenied(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("expected 2 events, got %d: %v", len(events), events)
 	}
-	if events[0] != "prism.tool.requested" {
+	if events[0] != "prizm.tool.requested" {
 		t.Errorf("first event should be requested, got %s", events[0])
 	}
-	if events[1] != "prism.tool.denied" {
+	if events[1] != "prizm.tool.denied" {
 		t.Errorf("second event should be denied, got %s", events[1])
 	}
 }
@@ -127,7 +127,7 @@ func TestExecutorListDirWithinRoot(t *testing.T) {
 		events = append(events, eventType)
 	})
 
-	result, err := exec.ExecuteWithPolicy(context.Background(), "list_dir", "lumi", "prism", "corr_test", map[string]any{"path": "."})
+	result, err := exec.ExecuteWithPolicy(context.Background(), "list_dir", "lumi", "prizm", "corr_test", map[string]any{"path": "."})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -139,10 +139,10 @@ func TestExecutorListDirWithinRoot(t *testing.T) {
 	if len(events) != 4 {
 		t.Fatalf("expected 4 events, got %d: %v", len(events), events)
 	}
-	if events[0] != "prism.tool.requested" {
+	if events[0] != "prizm.tool.requested" {
 		t.Errorf("first event should be requested, got %s", events[0])
 	}
-	if events[1] != "prism.tool.approved" {
+	if events[1] != "prizm.tool.approved" {
 		t.Errorf("second event should be approved, got %s", events[1])
 	}
 }
@@ -154,7 +154,7 @@ func TestExecutorWriteFileDryRunNoDiskWrite(t *testing.T) {
 	cfg := PolicyConfig{WorkspaceRoot: tmpDir, MaxFileSize: 1024 * 1024}
 	exec := NewExecutor(reg, &cfg)
 
-	result, err := exec.ExecuteWithPolicy(context.Background(), "write_file_dry_run", "lumi", "prism", "corr_test", map[string]any{
+	result, err := exec.ExecuteWithPolicy(context.Background(), "write_file_dry_run", "lumi", "prizm", "corr_test", map[string]any{
 		"path":    "should_not_exist.txt",
 		"content": "This content should never be written",
 	})
@@ -193,7 +193,7 @@ func TestExecutorWriteFileProposalPersistsEmptyContentApproval(t *testing.T) {
 	exec := NewExecutor(reg, &cfg)
 	exec.SetApprovalStore(store)
 
-	result, err := exec.ExecuteWithPolicy(context.Background(), "write_file_proposal", "astraea", "prism", "corr_test", map[string]any{
+	result, err := exec.ExecuteWithPolicy(context.Background(), "write_file_proposal", "astraea", "prizm", "corr_test", map[string]any{
 		"_run_id": "run_test",
 		"path":    targetPath,
 		"content": "",
@@ -241,7 +241,7 @@ func TestExecutorCreateDirectoryProposalPersistsApproval(t *testing.T) {
 	exec := NewExecutor(reg, &cfg)
 	exec.SetApprovalStore(store)
 
-	result, err := exec.ExecuteWithPolicy(context.Background(), "create_directory_proposal", "astraea", "prism", "corr_test", map[string]any{
+	result, err := exec.ExecuteWithPolicy(context.Background(), "create_directory_proposal", "astraea", "prizm", "corr_test", map[string]any{
 		"_run_id": "run_test",
 		"path":    targetPath,
 	})
@@ -271,6 +271,126 @@ func TestExecutorCreateDirectoryProposalPersistsApproval(t *testing.T) {
 	}
 }
 
+func TestExecutorShellRequiresApprovalDoesNotExecute(t *testing.T) {
+	runsDir := t.TempDir()
+	markerDir := t.TempDir()
+	marker := filepath.Join(markerDir, "marker.txt")
+
+	reg := NewRegistry()
+	if err := reg.Register(&ShellTool{
+		Policy:         ShellPolicy{Tier: "tier_3", Allowlist: []string{"*"}, Blocklist: []string{}},
+		DefaultTimeout: 10,
+		MaxOutputBytes: 10240,
+		MaxStderrBytes: 5120,
+	}); err != nil {
+		t.Fatalf("register shell tool: %v", err)
+	}
+
+	// Gated mode: AutoApproveMutations is false, so the shell tool requires
+	// approval. This reproduces two historical bugs in one test: (1)
+	// persistApproval used to error out on tools with no "path" input, and
+	// (2) the shell command used to actually run immediately, before any
+	// human approval — asserted here by checking the marker file was NOT
+	// created by this call.
+	cfg := DefaultPolicyConfig()
+	store := approval.NewStore(runsDir)
+	exec := NewExecutor(reg, &cfg)
+	exec.SetApprovalStore(store)
+
+	command := "touch " + marker
+	result, err := exec.ExecuteWithPolicy(context.Background(), "shell", "lumi", "prizm", "corr_test", map[string]any{
+		"_run_id": "run_test",
+		"command": command,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("shell call should succeed, got error: %s", result.Error)
+	}
+
+	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+		t.Fatalf("shell command must not execute before approval — marker file exists")
+	}
+
+	approvalID, _ := result.Output["approval_id"].(string)
+	if approvalID == "" {
+		t.Fatal("expected approval_id in tool result")
+	}
+
+	a, err := store.Load("run_test", approvalID)
+	if err != nil {
+		t.Fatalf("expected persisted approval: %v", err)
+	}
+	if a.MutationType != approval.MutationToolCall {
+		t.Fatalf("mutation type = %q, want %q", a.MutationType, approval.MutationToolCall)
+	}
+	if a.TargetPath != command {
+		t.Fatalf("target path = %q, want %q", a.TargetPath, command)
+	}
+	if a.ToolName != "shell" {
+		t.Fatalf("tool name = %q, want %q", a.ToolName, "shell")
+	}
+	if a.Input["command"] != command {
+		t.Fatalf("input[command] = %v, want %q", a.Input["command"], command)
+	}
+}
+
+func TestExecutorGitCommitRequiresApprovalDoesNotExecute(t *testing.T) {
+	root := initGitRepo(t)
+	writeAndStage(t, root, "file.txt", "content\n")
+	before := currentSHA(t, root)
+
+	runsDir := t.TempDir()
+	reg := NewRegistry()
+	if err := reg.Register(&GitCommitTool{ToolPaths: ToolPaths{WorkspaceRoot: root}}); err != nil {
+		t.Fatalf("register git_commit tool: %v", err)
+	}
+
+	// Gated mode (AutoApproveMutations=false): historically git_commit's
+	// Execute() ran the real commit immediately here, before any human
+	// approval — asserted by checking HEAD hasn't moved.
+	cfg := DefaultPolicyConfig()
+	store := approval.NewStore(runsDir)
+	exec := NewExecutor(reg, &cfg)
+	exec.SetApprovalStore(store)
+
+	result, err := exec.ExecuteWithPolicy(context.Background(), "git_commit", "lumi", "prizm", "corr_test", map[string]any{
+		"_run_id": "run_test",
+		"message": "should not commit yet",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("git_commit call should succeed, got error: %s", result.Error)
+	}
+
+	after := currentSHA(t, root)
+	if before != after {
+		t.Fatalf("git_commit must not execute before approval — HEAD moved from %s to %s", before, after)
+	}
+
+	approvalID, _ := result.Output["approval_id"].(string)
+	if approvalID == "" {
+		t.Fatal("expected approval_id in tool result — this used to fail with 'target_path is required'")
+	}
+
+	a, err := store.Load("run_test", approvalID)
+	if err != nil {
+		t.Fatalf("expected persisted approval: %v", err)
+	}
+	if a.MutationType != approval.MutationToolCall {
+		t.Fatalf("mutation type = %q, want %q", a.MutationType, approval.MutationToolCall)
+	}
+	if a.ToolName != "git_commit" {
+		t.Fatalf("tool name = %q, want %q", a.ToolName, "git_commit")
+	}
+	if a.Input["message"] != "should not commit yet" {
+		t.Fatalf("input[message] = %v, want %q", a.Input["message"], "should not commit yet")
+	}
+}
+
 func TestExecutorToolFailedEvent(t *testing.T) {
 	reg := NewRegistry()
 	// Don't register builtins — resolve will fail for unknown tools
@@ -283,7 +403,7 @@ func TestExecutorToolFailedEvent(t *testing.T) {
 	})
 
 	// Try to call "echo" which isn't registered
-	result, err := exec.ExecuteWithPolicy(context.Background(), "echo", "lumi", "prism", "corr_test", map[string]any{"text": "hello"})
+	result, err := exec.ExecuteWithPolicy(context.Background(), "echo", "lumi", "prizm", "corr_test", map[string]any{"text": "hello"})
 	// The policy check for echo will pass, but the registry won't find the tool
 	// This should result in a tool.failed event
 	_ = result
@@ -292,7 +412,7 @@ func TestExecutorToolFailedEvent(t *testing.T) {
 	// Should have: requested, approved, started, failed
 	found := false
 	for _, e := range events {
-		if e == "prism.tool.failed" {
+		if e == "prizm.tool.failed" {
 			found = true
 		}
 	}

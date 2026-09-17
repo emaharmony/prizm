@@ -1,6 +1,6 @@
-﻿# Prism Safety Model
+﻿# Prizm Safety Model
 
-Prism is designed so that the framework — not the model — controls what actually
+Prizm is designed so that the framework — not the model — controls what actually
 happens. Models generate outputs and request actions; the runtime decides
 whether those actions run. This page explains the human-in-the-loop model and
 the boundaries you should rely on.
@@ -45,7 +45,7 @@ introduced for interactive Discord use. It is not a general auto-approve
 switch: it is scoped to one configured operator and one channel setting at a
 time.
 
-**Who can enable it:** only whoever controls `prism.yaml`. Free Mode requires
+**Who can enable it:** only whoever controls `prizm.yaml`. Free Mode requires
 two things to be true simultaneously for a given message:
 1. The Discord channel's `channel_roles` entry has `mode: free`.
 2. The message sender's Discord user ID matches `shell.master_user_id`
@@ -57,7 +57,7 @@ activate, even on a channel configured with `mode: free`.
 
 **Who else can trigger it:** nobody. Every other Discord user in a
 free-mode-configured channel is explicitly routed back to gated behavior;
-there is no remote or cross-Prism path into Free Mode. It is Discord-only —
+there is no remote or cross-Prizm path into Free Mode. It is Discord-only —
 the HTTP API, CLI, and scheduled/autonomous work do not go through this
 switch.
 
@@ -90,7 +90,7 @@ message is handled — it is not a standing session state.
   project's branch name is protected across every repo any git tool
   touches.
 - Every free-mode action still emits audit events
-  (`prism.free.action`, `prism.mutation.applied`, etc.) to the normal event
+  (`prizm.free.action`, `prizm.mutation.applied`, etc.) to the normal event
   stream — nothing about Free Mode is silent.
 
 **What does NOT still apply — read this before enabling:**
@@ -100,7 +100,7 @@ message is handled — it is not a standing session state.
   `shell_policy` command-pattern tier restrict what runs. A free-mode
   channel with no explicit `shell_policy` defaults to `tier_3` (effectively
   unrestricted command patterns). Treat Free Mode's shell access as
-  "whatever the OS user running Prism can do," not "sandboxed to this
+  "whatever the OS user running Prizm can do," not "sandboxed to this
   repository."
 
 **How to disable it:** set `mode: gated` (or omit `mode`) on every channel
@@ -137,6 +137,6 @@ Autopatch is **experimental** and disabled by default.
 
 ## No False Guarantees
 
-Prism reduces risk through layered controls; it does not make automation
+Prizm reduces risk through layered controls; it does not make automation
 "fully safe" or "fully autonomous." Review experimental features before enabling
 them, and keep a human in the loop for any mutation or high-impact action.

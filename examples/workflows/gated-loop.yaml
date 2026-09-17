@@ -2,7 +2,7 @@
 #
 #   PROBE → RESEARCH → PLAN → FEEDBACK_PRE → EXECUTION → FEEDBACK_POST → REPORT
 #
-# Point prism.workflow_config at this file to override the built-in DefaultConfig().
+# Point prizm.workflow_config at this file to override the built-in DefaultConfig().
 # Edit phases, allowed tools, gate types and thresholds, approvers and reviewers.
 # FEEDBACK_PRE pauses for a human ("ema") before any code is written.
 # FEEDBACK_POST pauses for review; requesting changes loops back to EXECUTION.
@@ -120,7 +120,7 @@ phases:
     gate:
       type: task_completion
       mode: partial_allowed
-    # Objective build/test verification. After the model commits, Prism runs the
+    # Objective build/test verification. After the model commits, Prizm runs the
     # named V5 validation profile (an allowlisted command — the model cannot choose
     # what runs). With blocking: true the phase cannot complete until it passes; the
     # failing output is fed back so the model fixes it and re-commits. Match the

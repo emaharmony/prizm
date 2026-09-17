@@ -18,21 +18,21 @@ mutations — it's read-only by design.
 - Built-in profiles: `echo_test` (safe noop), `go_test_all` (runs `go test ./...`)
 - Safety checks: no pipes, redirects, command chaining, or arbitrary execution
 - Path containment via `EvalSymlinks` on working_dir
-- Validation events: `prism.validation.requested/started/completed/failed/skipped/timeout`
+- Validation events: `prizm.validation.requested/started/completed/failed/skipped/timeout`
 - Artifacts: `<profile>.json`, `<profile>.stdout.txt`, `<profile>.stderr.txt`
 
 ### Deterministic Review (`internal/review`)
 - `Reviewer` generates reviews from mutation + validation results — no LLM
 - `Review` struct: recommendation, summary, files_changed, validation_results, reviewer_notes
 - Recommendations: `approved_for_human_review`, `needs_fix`, `validation_failed`, `no_mutation_detected`
-- Review events: `prism.review.requested/started/completed/failed`
+- Review events: `prizm.review.requested/started/completed/failed`
 - Review artifact: `review.md` with human-readable recommendation
 - Reviewer CANNOT approve or apply mutations (read-only by design)
 
 ### CLI Commands
-- `prism validation list` — list registered validation profiles
-- `prism validation run <profile>` — run a validation profile directly
-- `prism approval approve --validate` — approve AND run validation pipeline
+- `prizm validation list` — list registered validation profiles
+- `prizm validation run <profile>` — run a validation profile directly
+- `prizm approval approve --validate` — approve AND run validation pipeline
 
 ### Runner Integration
 - Validation runs after mutation is applied
@@ -56,7 +56,7 @@ mutations — it's read-only by design.
 | `internal/review/artifact.go` | Review artifact generation (review.md) |
 | `internal/event/event.go` | 10 validation + 4 review event types |
 | `internal/run/runner.go` | Post-mutation validation + review pipeline |
-| `cmd/prism-cli/main.go` | Validation and approval commands |
+| `cmd/prizm-cli/main.go` | Validation and approval commands |
 
 ## Design Decisions
 
@@ -114,22 +114,22 @@ mutations — it's read-only by design.
 ## Pipeline Flow (Post-Mutation)
 
 ```
-Mutation applied → emit(prism.mutation.applied)
+Mutation applied → emit(prizm.mutation.applied)
 
 For each validation profile:
-  → emit(prism.validation.requested)
-  → emit(prism.validation.started)
+  → emit(prizm.validation.requested)
+  → emit(prizm.validation.started)
   → cmd.Run(profile.Command, profile.Args)
-  → Success → emit(prism.validation.completed)
-  → Failure → emit(prism.validation.failed)
-  → Timeout → emit(prism.validation.timeout)
-  → Error   → emit(prism.validation.skipped)
+  → Success → emit(prizm.validation.completed)
+  → Failure → emit(prizm.validation.failed)
+  → Timeout → emit(prizm.validation.timeout)
+  → Error   → emit(prizm.validation.skipped)
   → Artifact: <profile>.json, <profile>.stdout.txt, <profile>.stderr.txt
 
 Reviewer.Generate(mutation_status, files_changed, validation_results)
-  → emit(prism.review.requested)
-  → emit(prism.review.started)
+  → emit(prizm.review.requested)
+  → emit(prizm.review.started)
   → Determine recommendation
-  → emit(prism.review.completed)
+  → emit(prizm.review.completed)
   → Artifact: review.md
 ```

@@ -1,9 +1,9 @@
-// Package adapter provides the Adapter SDK for third-party Prism adapters.
+// Package adapter provides the Adapter SDK for third-party Prizm adapters.
 //
 // V23 M4.4: Adapter SDK extensions
 //
 // This file adds lifecycle management, event bus interface, and manifest
-// extensions for building third-party adapters that connect Prism to
+// extensions for building third-party adapters that connect Prizm to
 // external systems (Discord, Telegram, HTTP, IoT, etc.).
 package adapter
 

@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "prism-sdk"
+name = "prizm-sdk"
 version = "0.2.0-preview.1"
-description = "Prism — Event-Native AI Agent Platform SDK"
+description = "Prizm — Event-Native AI Agent Platform SDK"
 requires-python = ">=3.11"
 dependencies = [
     "nats-py>=2.6.0",

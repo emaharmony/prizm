@@ -6,7 +6,7 @@ import (
 
 func TestShellConfigParsing(t *testing.T) {
 	yaml := `
-prism:
+prizm:
   instance_id: test
   port: 8321
 agents:
@@ -100,7 +100,7 @@ channel_roles:
 
 func TestShellConfigDefaults(t *testing.T) {
 	yaml := `
-prism:
+prizm:
   instance_id: test
   port: 8321
 agents:
@@ -131,7 +131,7 @@ agents:
 
 func TestChannelRoleDefaultMode(t *testing.T) {
 	yaml := `
-prism:
+prizm:
   instance_id: test
   port: 8321
 agents:

@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/emaharmony/prism/internal/adapter"
+	"github.com/emaharmony/prizm/internal/adapter"
 )
 
 // EchoAdapter is a minimal adapter that echoes input back as output.

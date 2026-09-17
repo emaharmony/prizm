@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // mockStage is a simple stage for testing the pipeline.
@@ -186,7 +186,7 @@ func TestRunContext_WithEvent_PreservesAllFields(t *testing.T) {
 		RunID:         "test-run",
 		CorrelationID: "corr-123",
 		Task:          "implement feature X",
-		Project:       "prism",
+		Project:       "prizm",
 		Agent:         "lumi",
 		ProviderName:  "ollama",
 		Model:         "qwen3",
@@ -202,8 +202,8 @@ func TestRunContext_WithEvent_PreservesAllFields(t *testing.T) {
 	if newRc.Task != "implement feature X" {
 		t.Errorf("Task = %q, want 'implement feature X'", newRc.Task)
 	}
-	if newRc.Project != "prism" {
-		t.Errorf("Project = %q, want prism", newRc.Project)
+	if newRc.Project != "prizm" {
+		t.Errorf("Project = %q, want prizm", newRc.Project)
 	}
 	if newRc.Agent != "lumi" {
 		t.Errorf("Agent = %q, want lumi", newRc.Agent)

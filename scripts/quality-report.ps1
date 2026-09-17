@@ -1,4 +1,4 @@
-# Prism Quality Report Script
+# Prizm Quality Report Script
 
 $ReportPath = "QUALITY.md"
 $Now = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -45,7 +45,7 @@ if ($GitStatus) { $GitClean = "Dirty" }
 
 # Generate QUALITY.md
 $Content = @"
-# Prism Repository Quality Report
+# Prizm Repository Quality Report
 
 Last verified: $Now
 
@@ -63,7 +63,7 @@ Last verified: $Now
 ## Feature Stability Summary
 - **Stable:** Workflow Engine, Event Bus, Policy Engine, Approval Gates, Validation Gates, Tool Registry, Providers.
 - **Preview:** API, Dashboard, Scheduler, Discord Adapter, Worktree Mutation.
-- **Experimental:** Remembrance, MCP, Cross-Prism, Sub-agents, Autopatch, Free Mode / Shell Tool (master-user-only, opt-in).
+- **Experimental:** Remembrance, MCP, Cross-Prizm, Sub-agents, Autopatch, Free Mode / Shell Tool (master-user-only, opt-in).
 
 ## CI & Verification
 - **Supported Platforms:** Linux (full suite), Windows (basic subset: safety, config, run + CLI doctor smoke test).

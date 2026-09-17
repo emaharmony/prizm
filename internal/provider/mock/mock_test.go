@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/provider"
-	"github.com/emaharmony/prism/internal/provider/mock"
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/provider/mock"
 )
 
 func TestMockProviderSuccess(t *testing.T) {
@@ -14,7 +14,7 @@ func TestMockProviderSuccess(t *testing.T) {
 	req := provider.GenerateRequest{
 		RunID:       "run_test123",
 		Agent:       "lumi",
-		Project:     "prism",
+		Project:     "prizm",
 		Task:        "Explain the lifecycle",
 		Prompt:      "system prompt",
 		Model:       "mock-model",
@@ -51,7 +51,7 @@ func TestFailingMockProvider(t *testing.T) {
 	req := provider.GenerateRequest{
 		RunID:   "run_fail",
 		Agent:   "lumi",
-		Project: "prism",
+		Project: "prizm",
 		Task:    "should fail",
 		Prompt:  "test",
 		Model:   "mock-model",

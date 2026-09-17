@@ -16,7 +16,10 @@ global:
   max_verification_attempts: 2
   # Auto-approve: skip FEEDBACK_PRE and FEEDBACK_POST gates entirely.
   # Set to true for fully autonomous loops (no human approval needed).
-  auto_approve: true
+  # false so the review_pass gates below actually run — reviewer (Claude
+  # Sonnet via the claude_code CLI) auto-fulfills them, so this still runs
+  # unattended, it just gets a real review pass at each checkpoint.
+  auto_approve: false
 
 confidence_domains:
   - codebase_understanding
@@ -62,11 +65,12 @@ phases:
 
   - name: FEEDBACK_PRE
     type: feedback_pre
-    description: "Auto-approve — no human needed for fast loop."
+    description: "reviewer checks planner's plan before coder starts executing it."
     max_iterations: 1
     allowed_tools: []
     gate:
-      type: ""
+      type: review_pass
+      required_reviewers: [reviewer]
     fallback:
       on_max_iterations: proceed
       blocks: false
@@ -85,11 +89,12 @@ phases:
 
   - name: FEEDBACK_POST
     type: feedback_post
-    description: "Self-review — check git_diff, fix obvious errors. Respond REVIEW_PASSED when done."
+    description: "reviewer checks coder's implementation (git_diff) before it's reported done."
     max_iterations: 3
     allowed_tools: [read_file, write_file, git_diff, git_status]
     gate:
-      type: ""
+      type: review_pass
+      required_reviewers: [reviewer]
     fallback:
       on_max_iterations: accept
       blocks: false

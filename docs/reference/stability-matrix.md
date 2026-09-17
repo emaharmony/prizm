@@ -1,6 +1,6 @@
-# Prism Stability Matrix
+# Prizm Stability Matrix
 
-Every major feature in Prism is assigned a stability level to set expectations for production use and API longevity.
+Every major feature in Prizm is assigned a stability level to set expectations for production use and API longevity.
 
 ## Stability Levels
 
@@ -31,7 +31,7 @@ Every major feature in Prism is assigned a stability level to set expectations f
 | API (v1) | **Preview** | Yes | N/A | Evaluation |
 | Discord Adapter | **Preview** | No | `channels` config | Evaluation |
 | MCP Integration | **Experimental** | No | `mcp.enabled` | Lab only |
-| Cross-Prism Delegation | **Experimental** | No | `bridge.enabled` | Lab only |
+| Cross-Prizm Delegation | **Experimental** | No | `bridge.enabled` | Lab only |
 | Sub-agents | **Experimental** | No | `subagents.enabled` | Lab only |
 | Autopatch | **Experimental** | No | `autopatch.enabled` | Lab only |
 | Codex Worker | **Preview** | No | `agents.capabilities` | Evaluation |
@@ -47,7 +47,7 @@ Every major feature in Prism is assigned a stability level to set expectations f
 *   **Concurrency:** High-load concurrent API access may experience rare data races in status polling.
 *   **Windows Paths:** While supported, some experimental integrations may have path-separator issues.
 *   **Memory Overhead:** Remembrance service (Python) requires separate resource management.
-*   **NATS Persistence:** Embedded NATS is configured for file storage by default; ensure disk space availability in `prism-data`.
+*   **NATS Persistence:** Embedded NATS is configured for file storage by default; ensure disk space availability in `prizm-data`.
 *   **Free Mode shell scope:** the shell tool's working directory is not path-contained to the workspace; only a hard blocklist and the configured command tier restrict it. See [Safety Model](../concepts/SAFETY.md#free-mode-owner-authorized-mutation-mode).
 *   **Protected branch is unenforced:** `project.default_branch` is documented as protected but no code currently blocks writes to it.
 *   **Windows test coverage is partial:** CI's Windows job runs only `internal/safety`, `internal/config`, `internal/run` plus a CLI smoke test — not the full suite. `internal/tool` currently fails on Windows (`TestShellTool_Timeout`, `TestShellTool_Cwd`) due to platform-specific shell-timeout behavior.

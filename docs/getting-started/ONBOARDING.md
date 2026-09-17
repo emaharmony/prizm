@@ -1,18 +1,18 @@
-# Prism Developer Onboarding
+# Prizm Developer Onboarding
 
-This guide gets a contributor from clone to a working local Prism setup.
+This guide gets a contributor from clone to a working local Prizm setup.
 
 ---
 
-## What Prism Is
+## What Prizm Is
 
-Prism is a Go event-native AI agent platform. It can run as a persistent service, a one-shot CLI, or an interactive terminal chat. The runtime owns event flow, sessions, tools, approvals, prompt context, memory integration, and API/dashboard access.
+Prizm is a Go event-native AI agent platform. It can run as a persistent service, a one-shot CLI, or an interactive terminal chat. The runtime owns event flow, sessions, tools, approvals, prompt context, memory integration, and API/dashboard access.
 
 Primary entry points:
 
-1. `prism serve` - persistent daemon with Discord, sessions, embedded NATS, API, and dashboard.
-2. `prism run` - one-shot run lifecycle for a single task.
-3. `prism chat` - interactive terminal chat using configured agents and tools.
+1. `prizm serve` - persistent daemon with Discord, sessions, embedded NATS, API, and dashboard.
+2. `prizm run` - one-shot run lifecycle for a single task.
+3. `prizm chat` - interactive terminal chat using configured agents and tools.
 4. HTTP API + SSE - local integration surface on serve-mode port `8322` by default.
 
 ---
@@ -20,12 +20,12 @@ Primary entry points:
 ## Quick Start
 
 ```bash
-git clone https://github.com/emaharmony/prism.git
-cd prism
-go build -o prism ./cmd/prism-cli
+git clone https://github.com/emaharmony/prizm.git
+cd prizm
+go build -o prizm ./cmd/prizm-cli
 go test ./... -count=1
-cp prism.yaml.example prism.yaml
-./prism serve --config prism.yaml
+cp prizm.yaml.example prizm.yaml
+./prizm serve --config prizm.yaml
 ```
 
 Open:
@@ -51,7 +51,7 @@ pip install -e .
 uvicorn remembrance.app:app --host 127.0.0.1 --port 18790
 ```
 
-Enable it in the repo root `prism.yaml`:
+Enable it in the repo root `prizm.yaml`:
 
 ```yaml
 remembrance:
@@ -67,31 +67,31 @@ remembrance:
 One-shot run mode:
 
 ```bash
-./prism run --task "Explain event-driven architecture" --provider ollama --model llama3.2
-./prism run --task "Build prompt and artifacts only" --dry-run-prompt
-./prism run --task "Use memory" --memory-enabled --memory-url http://localhost:18790
+./prizm run --task "Explain event-driven architecture" --provider ollama --model llama3.2
+./prizm run --task "Build prompt and artifacts only" --dry-run-prompt
+./prizm run --task "Use memory" --memory-enabled --memory-url http://localhost:18790
 ```
 
 Interactive chat:
 
 ```bash
-./prism chat --config prism.yaml
-./prism chat --config prism.yaml --agent astraea
+./prizm chat --config prizm.yaml
+./prizm chat --config prizm.yaml --agent astraea
 ```
 
 Useful management commands:
 
 ```bash
-./prism status --config prism.yaml
-./prism health
-./prism tool list
-./prism context show --context soul,agents --workspace-root .
-./prism search --query "memory pipeline" --provider mock
-./prism trace <run_id>
-./prism cost <run_id>
+./prizm status --config prizm.yaml
+./prizm health
+./prizm tool list
+./prizm context show --context soul,agents --workspace-root .
+./prizm search --query "memory pipeline" --provider mock
+./prizm trace <run_id>
+./prizm cost <run_id>
 ```
 
-`prism run` expects a NATS bus at `nats://localhost:4222`. Use `prism serve` for embedded NATS or run `cmd/prism-bus` in another terminal.
+`prizm run` expects a NATS bus at `nats://localhost:4222`. Use `prizm serve` for embedded NATS or run `cmd/prizm-bus` in another terminal.
 
 ---
 
@@ -99,7 +99,7 @@ Useful management commands:
 
 ### Events
 
-Everything meaningful becomes an event: agent output, tool calls, approvals, session changes, scheduled wake events, cross-Prism messages, and memory captures. Agent IDs become namespaces such as `astraea.agent.output`.
+Everything meaningful becomes an event: agent output, tool calls, approvals, session changes, scheduled wake events, cross-Prizm messages, and memory captures. Agent IDs become namespaces such as `astraea.agent.output`.
 
 ### Sessions
 
@@ -107,7 +107,7 @@ Sessions are SQLite-backed conversations with idle reset, daily reset configurat
 
 ### Agents
 
-Agents are configured in `prism.yaml`:
+Agents are configured in `prizm.yaml`:
 
 - `id` - event namespace and lookup key.
 - `role` - lead, coder, reviewer, orchestrator, guard, etc.
@@ -126,17 +126,17 @@ Plan tools track task plans in workspace state. Guard checks block mutation tool
 
 Remembrance captures agent output, extracts useful facts, and builds context for later prompts. Serve mode can use it both asynchronously after agent output and synchronously before the next LLM call.
 
-### Cross-Prism and Factory
+### Cross-Prizm and Factory
 
-The bridge handles signed cross-Prism subjects. The optional Factory handoff writes validated task requests into a Roblox Factory queue. See [CROSS-PRISM-FACTORY-SETUP.md](../history/milestones/CROSS-PRISM-FACTORY-SETUP.md).
+The bridge handles signed cross-Prizm subjects. The optional Factory handoff writes validated task requests into a Roblox Factory queue. See [CROSS-PRIZM-FACTORY-SETUP.md](../history/milestones/CROSS-PRIZM-FACTORY-SETUP.md).
 
 ---
 
 ## Architecture Tour
 
 ```text
-prism serve
-  - load prism.yaml
+prizm serve
+  - load prizm.yaml
   - start or connect to NATS
   - initialize SQLite stores
   - register agents, tools, state, plans, guard, scheduler

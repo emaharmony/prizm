@@ -1,4 +1,4 @@
-// Package tool provides Prism's state management tools — the actions an AI agent
+// Package tool provides Prizm's state management tools — the actions an AI agent
 // can use to manage its working state (active task, decisions, blocked items,
 // and working context). These tools let the agent persist what it's doing
 // across sessions, so it "wakes up knowing what it was doing."
@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/emaharmony/prism/internal/state"
+	"github.com/emaharmony/prizm/internal/state"
 )
 
 // StateManager interface for tool access to working state.

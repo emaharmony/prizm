@@ -6,16 +6,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/prompt"
+	"github.com/emaharmony/prizm/internal/prompt"
 )
 
 func TestBuildPromptBasic(t *testing.T) {
-	result := prompt.BuildPrompt("lumi", "prism", "Explain the lifecycle", "")
+	result := prompt.BuildPrompt("lumi", "prizm", "Explain the lifecycle", "")
 
 	if !strings.Contains(result, "## Agent\nlumi") {
 		t.Error("prompt missing agent section")
 	}
-	if !strings.Contains(result, "## Project\nprism") {
+	if !strings.Contains(result, "## Project\nprizm") {
 		t.Error("prompt missing project section")
 	}
 	if !strings.Contains(result, "## Task\nExplain the lifecycle") {
@@ -30,7 +30,7 @@ func TestBuildPromptBasic(t *testing.T) {
 }
 
 func TestBuildPromptWithContext(t *testing.T) {
-	result := prompt.BuildPrompt("lumi", "prism", "Analyze code", "Previous discussion about event-driven architecture")
+	result := prompt.BuildPrompt("lumi", "prizm", "Analyze code", "Previous discussion about event-driven architecture")
 
 	if !strings.Contains(result, "## Retrieved Context") {
 		t.Error("prompt missing context section when context provided")
@@ -41,7 +41,7 @@ func TestBuildPromptWithContext(t *testing.T) {
 }
 
 func TestBuildPromptWithEmptyContext(t *testing.T) {
-	result := prompt.BuildPrompt("lumi", "prism", "Test task", "   ")
+	result := prompt.BuildPrompt("lumi", "prizm", "Test task", "   ")
 
 	if strings.Contains(result, "## Retrieved Context") {
 		t.Error("prompt should omit context section for whitespace-only context")
@@ -49,7 +49,7 @@ func TestBuildPromptWithEmptyContext(t *testing.T) {
 }
 
 func TestBuildPromptRulesContent(t *testing.T) {
-	result := prompt.BuildPrompt("lumi", "prism", "Test", "")
+	result := prompt.BuildPrompt("lumi", "prizm", "Test", "")
 
 	rules := []string{
 		"Follow the task directly",
@@ -66,7 +66,7 @@ func TestBuildPromptRulesContent(t *testing.T) {
 
 func TestWritePrompt(t *testing.T) {
 	tmpDir := t.TempDir()
-	content := prompt.BuildPrompt("lumi", "prism", "Test task", "")
+	content := prompt.BuildPrompt("lumi", "prizm", "Test task", "")
 
 	err := prompt.WritePrompt(tmpDir, content)
 	if err != nil {

@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/event"
-	"github.com/emaharmony/prism/internal/provider/mock"
+	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/provider/mock"
 )
 
 // mockStreamCallback captures callback invocations for testing.
@@ -169,7 +169,7 @@ func TestPersistenceStage_NonEmptyRunDir_WritesFiles(t *testing.T) {
 		ProviderName: "mock",
 		RunDir:       tmpDir,
 		Events: []event.Event{
-			{ID: "evt-1", Type: "prism.run.started", Source: "prism"},
+			{ID: "evt-1", Type: "prizm.run.started", Source: "prizm"},
 		},
 		Results: map[string]*StageResult{
 			"llm": {StageName: "llm", Success: true},

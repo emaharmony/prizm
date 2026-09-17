@@ -203,7 +203,7 @@ func NewClientWithTimeout(baseURL string, timeout time.Duration) *Client {
 // POSTs to /v1/context/build with the agent's task.
 func (c *Client) BuildContext(task, project, agent string, maxTokens int) (*ContextPackResponse, error) {
 	if project == "" {
-		project = "prism"
+		project = "prizm"
 	}
 	return c.BuildContextWithOptions(BuildContextRequest{
 		Task:      task,
@@ -215,7 +215,7 @@ func (c *Client) BuildContext(task, project, agent string, maxTokens int) (*Cont
 
 func (c *Client) BuildContextWithOptions(req BuildContextRequest) (*ContextPackResponse, error) {
 	if req.ProjectID == "" {
-		req.ProjectID = "prism"
+		req.ProjectID = "prizm"
 	}
 	bodyBytes, err := json.Marshal(req)
 	if err != nil {
@@ -266,7 +266,7 @@ func (c *Client) Capture(text, source, category, tier string) (map[string]any, e
 		SourceAgent:     source,
 		Scope:           "project",
 		ImportanceScore: 0.5,
-		ProjectID:       "prism",
+		ProjectID:       "prizm",
 	}
 	if category != "" {
 		req.Category = category
@@ -279,7 +279,7 @@ func (c *Client) Capture(text, source, category, tier string) (map[string]any, e
 
 func (c *Client) CaptureWithMetadata(req CaptureRequest) (map[string]any, error) {
 	if req.ProjectID == "" {
-		req.ProjectID = "prism"
+		req.ProjectID = "prizm"
 	}
 	if req.Category == "" {
 		req.Category = "conversation"

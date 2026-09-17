@@ -1,6 +1,6 @@
-// Package event defines the canonical Prism event schema — the shared vocabulary
+// Package event defines the canonical Prizm event schema — the shared vocabulary
 // that every component (CLI, runner, tool executor, validation engine) uses to
-// communicate. Events are Prism's universal language.
+// communicate. Events are Prizm's universal language.
 //
 // Why events? Instead of components calling each other directly (tight coupling),
 // everything emits events to NATS. This means:
@@ -23,7 +23,6 @@
 package event
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -58,21 +57,21 @@ var V1EventTypes = struct {
 	// System
 	SystemHealth string
 }{
-	TaskCreated:            "prism.task.created",
-	TaskStarted:            "prism.task.started",
-	TaskCompleted:          "prism.task.completed",
-	TaskFailed:             "prism.task.failed",
-	MemoryContextRequested: "prism.memory.context_requested",
-	MemoryContextBuilt:     "prism.memory.context_built",
-	MemoryContextFailed:    "prism.memory.context_failed",
-	AgentStarted:           "prism.agent.started",
-	AgentOutput:            "prism.agent.output",
-	AgentCompleted:         "prism.agent.completed",
-	AgentFailed:            "prism.agent.failed",
-	ToolCalled:             "prism.tool.called",
-	ToolResult:             "prism.tool.result",
-	ToolFailed:             "prism.tool.failed",
-	SystemHealth:           "prism.system.health",
+	TaskCreated:            "prizm.task.created",
+	TaskStarted:            "prizm.task.started",
+	TaskCompleted:          "prizm.task.completed",
+	TaskFailed:             "prizm.task.failed",
+	MemoryContextRequested: "prizm.memory.context_requested",
+	MemoryContextBuilt:     "prizm.memory.context_built",
+	MemoryContextFailed:    "prizm.memory.context_failed",
+	AgentStarted:           "prizm.agent.started",
+	AgentOutput:            "prizm.agent.output",
+	AgentCompleted:         "prizm.agent.completed",
+	AgentFailed:            "prizm.agent.failed",
+	ToolCalled:             "prizm.tool.called",
+	ToolResult:             "prizm.tool.result",
+	ToolFailed:             "prizm.tool.failed",
+	SystemHealth:           "prizm.system.health",
 }
 
 // V3EventTypes defines the event types introduced in V3 (controlled tool execution).
@@ -85,12 +84,12 @@ var V3EventTypes = struct {
 	ToolCompleted string
 	ToolFailed    string
 }{
-	ToolRequested: "prism.tool.requested",
-	ToolApproved:  "prism.tool.approved",
-	ToolDenied:    "prism.tool.denied",
-	ToolStarted:   "prism.tool.started",
-	ToolCompleted: "prism.tool.completed",
-	ToolFailed:    "prism.tool.failed",
+	ToolRequested: "prizm.tool.requested",
+	ToolApproved:  "prizm.tool.approved",
+	ToolDenied:    "prizm.tool.denied",
+	ToolStarted:   "prizm.tool.started",
+	ToolCompleted: "prizm.tool.completed",
+	ToolFailed:    "prizm.tool.failed",
 }
 
 // V2EventTypes defines the event types introduced in V2 (real LLM agent execution).
@@ -111,19 +110,19 @@ var V2EventTypes = struct {
 	// Output artifacts
 	OutputWritten string
 }{
-	LLMRequested:     "prism.llm.requested",
-	LLMCompleted:     "prism.llm.completed",
-	LLMFailed:        "prism.llm.failed",
-	ContextRequested: "prism.context.requested",
-	ContextInjected:  "prism.context.injected",
-	ContextFailed:    "prism.context.failed",
-	AgentFailed:      "prism.agent.failed",
-	OutputWritten:    "prism.output.written",
+	LLMRequested:     "prizm.llm.requested",
+	LLMCompleted:     "prizm.llm.completed",
+	LLMFailed:        "prizm.llm.failed",
+	ContextRequested: "prizm.context.requested",
+	ContextInjected:  "prizm.context.injected",
+	ContextFailed:    "prizm.context.failed",
+	AgentFailed:      "prizm.agent.failed",
+	OutputWritten:    "prizm.output.written",
 }
 
-// Event is the canonical Prism event — the atomic unit of communication.
+// Event is the canonical Prizm event — the atomic unit of communication.
 // Every action, decision, and state change flows as one of these. An event
-// has a unique ULID-based ID, belongs to a type namespace (e.g., prism.task.started),
+// has a unique ULID-based ID, belongs to a type namespace (e.g., prizm.task.started),
 // optionally links to a parent event (causal trace), and carries arbitrary
 // payload data. The CorrelationID groups all events from the same logical request.
 type Event struct {
@@ -164,29 +163,37 @@ type TokenUsage struct {
 
 // NewID generates a unique, sortable event ID using ULID.
 // Format: evt_<ulid>
+//
+// Entropy is ulid.DefaultEntropy(), the library's thread-safe, per-process
+// monotonically increasing source, not crypto/rand directly: plain
+// crypto/rand entropy makes two ULIDs minted within the same millisecond
+// sort in effectively random relative order, silently breaking the
+// "ORDER BY id ASC" chronological-ordering guarantee event stores rely on
+// (see store.go's Query). DefaultEntropy guarantees strictly increasing IDs
+// for same-millisecond calls within this process.
 func NewID() string {
-	id := ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader)
+	id := ulid.MustNew(ulid.Timestamp(time.Now()), ulid.DefaultEntropy())
 	return fmt.Sprintf("evt_%s", id.String())
 }
 
 // NewCorrelationID generates a correlation ID.
 // Format: corr_<ulid>
 func NewCorrelationID() string {
-	id := ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader)
+	id := ulid.MustNew(ulid.Timestamp(time.Now()), ulid.DefaultEntropy())
 	return fmt.Sprintf("corr_%s", id.String())
 }
 
 // NewRunID generates a run ID.
 // Format: run_<ulid>
 func NewRunID() string {
-	id := ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader)
+	id := ulid.MustNew(ulid.Timestamp(time.Now()), ulid.DefaultEntropy())
 	return fmt.Sprintf("run_%s", id.String())
 }
 
 // NewSessionID generates a session ID.
 // Format: sess_<ulid>
 func NewSessionID() string {
-	id := ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader)
+	id := ulid.MustNew(ulid.Timestamp(time.Now()), ulid.DefaultEntropy())
 	return fmt.Sprintf("sess_%s", id.String())
 }
 
@@ -247,16 +254,16 @@ var V5EventTypes = struct {
 	ReviewCompleted string
 	ReviewFailed    string
 }{
-	ValidationRequested: "prism.validation.requested",
-	ValidationStarted:   "prism.validation.started",
-	ValidationCompleted: "prism.validation.completed",
-	ValidationFailed:    "prism.validation.failed",
-	ValidationSkipped:   "prism.validation.skipped",
-	ValidationTimeout:   "prism.validation.timeout",
-	ReviewRequested:     "prism.review.requested",
-	ReviewStarted:       "prism.review.started",
-	ReviewCompleted:     "prism.review.completed",
-	ReviewFailed:        "prism.review.failed",
+	ValidationRequested: "prizm.validation.requested",
+	ValidationStarted:   "prizm.validation.started",
+	ValidationCompleted: "prizm.validation.completed",
+	ValidationFailed:    "prizm.validation.failed",
+	ValidationSkipped:   "prizm.validation.skipped",
+	ValidationTimeout:   "prizm.validation.timeout",
+	ReviewRequested:     "prizm.review.requested",
+	ReviewStarted:       "prizm.review.started",
+	ReviewCompleted:     "prizm.review.completed",
+	ReviewFailed:        "prizm.review.failed",
 }
 
 // V16EventTypes defines the event types introduced in V16 (Intelligence Arc).
@@ -266,8 +273,8 @@ var V16EventTypes = struct {
 	CostTracked  string
 	CostReported string
 }{
-	CostTracked:  "prism.cost.tracked",
-	CostReported: "prism.cost.reported",
+	CostTracked:  "prizm.cost.tracked",
+	CostReported: "prizm.cost.reported",
 }
 
 // V19EventTypes defines the event types introduced in V19 (Smart Context Injection).
@@ -277,8 +284,8 @@ var V19EventTypes = struct {
 	ContextFileRead string
 	ContextInjected string
 }{
-	ContextFileRead: "prism.context.file_read",
-	ContextInjected: "prism.context.injected",
+	ContextFileRead: "prizm.context.file_read",
+	ContextInjected: "prizm.context.injected",
 }
 
 // V4EventTypes defines the event types introduced in V4 (approval-gated mutations).
@@ -295,14 +302,14 @@ var V4EventTypes = struct {
 	MutationApplied   string
 	MutationFailed    string
 }{
-	ApprovalRequested: "prism.approval.requested",
-	ApprovalGranted:   "prism.approval.granted",
-	ApprovalDenied:    "prism.approval.denied",
-	ApprovalExpired:   "prism.approval.expired",
-	MutationProposed:  "prism.mutation.proposed",
-	MutationValidated: "prism.mutation.validated",
-	MutationApplied:   "prism.mutation.applied",
-	MutationFailed:    "prism.mutation.failed",
+	ApprovalRequested: "prizm.approval.requested",
+	ApprovalGranted:   "prizm.approval.granted",
+	ApprovalDenied:    "prizm.approval.denied",
+	ApprovalExpired:   "prizm.approval.expired",
+	MutationProposed:  "prizm.mutation.proposed",
+	MutationValidated: "prizm.mutation.validated",
+	MutationApplied:   "prizm.mutation.applied",
+	MutationFailed:    "prizm.mutation.failed",
 }
 
 // Summary represents a V1 run summary written to summary.json.

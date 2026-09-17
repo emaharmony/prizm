@@ -1,5 +1,5 @@
 // Package validation provides safe, profile-driven validation command execution
-// for Prism V5. Commands are only sourced from registered profiles — never from
+// for Prizm V5. Commands are only sourced from registered profiles — never from
 // LLM output or user input.
 package validation
 

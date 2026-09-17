@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/retry"
+	"github.com/emaharmony/prizm/internal/retry"
 )
 
 // driver.go wires the Natural Gates phase/gate abstractions to a live LLM and
@@ -235,7 +235,7 @@ func (e *Engine) Drive(ctx context.Context, llm LLMFunc, tool ToolFunc, opts Dri
 			}
 			e.emitEvent("workflow.paused", pausePayload)
 			// A separate feedback.requested event lets Discord/dashboard/sub-agent
-			// reviewers know to act and reply on prism.workflow.feedback.response.
+			// reviewers know to act and reply on prizm.workflow.feedback.response.
 			e.emitEvent("feedback.requested", pausePayload)
 			if opts.StateDir != "" {
 				_ = SaveWorkflowState(e.state, opts.StateDir)
@@ -344,7 +344,7 @@ func (e *Engine) Drive(ctx context.Context, llm LLMFunc, tool ToolFunc, opts Dri
 			if err != nil {
 				return e.state, fmt.Errorf("llm call in %s: %w", phaseName, err)
 			}
-			// Per-iteration token telemetry so live observers (e.g. `prism watch`)
+			// Per-iteration token telemetry so live observers (e.g. `prizm watch`)
 			// can render a budget burn-down. Purely observational; emitted only for
 			// a successful call.
 			e.emitEvent("phase.tokens", map[string]any{

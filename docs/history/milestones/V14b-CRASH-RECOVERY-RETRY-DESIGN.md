@@ -2,11 +2,11 @@
 
 ## Mission
 
-Make Prism survive crashes, retry transient failures, and prevent double-writes.
+Make Prizm survive crashes, retry transient failures, and prevent double-writes.
 This is the reliability trilogy: WAL recovery, exponential backoff retry, and
 idempotency keys for mutations.
 
-**Prism is React for AI.** When state changes, actions fire automatically.
+**Prizm is React for AI.** When state changes, actions fire automatically.
 But what happens when the process crashes? When the LLM returns 503? When
 two humans approve the same mutation simultaneously?
 
@@ -17,7 +17,7 @@ V14b answers: the system recovers, retries, and deduplicates.
 ### 1. Write-Ahead Log (WAL) for Run State
 
 Before every stage transition, the pipeline writes a WAL entry to
-`runs/<id>/wal.jsonl`. On crash, `prism run --recover <id>` replays the WAL,
+`runs/<id>/wal.jsonl`. On crash, `prizm run --recover <id>` replays the WAL,
 rebuilds the RunContext, and resumes from the last completed stage.
 
 WAL entries use the same Event struct with `wal.*` type namespace:
@@ -48,7 +48,7 @@ Retries only on retryable errors:
 **Mutations NEVER retry.** This is enforced at the type level: the ToolStage
 checks if a tool is a mutation (write_file_proposal) and skips retry.
 
-Each retry emits a `prism.stage.retry` event with the attempt number and delay.
+Each retry emits a `prizm.stage.retry` event with the attempt number and delay.
 
 ### 3. Idempotency Keys for Mutations
 
@@ -75,16 +75,16 @@ internal/
 │   ├── wal.go               # NEW: WAL writer, reader, recovery logic
 │   ├── retry.go             # NEW: Exponential backoff with jitter
 │   └── idempotency.go       # NEW: SHA256 key generation and checking
-└── cmd/prism-cli/
+└── cmd/prizm-cli/
     └── cmd_run.go            # Updated: --recover flag, retry config flags
 ```
 
 ## New CLI Commands
 
 ```
-prism run --recover <run_id>           # Resume a crashed run from WAL
-prism run --max-retries 5               # Configure retry attempts (default: 3)
-prism run --retry-base-delay 2s         # Configure retry base delay
+prizm run --recover <run_id>           # Resume a crashed run from WAL
+prizm run --max-retries 5               # Configure retry attempts (default: 3)
+prizm run --retry-base-delay 2s         # Configure retry base delay
 ```
 
 ## WAL Entry Format
@@ -111,7 +111,7 @@ Each WAL entry is a JSON line in `runs/<id>/wal.jsonl`:
 ## Recovery Flow
 
 ```
-$ prism run --recover run_01J4XYZ
+$ prizm run --recover run_01J4XYZ
 
 Scanning WAL for run_01J4XYZ...
   Last completed stage: llm (index 2)
@@ -155,13 +155,13 @@ Artifacts: runs/run_01J4XYZ/
 2. `internal/stage/retry.go` — Exponential backoff with jitter, retryable error classification
 3. `internal/stage/idempotency.go` — SHA256 key generation and duplicate detection
 4. `Pipeline.Run()` writes WAL entries at stage transitions (entered + completed)
-5. `prism run --recover <id>` reads WAL, rebuilds RunContext, resumes from last completed stage
+5. `prizm run --recover <id>` reads WAL, rebuilds RunContext, resumes from last completed stage
 6. LLMStage retries on 429/503/timeout (configurable maxRetries)
 7. ToolStage retries on retryable errors but NEVER retries mutations
 8. Idempotency keys prevent double-writes from crash recovery and concurrent approvals
 9. All 377+ existing tests pass unchanged
 10. New tests for WAL, retry, and idempotency
-11. Version: `prism v0.14.0` (stays at v0.14 since V14a wasn't a release version bump)
+11. Version: `prizm v0.14.0` (stays at v0.14 since V14a wasn't a release version bump)
 12. Design doc: `docs/V14b-CRASH-RECOVERY-RETRY-DESIGN.md`
 
 ## What V14b Does NOT Include

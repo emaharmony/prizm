@@ -1,4 +1,4 @@
-// Package run provides Prism's execution runner and run management.
+// Package run provides Prizm's execution runner and run management.
 //
 // V14d adds run locking to prevent concurrent runs from corrupting the same
 // run directory. The lock is file-based (flock) for portability across

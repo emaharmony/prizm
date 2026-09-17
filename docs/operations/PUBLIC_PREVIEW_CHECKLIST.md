@@ -1,6 +1,6 @@
-﻿# Prism Public Preview Checklist
+﻿# Prizm Public Preview Checklist
 
-A realistic checklist for presenting Prism as a credible public-preview project.
+A realistic checklist for presenting Prizm as a credible public-preview project.
 This tracks presentation and hygiene, not production readiness.
 
 ## Documentation
@@ -18,14 +18,14 @@ This tracks presentation and hygiene, not production readiness.
 ## Consistency & Claims
 
 - [x] License language consistent (source-available / all-rights-reserved)
-- [x] Prism is not called "open source"
+- [x] Prizm is not called "open source"
 - [x] No production-readiness claims
 - [x] Stable vs experimental boundaries are explicit
 
 ## Repo Hygiene
 
 - [x] No IDE folders tracked (`.idea/`, `.vscode/`)
-- [x] No local workspace state tracked (`prism-workspace/`)
+- [x] No local workspace state tracked (`prizm-workspace/`)
 - [x] No generated `runs/` artifacts tracked (only sanitized `examples/runs/`)
 - [x] Scratch/temp helpers untracked and gitignored
 - [x] No secrets committed

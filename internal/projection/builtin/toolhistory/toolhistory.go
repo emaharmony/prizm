@@ -1,6 +1,6 @@
 // Package toolhistory provides a projection that tracks tool call history.
 //
-// It subscribes to prism.tool.* events and produces a snapshot showing
+// It subscribes to prizm.tool.* events and produces a snapshot showing
 // all tool calls in a run, their statuses, policy decisions, and results,
 // along with an aggregate summary.
 //
@@ -26,8 +26,8 @@
 package toolhistory
 
 import (
-	"github.com/emaharmony/prism/internal/event"
-	"github.com/emaharmony/prism/internal/projection"
+	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/projection"
 )
 
 // ToolCallEntry represents a single tool call in the projection state.

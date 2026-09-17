@@ -1,6 +1,6 @@
-// Package stage provides Prism's pipeline execution engine (V14a).
+// Package stage provides Prizm's pipeline execution engine (V14a).
 //
-// Prism is React for AI. When state changes (events), actions fire automatically.
+// Prizm is React for AI. When state changes (events), actions fire automatically.
 // The event bus IS the render loop. The pipeline IS the event-driven architecture.
 //
 // Each stage is an event producer. The pipeline sequences stages and passes
@@ -19,8 +19,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/emaharmony/prism/internal/event"
-	"github.com/emaharmony/prism/internal/provider"
+	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/provider"
 )
 
 // RunContext carries immutable state through the pipeline.
@@ -106,7 +106,7 @@ type StageResult struct {
 	Error string
 }
 
-// Stage is a single step in the Prism pipeline.
+// Stage is a single step in the Prizm pipeline.
 //
 // Each stage is independently testable, mockable, and replaceable.
 // Stages emit events by returning new RunContexts with appended events.

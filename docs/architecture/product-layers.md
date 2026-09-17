@@ -1,9 +1,9 @@
-# Prism Product Layers
+# Prizm Product Layers
 
-This document defines the architectural layers of Prism to clarify system boundaries and trust levels.
+This document defines the architectural layers of Prizm to clarify system boundaries and trust levels.
 
-## Prism Core
-The essential runtime engine. Without these, Prism does not function as an event-native, policy-governed system.
+## Prizm Core
+The essential runtime engine. Without these, Prizm does not function as an event-native, policy-governed system.
 
 | Package / Subsystem | Layer | Stability | Owner | Required | Trust Boundary |
 |---|---|---|---|---|---|
@@ -17,7 +17,7 @@ The essential runtime engine. Without these, Prism does not function as an event
 | `internal/orchestrator`| Core | Stable | Orchestration | Yes | Managed |
 | `internal/task` | Core | Stable | State | Yes | Persistence |
 
-## Prism Platform
+## Prizm Platform
 Services and interfaces that make the core operational and accessible.
 
 | Package / Subsystem | Layer | Stability | Owner | Required | Trust Boundary |
@@ -30,7 +30,7 @@ Services and interfaces that make the core operational and accessible.
 | `internal/provider` | Platform | Stable | Integration | Yes | Model Provider |
 | `internal/invocation` | Platform | Experimental | Platform | Optional | Network Ingress |
 
-## Prism Integrations
+## Prizm Integrations
 Adapters for external platforms and specialized autonomous capabilities.
 
 | Package / Subsystem | Layer | Stability | Owner | Required | Trust Boundary |
@@ -38,24 +38,24 @@ Adapters for external platforms and specialized autonomous capabilities.
 | `adapters/discord` | Integration | Preview | Integrations | Optional | Discord API |
 | `internal/mcp` | Integration | Experimental | Integrations | Optional | External Host |
 | `internal/autopatch` | Integration | Experimental | Autonomous | Optional | Local Worktree |
-| `internal/subagent` | Integration | Experimental | Autonomous | Optional | Prism Delegation |
+| `internal/subagent` | Integration | Experimental | Autonomous | Optional | Prizm Delegation |
 | `remembrance` | Integration | Experimental | Memory | Optional | RPC / Persistence |
 | `adapters/firecrawl` | Integration | Experimental | Integrations | Optional | External Web |
 | `adapters/roblox` | Integration | Experimental | Integrations | Optional | External API |
 
 ## Layer Definitions
 
-### Prism Core
-*   **Definition:** The minimal set of components required to boot Prism and execute a task.
+### Prizm Core
+*   **Definition:** The minimal set of components required to boot Prizm and execute a task.
 *   **Guarantees:** High stability, strong backward compatibility, rigorous testing.
 *   **Mutation Safety:** Primary enforcement point for policy and safety.
 
-### Prism Platform
-*   **Definition:** The operational surface of Prism. APIs, UIs, and management services.
+### Prizm Platform
+*   **Definition:** The operational surface of Prizm. APIs, UIs, and management services.
 *   **Guarantees:** Stable interfaces, functional parity across releases.
 *   **Responsibility:** Orchestrating core components for multi-user or service-mode use.
 
-### Prism Integrations
-*   **Definition:** Extensions that connect Prism to the outside world or add high-level agent behaviors.
+### Prizm Integrations
+*   **Definition:** Extensions that connect Prizm to the outside world or add high-level agent behaviors.
 *   **Guarantees:** Varies (see Stability Level). May change rapidly.
-*   **Responsibility:** Adapting external protocols to the Prism event-native core.
+*   **Responsibility:** Adapting external protocols to the Prizm event-native core.

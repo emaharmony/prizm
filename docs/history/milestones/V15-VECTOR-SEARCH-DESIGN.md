@@ -2,7 +2,7 @@
 
 ## Mission
 
-Add vector similarity search to Prism's existing SQLite event store. This
+Add vector similarity search to Prizm's existing SQLite event store. This
 enables semantic queries like "find runs similar to this task" or "what events
 are semantically related to X?" — all within the single-binary deployment story.
 
@@ -107,7 +107,7 @@ Built-in providers:
 
 ### Integration Points
 
-The vector store integrates with existing Prism systems:
+The vector store integrates with existing Prizm systems:
 
 1. **Event Enrichment** (V16a precursor): When an event is stored in the
    EventStore, an async hook can generate an embedding and upsert it into
@@ -116,7 +116,7 @@ The vector store integrates with existing Prism systems:
 2. **Run Summary Indexing**: After a run completes, the task description
    and summary get embedded for future similarity search.
 
-3. **CLI Command**: `prism search --query "find deployment failures" --top-k 5`
+3. **CLI Command**: `prizm search --query "find deployment failures" --top-k 5`
 
 ## New Files
 
@@ -128,7 +128,7 @@ The vector store integrates with existing Prism systems:
 - `internal/vector/store_test.go` — VectorStore interface tests
 - `internal/vector/sqlite_test.go` — SQLite implementation tests
 - `internal/vector/embedding_test.go` — Embedding provider tests
-- `cmd/prism-cli/cmd_search.go` — `prism search` CLI command
+- `cmd/prizm-cli/cmd_search.go` — `prizm search` CLI command
 
 ## Scorecard Impact
 
@@ -143,7 +143,7 @@ The vector store integrates with existing Prism systems:
 ## Risk Assessment
 
 - **sqlite-vss CGO dependency**: Requires CGO and SQLite compilation.
-  Prism's core SQLite stores use a pure-Go driver, so sqlite-vss would need
+  Prizm's core SQLite stores use a pure-Go driver, so sqlite-vss would need
   explicit CGO build support if this design is implemented.
 - **Embedding dimension consistency**: Must enforce consistent dimensions.
   VectorStore.ValidateDimension() handles this.
@@ -152,4 +152,4 @@ The vector store integrates with existing Prism systems:
 
 ## Version Bump
 
-prism v0.15.0
+prizm v0.15.0

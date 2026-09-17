@@ -1,11 +1,11 @@
-// Package petart renders a small ASCII "pet" whose mood tracks a running Prism
-// workflow. It is the friendly, non-developer-facing face of `prism watch`: instead
+// Package petart renders a small ASCII "pet" whose mood tracks a running Prizm
+// workflow. It is the friendly, non-developer-facing face of `prizm watch`: instead
 // of phase jargon, a little creature reacts to what the agent is doing — sleeping
 // when idle, thinking while the agent works, celebrating on success, worried when
 // something needs a human.
 //
 // It is deliberately free of any GUI dependency (no Fyne) so the mood/frame logic is
-// unit-testable and reusable. The desktop panel (cmd/prism-panel) is a thin renderer
+// unit-testable and reusable. The desktop panel (cmd/prizm-panel) is a thin renderer
 // on top of Render(). All output is strict ASCII.
 package petart
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/tracker"
+	"github.com/emaharmony/prizm/internal/tracker"
 )
 
 // Mood names.
@@ -108,7 +108,7 @@ func caption_(mood string, s tracker.Snapshot, connected bool) string {
 		return phaseFriendly(s.Current) + "..."
 	default: // sleeping
 		if !connected {
-			return "Can't reach Prism - retrying..."
+			return "Can't reach Prizm - retrying..."
 		}
 		return "Resting. Nothing running right now."
 	}

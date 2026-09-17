@@ -25,7 +25,7 @@ func TestBindAddrDefaultsToLoopback(t *testing.T) {
 	if got := c.BindAddr(8322); got != "127.0.0.1:8322" {
 		t.Errorf("BindAddr default = %q, want 127.0.0.1:8322", got)
 	}
-	c.Prism.BindHost = "0.0.0.0"
+	c.Prizm.BindHost = "0.0.0.0"
 	if got := c.BindAddr(8322); got != "0.0.0.0:8322" {
 		t.Errorf("BindAddr = %q, want 0.0.0.0:8322", got)
 	}
@@ -33,7 +33,7 @@ func TestBindAddrDefaultsToLoopback(t *testing.T) {
 
 func TestValidate_NonLoopbackRequiresToken(t *testing.T) {
 	c := DefaultConfig()
-	c.Prism.BindHost = "0.0.0.0"
+	c.Prizm.BindHost = "0.0.0.0"
 	c.API.AuthToken = ""
 	if err := c.Validate(); err == nil {
 		t.Fatal("expected error: non-loopback bind without auth token")
@@ -54,7 +54,7 @@ func TestValidate_LoopbackNeedsNoToken(t *testing.T) {
 }
 
 func TestResolveAuthToken_EnvWins(t *testing.T) {
-	const envName = "PRISM_TEST_API_TOKEN"
+	const envName = "PRIZM_TEST_API_TOKEN"
 	t.Setenv(envName, "from-env")
 	a := APIServerConfig{AuthToken: "inline", AuthTokenEnv: envName}
 	if got := a.ResolveAuthToken(); got != "from-env" {

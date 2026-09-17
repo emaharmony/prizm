@@ -5,13 +5,18 @@
 *.swo
 *~
 
-# Prism build artifacts (binaries at repo root only)
+# Prizm build artifacts (binaries at repo root only)
 *.exe
 /prism
 /prism-cli
 /prism-bus
 /prism-agent
 prism-data/
+/prizm
+/prizm-cli
+/prizm-bus
+/prizm-agent
+prizm-data/
 
 # Environment & secrets
 .env
@@ -62,12 +67,16 @@ coverage-gate.md
 test-results/
 /prism-panel
 .prism/
+/prizm-panel
+.prizm/
 
 # Local config (contains secrets)
 prism.yaml
+prizm.yaml
 
 # Workspace — local state, never shipped
 prism-workspace/
+prizm-workspace/
 docs/PUDGYPOWER-FACTORY-RUNBOOK.md
 /campaign
 /references

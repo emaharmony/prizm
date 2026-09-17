@@ -247,8 +247,8 @@ func TestCompactionArchivesInsteadOfDeleting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if len(got.Messages) != 2 {
-		t.Fatalf("expected 2 active messages after compaction, got %d", len(got.Messages))
+	if len(got.Messages) != 3 { // 2 kept + 1 continuity summary (V76 summarize strategy)
+		t.Fatalf("expected 3 active messages after summarize compaction (2 kept + 1 continuity), got %d", len(got.Messages))
 	}
 
 	var archived, total int
@@ -258,8 +258,8 @@ func TestCompactionArchivesInsteadOfDeleting(t *testing.T) {
 	if err := m.db.QueryRow("SELECT COUNT(*) FROM messages WHERE session_id = ?", s.ID).Scan(&total); err != nil {
 		t.Fatalf("count total: %v", err)
 	}
-	if archived != 2 || total != 4 {
-		t.Fatalf("archived=%d total=%d, want archived=2 total=4", archived, total)
+	if archived != 3 || total != 6 { // 3 archived (incl continuity re-compaction) + 3 active = 6
+		t.Fatalf("archived=%d total=%d, want archived=3 total=6", archived, total)
 	}
 }
 

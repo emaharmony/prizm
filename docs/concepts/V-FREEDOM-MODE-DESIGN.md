@@ -1,4 +1,4 @@
-# Prism Freedom Mode — Design Doc
+# Prizm Freedom Mode — Design Doc
 
 **Date:** 2026-07-14
 **Authors:** Ema + Lumi
@@ -8,25 +8,25 @@
 
 ## Context
 
-Prism's gated workflow (PLAN → BRANCH → IMPLEMENT → FEEDBACK_PRE → EXECUTION → FEEDBACK_POST) provides system-enforced safety. Every mutation goes through proposal → approval → application. Every phase restricts which tools are available. This is excellent for autonomous, scheduled work — but it makes Prism significantly less capable than OpenClaw or Claude Code for interactive, Ema-directed work.
+Prizm's gated workflow (PLAN → BRANCH → IMPLEMENT → FEEDBACK_PRE → EXECUTION → FEEDBACK_POST) provides system-enforced safety. Every mutation goes through proposal → approval → application. Every phase restricts which tools are available. This is excellent for autonomous, scheduled work — but it makes Prizm significantly less capable than OpenClaw or Claude Code for interactive, Ema-directed work.
 
-**The tension:** Prism's gates are its superpower for *autonomous* work AND its bottleneck for *interactive* work. Ema wants Prism to eventually replace OpenClaw, but Prism currently can't do what OpenClaw does — execute shell commands, make multi-step decisions freely, edit files without phase gates.
+**The tension:** Prizm's gates are its superpower for *autonomous* work AND its bottleneck for *interactive* work. Ema wants Prizm to eventually replace OpenClaw, but Prizm currently can't do what OpenClaw does — execute shell commands, make multi-step decisions freely, edit files without phase gates.
 
-**The goal:** Give Prism a "free mode" — full tool access, no phase gates — while preserving the gated workflow for autonomous/scheduled work.
+**The goal:** Give Prizm a "free mode" — full tool access, no phase gates — while preserving the gated workflow for autonomous/scheduled work.
 
 ---
 
 ## Vision Alignment
 
-From PRISM-VISION.md:
-> "Prism is an event-native agentic environment... It replaces OpenClaw and any other agentic system entirely."
+From PRIZM-VISION.md:
+> "Prizm is an event-native agentic environment... It replaces OpenClaw and any other agentic system entirely."
 
 From Ema's vision notes:
-> "Prism Lumi = left brain (structured, scheduled, deliberate). OpenClaw Lumi = right brain (real-time, creative, reactive)."
-> "The plan was always to replace OpenClaw with Prism."
-> "Goal: Get Prism Lumi to be more capable than OpenClaw."
+> "Prizm Lumi = left brain (structured, scheduled, deliberate). OpenClaw Lumi = right brain (real-time, creative, reactive)."
+> "The plan was always to replace OpenClaw with Prizm."
+> "Goal: Get Prizm Lumi to be more capable than OpenClaw."
 
-**This design is the bridge.** It gives Prism right-brain capabilities without sacrificing left-brain safety.
+**This design is the bridge.** It gives Prizm right-brain capabilities without sacrificing left-brain safety.
 
 ---
 
@@ -47,7 +47,7 @@ From Ema's vision notes:
 
 ### Mode 2: Free Mode (New)
 
-**When:** Interactive, Ema-directed work in Discord channels. Ema asks Prism to do something → Prism does it, full capability, no gates.
+**When:** Interactive, Ema-directed work in Discord channels. Ema asks Prizm to do something → Prizm does it, full capability, no gates.
 
 **How it works:**
 - No phase gates — direct from message to action
@@ -61,7 +61,7 @@ From Ema's vision notes:
 1. Channel role config has `mode: free`
 2. The message sender is the configured `master_user` (Ema's Discord ID)
 
-If a non-master user sends a message in a free-mode channel, Prism falls back to gated behavior. This is config-driven:
+If a non-master user sends a message in a free-mode channel, Prizm falls back to gated behavior. This is config-driven:
 
 ```yaml
 shell:
@@ -106,7 +106,7 @@ func (t *ShellTool) Name() string { return "shell" }
 The shell tool respects the existing policy engine (`internal/tool/policy.go`) with new config:
 
 ```yaml
-# prism.yaml — per channel role
+# prizm.yaml — per channel role
 channel_roles:
   - id: "1491622581348864162"  # manager-room
     role: manager-room
@@ -206,7 +206,7 @@ Tool execution (shell, write_file, git, etc.)
     ↓
 Response → Discord
     ↓
-Event emitted: prism.free.action (for audit, not gating)
+Event emitted: prizm.free.action (for audit, not gating)
 ```
 
 If sender is NOT master_user → falls back to gated behavior for that message.
@@ -218,7 +218,7 @@ When `channelRole.Mode == "free"`:
 2. **All tools registered** — including shell tool
 3. **Direct mutations allowed** — `write_file` instead of `write_file_proposal`
 4. **Session-based context** — conversation history persists across messages
-5. **Events for audit** — emit `prism.free.tool_called` and `prism.free.action_completed` but don't gate on them
+5. **Events for audit** — emit `prizm.free.tool_called` and `prizm.free.action_completed` but don't gate on them
 
 ### What Stays the Same
 
@@ -232,7 +232,7 @@ When `channelRole.Mode == "free"`:
 
 ## Integration Points
 
-### 1. Channel Role Config (prism.yaml)
+### 1. Channel Role Config (prizm.yaml)
 
 New fields on `ChannelRole`:
 ```yaml
@@ -281,7 +281,7 @@ func (e *Executor) executeShell(ctx context.Context, input map[string]any) (Tool
     // 2. If blocked, return error with reason
     // 3. Execute via os/exec with timeout
     // 4. Capture stdout, stderr, exit code
-    // 5. Emit prism.tool.shell.executed event
+    // 5. Emit prizm.tool.shell.executed event
     // 6. Return result
 }
 ```
@@ -319,16 +319,16 @@ type ShellDefaults struct {
 
 ### Tier-Based Allowlists
 - Pattern-matched against command string (glob-style: `go build*` matches `go build ./...`)
-- Configurable per deployment via `prism.yaml`
+- Configurable per deployment via `prizm.yaml`
 - Default tiers ship with sensible allowlists
 
 ### Path Containment
 - Shell commands execute with `cwd` constrained to allowed project paths
-- The existing `allowed_paths` config in `prism.yaml` restricts file operations
+- The existing `allowed_paths` config in `prizm.yaml` restricts file operations
 - Shell tool should respect the same path boundaries
 
 ### Audit Trail
-- Every shell command emitted as `prism.tool.shell.executed` event
+- Every shell command emitted as `prizm.tool.shell.executed` event
 - Includes command, cwd, exit_code, duration, channel, user
 - Dashboard can display shell activity (future)
 
@@ -351,30 +351,30 @@ type ShellDefaults struct {
 - Set `mode: free` on #manager-room (Ema's primary interactive channel)
 - Keep `mode: gated` on #build-room (agent factory)
 - Keep #fun as `tools: none`
-- Monitor: does Prism Lumi respond correctly in free mode?
+- Monitor: does Prizm Lumi respond correctly in free mode?
 
 ### Phase 3: Capability Expansion
 - Add MCP tool support in free mode (unified tool access)
 - Add subagent spawning in free mode (like OpenClaw's `sessions_spawn`)
 - Add file editing tools without phase restriction
-- Evaluate: can Prism now replace OpenClaw for interactive work?
+- Evaluate: can Prizm now replace OpenClaw for interactive work?
 
 ### Phase 4: OpenClaw Sunset (Future)
-- When Prism free mode reaches feature parity with OpenClaw
-- Migrate remaining OpenClaw workflows to Prism
+- When Prizm free mode reaches feature parity with OpenClaw
+- Migrate remaining OpenClaw workflows to Prizm
 - Decommission OpenClaw
 
 ---
 
 ## Open Questions
 
-1. **Should free mode support the gated-loop workflow as an opt-in?** E.g., Ema types "run gated loop on BassBook" and Prism launches the full workflow even in free mode? (My recommendation: yes — free mode can *invoke* gated mode, but gated mode can't invoke free mode.)
+1. **Should free mode support the gated-loop workflow as an opt-in?** E.g., Ema types "run gated loop on BassBook" and Prizm launches the full workflow even in free mode? (My recommendation: yes — free mode can *invoke* gated mode, but gated mode can't invoke free mode.)
 
-2. **How should we handle the shell tool in autonomous/scheduled work?** Tier 1 allowlist for build/test commands? Or keep autonomous mode fully gated with no shell? (My recommendation: tier 1 for autonomous — Prism needs to run tests after writing code.)
+2. **How should we handle the shell tool in autonomous/scheduled work?** Tier 1 allowlist for build/test commands? Or keep autonomous mode fully gated with no shell? (My recommendation: tier 1 for autonomous — Prizm needs to run tests after writing code.)
 
-3. **Should free mode have its own event namespace?** `prism.free.*` vs `prism.channel.*`? Or keep the existing event structure and just add a `mode` field to events? (My recommendation: add `mode` field to existing events — simpler, preserves dashboard compatibility.)
+3. **Should free mode have its own event namespace?** `prizm.free.*` vs `prizm.channel.*`? Or keep the existing event structure and just add a `mode` field to events? (My recommendation: add `mode` field to existing events — simpler, preserves dashboard compatibility.)
 
-4. **What about the `listen_to_agents` bot interop?** OpenClaw Lumi talks to Prism Lumi via Discord. In free mode, should Prism Lumi be able to spawn subagents like OpenClaw does? (My recommendation: yes, but that's Phase 3 — not blocking Phase 1.)
+4. **What about the `listen_to_agents` bot interop?** OpenClaw Lumi talks to Prizm Lumi via Discord. In free mode, should Prizm Lumi be able to spawn subagents like OpenClaw does? (My recommendation: yes, but that's Phase 3 — not blocking Phase 1.)
 
 5. **Should we add a `write_file` direct path in free mode** (skipping the proposal dance), or keep the existing tool but just disable the phase gate? (My recommendation: add a direct write path — the proposal system is phase-coupled and doesn't make sense without phases.)
 
@@ -395,4 +395,4 @@ type ShellDefaults struct {
 shell:
   master_user_id: "164169326142816256"  # Ema's Discord ID
 ```
-7. ✅ **Autonomous work gets shell access** — tier_1 allowlist (build, test, git) available in gated mode so Prism can run tests after writing code
+7. ✅ **Autonomous work gets shell access** — tier_1 allowlist (build, test, git) available in gated mode so Prizm can run tests after writing code

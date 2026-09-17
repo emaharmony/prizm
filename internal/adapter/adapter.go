@@ -1,8 +1,8 @@
-// Package adapter provides the Adapter Contract System for Prism V9.
+// Package adapter provides the Adapter Contract System for Prizm V9.
 //
-// Adapters are the only way external domain logic enters Prism. Tools, gates,
+// Adapters are the only way external domain logic enters Prizm. Tools, gates,
 // workflows, and policy are all internal. Adapters are the seam between
-// Prism Core and the outside world.
+// Prizm Core and the outside world.
 //
 // After V9, domain integrations (trading, Roblox, OpenClaw, etc.) plug in
 // through adapters instead of forks.
@@ -15,7 +15,7 @@ import (
 )
 
 // Adapter is the contract that all domain adapters must implement.
-// Adapters connect Prism to external systems (trading, publishing, deployment, etc.)
+// Adapters connect Prizm to external systems (trading, publishing, deployment, etc.)
 //
 // Adapter names must be alphanumeric + hyphens only (no dots).
 // This prevents ambiguity in the policy action format: adapter.<name>.<action>

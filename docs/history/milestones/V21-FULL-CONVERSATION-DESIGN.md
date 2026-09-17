@@ -8,7 +8,7 @@
 
 ## Thesis
 
-Prism gains a full conversation pipeline that processes Discord messages through debounce → session → routing → LLM → response → Discord delivery. The pipeline is hybrid: the handler is the adapter (Discord-specific concerns), and the pipeline stages handle the domain-agnostic core.
+Prizm gains a full conversation pipeline that processes Discord messages through debounce → session → routing → LLM → response → Discord delivery. The pipeline is hybrid: the handler is the adapter (Discord-specific concerns), and the pipeline stages handle the domain-agnostic core.
 
 ---
 

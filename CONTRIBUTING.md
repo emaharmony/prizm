@@ -1,8 +1,8 @@
-# Contributing to Prism
+# Contributing to Prizm
 
-Thanks for your interest in Prism.
+Thanks for your interest in Prizm.
 
-Prism is an experimental event-native AI agent framework. Contributions should preserve the core design principle:
+Prizm is an experimental event-native AI agent framework. Contributions should preserve the core design principle:
 
 > The framework controls the lifecycle; models generate outputs inside that lifecycle.
 
@@ -29,11 +29,11 @@ If working on Remembrance, follow the Python setup instructions in the Remembran
 
 ## Licensing and Contributions
 
-Prism is currently source-available under an all-rights-reserved license.
+Prizm is currently source-available under an all-rights-reserved license.
 
-By submitting a pull request or contribution, you agree that your contribution may be incorporated into Prism under the repository's current license unless a separate written agreement is made.
+By submitting a pull request or contribution, you agree that your contribution may be incorporated into Prizm under the repository's current license unless a separate written agreement is made.
 
-If you want to use Prism or contribute under different terms, contact Emmanuel Vinas through GitHub first.
+If you want to use Prizm or contribute under different terms, contact Emmanuel Vinas through GitHub first.
 
 ## Contribution Guidelines
 
@@ -60,4 +60,4 @@ A good PR should include:
 
 ## Project Direction
 
-Prism is designed to remain domain-agnostic. Domain-specific systems (trading, Roblox, developer automation, deployment workflows) should integrate through adapters/gates rather than changing Prism core into a domain-specific framework.
+Prizm is designed to remain domain-agnostic. Domain-specific systems (trading, Roblox, developer automation, deployment workflows) should integrate through adapters/gates rather than changing Prizm core into a domain-specific framework.

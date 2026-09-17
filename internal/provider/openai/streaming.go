@@ -2,7 +2,7 @@
 //
 // GenerateStream reads SSE events from the OpenAI response and batches tokens
 // into 50ms intervals as per V14a design. Token events go to a separate NATS
-// stream (PRISM_TOKENS) and are NOT written to events.jsonl.
+// stream (PRIZM_TOKENS) and are NOT written to events.jsonl.
 package openai
 
 import (
@@ -14,8 +14,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/emaharmony/prism/internal/provider"
-	"github.com/emaharmony/prism/internal/retry"
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/retry"
 )
 
 // GenerateStream calls the OpenAI chat completion API with streaming enabled.

@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/event"
-	"github.com/emaharmony/prism/internal/provider/mock"
-	"github.com/emaharmony/prism/internal/session"
-	"github.com/emaharmony/prism/internal/stage"
+	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/provider/mock"
+	"github.com/emaharmony/prizm/internal/session"
+	"github.com/emaharmony/prizm/internal/stage"
 )
 
 // TestE2E_FullConversationPipeline tests the V21 full conversation path:

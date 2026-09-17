@@ -1,8 +1,8 @@
-// Package orchestrator provides the persistent daemon that runs Prism as a
+// Package orchestrator provides the persistent daemon that runs Prizm as a
 // live service. It manages agent lifecycles, routes messages, tracks sessions,
 // and wires the event bus to registered actions.
 //
-// V20: The orchestrator is the brain of `prism serve`. It starts the embedded
+// V20: The orchestrator is the brain of `prizm serve`. It starts the embedded
 // NATS server, registers agents from config, sets up the session manager,
 // agent router, and adapter connections, then runs until interrupted.
 package orchestrator
@@ -16,16 +16,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/emaharmony/prism/internal/agent"
-	"github.com/emaharmony/prism/internal/bus"
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/agent"
+	"github.com/emaharmony/prizm/internal/bus"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
-// Orchestrator manages the persistent Prism service lifecycle.
+// Orchestrator manages the persistent Prizm service lifecycle.
 type Orchestrator struct {
 	mu sync.RWMutex
 
-	// Config is the loaded Prism configuration.
+	// Config is the loaded Prizm configuration.
 	Config *Config
 
 	// Agent registry holds all registered agents.
@@ -58,7 +58,7 @@ func New(cfg *Config) (*Orchestrator, error) {
 	return &Orchestrator{
 		Config:  cfg,
 		Agents:  agent.NewRegistry(),
-		natsURL: cfg.Prism.NATSURL,
+		natsURL: cfg.Prizm.NATSURL,
 		ctx:     ctx,
 		cancel:  cancel,
 		healthy: false,

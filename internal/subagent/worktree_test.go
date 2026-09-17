@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/gitx"
-	v2 "github.com/emaharmony/prism/internal/workflow/v2"
+	"github.com/emaharmony/prizm/internal/gitx"
+	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 )
 
 func initTempRepo(t *testing.T) string {
@@ -20,7 +20,7 @@ func initTempRepo(t *testing.T) string {
 		}
 	}
 	run("init", "-b", "main")
-	run("config", "user.email", "t@prism.local")
+	run("config", "user.email", "t@prizm.local")
 	run("config", "user.name", "T")
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("x\n"), 0o644); err != nil {
 		t.Fatal(err)

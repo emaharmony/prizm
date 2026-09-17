@@ -1,7 +1,7 @@
-// Package checksum provides SHA-256 checksum helpers for Prism artifacts.
+// Package checksum provides SHA-256 checksum helpers for Prizm artifacts.
 //
-// V14d adds artifact integrity verification. Every file Prism writes gets a
-// sidecar checksum file. On read, Prism verifies the checksum matches. This
+// V14d adds artifact integrity verification. Every file Prizm writes gets a
+// sidecar checksum file. On read, Prizm verifies the checksum matches. This
 // prevents silent corruption and detects tampering.
 //
 // Checksums are stored as sidecar files: if the artifact is `output.md`, the

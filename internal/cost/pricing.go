@@ -6,7 +6,7 @@ import "sync"
 // models, in USD. OutputPricingTable holds the COMPLETION price per 1K tokens.
 // These are approximate built-in defaults and act as the fallback when no
 // config override is supplied. Operators can override or extend them at runtime
-// via SetPricingOverrides (wired from prism.yaml's `cost.pricing`) so prices can
+// via SetPricingOverrides (wired from prizm.yaml's `cost.pricing`) so prices can
 // be corrected without recompiling.
 //
 // EstimateCost (input-only, total-token) is kept for backward compatibility with
@@ -73,7 +73,7 @@ var OutputPricingTable = map[string]float64{
 
 // ModelPrice is a per-model pricing override in USD per 1K tokens. It carries
 // both the input (prompt) and output (completion) price so operators can supply
-// a full override from config. It maps 1:1 to prism.yaml's `cost.pricing.<model>`.
+// a full override from config. It maps 1:1 to prizm.yaml's `cost.pricing.<model>`.
 type ModelPrice struct {
 	Input  float64
 	Output float64
@@ -145,8 +145,8 @@ var (
 )
 
 // SetPricingOverrides rebuilds the package-level pricer with config overrides
-// layered over the built-in tables. Call once at startup (e.g. from `prism
-// serve`) with prism.yaml's `cost.pricing`. A nil/empty map restores defaults.
+// layered over the built-in tables. Call once at startup (e.g. from `prizm
+// serve`) with prizm.yaml's `cost.pricing`. A nil/empty map restores defaults.
 func SetPricingOverrides(overrides map[string]ModelPrice) {
 	p := NewPricer(overrides)
 	defaultPricerMu.Lock()

@@ -2,6 +2,7 @@ package plan
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -352,5 +353,168 @@ func TestManagerConcurrentAccess(t *testing.T) {
 	}
 	if len(plans) != 10 {
 		t.Fatalf("expected 10 plans, got %d", len(plans))
+	}
+}
+
+func TestStepProgress(t *testing.T) {
+	p := &Plan{
+		Steps: []Step{
+			{ID: "S1", Title: "First", Status: StepCompleted},
+			{ID: "S2", Title: "Second", Status: StepPending},
+			{ID: "S3", Title: "Third", Status: StepCompleted},
+			{ID: "S4", Title: "Fourth", Status: StepInProgress},
+		},
+	}
+	completed, total := StepProgress(p)
+	if completed != 2 || total != 4 {
+		t.Errorf("StepProgress = %d/%d, want 2/4", completed, total)
+	}
+	if completed, total := StepProgress(nil); completed != 0 || total != 0 {
+		t.Errorf("StepProgress(nil) = %d/%d, want 0/0", completed, total)
+	}
+}
+
+func TestManagerUpdateStepStatus(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(dir)
+	if err := m.EnsureDir(); err != nil {
+		t.Fatal(err)
+	}
+	p := Plan{Title: "Test", Steps: []Step{
+		{ID: "S1", Title: "Step 1", Status: StepPending},
+		{ID: "S2", Title: "Step 2", Status: StepPending},
+	}}
+	if err := m.CreatePlan(p); err != nil {
+		t.Fatal(err)
+	}
+	plans, _ := m.LoadPlans()
+	planID := plans[0].ID
+	if err := m.UpdateStepStatus(planID, "S1", StepCompleted, "done"); err != nil {
+		t.Fatalf("UpdateStepStatus: %v", err)
+	}
+	plans, _ = m.LoadPlans()
+	if plans[0].Steps[0].Status != StepCompleted {
+		t.Errorf("S1 status = %s, want completed", plans[0].Steps[0].Status)
+	}
+	if plans[0].Steps[0].Notes != "done" {
+		t.Errorf("S1 notes = %s, want 'done'", plans[0].Steps[0].Notes)
+	}
+	if plans[0].Steps[0].CompletedAt == nil {
+		t.Error("S1 CompletedAt should be set")
+	}
+}
+
+func TestManagerAddStep(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(dir)
+	if err := m.EnsureDir(); err != nil {
+		t.Fatal(err)
+	}
+	p := Plan{Title: "Test", Steps: []Step{
+		{ID: "S1", Title: "Step 1", Status: StepPending},
+	}}
+	if err := m.CreatePlan(p); err != nil {
+		t.Fatal(err)
+	}
+	plans, _ := m.LoadPlans()
+	planID := plans[0].ID
+	if err := m.AddStep(planID, "Step 2"); err != nil {
+		t.Fatalf("AddStep: %v", err)
+	}
+	plans, _ = m.LoadPlans()
+	if len(plans[0].Steps) != 2 {
+		t.Errorf("Steps count = %d, want 2", len(plans[0].Steps))
+	}
+	if plans[0].Steps[1].ID != "S2" {
+		t.Errorf("New step ID = %s, want S2", plans[0].Steps[1].ID)
+	}
+}
+
+func TestManagerReopenPlan(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(dir)
+	if err := m.EnsureDir(); err != nil {
+		t.Fatal(err)
+	}
+	p := Plan{Title: "Test"}
+	if err := m.CreatePlan(p); err != nil {
+		t.Fatal(err)
+	}
+	plans, _ := m.LoadPlans()
+	planID := plans[0].ID
+	if err := m.CompletePlan(planID); err != nil {
+		t.Fatal(err)
+	}
+	plans, _ = m.LoadPlans()
+	if plans[0].Status != StatusCompleted {
+		t.Fatalf("want completed, got %s", plans[0].Status)
+	}
+	if err := m.ReopenPlan(planID); err != nil {
+		t.Fatal(err)
+	}
+	plans, _ = m.LoadPlans()
+	if plans[0].Status != StatusAutoProceed {
+		t.Errorf("want auto_proceed, got %s", plans[0].Status)
+	}
+	if plans[0].CompletedAt != nil {
+		t.Error("CompletedAt should be nil after reopen")
+	}
+}
+
+func TestManagerUpdatePlan(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(dir)
+	if err := m.EnsureDir(); err != nil {
+		t.Fatal(err)
+	}
+	p := Plan{Title: "Original"}
+	if err := m.CreatePlan(p); err != nil {
+		t.Fatal(err)
+	}
+	plans, _ := m.LoadPlans()
+	planID := plans[0].ID
+	if err := m.UpdatePlan(planID, map[string]any{"title": "Updated", "branch": "feat/test"}); err != nil {
+		t.Fatal(err)
+	}
+	plans, _ = m.LoadPlans()
+	if plans[0].Title != "Updated" {
+		t.Errorf("Title = %s, want Updated", plans[0].Title)
+	}
+	if plans[0].Branch != "feat/test" {
+		t.Errorf("Branch = %s, want feat/test", plans[0].Branch)
+	}
+}
+
+func TestFormatPlanForPromptWithSteps(t *testing.T) {
+	p := &Plan{
+		Title:  "Test Plan",
+		ID:     "P-001",
+		Status: StatusAutoProceed,
+		Steps: []Step{
+			{ID: "S1", Title: "First step", Status: StepCompleted},
+			{ID: "S2", Title: "Second step", Status: StepInProgress},
+			{ID: "S3", Title: "Third step", Status: StepBlocked, Notes: "waiting on review"},
+			{ID: "S4", Title: "Fourth step", Status: StepPending},
+			{ID: "S5", Title: "Fifth step", Status: StepSkipped},
+		},
+	}
+	result := FormatPlanForPrompt(p)
+	if !strings.Contains(result, "[x] S1: First step") {
+		t.Error("Missing completed step marker")
+	}
+	if !strings.Contains(result, "[~] S2: Second step") {
+		t.Error("Missing in-progress step marker")
+	}
+	if !strings.Contains(result, "[!] S3: Third step (waiting on review)") {
+		t.Error("Missing blocked step marker with notes")
+	}
+	if !strings.Contains(result, "[ ] S4: Fourth step") {
+		t.Error("Missing pending step marker")
+	}
+	if !strings.Contains(result, "[-] S5: Fifth step") {
+		t.Error("Missing skipped step marker")
+	}
+	if !strings.Contains(result, "**Progress:** 1/5 steps completed") {
+		t.Error("Missing progress line")
 	}
 }

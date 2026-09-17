@@ -2,11 +2,11 @@
 
 ## Mission
 
-Make Prism actually useful. Right now it only has mock + ollama providers and
+Make Prizm actually useful. Right now it only has mock + ollama providers and
 an echo adapter. V14c adds an OpenAI-compatible provider, the first real adapter
 (Refract Track), and a deployment story.
 
-**Prism is React for AI.** When state changes, actions fire automatically.
+**Prizm is React for AI.** When state changes, actions fire automatically.
 Refract Track is the proof: when `task.completed` fires, Refract Track
 auto-logs progress. No manual tracking. The model doesn't do it — the event
 system does.
@@ -16,7 +16,7 @@ system does.
 ### 1. OpenAI-Compatible Provider
 
 A provider that calls OpenAI's chat completion API using raw HTTP (no SDK).
-This gives Prism access to GPT-4, GPT-3.5, and any OpenAI-compatible endpoint.
+This gives Prizm access to GPT-4, GPT-3.5, and any OpenAI-compatible endpoint.
 
 ```go
 // internal/provider/openai.go
@@ -73,13 +73,13 @@ func (c *ChainProvider) Generate(ctx context.Context, req GenerateRequest) (Gene
 ### 3. Refract Track Adapter (First Real Adapter)
 
 Refract Track auto-logs project progress when tasks complete. It subscribes
-to `prism.task.completed` events and writes progress entries to JSONL files.
+to `prizm.task.completed` events and writes progress entries to JSONL files.
 
 ```go
 // internal/adapter/builtin/refracttrack/refracttrack.go
 
 type RefractTrackAdapter struct {
-    storagePath string  // ~/.prism/refract-track/<project>/
+    storagePath string  // ~/.prizm/refract-track/<project>/
 }
 
 func (a *RefractTrackAdapter) Name() string        // "refract-track"
@@ -96,7 +96,7 @@ func (a *RefractTrackAdapter) Health(ctx context.Context) (*adapter.Health, erro
 ```
 
 **Auto-logging from events:**
-When `prism.task.completed` fires, Refract Track automatically creates a
+When `prizm.task.completed` fires, Refract Track automatically creates a
 progress entry with the task description, status, agent, and timestamp.
 No manual action needed. That's the thesis in action.
 
@@ -108,7 +108,7 @@ No manual action needed. That's the thesis in action.
 .PHONY: dev test build
 
 dev:                           ## Run in development mode
-	go run ./cmd/prism-cli run --task "hello" --project dev --agent lumi
+	go run ./cmd/prizm-cli run --task "hello" --project dev --agent lumi
 
 test:                          ## Run all tests
 	go test ./... -count=1 -race
@@ -118,12 +118,12 @@ test-coverage:                 ## Run tests with coverage
 	go tool cover -html=coverage.out
 
 build:                         ## Build binary
-	CGO_ENABLED=0 go build -o prism ./cmd/prism-cli/
+	CGO_ENABLED=0 go build -o prizm ./cmd/prizm-cli/
 
 build-all:                     ## Cross-compile for all platforms
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o prism-linux-amd64 ./cmd/prism-cli/
-	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o prism-darwin-arm64 ./cmd/prism-cli/
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o prism-windows-amd64.exe ./cmd/prism-cli/
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o prizm-linux-amd64 ./cmd/prizm-cli/
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o prizm-darwin-arm64 ./cmd/prizm-cli/
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o prizm-windows-amd64.exe ./cmd/prizm-cli/
 
 lint:                          ## Run linters
 	go vet ./...
@@ -137,12 +137,12 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o prism ./cmd/prism-cli/
+RUN CGO_ENABLED=0 go build -o prizm ./cmd/prizm-cli/
 
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates
-COPY --from=builder /app/prism /usr/local/bin/prism
-ENTRYPOINT ["prism"]
+COPY --from=builder /app/prizm /usr/local/bin/prizm
+ENTRYPOINT ["prizm"]
 CMD ["--help"]
 ```
 
@@ -151,7 +151,7 @@ CMD ["--help"]
 
 version: '3.8'
 services:
-  prism:
+  prizm:
     build: .
     ports:
       - "8080:8080"
@@ -159,14 +159,14 @@ services:
       - ./runs:/app/runs
       - ./policies:/app/policies
     environment:
-      - PRISM_PORT=8080
-      - PRISM_RUN_DIR=/app/runs
-      - PRISM_POLICY_DIR=/app/policies
+      - PRIZM_PORT=8080
+      - PRIZM_RUN_DIR=/app/runs
+      - PRIZM_POLICY_DIR=/app/policies
 ```
 
 ### 5. `--embedded-bus` Mode
 
-For getting started without NATS, `prism run --embedded-bus` starts an in-process
+For getting started without NATS, `prizm run --embedded-bus` starts an in-process
 NATS server. This eliminates the "install NATS first" friction for new users.
 
 ```go
@@ -197,7 +197,7 @@ internal/
 │   └── embedded.go         # NEW: In-process NATS server for --embedded-bus
 ├── stage/
 │   └── (existing files)    # No changes to stage package
-cmd/prism-cli/
+cmd/prizm-cli/
 │   └── cmd_run.go          # Updated: --fallback-provider, --allow-paid-fallback
 Makefile                      # NEW: dev, test, build, lint targets
 Dockerfile                    # NEW: Multi-stage build
@@ -209,10 +209,10 @@ docker-compose.yaml           # NEW: One-command start
 1. `internal/provider/openai.go` — OpenAI-compatible provider with Generate + GenerateStream
 2. `internal/provider/chain.go` — Provider chaining with tier-based fallback
 3. `internal/adapter/builtin/refracttrack/` — Auto-logging adapter with log_progress, query_status, list_projects
-4. Refract Track auto-logs from `prism.task.completed` events
+4. Refract Track auto-logs from `prizm.task.completed` events
 5. `Makefile` with dev, test, build, build-all, lint targets
 6. `Dockerfile` with multi-stage build, CGO_ENABLED=0
-7. `docker-compose.yaml` with prism service
+7. `docker-compose.yaml` with prizm service
 8. `--embedded-bus` flag for in-process NATS server
 9. All 393+ existing tests pass unchanged
 10. New tests for OpenAI provider, chain provider, Refract Track adapter

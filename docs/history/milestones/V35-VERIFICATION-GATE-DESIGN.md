@@ -12,7 +12,7 @@ produced. The `task_completion` gate counts tasks the model marked done; the
 `review_pass` gate relies on a human or sub-agent reviewer. Neither is an
 *objective* signal that the committed code compiles and its tests pass.
 
-Prism already had the machinery to run that signal safely: the V5 `validation`
+Prizm already had the machinery to run that signal safely: the V5 `validation`
 package runs **allowlisted** command profiles (e.g. `go_test_all` → `go test
 ./...`) with a timeout, a minimal environment, and artifact capture — the model
 never controls what executes. It was simply never wired into the loop.

@@ -4,7 +4,7 @@
 
 V31 is documented as a gap, not a completed implementation.
 
-Prism has streaming support through the `provider.StreamingProvider` interface and `LLMStage` can deliver token chunks through `StreamCallback`. Mock, OpenAI chat completions, Anthropic, and Gemini have streaming implementations. Serve mode can use callback-based delivery for streaming provider paths.
+Prizm has streaming support through the `provider.StreamingProvider` interface and `LLMStage` can deliver token chunks through `StreamCallback`. Mock, OpenAI chat completions, Anthropic, and Gemini have streaming implementations. Serve mode can use callback-based delivery for streaming provider paths.
 
 The native ChatProvider tool loop introduced for Ollama chat tool calling still uses synchronous `/api/chat` responses with `stream: false`.
 

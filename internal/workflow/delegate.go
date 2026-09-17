@@ -1,4 +1,4 @@
-// Package workflow provides Prism's workflow execution engine (V7+).
+// Package workflow provides Prizm's workflow execution engine (V7+).
 //
 // V13 adds the delegation step handler: when a workflow step has type "delegate",
 // the runner resolves the named agent from the agent registry and calls the
@@ -21,9 +21,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/emaharmony/prism/internal/agent"
-	"github.com/emaharmony/prism/internal/policy"
-	"github.com/emaharmony/prism/internal/provider"
+	"github.com/emaharmony/prizm/internal/agent"
+	"github.com/emaharmony/prizm/internal/policy"
+	"github.com/emaharmony/prizm/internal/provider"
 )
 
 // DelegationConfig holds the configuration for executing a delegation step.
@@ -75,7 +75,7 @@ func ExecuteDelegate(ctx context.Context, cfg DelegationConfig, step Step, input
 			},
 			Subject: policy.Subject{
 				Type: "workflow",
-				ID:   "prism-workflow",
+				ID:   "prizm-workflow",
 			},
 		}
 		decision := cfg.PolicyEvaluator.Evaluate(req)

@@ -1,10 +1,10 @@
 package ollama
 
 import (
-	"github.com/emaharmony/prism/internal/tool"
+	"github.com/emaharmony/prizm/internal/tool"
 )
 
-// ConvertToolsToOllama converts Prism tool definitions to Ollama's function schema format.
+// ConvertToolsToOllama converts Prizm tool definitions to Ollama's function schema format.
 //
 // Security: Only public metadata (name, description, parameter schemas) is exposed.
 // No workspace paths, implementation details, or file contents are included.

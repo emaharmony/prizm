@@ -2,7 +2,7 @@
 
 ## Mission
 
-Improve Prism's performance across four areas: vector search, HTTP connection
+Improve Prizm's performance across four areas: vector search, HTTP connection
 management, event store queries, and concurrent access patterns. All improvements
 are internal optimizations — no external API changes.
 
@@ -75,9 +75,9 @@ Benchmarked and confirmed adequate without database migration.
    The threshold is tunable: `2 × neighbors` for search fallback.
 
 2. **Single-layer HNSW** — The full HNSW paper describes a multi-layer graph
-   with logarithmic hierarchy. Prism uses a single layer with configurable
+   with logarithmic hierarchy. Prizm uses a single layer with configurable
    neighbors (24 is the default). Multi-layer adds complexity without benefit
-   at Prism's current scale (tens of thousands of vectors). If search latency
+   at Prizm's current scale (tens of thousands of vectors). If search latency
    for 100K+ vectors becomes problematic, multi-layer is a natural upgrade.
 
 3. **Deterministic entry point** — Non-deterministic Go map iteration caused

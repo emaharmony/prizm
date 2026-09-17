@@ -427,7 +427,7 @@ func NewGateFromConfig(cfg GateConfig) Gate {
 // read budget, commit/push) lives in the EXECUTION phase via the driver.
 //
 // This is the out-of-the-box flow; it can be overridden by a workflow config file
-// (see prism.workflow_config) loaded with LoadConfig.
+// (see prizm.workflow_config) loaded with LoadConfig.
 func DefaultConfig() *WorkflowConfig {
 	return &WorkflowConfig{
 		Name:        "gated-loop",

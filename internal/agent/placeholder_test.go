@@ -5,13 +5,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/agent"
+	"github.com/emaharmony/prizm/internal/agent"
 )
 
 func TestPlaceholderAgentBasic(t *testing.T) {
 	input := agent.PlaceholderInput{
 		Task:    "Test V1 event lifecycle",
-		Project: "prism",
+		Project: "prizm",
 		Agent:   "lumi",
 	}
 
@@ -34,7 +34,7 @@ func TestPlaceholderAgentBasic(t *testing.T) {
 func TestPlaceholderAgentWithContext(t *testing.T) {
 	input := agent.PlaceholderInput{
 		Task:    "Analyze project",
-		Project: "prism",
+		Project: "prizm",
 		Agent:   "lumi",
 		Context: "Previous discussion about event-driven architecture",
 	}
@@ -62,7 +62,7 @@ func TestPlaceholderAgentWithContext(t *testing.T) {
 func TestPlaceholderOutputJSON(t *testing.T) {
 	input := agent.PlaceholderInput{
 		Task:    "Test",
-		Project: "prism",
+		Project: "prizm",
 		Agent:   "lumi",
 	}
 	output := agent.RunPlaceholder(input)
@@ -99,7 +99,7 @@ func TestPlaceholderAlwaysSucceeds(t *testing.T) {
 func TestPlaceholderWithDelay(t *testing.T) {
 	input := agent.PlaceholderInput{
 		Task:    "test delay",
-		Project: "prism",
+		Project: "prizm",
 		Agent:   "lumi",
 	}
 

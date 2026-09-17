@@ -578,13 +578,13 @@ func TestEvaluatorEmitsRequestedEvent(t *testing.T) {
 	eval.Evaluate(PolicyRequest{Action: "test"})
 	found := false
 	for _, e := range emitter.events {
-		if e.eventType == "prism.policy.requested" {
+		if e.eventType == "prizm.policy.requested" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("expected prism.policy.requested event")
+		t.Error("expected prizm.policy.requested event")
 	}
 }
 
@@ -605,18 +605,18 @@ func TestEvaluatorEmitsEvaluatedEvent(t *testing.T) {
 	evalFound := false
 	allowFound := false
 	for _, e := range emitter.events {
-		if e.eventType == "prism.policy.evaluated" {
+		if e.eventType == "prizm.policy.evaluated" {
 			evalFound = true
 		}
-		if e.eventType == "prism.policy.allowed" {
+		if e.eventType == "prizm.policy.allowed" {
 			allowFound = true
 		}
 	}
 	if !evalFound {
-		t.Error("expected prism.policy.evaluated event")
+		t.Error("expected prizm.policy.evaluated event")
 	}
 	if !allowFound {
-		t.Error("expected prism.policy.allowed event")
+		t.Error("expected prizm.policy.allowed event")
 	}
 }
 
@@ -631,18 +631,18 @@ func TestEvaluatorEmitsDeniedEvent(t *testing.T) {
 	evalFound := false
 	deniedFound := false
 	for _, e := range emitter.events {
-		if e.eventType == "prism.policy.evaluated" {
+		if e.eventType == "prizm.policy.evaluated" {
 			evalFound = true
 		}
-		if e.eventType == "prism.policy.denied" {
+		if e.eventType == "prizm.policy.denied" {
 			deniedFound = true
 		}
 	}
 	if !evalFound {
-		t.Error("expected prism.policy.evaluated event")
+		t.Error("expected prizm.policy.evaluated event")
 	}
 	if !deniedFound {
-		t.Error("expected prism.policy.denied event")
+		t.Error("expected prizm.policy.denied event")
 	}
 }
 
@@ -662,12 +662,12 @@ func TestEvaluatorEmitsApprovalRequiredEvent(t *testing.T) {
 
 	approvalFound := false
 	for _, e := range emitter.events {
-		if e.eventType == "prism.policy.approval_required" {
+		if e.eventType == "prizm.policy.approval_required" {
 			approvalFound = true
 		}
 	}
 	if !approvalFound {
-		t.Error("expected prism.policy.approval_required event")
+		t.Error("expected prizm.policy.approval_required event")
 	}
 }
 

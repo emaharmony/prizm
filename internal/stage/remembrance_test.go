@@ -76,13 +76,13 @@ func TestRemembranceStage_ContextBuild(t *testing.T) {
 		case "/v1/context/build":
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{
-				"project_id": "prism",
+				"project_id": "prizm",
 				"agent_id": "lumi",
 				"task": "who is ema",
 				"selected_memories": ["m1"],
 				"context_markdown": "# Retrieved Remembrance Context\n\n## Task\nwho is ema\n\n## Relevant Context\n- **Ema is the founder** \u2014 Ema founded the project\n",
 				"context_json": {
-					"project_id": "prism",
+					"project_id": "prizm",
 					"agent_id": "lumi",
 					"task": "who is ema",
 					"selected_memories": [
@@ -100,7 +100,7 @@ func TestRemembranceStage_ContextBuild(t *testing.T) {
 
 	s := NewRemembranceStage(true, false, server.URL, WithCapture(false), WithContext(true))
 
-	rc := &RunContext{Task: "who is ema", Project: "prism", Agent: "lumi"}
+	rc := &RunContext{Task: "who is ema", Project: "prizm", Agent: "lumi"}
 	_, result, err := s.Execute(context.Background(), rc)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -135,7 +135,7 @@ func TestRemembranceStage_Capture(t *testing.T) {
 				"category": "project",
 				"tier": "persist",
 				"summary": "Agent output captured",
-				"topics": ["prism", "remembrance"],
+				"topics": ["prizm", "remembrance"],
 				"entities": ["ema"],
 				"new_entities": [],
 				"edges_created": 1
@@ -148,7 +148,7 @@ func TestRemembranceStage_Capture(t *testing.T) {
 
 	s := NewRemembranceStage(true, false, server.URL, WithCapture(true), WithContext(false))
 
-	rc := &RunContext{Task: "test task", Agent: "lumi", Project: "prism", LLMResponse: "I've completed the task."}
+	rc := &RunContext{Task: "test task", Agent: "lumi", Project: "prizm", LLMResponse: "I've completed the task."}
 	_, result, err := s.Execute(context.Background(), rc)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -185,7 +185,7 @@ func TestRemembranceStage_CaptureAndContext(t *testing.T) {
 		case "/v1/context/build":
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{
-				"project_id": "prism",
+				"project_id": "prizm",
 				"agent_id": "lumi",
 				"task": "test",
 				"selected_memories": [],
@@ -200,7 +200,7 @@ func TestRemembranceStage_CaptureAndContext(t *testing.T) {
 
 	s := NewRemembranceStage(true, false, server.URL, WithCapture(true), WithContext(true))
 
-	rc := &RunContext{Task: "test task", Agent: "lumi", Project: "prism", LLMResponse: "Done."}
+	rc := &RunContext{Task: "test task", Agent: "lumi", Project: "prizm", LLMResponse: "Done."}
 	_, result, err := s.Execute(context.Background(), rc)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -229,7 +229,7 @@ func TestRemembranceStage_EmptyOutput(t *testing.T) {
 		}
 		if r.URL.Path == "/v1/context/build" {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"project_id":"prism","task":"test","selected_memories":[],"context_markdown":"","token_count":0}`))
+			w.Write([]byte(`{"project_id":"prizm","task":"test","selected_memories":[],"context_markdown":"","token_count":0}`))
 		}
 	}))
 	defer server.Close()
@@ -264,7 +264,7 @@ func TestRemembranceStage_ContextBuildFails_Required(t *testing.T) {
 
 	s := NewRemembranceStage(true, true, server.URL, WithCapture(false), WithContext(true))
 
-	rc := &RunContext{Task: "test task", Agent: "lumi", Project: "prism"}
+	rc := &RunContext{Task: "test task", Agent: "lumi", Project: "prizm"}
 	_, result, err := s.Execute(context.Background(), rc)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -295,7 +295,7 @@ func TestRemembranceStage_ContextBuildFails_Graceful(t *testing.T) {
 
 	s := NewRemembranceStage(true, false, server.URL, WithCapture(false), WithContext(true))
 
-	rc := &RunContext{Task: "test task", Agent: "lumi", Project: "prism"}
+	rc := &RunContext{Task: "test task", Agent: "lumi", Project: "prizm"}
 	_, result, err := s.Execute(context.Background(), rc)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -318,7 +318,7 @@ func TestRemembranceStage_HealthCheckCache(t *testing.T) {
 			w.Write([]byte(`{"status":"ok"}`))
 		case "/v1/context/build":
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"project_id":"prism","task":"test","selected_memories":[],"context_markdown":"","token_count":0}`))
+			w.Write([]byte(`{"project_id":"prizm","task":"test","selected_memories":[],"context_markdown":"","token_count":0}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}

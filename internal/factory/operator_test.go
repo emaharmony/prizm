@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/crossprism"
+	"github.com/emaharmony/prizm/internal/crossprizm"
 )
 
-func TestOperatorHandleCrossPrismTaskWritesInboxTask(t *testing.T) {
+func TestOperatorHandleCrossPrizmTaskWritesInboxTask(t *testing.T) {
 	root := t.TempDir()
 	projectPath := filepath.Join(root, "roblox-project")
 	if err := os.MkdirAll(projectPath, 0755); err != nil {
@@ -31,11 +31,11 @@ func TestOperatorHandleCrossPrismTaskWritesInboxTask(t *testing.T) {
 		t.Fatalf("new operator: %v", err)
 	}
 
-	msg := crossprism.NewMessage("lumi-ceo", "astraea-manager", crossprism.TypeTaskRequest)
+	msg := crossprizm.NewMessage("lumi-ceo", "astraea-manager", crossprizm.TypeTaskRequest)
 	msg.CorrelationID = "factory-smoke"
 	msg.Request = map[string]any{"task": "Validate the Eggventura factory pipeline."}
 
-	resp, err := op.HandleCrossPrismTask(context.Background(), msg)
+	resp, err := op.HandleCrossPrizmTask(context.Background(), msg)
 	if err != nil {
 		t.Fatalf("handle task: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestOperatorHandleCrossPrismTaskWritesInboxTask(t *testing.T) {
 		t.Fatalf("expected accepted response, got %#v", resp)
 	}
 
-	taskPath := filepath.Join(root, "inbox", "prism-factory-smoke.json")
+	taskPath := filepath.Join(root, "inbox", "prizm-factory-smoke.json")
 	data, err := os.ReadFile(taskPath)
 	if err != nil {
 		t.Fatalf("read task: %v", err)
@@ -62,7 +62,7 @@ func TestOperatorHandleCrossPrismTaskWritesInboxTask(t *testing.T) {
 		t.Fatalf("project_path = %v", payload["project_path"])
 	}
 
-	requestPath := filepath.Join(root, "prompts", "prism-factory-smoke.md")
+	requestPath := filepath.Join(root, "prompts", "prizm-factory-smoke.md")
 	body, err := os.ReadFile(requestPath)
 	if err != nil {
 		t.Fatalf("read request: %v", err)

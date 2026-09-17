@@ -1,4 +1,4 @@
-// Package skill adds skill-use capabilities to Prism: it discovers, parses, and
+// Package skill adds skill-use capabilities to Prizm: it discovers, parses, and
 // registers SKILL.md-based skills (the Claude Code / Agent Skills convention, also
 // used by OpenClaw) so agents can invoke them.
 //
@@ -15,7 +15,7 @@
 // The frontmatter's name+description are cheap to list (so the model can decide
 // when a skill is relevant); the body is the instruction payload loaded into
 // context when the skill is invoked. Bundled scripts/resources live alongside the
-// SKILL.md in the skill's directory and run through Prism's normal tool/policy path.
+// SKILL.md in the skill's directory and run through Prizm's normal tool/policy path.
 package skill
 
 import (

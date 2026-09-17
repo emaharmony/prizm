@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/delegation"
-	"github.com/emaharmony/prism/internal/orchestrator"
-	"github.com/emaharmony/prism/internal/task"
+	"github.com/emaharmony/prizm/internal/delegation"
+	"github.com/emaharmony/prizm/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/task"
 )
 
 // TestDelegationStage_CapabilityCheck verifies that capability checks

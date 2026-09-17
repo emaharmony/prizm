@@ -41,14 +41,14 @@ func (l *LogEmitter) Emit(eventType string, payload map[string]any) {
 // iterate loop-backs in real time.
 type NATSEmitter struct {
 	pub     *NATSPublisher
-	subject string // base subject, e.g. "prism.workflow"
+	subject string // base subject, e.g. "prizm.workflow"
 }
 
 // NewNATSEmitter builds a NATS-backed event emitter. A nil publisher yields a
 // no-op emitter so callers without NATS still run.
 func NewNATSEmitter(pub *NATSPublisher, subject string) *NATSEmitter {
 	if subject == "" {
-		subject = "prism.workflow"
+		subject = "prizm.workflow"
 	}
 	return &NATSEmitter{pub: pub, subject: subject}
 }

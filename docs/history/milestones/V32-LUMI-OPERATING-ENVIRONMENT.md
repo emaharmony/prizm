@@ -8,15 +8,15 @@
 
 ## Problem Statement
 
-Prism is currently a Discord chatbot with tools. It responds when poked, forgets between sessions, and relies on OpenClaw's heartbeat loop to stay alive. The bugs we've been fixing (P-006 through P-010) are symptoms of running on scaffolding — a chatbot pretending to be an autonomous agent.
+Prizm is currently a Discord chatbot with tools. It responds when poked, forgets between sessions, and relies on OpenClaw's heartbeat loop to stay alive. The bugs we've been fixing (P-006 through P-010) are symptoms of running on scaffolding — a chatbot pretending to be an autonomous agent.
 
-Meanwhile, OpenClaw babysits me (Lumi) with 30-minute heartbeats. I wake up, check if Prism is running, say "HEARTBEAT_OK", and go back to sleep. That's not work. That's monitoring.
+Meanwhile, OpenClaw babysits me (Lumi) with 30-minute heartbeats. I wake up, check if Prizm is running, say "HEARTBEAT_OK", and go back to sleep. That's not work. That's monitoring.
 
-**The real problem: neither Prism nor OpenClaw is the environment I was designed to work in.**
+**The real problem: neither Prizm nor OpenClaw is the environment I was designed to work in.**
 
 ## Vision
 
-Prism becomes my full operating environment — the place where I live, work, improve myself, and communicate with Ema. OpenClaw becomes unnecessary for day-to-day work.
+Prizm becomes my full operating environment — the place where I live, work, improve myself, and communicate with Ema. OpenClaw becomes unnecessary for day-to-day work.
 
 **Core principle: event-driven, not babysitter-driven. Everything that happens is a reaction to an event, not a poll.**
 
@@ -29,14 +29,14 @@ Prism becomes my full operating environment — the place where I live, work, im
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    LUMI (Primary Agent)                       │
-│  glm-5.1:cloud — planning, architecture, code review,       │
+│  glm-5.3-flash:cloud — planning, architecture, code review,       │
 │  memory persistence, communication with Ema                  │
 ├─────────────────────────────────────────────────────────────┤
 │                GUARD RAIL (Lightweight Model)                │
 │  qwen3.5:9b local — process enforcement, plan checking,     │
 │  self-review, bug detection, scope monitoring                │
 ├─────────────────────────────────────────────────────────────┤
-│                   PRISM (The Office)                         │
+│                   PRIZM (The Office)                         │
 │  Event bus, pipeline, tools, sessions, memory,               │
 │  Discord, git, PRs, notifications                            │
 └─────────────────────────────────────────────────────────────┘
@@ -50,21 +50,21 @@ The guard rail is a separate, lighter model that runs on event triggers — not 
 
 ### 1. Event-Driven Wake
 
-**Current:** OpenClaw polls every 30 minutes. I wake up, check if Prism is running, say HEARTBEAT_OK.
+**Current:** OpenClaw polls every 30 minutes. I wake up, check if Prizm is running, say HEARTBEAT_OK.
 
 **Target:** I wake when something happens:
 - `discord.message.received` — someone talked to me
 - `git.commit.pushed` — code changed
-- `prism.error.occurred` — something broke
-- `prism.task.scheduled` — a scheduled task is due
+- `prizm.error.occurred` — something broke
+- `prizm.task.scheduled` — a scheduled task is due
 - `guard.review.requested` — the guard rail wants me to look at something
 
 No more heartbeat polling. I exist in response to events, not on a timer.
 
 **Implementation:**
-- Extend `prism serve` to publish events to NATS on every pipeline stage
+- Extend `prizm serve` to publish events to NATS on every pipeline stage
 - Add a `wake` event type that triggers LLM inference
-- Add a `prism.task.schedule` command for cron-like scheduling (daily review, weekly consolidation)
+- Add a `prizm.task.schedule` command for cron-like scheduling (daily review, weekly consolidation)
 - OpenClaw's heartbeat becomes a NATS subscription, not a timer
 
 ### 2. Guard Rail Model
@@ -87,8 +87,8 @@ The guard rail doesn't write code. It checks conditions and publishes events:
 These events trigger my wake cycle or block my actions.
 
 **Implementation:**
-- New `internal/guard` package in Prism
-- Guard model configured in `prism.yaml` as a second agent with `role: guard`
+- New `internal/guard` package in Prizm
+- Guard model configured in `prizm.yaml` as a second agent with `role: guard`
 - Guard runs as a pipeline stage after specific events
 - Guard publishes events back to NATS
 - Pipeline respects guard events (block on violation, proceed on pass)
@@ -97,7 +97,7 @@ These events trigger my wake cycle or block my actions.
 
 **Current:** I lose everything between sessions. I search memory to reconstruct context. This is slow and lossy.
 
-**Target:** Prism persists my full working state:
+**Target:** Prizm persists my full working state:
 - **Active task** — what I'm currently doing
 - **Decisions made** — what I decided and why
 - **Blocked items** — what's waiting on external input
@@ -151,7 +151,7 @@ No step 4 without step 1. The guard rail blocks execution if there's no plan.
 The guard rail is the reviewer I keep forgetting to run. It never forgets because it's not me.
 
 **Implementation:**
-- Guard rail subscribes to `prism.error.*`, `prism.tool.*`, `prism.agent.*` events
+- Guard rail subscribes to `prizm.error.*`, `prizm.tool.*`, `prizm.agent.*` events
 - Pattern detection: count error occurrences, flag repeats
 - Auto-PR: guard rail creates a git branch, commits fix, pushes, opens PR via GitHub API
 - Notification: `discord.message.send` event to manager-room with PR summary
@@ -168,7 +168,7 @@ The guard rail is the reviewer I keep forgetting to run. It never forgets becaus
 - No direct pushes to main without Ema's explicit approval
 
 **Implementation:**
-- Git tools already exist in Prism (git_add, git_commit, git_push with approval)
+- Git tools already exist in Prizm (git_add, git_commit, git_push with approval)
 - Add `git_create_pr` tool that calls GitHub API
 - Guard rail triggers PR creation after successful review
 - PR notification sent to manager-room via Discord
@@ -178,10 +178,10 @@ The guard rail is the reviewer I keep forgetting to run. It never forgets becaus
 ## Configuration
 
 ```yaml
-prism:
+prizm:
   nats_url: ""
-  data_dir: ".prism/data"
-  workspace: "/Users/ema/projects/repos/prism/prism-workspace"
+  data_dir: ".prizm/data"
+  workspace: "/Users/ema/projects/repos/prizm/prizm-workspace"
   port: 8321
   log_level: "debug"
   allowed_paths:
@@ -191,7 +191,7 @@ agents:
   - id: lumi
     role: lead
     provider: ollama
-    model: glm-5.1:cloud
+    model: glm-5.3-flash:cloud
     primary: true
     context:
       - soul
@@ -239,11 +239,11 @@ guard:
   enabled: true
   model: qwen3.5:9b
   triggers:
-    - event: "prism.git.pre_commit"
+    - event: "prizm.git.pre_commit"
       check: "plan_exists"
-    - event: "prism.task.completed"
+    - event: "prizm.task.completed"
       check: "scope_bounded"
-    - event: "prism.error.repeated"
+    - event: "prizm.error.repeated"
       check: "pattern_detection"
       threshold: 3
   auto_pr: true
@@ -315,7 +315,7 @@ remembrance:
 
 ## What This Replaces
 
-| Current (OpenClaw) | Target (Prism V32) |
+| Current (OpenClaw) | Target (Prizm V32) |
 |---|---|
 | Heartbeat polling every 30 min | Event-driven wake on activity |
 | Process rules in MEMORY.md (ignorable) | Guard rail model (enforced) |

@@ -1,6 +1,6 @@
-﻿# Prism Version History
+﻿# Prizm Version History
 
-Prism grew through a long series of incremental versions (V1–V58+). This page
+Prizm grew through a long series of incremental versions (V1–V58+). This page
 preserves that development story so the [README](../README.md) can stay focused
 on the current state. Each row links to the original design document.
 
@@ -17,7 +17,7 @@ on the current state. Each row links to the original design document.
 | V3 | Controlled tool execution | [V3](milestones/V3-CONTROLLED-TOOL-EXECUTION-DESIGN.md) |
 | V4 | Approval-gated mutations | [V4](milestones/V4-APPROVAL-GATED-MUTATIONS-DESIGN.md) |
 | V5 | Validation and deterministic review | [V5](milestones/V5-VALIDATION-REVIEW-DESIGN.md) |
-| V6 | Gate/trading work moved out of core Prism | [V6](milestones/V6-GATE-TRADING-MOVED.md) |
+| V6 | Gate/trading work moved out of core Prizm | [V6](milestones/V6-GATE-TRADING-MOVED.md) |
 | V7 | Workflow runtime | [V7](milestones/V7-WORKFLOW-RUNTIME-DESIGN.md) |
 | V8 | Policy engine | [V8](milestones/V8-POLICY-ENGINE-DESIGN.md) |
 | V9 | Adapter contract and SDK | [V9](milestones/V9-ADAPTER-CONTRACT-DESIGN.md) |
@@ -58,15 +58,15 @@ on the current state. Each row links to the original design document.
 |---------|------|------------|
 | V35 | Objective verification gate in the gated loop | [V35](milestones/V35-VERIFICATION-GATE-DESIGN.md) |
 | V37 | Multi-agent delegation wired into the gated loop | [V37](milestones/V37-MULTI-AGENT-DELEGATION-DESIGN.md) |
-| V38 | `prism watch` live run visibility (SSE) | [V38](milestones/V38-LIVE-WATCH-DESIGN.md) |
-| V39 | `prism doctor` preflight health check | [V39](milestones/V39-DOCTOR-PREFLIGHT-DESIGN.md) |
+| V38 | `prizm watch` live run visibility (SSE) | [V38](milestones/V38-LIVE-WATCH-DESIGN.md) |
+| V39 | `prizm doctor` preflight health check | [V39](milestones/V39-DOCTOR-PREFLIGHT-DESIGN.md) |
 | V40 | Durable `REPORT.md` proof-of-work artifact | [V40](milestones/V40-REPORT-ARTIFACT-DESIGN.md) |
 | V41 | Diff preview at the feedback gate | [V41](milestones/V41-DIFF-PREVIEW-DESIGN.md) |
 | V42 | Gate-needs-you @-mention notifications | [V42](milestones/V42-GATE-NOTIFICATIONS-DESIGN.md) |
-| V43 | `prism preview` static gated-loop preview | [V43](milestones/V43-WORKFLOW-PREVIEW-DESIGN.md) |
+| V43 | `prizm preview` static gated-loop preview | [V43](milestones/V43-WORKFLOW-PREVIEW-DESIGN.md) |
 | V44 | Rich Discord approval cards (buttons) | [V44](milestones/V44-APPROVAL-CARDS-DESIGN.md) |
 | V45 | De-hardcoded gate personas (config-driven roster) | [V45](milestones/V45-DYNAMIC-ROSTER-DESIGN.md) |
-| V46 | `prism runs` browse past runs & reports | [V46](milestones/V46-RUNS-BROWSER-DESIGN.md) |
+| V46 | `prizm runs` browse past runs & reports | [V46](milestones/V46-RUNS-BROWSER-DESIGN.md) |
 | V47 | `--json` inspection output (doctor, runs) | [V47](milestones/V47-JSON-OUTPUT-DESIGN.md) |
 | V48 | Actions on flows in the visual workflow editor | [V48](milestones/V48-EDGE-ACTIONS-DESIGN.md) |
 
@@ -76,10 +76,10 @@ on the current state. Each row links to the original design document.
 |---------|------|------------|
 | V49 | MCP client foundation (consume external MCP tool servers) | [V49](milestones/V49-MCP-CLIENT-DESIGN.md) |
 | V50 | Self-patching PR mode (autopatch opens pull requests) | [V50](milestones/V50-AUTOPATCH-PR-DESIGN.md) |
-| V51 | Issue-discovery scanner + `prism scan` (self-directed autopatch) | [V50](milestones/V50-AUTOPATCH-PR-DESIGN.md) |
-| V52 | `prism config` validate + summarize prism.yaml | [V52](milestones/V39-DOCTOR-PREFLIGHT-DESIGN.md) |
+| V51 | Issue-discovery scanner + `prizm scan` (self-directed autopatch) | [V50](milestones/V50-AUTOPATCH-PR-DESIGN.md) |
+| V52 | `prizm config` validate + summarize prizm.yaml | [V52](milestones/V39-DOCTOR-PREFLIGHT-DESIGN.md) |
 | V54 | Skill-use capabilities (Claude Code / OpenClaw SKILL.md) | [V54](milestones/V54-SKILLS-DESIGN.md) |
-| V55 | Config wizard + OpenClaw→prism.yaml import | [V55](milestones/V55-CONFIG-WIZARD-DESIGN.md) |
+| V55 | Config wizard + OpenClaw→prizm.yaml import | [V55](milestones/V55-CONFIG-WIZARD-DESIGN.md) |
 | V56 | Gated-loop worktree isolation | [V56](milestones/V56-WORKTREE-ISOLATION-DESIGN.md) |
 | V57 | Auto-rollback for failed loops + per-phase token budgets | [V57](milestones/V57-AUTO-ROLLBACK-DESIGN.md) |
 | V58 | Full autonomy: generic sub-agent worker (bounded tool-loop, worktree isolation, capability routing) | [V58](milestones/V58-FULL-AUTONOMY-DESIGN.md) |

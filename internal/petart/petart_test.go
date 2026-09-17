@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/tracker"
+	"github.com/emaharmony/prizm/internal/tracker"
 )
 
 func TestPickMoodFromState(t *testing.T) {
@@ -62,7 +62,7 @@ func TestRenderCaptions(t *testing.T) {
 		t.Fatalf("thinking caption = %q", capThink)
 	}
 	_, _, capDown := Render(tracker.Snapshot{Status: "running"}, false, 0, 0)
-	if !strings.Contains(strings.ToLower(capDown), "reach prism") {
+	if !strings.Contains(strings.ToLower(capDown), "reach prizm") {
 		t.Fatalf("disconnected caption = %q", capDown)
 	}
 	mood, _, capDone := Render(tracker.Snapshot{Status: "completed"}, true, 0, 0)

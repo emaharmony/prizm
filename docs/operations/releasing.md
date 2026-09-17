@@ -1,6 +1,6 @@
-# Releasing Prism
+# Releasing Prizm
 
-Prism has not yet established a tagged release in the verified checkout. The
+Prizm has not yet established a tagged release in the verified checkout. The
 maintainer must reconcile the CLI, changelog, SDK, and Remembrance versions
 before the first artifact release.
 
@@ -15,7 +15,7 @@ before the first artifact release.
 5. Create an annotated `vX.Y.Z` tag from the verified commit and push it.
 6. The release workflow builds checksummed Linux amd64, macOS arm64, and
    Windows amd64 CLI archives and attaches them to the GitHub release.
-7. Download each artifact, verify SHA-256, run `prism version`, `--help`, and
+7. Download each artifact, verify SHA-256, run `prizm version`, `--help`, and
    `doctor --json`, then publish release notes.
 
 ## Rollback

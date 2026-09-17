@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/orchestrator"
 )
 
 func TestAgentTopology(t *testing.T) {
@@ -198,7 +198,7 @@ func TestEventFlow(t *testing.T) {
 	if !strings.Contains(output, "lumi.*") {
 		t.Error("expected lumi namespace")
 	}
-	if !strings.Contains(output, "prism.task.created") {
+	if !strings.Contains(output, "prizm.task.created") {
 		t.Error("expected system events")
 	}
 }

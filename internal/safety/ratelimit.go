@@ -1,4 +1,4 @@
-// Package safety provides Prism's rate limiting infrastructure.
+// Package safety provides Prizm's rate limiting infrastructure.
 //
 // Rate limiting prevents abuse from:
 //   - Users spamming the bot with rapid-fire messages

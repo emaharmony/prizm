@@ -15,8 +15,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/emaharmony/prism/internal/agent"
-	"github.com/emaharmony/prism/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/agent"
+	"github.com/emaharmony/prizm/internal/orchestrator"
 )
 
 // Router determines which agent should handle an incoming message.

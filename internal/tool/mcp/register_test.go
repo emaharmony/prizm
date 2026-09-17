@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/tool"
+	"github.com/emaharmony/prizm/internal/tool"
 )
 
 type fakeInitClient struct {

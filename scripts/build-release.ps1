@@ -9,20 +9,20 @@ try {
         throw "invalid SemVer: $Version"
     }
 
-    $module = "github.com/emaharmony/prism"
+    $module = "github.com/emaharmony/prizm"
     $ldflags = "-s -w -X $module/internal/version.Version=$Version"
     $dist = Join-Path $root "dist"
     if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
     New-Item -ItemType Directory -Path $dist | Out-Null
 
     function Build-Archive([string]$GoOS, [string]$GoArch, [string]$Extension, [string]$Format) {
-        $package = "prism-$Version-$GoOS-$GoArch"
+        $package = "prizm-$Version-$GoOS-$GoArch"
         $stage = Join-Path $dist $package
         New-Item -ItemType Directory -Path $stage | Out-Null
         $previousOS, $previousArch, $previousCGO = $env:GOOS, $env:GOARCH, $env:CGO_ENABLED
         try {
             $env:GOOS, $env:GOARCH, $env:CGO_ENABLED = $GoOS, $GoArch, "0"
-            & go build -trimpath -ldflags $ldflags -o (Join-Path $stage "prism$Extension") ./cmd/prism-cli
+            & go build -trimpath -ldflags $ldflags -o (Join-Path $stage "prizm$Extension") ./cmd/prizm-cli
             if ($LASTEXITCODE -ne 0) { throw "build failed for $GoOS/$GoArch" }
         } finally {
             $env:GOOS, $env:GOARCH, $env:CGO_ENABLED = $previousOS, $previousArch, $previousCGO

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/bus"
-	v2 "github.com/emaharmony/prism/internal/workflow/v2"
+	"github.com/emaharmony/prizm/internal/bus"
+	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 	"github.com/nats-io/nats.go"
 )
 
@@ -19,8 +19,8 @@ import (
 // deterministic; no live model).
 func TestE2E_DelegationOverNATS(t *testing.T) {
 	const (
-		delegationSubject = "prism.agent.openclaw"
-		completionSubject = "prism.workflow.task.complete"
+		delegationSubject = "prizm.agent.openclaw"
+		completionSubject = "prizm.workflow.task.complete"
 	)
 
 	url, cleanup, err := bus.StartEmbeddedBus(0)

@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/emaharmony/prism/internal/codexworker"
-	"github.com/emaharmony/prism/internal/provider"
+	"github.com/emaharmony/prizm/internal/codexworker"
+	"github.com/emaharmony/prizm/internal/provider"
 )
 
 // CodexWorker runs the local Codex CLI inside the isolated worktree.
@@ -52,7 +52,7 @@ func (w *CodexWorker) Run(ctx context.Context, req WorkerRequest) (WorkerResult,
 	return res, err
 }
 
-// LocalAgentWorker asks a configured Prism model for a unified diff and applies it.
+// LocalAgentWorker asks a configured Prizm model for a unified diff and applies it.
 type LocalAgentWorker struct {
 	Provider provider.Provider
 	Model    string
@@ -76,7 +76,7 @@ func (w *LocalAgentWorker) Run(ctx context.Context, req WorkerRequest) (WorkerRe
 		Prompt:      prompt,
 		Model:       w.Model,
 		Agent:       w.AgentID,
-		Project:     "prism",
+		Project:     "prizm",
 		Task:        req.Description,
 		Temperature: 0.1,
 		MaxTokens:   4096,

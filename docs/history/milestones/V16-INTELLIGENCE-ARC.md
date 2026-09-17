@@ -6,22 +6,22 @@
 
 ## What Changed
 
-V16 enriches every Prism event with intelligent metadata — how long it took, what it cost, whether it succeeded, and what should happen next. Two new CLI commands (`prism cost` and `prism trace`) make this data immediately useful.
+V16 enriches every Prizm event with intelligent metadata — how long it took, what it cost, whether it succeeded, and what should happen next. Two new CLI commands (`prizm cost` and `prizm trace`) make this data immediately useful.
 
 ### New Features
 
 1. **Enriched EventMetadata** — `DurationMs`, `Outcome`, `TokenUsage` added to event metadata
 2. **Cost Tracking** — `internal/cost/` package tracks per-provider, per-model, per-agent token usage
 3. **Event Schema Validation** — `internal/event/schema.go` validates event payloads at ingestion
-4. **CLI: `prism cost`** — Aggregates and displays token usage and cost for a run
-5. **CLI: `prism trace`** — Reconstructs causal DAG from parent_id chains and prints human-readable trace
+4. **CLI: `prizm cost`** — Aggregates and displays token usage and cost for a run
+5. **CLI: `prizm trace`** — Reconstructs causal DAG from parent_id chains and prints human-readable trace
 
 ### New Event Types
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.cost.tracked` | Token usage recorded for an LLM call | `provider`, `model`, `prompt_tokens`, `completion_tokens`, `estimated_cost_usd` |
-| `prism.cost.reported` | Cost report generated for a run | `run_id`, `total_tokens`, `estimated_cost_usd` |
+| `prizm.cost.tracked` | Token usage recorded for an LLM call | `provider`, `model`, `prompt_tokens`, `completion_tokens`, `estimated_cost_usd` |
+| `prizm.cost.reported` | Cost report generated for a run | `run_id`, `total_tokens`, `estimated_cost_usd` |
 
 ### New Packages
 
@@ -32,8 +32,8 @@ V16 enriches every Prism event with intelligent metadata — how long it took, w
 
 ### New CLI Commands
 
-- `prism cost <run_id>` — Show token usage and cost report
-- `prism trace <run_id>` — Show event trace (causal DAG)
+- `prizm cost <run_id>` — Show token usage and cost report
+- `prizm trace <run_id>` — Show event trace (causal DAG)
 
 ### Design Decisions
 
@@ -41,7 +41,7 @@ V16 enriches every Prism event with intelligent metadata — how long it took, w
 - **Outcome is explicit** — Every event can carry `success`, `failure`, `timeout`, or `skipped`.
 - **TokenUsage replaces TokenCost** — `TokenCost` (int) is deprecated but not removed. Both serialize.
 - **Cost aggregation is event-driven** — `CostTracker` subscribes to LLM events. No polling.
-- **Trace is read-only** — `prism trace` reads `events.jsonl`. No new storage.
+- **Trace is read-only** — `prizm trace` reads `events.jsonl`. No new storage.
 - **Schema validation is opt-in** — Call `event.Validate(evt)` in development to catch bugs early.
 - **No new external dependencies** — Cost estimation uses hardcoded pricing tables.
 

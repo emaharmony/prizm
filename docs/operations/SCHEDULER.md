@@ -1,31 +1,31 @@
-# Scheduler — Cron Jobs in Prism
+# Scheduler — Cron Jobs in Prizm
 
-Prism has a built-in cron scheduler that runs inside `prism serve`. Each job
+Prizm has a built-in cron scheduler that runs inside `prizm serve`. Each job
 fires a NATS event on a cron schedule; the **wake handler** subscribes to those
 events and runs the mapped action (post a digest, run the gated loop, etc.).
 
 ```text
-prism.yaml scheduler job ──(cron fires)──▶ NATS event ──▶ wake handler ──▶ action
+prizm.yaml scheduler job ──(cron fires)──▶ NATS event ──▶ wake handler ──▶ action
 ```
 
 The scheduler ticks once per minute, aligned to the minute boundary. Config is
 read at startup, so **adding or changing a job requires restarting
-`prism serve`.**
+`prizm serve`.**
 
 ---
 
 ## Configuration
 
-Jobs live under `prism.scheduler` in `prism.yaml`:
+Jobs live under `prizm.scheduler` in `prizm.yaml`:
 
 ```yaml
-prism:
+prizm:
   scheduler:
     enabled: true          # master switch for all jobs
     jobs:
       - name: "status-report"          # unique, human-readable
         schedule: "0 */2 * * *"        # cron expression (see below)
-        event: "prism.task.scheduled"  # NATS subject the wake handler listens on
+        event: "prizm.task.scheduled"  # NATS subject the wake handler listens on
         payload:
           action: "status_report"      # which action to run
         enabled: true                  # per-job on/off
@@ -35,7 +35,7 @@ prism:
 |-------|---------|
 | `name` | Unique job name (shown in logs: `[SCHEDULER] fired job "…"`). |
 | `schedule` | 5-field cron expression (below). |
-| `event` | NATS subject to publish. Use `prism.task.scheduled` — that is what the wake handler subscribes to. |
+| `event` | NATS subject to publish. Use `prizm.task.scheduled` — that is what the wake handler subscribes to. |
 | `payload.action` | The action to run (see **Available actions**). |
 | `enabled` | `false` skips the job even when the scheduler is on. |
 
@@ -79,13 +79,13 @@ message (no LLM). **LLM** actions wake an agent with a prompt.
 | `memory_consolidation` | LLM | Weekly memory consolidation pass. |
 
 Action prompts and target channels are defined in `knownActions`
-(`cmd/prism-cli/wake_handler.go`).
+(`cmd/prizm-cli/wake_handler.go`).
 
 ---
 
 ## Edit cron jobs in the dashboard
 
-`prism serve` now hosts the dashboard on the API port (default
+`prizm serve` now hosts the dashboard on the API port (default
 `http://localhost:8322/`). Open **`/scheduler.html`** for a pleasant cron
 editor:
 
@@ -95,31 +95,31 @@ editor:
 - An **action dropdown** populated from the known wake actions, plus an
   **Advanced** expander per job for a custom action string, a custom event
   subject, and extra payload key/values.
-- **Save** writes `prism.yaml` **surgically** — your comments and every other
-  section are preserved. Changes apply after you **restart `prism serve`**
+- **Save** writes `prizm.yaml` **surgically** — your comments and every other
+  section are preserved. Changes apply after you **restart `prizm serve`**
   (the banner reminds you).
 
 The **`/config.html`** page does the same for common settings (instance, paths,
 feature toggles, autopatch, remembrance) and the workflow run-behavior knobs.
 
-The sections below describe the underlying `prism.yaml` format the UI edits.
+The sections below describe the underlying `prizm.yaml` format the UI edits.
 
 ## Add a job (by hand)
 
-1. Open `prism.yaml` → `prism.scheduler.jobs`.
+1. Open `prizm.yaml` → `prizm.scheduler.jobs`.
 2. Append an entry with a unique `name`, a `schedule`, `event:
-   "prism.task.scheduled"`, and `payload.action` set to a supported action.
+   "prizm.task.scheduled"`, and `payload.action` set to a supported action.
 3. Keep `enabled: true` (and make sure `scheduler.enabled: true`).
-4. Restart: `prism serve --config prism.yaml`.
-5. Confirm at startup: `[SCHEDULER] added job "<name>": event=prism.task.scheduled enabled=true`.
-   When it fires you'll see `[SCHEDULER] fired job "<name>" → prism.task.scheduled`.
+4. Restart: `prizm serve --config prizm.yaml`.
+5. Confirm at startup: `[SCHEDULER] added job "<name>": event=prizm.task.scheduled enabled=true`.
+   When it fires you'll see `[SCHEDULER] fired job "<name>" → prizm.task.scheduled`.
 
 Example — a weekday-morning PR summary:
 
 ```yaml
       - name: "morning-pr-check"
         schedule: "0 9 * * 1-5"
-        event: "prism.task.scheduled"
+        event: "prizm.task.scheduled"
         payload:
           action: "check_prs"
         enabled: true
@@ -141,7 +141,7 @@ Example — a weekday-morning PR summary:
 - Direct actions that post to Discord need a `channels:` entry for the target
   channel and a running bot; otherwise the result is only logged.
 - Custom `event` subjects require a matching subscriber. For scheduled actions,
-  always use `prism.task.scheduled`.
+  always use `prizm.task.scheduled`.
 
 ## See Also
 

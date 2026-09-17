@@ -11,7 +11,7 @@ import (
 )
 
 const sampleConfig = `# top comment
-prism:
+prizm:
   instance_id: "astraea"   # inline
   port: 8321
   scheduler:
@@ -31,7 +31,7 @@ remembrance:
 func newConfigTestServer(t *testing.T) (*Server, string) {
 	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "prism.yaml")
+	path := filepath.Join(dir, "prizm.yaml")
 	if err := os.WriteFile(path, []byte(sampleConfig), 0o644); err != nil {
 		t.Fatal(err)
 	}

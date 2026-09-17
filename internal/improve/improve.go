@@ -1,6 +1,6 @@
 // Package improve implements the V32 Self-Improvement Loop.
 //
-// The self-improvement loop observes Prism's own behavior and creates
+// The self-improvement loop observes Prizm's own behavior and creates
 // improvement proposals when it detects patterns:
 //   - Error pattern detection: same error 3+ times → create fix proposal
 //   - Process violation logging: skipped reviews, scope drift
@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/emaharmony/prism/internal/plan"
+	"github.com/emaharmony/prizm/internal/plan"
 )
 
 // ImprovementCategory classifies the type of improvement.

@@ -1,10 +1,11 @@
-/* Shared browser utilities for Prism's embedded operational dashboard. */
+/* Shared browser utilities for Prizm's embedded operational dashboard. */
 (function () {
   const API = '/api/v1';
   const labels = {
     '/index.html': 'Overview', '/': 'Overview', '/v2.html': 'Operations',
     '/usage.html': 'Usage', '/workflow-editor.html': 'Workflow', '/editor.html': 'Agents',
-    '/workspace.html': 'Workspace', '/scheduler.html': 'Scheduler', '/config.html': 'Settings'
+    '/workspace.html': 'Workspace', '/scheduler.html': 'Scheduler', '/config.html': 'Settings',
+    '/multiagent-runs.html': 'Multi-Agent Runs'
   };
 
   function escape(value) {
@@ -32,7 +33,7 @@
 
   function statusClass(status) {
     const value = String(status || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    if (/fail|deny|reject|error|cancel/.test(value)) return 'danger';
+    if (/fail|deny|reject|error|cancel|exhausted/.test(value)) return 'danger';
     if (/pending|wait|approval|pause|warn|validat/.test(value)) return 'warning';
     if (/run|progress|active|assigned|created|queue/.test(value)) return 'info';
     if (/complete|success|healthy|running|approved|ok/.test(value)) return 'success';
@@ -70,7 +71,7 @@
   }
 
   function setShellHealth(text, healthy) {
-    const target = document.querySelector('[data-prism-health]');
+    const target = document.querySelector('[data-prizm-health]');
     if (!target) return;
     target.textContent = text;
     target.dataset.state = healthy ? 'healthy' : 'offline';
@@ -83,12 +84,12 @@
     nav.setAttribute('aria-label', 'Primary navigation');
     nav.innerHTML = `
       <a class="skip-link" href="#main-content">Skip to content</a>
-      <a class="brand" href="/index.html" aria-label="Prism overview"><span aria-hidden="true">◆</span> Prism</a>
+      <a class="brand" href="/index.html" aria-label="Prizm overview"><span aria-hidden="true">◆</span> Prizm</a>
       <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav">Menu</button>
       <div class="nav-links" id="primary-nav">
         ${Object.entries(labels).filter(([href]) => href !== '/').map(([href, label]) => `<a href="${href}" ${path === href ? 'aria-current="page"' : ''}>${label}</a>`).join('')}
       </div>
-      <span class="shell-health" role="status" aria-live="polite" data-prism-health data-state="loading">Checking service…</span>`;
+      <span class="shell-health" role="status" aria-live="polite" data-prizm-health data-state="loading">Checking service…</span>`;
     const toggle = nav.querySelector('.nav-toggle');
     toggle.addEventListener('click', () => {
       const open = nav.classList.toggle('nav-open');
@@ -99,5 +100,5 @@
   }
 
   document.addEventListener('DOMContentLoaded', initShell);
-  window.PrismUI = { API, request, escape, formatTime, relativeTime, statusClass, badge };
+  window.PrizmUI = { API, request, escape, formatTime, relativeTime, statusClass, badge };
 }());

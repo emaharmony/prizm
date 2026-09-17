@@ -18,9 +18,9 @@ type NATSPublisher struct {
 }
 
 // NewNATSPublisher connects to NATS and returns a publisher.
-// Uses the same connection pattern as the rest of Prism (nats.Connect with Name option).
+// Uses the same connection pattern as the rest of Prizm (nats.Connect with Name option).
 func NewNATSPublisher(natsURL string) (*NATSPublisher, error) {
-	nc, err := nats.Connect(natsURL, nats.Name("prism-workflow-publisher"))
+	nc, err := nats.Connect(natsURL, nats.Name("prizm-workflow-publisher"))
 	if err != nil {
 		return nil, fmt.Errorf("nats connect for publisher: %w", err)
 	}
@@ -46,7 +46,7 @@ func (p *NATSPublisher) Close() {
 }
 
 // PublishTaskPacket marshals and publishes a task delegation packet to the given subject.
-// This is used by the DelegationManager to send tasks to agents (e.g., prism.agent.openclaw).
+// This is used by the DelegationManager to send tasks to agents (e.g., prizm.agent.openclaw).
 func (p *NATSPublisher) PublishTaskPacket(subject string, packet TaskPacket) error {
 	if p.conn == nil {
 		return fmt.Errorf("NATS not connected")
@@ -144,7 +144,7 @@ type NATSListener struct {
 
 // NewNATSListener connects to NATS and returns a listener.
 func NewNATSListener(natsURL string) (*NATSListener, error) {
-	nc, err := nats.Connect(natsURL, nats.Name("prism-workflow-listener"))
+	nc, err := nats.Connect(natsURL, nats.Name("prizm-workflow-listener"))
 	if err != nil {
 		return nil, fmt.Errorf("nats connect for listener: %w", err)
 	}
@@ -177,9 +177,9 @@ func (l *NATSListener) Close() {
 // incoming events into the engine's external event channel.
 //
 // Subscribed subjects:
-//   - prism.workflow.feedback.response — approval/review responses
-//   - prism.workflow.task.complete — task completion notifications
-//   - prism.agent.status — agent availability updates
+//   - prizm.workflow.feedback.response — approval/review responses
+//   - prizm.workflow.task.complete — task completion notifications
+//   - prizm.agent.status — agent availability updates
 func (l *NATSListener) Listen(engine *Engine) error {
 	if l.conn == nil {
 		return fmt.Errorf("NATS not connected")
@@ -191,7 +191,7 @@ func (l *NATSListener) Listen(engine *Engine) error {
 	eventCh := engine.GetExternalEventChannel()
 
 	// Subscribe to feedback responses (approval/review)
-	sub, err := l.conn.Subscribe("prism.workflow.feedback.response", func(msg *nats.Msg) {
+	sub, err := l.conn.Subscribe("prizm.workflow.feedback.response", func(msg *nats.Msg) {
 		var payload map[string]any
 		if err := json.Unmarshal(msg.Data, &payload); err != nil {
 			log.Printf("[NATS-LISTEN] failed to parse feedback response: %v", err)
@@ -229,13 +229,13 @@ func (l *NATSListener) Listen(engine *Engine) error {
 		}
 	})
 	if err != nil {
-		return fmt.Errorf("subscribe to prism.workflow.feedback.response: %w", err)
+		return fmt.Errorf("subscribe to prizm.workflow.feedback.response: %w", err)
 	}
 	l.subs = append(l.subs, sub)
-	log.Printf("[NATS-LISTEN] subscribed to prism.workflow.feedback.response")
+	log.Printf("[NATS-LISTEN] subscribed to prizm.workflow.feedback.response")
 
 	// Subscribe to task completion notifications
-	sub, err = l.conn.Subscribe("prism.workflow.task.complete", func(msg *nats.Msg) {
+	sub, err = l.conn.Subscribe("prizm.workflow.task.complete", func(msg *nats.Msg) {
 		var completion TaskCompletion
 		if err := json.Unmarshal(msg.Data, &completion); err != nil {
 			log.Printf("[NATS-LISTEN] failed to parse task completion: %v", err)
@@ -267,13 +267,13 @@ func (l *NATSListener) Listen(engine *Engine) error {
 		}
 	})
 	if err != nil {
-		return fmt.Errorf("subscribe to prism.workflow.task.complete: %w", err)
+		return fmt.Errorf("subscribe to prizm.workflow.task.complete: %w", err)
 	}
 	l.subs = append(l.subs, sub)
-	log.Printf("[NATS-LISTEN] subscribed to prism.workflow.task.complete")
+	log.Printf("[NATS-LISTEN] subscribed to prizm.workflow.task.complete")
 
 	// Subscribe to agent status updates
-	sub, err = l.conn.Subscribe("prism.agent.status", func(msg *nats.Msg) {
+	sub, err = l.conn.Subscribe("prizm.agent.status", func(msg *nats.Msg) {
 		var payload map[string]any
 		if err := json.Unmarshal(msg.Data, &payload); err != nil {
 			log.Printf("[NATS-LISTEN] failed to parse agent status: %v", err)
@@ -303,10 +303,10 @@ func (l *NATSListener) Listen(engine *Engine) error {
 		}
 	})
 	if err != nil {
-		return fmt.Errorf("subscribe to prism.agent.status: %w", err)
+		return fmt.Errorf("subscribe to prizm.agent.status: %w", err)
 	}
 	l.subs = append(l.subs, sub)
-	log.Printf("[NATS-LISTEN] subscribed to prism.agent.status")
+	log.Printf("[NATS-LISTEN] subscribed to prizm.agent.status")
 
 	return nil
 }

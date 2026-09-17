@@ -1,12 +1,12 @@
 """
-Prism Minimal Example — SDK only, no channel adapters.
+Prizm Minimal Example — SDK only, no channel adapters.
 
-Starts the Prism bus (Go binary), connects, publishes test events,
+Starts the Prizm bus (Go binary), connects, publishes test events,
 and demonstrates event chains.
 
 Usage:
     # Terminal 1: Start the bus
-    cd /path/to/prism && ./prism-bus
+    cd /path/to/prizm && ./prizm-bus
 
     # Terminal 2: Run this example
     cd sdk && python -m examples.minimal
@@ -15,38 +15,38 @@ Usage:
 import asyncio
 import logging
 
-import prism
+import prizm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 logger = logging.getLogger("minimal")
 
 
 async def main():
-    # Connect to the Prism bus
-    await prism.connect(name="minimal-example")
-    logger.info("Connected to Prism bus!")
+    # Connect to the Prizm bus
+    await prizm.connect(name="minimal-example")
+    logger.info("Connected to Prizm bus!")
 
     # Subscribe to all agent events
-    @prism.on("prism.agent.*")
+    @prizm.on("prizm.agent.*")
     async def log_agent_events(event):
         logger.info(f"🧠 Agent event: {event.type} from {event.source} "
                      f"| payload: {event.payload}")
 
     # Subscribe to memory events
-    @prism.on("prism.memory.*")
+    @prizm.on("prizm.memory.*")
     async def log_memory_events(event):
         logger.info(f"📝 Memory event: {event.type} | {event.payload}")
 
     # Define a simple agent
-    @prism.agent(name="greeter", subscribes=["prism.channel.received.*"])
+    @prizm.agent(name="greeter", subscribes=["prizm.channel.received.*"])
     async def greeter(event):
         """Simple agent that greets people."""
         sender = event.payload.get("sender_name", "unknown")
         text = event.payload.get("text", "")
 
         # Make a decision
-        await prism.emit(
-            "prism.agent.decision",
+        await prizm.emit(
+            "prizm.agent.decision",
             {
                 "action": "greet",
                 "confidence": 0.95,
@@ -58,8 +58,8 @@ async def main():
         )
 
         # Store memory
-        await prism.emit(
-            "prism.memory.stored",
+        await prizm.emit(
+            "prizm.memory.stored",
             {
                 "category": "interaction",
                 "tier": "session",
@@ -75,21 +75,21 @@ async def main():
     correlation_id = "test-001"
 
     # Simulate a Discord message arriving
-    await prism.emit(
-        "prism.channel.received.discord",
+    await prizm.emit(
+        "prizm.channel.received.discord",
         {
             "channel": "discord",
             "channel_id": "123456789",
             "sender_name": "Ema",
-            "text": "Hello Prism!",
+            "text": "Hello Prizm!",
         },
         source="test",
         correlation_id=correlation_id,
     )
 
     # Simulate a Telegram message arriving
-    await prism.emit(
-        "prism.channel.received.telegram",
+    await prizm.emit(
+        "prizm.channel.received.telegram",
         {
             "channel": "telegram",
             "chat_id": "987654321",
@@ -106,7 +106,7 @@ async def main():
     logger.info("Press Ctrl+C to stop.")
 
     # Subscribe handlers and run
-    await prism.run()
+    await prizm.run()
 
 
 if __name__ == "__main__":

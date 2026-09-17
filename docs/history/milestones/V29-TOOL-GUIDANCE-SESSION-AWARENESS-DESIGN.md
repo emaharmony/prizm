@@ -38,8 +38,8 @@ Serve and chat paths share a `toolUsageGuidance` block so native and text tool p
 No new user command was added. The behavior is visible through better tool calls in:
 
 ```bash
-prism serve --config prism.yaml
-prism chat --config prism.yaml
+prizm serve --config prizm.yaml
+prizm chat --config prizm.yaml
 ```
 
 ## Testing

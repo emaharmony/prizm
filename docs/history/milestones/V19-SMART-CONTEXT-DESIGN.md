@@ -5,7 +5,7 @@
 
 ## Mission
 
-Prism can now inject OpenClaw workspace context into LLM prompts — personality, rules, project docs — without manual file duplication. Smart selection, token budgeting, and observability built in.
+Prizm can now inject OpenClaw workspace context into LLM prompts — personality, rules, project docs — without manual file duplication. Smart selection, token budgeting, and observability built in.
 
 ## What Changed
 
@@ -61,32 +61,32 @@ Connection → Context → Remembrance → LLM → Tool → Approval → Validat
 ```
 
 Emits two events per run:
-- `prism.context.file_read` — per file (file, size, tokens)
-- `prism.context.injected` — aggregate (files, total tokens, truncation, hash)
+- `prizm.context.file_read` — per file (file, size, tokens)
+- `prizm.context.injected` — aggregate (files, total tokens, truncation, hash)
 
 ### 6. CLI Commands
 
 ```bash
 # Preview what would be injected
-prism context show --context soul,agents --workspace-root ~/.openclaw/workspace
+prizm context show --context soul,agents --workspace-root ~/.openclaw/workspace
 
 # With auto-discovery
-prism context show --context soul,agents --auto --task "fix the approval engine"
+prizm context show --context soul,agents --auto --task "fix the approval engine"
 
 # With token budget
-prism context show --context soul,agents --budget 4000
+prizm context show --context soul,agents --budget 4000
 ```
 
 ### 7. V19 Event Types
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.context.file_read` | Workspace file read for context | `file`, `source`, `size_bytes`, `estimated_tokens` |
-| `prism.context.injected` | Context injection complete | `run_id`, `files`, `total_tokens`, `truncated`, `truncation_applied` |
+| `prizm.context.file_read` | Workspace file read for context | `file`, `source`, `size_bytes`, `estimated_tokens` |
+| `prizm.context.injected` | Context injection complete | `run_id`, `files`, `total_tokens`, `truncated`, `truncation_applied` |
 
 ### 8. Content Hash (Safety Net)
 
-Every context injection computes a SHA-256 hash of the raw concatenated files. Stored in `prism.context.injected` event for traceability. If the hash differs from a cached version, it's flagged in the trace — observability without blocking.
+Every context injection computes a SHA-256 hash of the raw concatenated files. Stored in `prizm.context.injected` event for traceability. If the hash differs from a cached version, it's flagged in the trace — observability without blocking.
 
 ## Design Decisions
 
@@ -96,7 +96,7 @@ Every context injection computes a SHA-256 hash of the raw concatenated files. S
 4. **Selectivity is the biggest win** — `--context soul,agents` cuts tokens ~45% by not reading files you don't need.
 5. **Auto-discovery is deterministic** — keyword matching, not embeddings. No LLM calls needed.
 6. **Content hash for observability** — SHA-256 of raw content in events, not a compilation diff gate.
-7. **Read-only** — Prism never writes to the workspace. Zero trust boundary violation.
+7. **Read-only** — Prizm never writes to the workspace. Zero trust boundary violation.
 
 ## Packages
 
@@ -104,8 +104,8 @@ Every context injection computes a SHA-256 hash of the raw concatenated files. S
 |---------|---------|-------|
 | `internal/context/` | Context builder, selection, budgeting, formatting | `builder.go`, `builder_test.go` |
 | `internal/stage/context.go` | Pipeline stage: read → budget → inject → emit events | New |
-| `cmd/prism-cli/cmd_context.go` | `prism context show` CLI command | New |
-| `cmd/prism-cli/main.go` | `--context`, `--context-auto`, `--context-file`, `--workspace-root` flags | Modified |
+| `cmd/prizm-cli/cmd_context.go` | `prizm context show` CLI command | New |
+| `cmd/prizm-cli/main.go` | `--context`, `--context-auto`, `--context-file`, `--workspace-root` flags | Modified |
 | `internal/event/event.go` | V19 event types | Modified |
 | `internal/event/schema.go` | V19 schema validation | Modified |
 
@@ -127,5 +127,5 @@ Every context injection computes a SHA-256 hash of the raw concatenated files. S
 - **Compilation/compression** — Deferred to V20. Raw caching + selectivity gives ~45% token savings with zero risk.
 - **RAG retrieval** — Deferred to V20. Uses V17 HNSW infrastructure.
 - **Frontmatter parsing** — Raw markdown injection is safe and lossless.
-- **Write-back to workspace** — Out of scope. Prism reads, never writes.
+- **Write-back to workspace** — Out of scope. Prizm reads, never writes.
 - **Remembrance composition** — Workspace context and memory context are separate stages; they compose naturally.

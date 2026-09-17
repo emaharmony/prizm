@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  prism:
+  prizm:
     build: .
     ports:
       - "8080:8080"
@@ -9,9 +9,9 @@ services:
       - ./runs:/app/runs
       - ./policies:/app/policies
     environment:
-      - PRISM_PORT=8080
-      - PRISM_RUN_DIR=/app/runs
-      - PRISM_POLICY_DIR=/app/policies
+      - PRIZM_PORT=8080
+      - PRIZM_RUN_DIR=/app/runs
+      - PRIZM_POLICY_DIR=/app/policies
     # For embedded NATS (no external NATS needed):
     # command: ["dashboard", "--embedded-bus"]
     command: ["dashboard"]

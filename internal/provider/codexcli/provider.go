@@ -1,11 +1,11 @@
-// Package codexcli adapts the Codex CLI (`codex exec`) into a Prism
+// Package codexcli adapts the Codex CLI (`codex exec`) into a Prizm
 // provider.Provider so a Codex subscription can drive an agent — the same seam
 // Ollama/OpenAI/Anthropic/claude_code plug into.
 //
 // Like internal/provider/claudecode, this shells out to the local `codex`
 // binary (subscription auth, no API key) rather than calling a paid HTTP API.
 // It runs `codex exec` in a read-only sandbox with approvals disabled so the
-// model only reads/reasons and emits its answer as text — Prism keeps owning
+// model only reads/reasons and emits its answer as text — Prizm keeps owning
 // tool execution, gates, and policy. It reuses the same subprocess pattern as
 // internal/codexworker but is a general text provider (not task/diff oriented).
 package codexcli
@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/provider"
+	"github.com/emaharmony/prizm/internal/provider"
 )
 
 const DefaultTimeoutMinutes = 10
@@ -80,7 +80,7 @@ func Normalize(cfg Config) Config {
 	}
 	if cfg.Sandbox == "" {
 		// A text-only provider should not mutate the workspace; read-only keeps
-		// Codex reasoning-only while Prism owns any tool execution.
+		// Codex reasoning-only while Prizm owns any tool execution.
 		cfg.Sandbox = "read-only"
 	}
 	if cfg.ApprovalPolicy == "" {

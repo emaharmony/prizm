@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/adapter"
+	"github.com/emaharmony/prizm/internal/adapter"
 )
 
 func TestDiscordAdapter_Name(t *testing.T) {
@@ -83,7 +83,7 @@ func TestDiscordAdapter_PostMessage(t *testing.T) {
 
 	d := NewWithClient(server.URL, server.Client())
 	result, err := d.Execute(context.Background(), "post_message", map[string]any{
-		"content": "Hello from Prism!",
+		"content": "Hello from Prizm!",
 	})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -91,8 +91,8 @@ func TestDiscordAdapter_PostMessage(t *testing.T) {
 	if result.Output["sent"] != true {
 		t.Error("post_message should return sent=true")
 	}
-	if receivedPayload.Content != "Hello from Prism!" {
-		t.Errorf("Content = %q, want Hello from Prism!", receivedPayload.Content)
+	if receivedPayload.Content != "Hello from Prizm!" {
+		t.Errorf("Content = %q, want Hello from Prizm!", receivedPayload.Content)
 	}
 }
 
@@ -109,7 +109,7 @@ func TestDiscordAdapter_PostRunSummary(t *testing.T) {
 		"run_id":      "run_abc123",
 		"status":      "completed",
 		"agent":       "lumi",
-		"project":     "prism",
+		"project":     "prizm",
 		"task":        "Implement V14e",
 		"duration_ms": 15000,
 	})
@@ -144,7 +144,7 @@ func TestDiscordAdapter_PostRunSummary_Failed(t *testing.T) {
 		"run_id":      "run_fail",
 		"status":      "failed",
 		"agent":       "lumi",
-		"project":     "prism",
+		"project":     "prizm",
 		"task":        "Fix the bug",
 		"duration_ms": 5000,
 	})

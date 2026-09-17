@@ -1,4 +1,4 @@
-// Package validation provides command safety checks for Prism V5's validation pipeline.
+// Package validation provides command safety checks for Prizm V5's validation pipeline.
 //
 // IsSafeCommandString inspects a command string and rejects anything that could be used
 // for shell injection or privilege escalation. This is the security layer that ensures

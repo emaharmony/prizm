@@ -1,4 +1,4 @@
-# V43 — `prism preview`: Static Gated-Loop Preview
+# V43 — `prizm preview`: Static Gated-Loop Preview
 
 **Status:** Source-current
 **Last Updated:** 2026-06-29
@@ -16,11 +16,11 @@ change to the hardened core.
 ## Design
 
 ```
-prism preview [--config prism.yaml] [--workflow <file>]
+prizm preview [--config prizm.yaml] [--workflow <file>]
 ```
 
 `resolvePreviewConfig` picks the effective config: an explicit `--workflow` file
-wins; otherwise the project's `prism.workflow_config`; otherwise the built-in
+wins; otherwise the project's `prizm.workflow_config`; otherwise the built-in
 `DefaultConfig` (so it works with zero setup). `renderWorkflowPreview` (pure, I/O
 free) formats it:
 
@@ -37,7 +37,7 @@ starts no work — a read-only explainer.
 
 ## Tests
 
-`cmd/prism-cli/cmd_preview_test.go`: the default config renders all sections
+`cmd/prizm-cli/cmd_preview_test.go`: the default config renders all sections
 (budgets, phases, verification, confidence domains, the "no LLM ran" footer); gate
 types and blocking flags appear; `resolvePreviewConfig` falls back to the built-in
 default when no config exists and errors on a missing explicit `--workflow` file.

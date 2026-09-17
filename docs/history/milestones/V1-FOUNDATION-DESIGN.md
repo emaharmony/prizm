@@ -2,18 +2,18 @@
 
 ## Mission
 
-Prism V1 establishes the foundational architecture: an event-driven agent runtime
+Prizm V1 establishes the foundational architecture: an event-driven agent runtime
 with a shared event schema, NATS-powered bus, deterministic placeholder agent,
 and a semantic memory system (Remembrance) for context injection.
 
-Every action in Prism is an event. The event schema is canonical — all components
+Every action in Prizm is an event. The event schema is canonical — all components
 share a single definition. The bus routes events; agents react.
 
 ## What Changed
 
-### Prism CLI (`cmd/prism-cli`)
-- `prism run` command orchestrates full agent lifecycle
-- `prism health` for system health checks
+### Prizm CLI (`cmd/prizm-cli`)
+- `prizm run` command orchestrates full agent lifecycle
+- `prizm health` for system health checks
 - CLI flags: `--task`, `--project`, `--agent`, `--bus-url`, `--memory-enabled`,
   `--require-memory`, `--memory-url`, `--run-dir`
 - Event persistence: `runs/<run_id>/events.jsonl` + `summary.json`
@@ -37,11 +37,11 @@ share a single definition. The bus routes events; agents react.
 - Deterministic, always-succeeds agent for testing
 - Stub for real LLM providers planned in V2
 
-### Agent Runtime (`cmd/prism-agent`)
+### Agent Runtime (`cmd/prizm-agent`)
 - Separate binary that subscribes to events via NATS
 - Decoupled from the CLI — agents react to events independently
 
-### Event Bus (`cmd/prism-bus`)
+### Event Bus (`cmd/prizm-bus`)
 - Embedded NATS JetStream for event routing
 - All components share the same event schema
 
@@ -55,7 +55,7 @@ share a single definition. The bus routes events; agents react.
 - Context formatter: markdown + JSON output, token budget
 - FastAPI REST endpoints: `/v1/memory/ingest`, `search`, `context/build`
 - CLI: `init`, `ingest`, `search`, `build-context`, `list`
-- Go client interface (`RemembranceClient`) for Prism integration
+- Go client interface (`RemembranceClient`) for Prizm integration
 - 15 seed memories covering architecture decisions
 - Full audit logging on all mutations
 - Stack: Python 3.11+, Pydantic, FastAPI, LanceDB, SQLite, Ollama
@@ -64,9 +64,9 @@ share a single definition. The bus routes events; agents react.
 
 | Package / File | Purpose |
 |---|---|
-| `cmd/prism-cli/main.go` | CLI entry point, `prism run` command |
-| `cmd/prism-bus/main.go` | NATS JetStream event bus |
-| `cmd/prism-agent/main.go` | Agent subscriber binary |
+| `cmd/prizm-cli/main.go` | CLI entry point, `prizm run` command |
+| `cmd/prizm-bus/main.go` | NATS JetStream event bus |
+| `cmd/prizm-agent/main.go` | Agent subscriber binary |
 | `internal/event/event.go` | Canonical event schema + 15 V1 types |
 | `internal/run/runner.go` | Full lifecycle orchestrator |
 | `internal/agent/placeholder.go` | Deterministic test agent |
@@ -85,12 +85,12 @@ share a single definition. The bus routes events; agents react.
 3. **Parent/propagation** — Every event has a parent ID and correlation ID. The causal
    chain is reconstructible from the event log alone.
 
-4. **Memory is optional but integrated** — Remembrance is a separate service that Prism
-   calls over HTTP. If unavailable, Prism degrades gracefully (unless `--require-memory`
+4. **Memory is optional but integrated** — Remembrance is a separate service that Prizm
+   calls over HTTP. If unavailable, Prizm degrades gracefully (unless `--require-memory`
    is set). The memory system is framework-agnostic with pluggable embedding providers.
 
 5. **Python for memory, Go for runtime** — Remembrance is Python for the rich ML/AI
-   ecosystem (LanceDB, Ollama embeddings). Prism runtime is Go for performance,
+   ecosystem (LanceDB, Ollama embeddings). Prizm runtime is Go for performance,
    concurrency, and single-binary deployment.
 
 6. **Hybrid ranking over pure vector** — Pure vector search misses keyword matches
@@ -132,7 +132,7 @@ runs/<run_id>/
 ## Remembrance Architecture
 
 ```
-Prism Runner
+Prizm Runner
   → RemembranceClient.GetContext(task, project, agent)
     → HTTP POST /v1/context/build
       → MemorySearcher (vector search in LanceDB)

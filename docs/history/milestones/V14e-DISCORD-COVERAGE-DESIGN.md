@@ -2,12 +2,12 @@
 
 ## Mission
 
-Raise all Prism scores to ≥8.5. Current gaps:
+Raise all Prizm scores to ≥8.5. Current gaps:
 - **Scalability: 6.5** — low test coverage (49%), no concurrent run support
 - **Usefulness: 8.0** — needs Discord adapter to prove multi-domain
 
 V14e fills both gaps with comprehensive test coverage and a Discord adapter
-that proves Prism works beyond the CLI.
+that proves Prizm works beyond the CLI.
 
 ## What V14e Builds
 
@@ -48,9 +48,9 @@ Test the god object's critical paths:
 
 ### 5. Discord Adapter (`internal/adapter/builtin/discord/`)
 
-Prism's second real adapter. Posts run results to Discord channels.
+Prizm's second real adapter. Posts run results to Discord channels.
 
-When `prism.run.completed` fires, the Discord adapter posts a rich embed
+When `prizm.run.completed` fires, the Discord adapter posts a rich embed
 with the run summary, status, and duration.
 
 ```go
@@ -127,7 +127,7 @@ internal/
 │   ├── lock.go             # Existing (V14d)
 │   ├── lock_test.go        # Existing (V14d)
 │   └── concurrent.go      # NEW: RunPool for concurrent execution
-cmd/prism-cli/
+cmd/prizm-cli/
 └── cmd_run.go              # Updated: --max-concurrent, --webhook-url flags
 ```
 

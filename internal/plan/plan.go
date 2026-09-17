@@ -60,6 +60,31 @@ const (
 	ApprovalCritical ApprovalLevel = "critical"
 )
 
+// StepStatus represents the status of a single step within a plan.
+type StepStatus string
+
+const (
+	// StepPending means the step hasn't been started yet.
+	StepPending StepStatus = "pending"
+	// StepInProgress means the step is currently being worked on.
+	StepInProgress StepStatus = "in_progress"
+	// StepCompleted means the step is done.
+	StepCompleted StepStatus = "completed"
+	// StepBlocked means the step is blocked by something.
+	StepBlocked StepStatus = "blocked"
+	// StepSkipped means the step was skipped.
+	StepSkipped StepStatus = "skipped"
+)
+
+// Step represents a single checklist item within a plan.
+type Step struct {
+	ID          string     `json:"id"`          // Step identifier (e.g., "S1", "S2")
+	Title       string     `json:"title"`       // What this step does
+	Status      StepStatus `json:"status"`      // Current status
+	Notes       string     `json:"notes"`       // Optional notes or context
+	CompletedAt *time.Time `json:"completed_at"` // When completed
+}
+
 // Plan represents a task plan with scope, deliverables, and approval status.
 type Plan struct {
 	ID            string        `json:"id"`             // Unique ID (e.g., "P-011")
@@ -67,6 +92,7 @@ type Plan struct {
 	Description   string        `json:"description"`    // Full description of what we're doing
 	Reasoning     string        `json:"reasoning"`      // Why we're doing it
 	Scope         string        `json:"scope"`          // What's explicitly OUT of scope
+	Steps         []Step        `json:"steps"`          // Ordered checklist of steps
 	Deliverables  []string      `json:"deliverables"`   // Expected outputs
 	ApprovalLevel ApprovalLevel `json:"approval_level"` // What level of approval is needed
 	Status        PlanStatus    `json:"status"`         // Current status
@@ -77,6 +103,7 @@ type Plan struct {
 	CompletedAt   *time.Time    `json:"completed_at"` // When completed
 	Branch        string        `json:"branch"`       // Git branch
 	PR            string        `json:"pr"`           // PR number
+	Notified      bool          `json:"notified"`     // Whether approval buttons were sent to Discord
 }
 
 // HasPlan checks if an active (non-completed, non-abandoned) plan exists.
@@ -337,15 +364,154 @@ func (m *Manager) savePlansLocked(plans []Plan) error {
 	return os.WriteFile(filepath.Join(m.stateDir, "plans.json"), data, 0644)
 }
 
+// StepProgress returns completed/total for the plan's steps.
+func StepProgress(plan *Plan) (completed, total int) {
+	if plan == nil {
+		return 0, 0
+	}
+	for _, s := range plan.Steps {
+		total++
+		if s.Status == StepCompleted {
+			completed++
+		}
+	}
+	return
+}
+
+// UpdatePlan updates specific fields of a plan. Only non-empty fields are updated.
+func (m *Manager) UpdatePlan(id string, updates map[string]any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	plans, err := m.loadPlansLocked()
+	if err != nil {
+		return err
+	}
+
+	for i := range plans {
+		if plans[i].ID == id {
+			if title, ok := updates["title"].(string); ok && title != "" {
+				plans[i].Title = title
+			}
+			if desc, ok := updates["description"].(string); ok {
+				plans[i].Description = desc
+			}
+			if reasoning, ok := updates["reasoning"].(string); ok {
+				plans[i].Reasoning = reasoning
+			}
+			if scope, ok := updates["scope"].(string); ok {
+				plans[i].Scope = scope
+			}
+			if branch, ok := updates["branch"].(string); ok {
+				plans[i].Branch = branch
+			}
+			if pr, ok := updates["pr"].(string); ok {
+				plans[i].PR = pr
+			}
+			if notified, ok := updates["notified"].(bool); ok {
+				plans[i].Notified = notified
+			}
+			plans[i].UpdatedAt = time.Now()
+			return m.savePlansLocked(plans)
+		}
+	}
+
+	return fmt.Errorf("plan %s not found", id)
+}
+
+// UpdateStepStatus updates the status of a specific step within a plan.
+func (m *Manager) UpdateStepStatus(planID, stepID string, status StepStatus, notes string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	plans, err := m.loadPlansLocked()
+	if err != nil {
+		return err
+	}
+
+	for i := range plans {
+		if plans[i].ID != planID {
+			continue
+		}
+		for j := range plans[i].Steps {
+			if plans[i].Steps[j].ID == stepID {
+				plans[i].Steps[j].Status = status
+				if notes != "" {
+					plans[i].Steps[j].Notes = notes
+				}
+				if status == StepCompleted {
+					now := time.Now()
+					plans[i].Steps[j].CompletedAt = &now
+				}
+				plans[i].UpdatedAt = time.Now()
+				return m.savePlansLocked(plans)
+			}
+		}
+		return fmt.Errorf("step %s not found in plan %s", stepID, planID)
+	}
+
+	return fmt.Errorf("plan %s not found", planID)
+}
+
+// AddStep adds a new step to a plan.
+func (m *Manager) AddStep(planID, title string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	plans, err := m.loadPlansLocked()
+	if err != nil {
+		return err
+	}
+
+	for i := range plans {
+		if plans[i].ID == planID {
+			stepNum := len(plans[i].Steps) + 1
+			plans[i].Steps = append(plans[i].Steps, Step{
+				ID:     fmt.Sprintf("S%d", stepNum),
+				Title:  title,
+				Status: StepPending,
+			})
+			plans[i].UpdatedAt = time.Now()
+			return m.savePlansLocked(plans)
+		}
+	}
+
+	return fmt.Errorf("plan %s not found", planID)
+}
+
+// ReopenPlan marks a completed or abandoned plan as in-progress (auto_proceed).
+func (m *Manager) ReopenPlan(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	plans, err := m.loadPlansLocked()
+	if err != nil {
+		return err
+	}
+
+	for i := range plans {
+		if plans[i].ID == id {
+			plans[i].Status = StatusAutoProceed
+			plans[i].CompletedAt = nil
+			plans[i].UpdatedAt = time.Now()
+			return m.savePlansLocked(plans)
+		}
+	}
+
+	return fmt.Errorf("plan %s not found", id)
+}
+
 // FormatPlanForPrompt formats a plan for LLM injection.
 func FormatPlanForPrompt(plan *Plan) string {
 	if plan == nil {
 		return "No active plan."
 	}
+	completed, total := StepProgress(plan)
 	result := fmt.Sprintf("## Active Plan: %s\n", plan.Title)
 	result += fmt.Sprintf("- **ID:** %s\n", plan.ID)
 	result += fmt.Sprintf("- **Status:** %s\n", plan.Status)
 	result += fmt.Sprintf("- **Approval:** %s\n", plan.ApprovalLevel)
+	result += fmt.Sprintf("- **Progress:** %d/%d steps completed\n", completed, total)
 	if plan.Description != "" {
 		result += fmt.Sprintf("- **Description:** %s\n", plan.Description)
 	}
@@ -359,6 +525,26 @@ func FormatPlanForPrompt(plan *Plan) string {
 		result += "- **Deliverables:**\n"
 		for _, d := range plan.Deliverables {
 			result += fmt.Sprintf("  - %s\n", d)
+		}
+	}
+	if len(plan.Steps) > 0 {
+		result += "- **Checklist:**\n"
+		for _, s := range plan.Steps {
+			check := "[ ]"
+			if s.Status == StepCompleted {
+				check = "[x]"
+			} else if s.Status == StepInProgress {
+				check = "[~]"
+			} else if s.Status == StepBlocked {
+				check = "[!]"
+			} else if s.Status == StepSkipped {
+				check = "[-]"
+			}
+			line := fmt.Sprintf("  %s %s: %s", check, s.ID, s.Title)
+			if s.Notes != "" {
+				line += fmt.Sprintf(" (%s)", s.Notes)
+			}
+			result += line + "\n"
 		}
 	}
 	if plan.Branch != "" {

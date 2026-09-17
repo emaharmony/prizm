@@ -44,10 +44,10 @@ default shells out to git + `gh`).
   evidence + attribution) build a reviewer-friendly PR.
 - `Service.maybeOpenPR`: invoked only in `pr` mode after validations pass. On
   success → `Status = pr_opened`, `result.PRURL`/`Branch` set, emits
-  `prism.autopatch.pr_opened`. **On PR failure the validated patch is preserved**
+  `prizm.autopatch.pr_opened`. **On PR failure the validated patch is preserved**
   (status stays `proposed`, error recorded) — good work is never discarded.
-- Config: `autopatch.mode: "pr"` + `autopatch.base_branch` in `prism.yaml`,
-  wired through `cmd/prism-cli/autopatch.go`. `NormalizeConfig` installs the
+- Config: `autopatch.mode: "pr"` + `autopatch.base_branch` in `prizm.yaml`,
+  wired through `cmd/prizm-cli/autopatch.go`. `NormalizeConfig` installs the
   default `ghPROpener` when mode is `pr`.
 
 The default `propose` mode is unchanged, so this is fully backward-compatible.
@@ -92,13 +92,13 @@ highest-severity one into an autopatch Request (→ fix → validate → PR).
   abort on) per-detector errors.
 - `Issue.ToRequest()` maps a finding to a scanner-sourced patch request;
   `TopIssue` (pure) selects the most urgent; `Service.ScanAndStart` wires
-  discover→select→Start and emits `prism.autopatch.scanned`.
+  discover→select→Start and emits `prizm.autopatch.scanned`.
 
 This makes the end-to-end story **find → fix → run → PR** fully autonomous.
 
-### `prism scan` CLI
+### `prizm scan` CLI
 
-`prism scan [--root .] [--severity low|medium|high] [--json]` surfaces the scanner
+`prizm scan [--root .] [--severity low|medium|high] [--json]` surfaces the scanner
 from the terminal: it runs the default detectors and prints the ranked findings
 (severity glyph, kind, title, location), or JSON for tooling. It is read-only — it
 shows what autopatch *would* fix first without starting a patch/PR.
@@ -109,15 +109,15 @@ findings.
 `--severity` applies `autopatch.FilterBySeverity` (pure) to suppress low-severity
 noise — notably the `format` detector's `gofmt -l` output, which on a CRLF
 checkout (Windows) can flag hundreds of files that are not real formatting debt.
-`prism scan --severity medium` focuses on vet/todo-class findings;
+`prizm scan --severity medium` focuses on vet/todo-class findings;
 `FilterBySeverity` is reusable by `ScanAndStart` so an unattended scan can be
 scoped the same way.
 
-`prism scan --start` completes the find→fix handoff from the terminal: it selects
+`prizm scan --start` completes the find→fix handoff from the terminal: it selects
 the top (severity-filtered) issue via `TopIssue`, builds the autopatch service from
-`prism.yaml`, and calls `Start` to run the gated pipeline (worktree → worker →
+`prizm.yaml`, and calls `Start` to run the gated pipeline (worktree → worker →
 validate → PR) on it. It is gated on `autopatch.enabled` and prints the started
-task id (`prism runs <id>` to follow). With no issues at the requested severity it
+task id (`prizm runs <id>` to follow). With no issues at the requested severity it
 reports "nothing to start" and does no work.
 
 ## Follow-ups (further polish)
@@ -125,7 +125,7 @@ reports "nothing to start" and does no work.
 - More detectors (failing-test profile, lint, flaky-CR signals); a periodic scan
   trigger (scheduler/wake) so discovery runs unattended.
 - **Draft PRs + reviewer assignment;** label `autopatch`.
-- **gh availability preflight** — DONE: `prism doctor` now has an `autopatch pr`
+- **gh availability preflight** — DONE: `prizm doctor` now has an `autopatch pr`
   check that FAILs when `gh` is missing in `pr` mode and WARNs when it is
   unauthenticated, so misconfiguration surfaces before `--start` reaches push time.
 - **Cost/iteration budget** shared with the gated loop's budget enforcement.

@@ -2,7 +2,7 @@
 
 ## Mission
 
-Centralize all policy decisions across Prism into a single, consistent, declarative
+Centralize all policy decisions across Prizm into a single, consistent, declarative
 policy engine. Before V8, policy lived in multiple places: tool policy (V3),
 approval gates (V4), validation profiles (V5). V8 brings them under one roof with
 a unified rule model, YAML-based configuration, and first-match evaluation.
@@ -24,12 +24,12 @@ a unified rule model, YAML-based configuration, and first-match evaluation.
 
 ### Policy Request Model (`internal/policy/request.go`)
 - `PolicyRequest`: Action, Resource (type + name), Subject (user/agent ID), Context (mode, metadata)
-- Standardized request format for all Prism policy decisions
+- Standardized request format for all Prizm policy decisions
 
 ### Policy Evaluator (`internal/policy/evaluator.go`)
 - `Evaluator`: registry-based, first-match evaluation
 - `Evaluate(req)` → `PolicyDecision` with default deny
-- Event emission at every evaluation: `prism.policy.requested/evaluated/allowed/denied/approval_required`
+- Event emission at every evaluation: `prizm.policy.requested/evaluated/allowed/denied/approval_required`
 - Configurable default decision (default: deny)
 
 ### Policy Registry + Loader (`internal/policy/registry.go`, `loader.go`)
@@ -38,11 +38,11 @@ a unified rule model, YAML-based configuration, and first-match evaluation.
 - `LoadFromDir()` — scan directory for `.yaml` policy files
 
 ### Policy Events (`internal/policy/events.go`)
-- `prism.policy.requested` — evaluation requested
-- `prism.policy.evaluated` — evaluation complete
-- `prism.policy.allowed` — rule matched with allow decision
-- `prism.policy.denied` — rule matched with deny decision
-- `prism.policy.approval_required` — rule matched with approval requirement
+- `prizm.policy.requested` — evaluation requested
+- `prizm.policy.evaluated` — evaluation complete
+- `prizm.policy.allowed` — rule matched with allow decision
+- `prizm.policy.denied` — rule matched with deny decision
+- `prizm.policy.approval_required` — rule matched with approval requirement
 
 ### Policy Artifacts (`internal/policy/artifacts.go`)
 - `runs/policy/<eval_id>.json` — persisted evaluation result
@@ -64,8 +64,8 @@ a unified rule model, YAML-based configuration, and first-match evaluation.
 - Backward compatible: no `PolicyEvaluator` = local V3 policy only
 
 ### CLI Commands
-- `prism policy list` — list all registered policy rules
-- `prism policy evaluate --input <file.json>` — evaluate a policy request against rules
+- `prizm policy list` — list all registered policy rules
+- `prizm policy evaluate --input <file.json>` — evaluate a policy request against rules
 
 ## Key Packages/Files
 
@@ -82,7 +82,7 @@ a unified rule model, YAML-based configuration, and first-match evaluation.
 | `internal/tool/executor.go` | Integrated V8 policy before local validation |
 | `internal/tool/policy_integration_test.go` | V8 ↔ V3 policy integration tests |
 | `policies/default.yaml` | Default policy rules for core operations |
-| `cmd/prism-cli/main.go` | Policy CLI commands |
+| `cmd/prizm-cli/main.go` | Policy CLI commands |
 
 ## Design Decisions
 
@@ -105,7 +105,7 @@ a unified rule model, YAML-based configuration, and first-match evaluation.
 
 5. **YAML configuration, not Go code** — Policies are data, not compiled code.
    They can be versioned, audited, distributed, and modified without recompilation.
-   The `policies/` directory is the single source of truth for what Prism allows.
+   The `policies/` directory is the single source of truth for what Prizm allows.
 
 6. **Backward compatible** — If no `PolicyEvaluator` is configured, the V3 local
    policy system still works. V8 is opt-in at the evaluator level. Once an
@@ -131,13 +131,13 @@ a unified rule model, YAML-based configuration, and first-match evaluation.
 ```
 Tool.Execute(request)
   → V8 PolicyEvaluator?.Evaluate(request)
-    → emit(prism.policy.requested)
+    → emit(prizm.policy.requested)
     → iterate rules in registration order
     → first match wins:
-      → allowed → emit(prism.policy.allowed)
-      → denied → emit(prism.policy.denied) → return error
-      → requires_approval → emit(prism.policy.approval_required)
-    → no match → default deny → emit(prism.policy.denied)
+      → allowed → emit(prizm.policy.allowed)
+      → denied → emit(prizm.policy.denied) → return error
+      → requires_approval → emit(prizm.policy.approval_required)
+    → no match → default deny → emit(prizm.policy.denied)
   → V3 local policy validation (path safety, input checks)
   → Tool.Execute()
 ```
@@ -183,4 +183,4 @@ policies:
 
 **Merged** (PR #14)
 **Date:** 2026-05-17
-**Version:** prism v0.8.0
+**Version:** prizm v0.8.0

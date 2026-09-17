@@ -1,13 +1,13 @@
-# Prism — System Design
+# Prizm — System Design
 
 **Last Updated:** 2026-05-21
-**Based On:** PRISM-VISION.md v2 (Ema + Lumi aligned)
+**Based On:** PRIZM-VISION.md v2 (Ema + Lumi aligned)
 
 ---
 
 ## System Overview
 
-Prism is an event-native agentic environment. Separate services communicate through a NATS event bus. Events trigger registered actions (webhook-style). Agents are first-class bus citizens with their own event namespaces. The orchestrator routes, delegates, and tracks tasks end-to-end.
+Prizm is an event-native agentic environment. Separate services communicate through a NATS event bus. Events trigger registered actions (webhook-style). Agents are first-class bus citizens with their own event namespaces. The orchestrator routes, delegates, and tracks tasks end-to-end.
 
 ---
 
@@ -15,7 +15,7 @@ Prism is an event-native agentic environment. Separate services communicate thro
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        Prism Runtime                                │
+│                        Prizm Runtime                                │
 │                                                                   │
 │  ┌───────────────────────────────────────────────────────────────┐ │
 │  │                    Orchestrator (Go)                          │ │
@@ -34,7 +34,7 @@ Prism is an event-native agentic environment. Separate services communicate thro
 │  │    lumi.*          — Lumi agent events                     │ │
 │  │    mango.*         — Mango agent events                    │ │
 │  │    remembrance.*   — Memory events                         │ │
-│  │    prism.*         — System events (cost, policy, etc.)    │ │
+│  │    prizm.*         — System events (cost, policy, etc.)    │ │
 │  │    adapter.discord.* — Discord adapter events              │ │
 │  │    adapter.telegram.* — Telegram adapter events            │ │
 │  │    cron.*          — Scheduled task events                  │ │
@@ -42,7 +42,7 @@ Prism is an event-native agentic environment. Separate services communicate thro
 │  │  Registered Actions:                                        │ │
 │  │    lumi.agent.output     → remembrance.gate.extract        │ │
 │  │    mango.agent.output    → remembrance.gate.extract        │ │
-│  │    *.tool.completed      → prism.cost.track                │ │
+│  │    *.tool.completed      → prizm.cost.track                │ │
 │  │    *.approval.requested  → adapter.discord.notify          │ │
 │  │    cron.triggered        → orchestrator.spawn_agent         │ │
 │  │                                                             │ │
@@ -93,7 +93,7 @@ Prism is an event-native agentic environment. Separate services communicate thro
 
 ### Per-Agent Namespaces (Dynamic)
 
-Each agent publishes events under its own namespace. The namespace is **determined by the agent's ID in its configuration**, not hardcoded. The only hardcoded namespace is `prism.*` for system-level events. If no agent ID is provided, auto-generate as `prism1`, `prism2`, etc.
+Each agent publishes events under its own namespace. The namespace is **determined by the agent's ID in its configuration**, not hardcoded. The only hardcoded namespace is `prizm.*` for system-level events. If no agent ID is provided, auto-generate as `prizm1`, `prizm2`, etc.
 
 Agent definitions are in the config:
 
@@ -101,7 +101,7 @@ Agent definitions are in the config:
 agents:
   - id: lumi                # Custom ID → lumi.* namespace
     role: lead
-    model: glm-5.1:cloud
+    model: glm-5.3-flash:cloud
     context: soul,agents
 
   - id: mango
@@ -109,12 +109,12 @@ agents:
     model: deepseek-v4-pro:cloud
     context: agents
 
-  # No ID → auto-generated as prism1
+  # No ID → auto-generated as prizm1
   - role: researcher
     model: gpt-4o
 ```
 
-The `id` field becomes the event namespace prefix. If omitted, auto-generated as `prism<N>`:
+The `id` field becomes the event namespace prefix. If omitted, auto-generated as `prizm<N>`:
 
 ```
 <agent-id>.agent.started          → Agent begins reasoning
@@ -140,17 +140,17 @@ remembrance.gate.extract    → Memory extraction triggered
 ### System Namespaces (shared)
 
 ```
-prism.task.created           → Task created
-prism.task.completed         → Task finished
-prism.cost.tracked           → Token cost recorded
-prism.cost.reported          → Cost report generated
-prism.policy.evaluated        → Policy decision made
-prism.approval.requested     → Approval needed
-prism.channel.received       → Message from Discord/Telegram
-prism.channel.sent           → Message sent to Discord/Telegram
-prism.session.created        → New session started
-prism.session.ended          → Session closed
-prism.cron.triggered         → Scheduled task fired
+prizm.task.created           → Task created
+prizm.task.completed         → Task finished
+prizm.cost.tracked           → Token cost recorded
+prizm.cost.reported          → Cost report generated
+prizm.policy.evaluated        → Policy decision made
+prizm.approval.requested     → Approval needed
+prizm.channel.received       → Message from Discord/Telegram
+prizm.channel.sent           → Message sent to Discord/Telegram
+prizm.session.created        → New session started
+prizm.session.ended          → Session closed
+prizm.cron.triggered         → Scheduled task fired
 ```
 
 ### Registered Actions
@@ -166,7 +166,7 @@ Events can trigger actions automatically — this is the webhook-style behavior:
   action: remembrance.gate.extract    # Save Mango's output to memory
 
 - trigger: "*.tool.completed"
-  action: prism.cost.track           # Track token costs
+  action: prizm.cost.track           # Track token costs
 
 - trigger: "*.approval.requested"
   action: adapter.discord.notify     # Send approval request to Discord
@@ -216,7 +216,7 @@ Every `lumi.agent.output` and `mango.agent.output` event triggers Remembrance's 
 
 ## Orchestrator Design
 
-The orchestrator is the brain of Prism. It runs as a persistent Go service (`prism serve`).
+The orchestrator is the brain of Prizm. It runs as a persistent Go service (`prizm serve`).
 
 ### Responsibilities
 
@@ -233,27 +233,27 @@ The orchestrator is the brain of Prism. It runs as a persistent Go service (`pri
 
 ```bash
 # Start the orchestrator
-prism serve --from-config --workspace ~/.openclaw/workspace
+prizm serve --from-config --workspace ~/.openclaw/workspace
 
 # Check status
-prism status
+prizm status
 
 # Manage sessions
-prism session list
-prism session show <id>
+prizm session list
+prizm session show <id>
 
 # Manage agents
-prism agent list
-prism agent spawn mango --task "Fix the auth bug"
-prism agent kill <id>
+prizm agent list
+prizm agent spawn mango --task "Fix the auth bug"
+prizm agent kill <id>
 
 # Manage tasks
-prism task list
-prism task show <id>
+prizm task list
+prizm task show <id>
 
 # Manage registered actions
-prism action list
-prism action register --trigger "lumi.agent.output" --action "remembrance.gate.extract"
+prizm action list
+prizm action register --trigger "lumi.agent.output" --action "remembrance.gate.extract"
 ```
 
 ---
@@ -286,7 +286,7 @@ You → "Lumi, fix the auth bug"
 
 ## Remembrance Integration
 
-Remembrance hooks directly into the event bus as a Prism service.
+Remembrance hooks directly into the event bus as a Prizm service.
 
 ### Event Flow
 
@@ -305,7 +305,7 @@ Next session:
 ### Key Properties
 
 - **Zero-cost local** — all LLM calls use Ollama, no API keys required
-- **Universal** — not Prism-specific, works with any event namespace
+- **Universal** — not Prizm-specific, works with any event namespace
 - **Seamless** — no model commands needed, registered actions handle it
 - **Long-term** — context persists across sessions, no loss of direction
 - **Lifecycle-aware** — context has a lifecycle (gate → extract → persist → recall → decay)
@@ -331,7 +331,7 @@ Next session:
 
 ```bash
 # One command to start everything
-prism serve --from-config --workspace ~/.openclaw/workspace
+prizm serve --from-config --workspace ~/.openclaw/workspace
 ```
 
 All services (orchestrator, agents, Remembrance, adapters) run in one process with goroutines. NATS is embedded.
@@ -340,13 +340,13 @@ All services (orchestrator, agents, Remembrance, adapters) run in one process wi
 
 ```bash
 # Orchestrator
-prism serve --role orchestrator --nats nats://nats-cluster:4222
+prizm serve --role orchestrator --nats nats://nats-cluster:4222
 
 # Agent node
-prism serve --role agent --nats nats://nats-cluster:4222
+prizm serve --role agent --nats nats://nats-cluster:4222
 
 # Remembrance node
-prism serve --role remembrance --nats nats://nats-cluster:4222
+prizm serve --role remembrance --nats nats://nats-cluster:4222
 ```
 
 External NATS cluster, services scale independently.
@@ -355,9 +355,9 @@ External NATS cluster, services scale independently.
 
 ## Compatibility with V1–V19
 
-All existing `prism.*` events continue to work. Per-agent namespaces are dynamic — configured by the user in their agent definitions. The namespace prefix comes from the agent's `id` field, not hardcoded. The orchestrator translates between them:
+All existing `prizm.*` events continue to work. Per-agent namespaces are dynamic — configured by the user in their agent definitions. The namespace prefix comes from the agent's `id` field, not hardcoded. The orchestrator translates between them:
 
-- `lumi.agent.output` with `correlation_id: X` is also published as `prism.agent.output` with the same correlation ID
+- `lumi.agent.output` with `correlation_id: X` is also published as `prizm.agent.output` with the same correlation ID
 - This means existing V1–V19 code (cost tracking, policy, projections) continues to work without modification
 
 ## See Also

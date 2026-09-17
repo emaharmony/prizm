@@ -1,8 +1,8 @@
-// Package stage provides Prism's pipeline execution engine (V14a+).
+// Package stage provides Prizm's pipeline execution engine (V14a+).
 //
 // V14b adds crash recovery via Write-Ahead Log (WAL). Before every stage
 // transition, the pipeline writes a WAL entry to runs/<id>/wal.jsonl.
-// On crash, prism run --recover <id> replays the WAL and resumes from the
+// On crash, prizm run --recover <id> replays the WAL and resumes from the
 // last completed stage.
 //
 // WAL entries use the same Event struct with wal.* type namespace,

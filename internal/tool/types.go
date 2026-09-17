@@ -1,5 +1,5 @@
 // Package tool provides the tool registry, policy engine, and built-in tools
-// for Prism V3's controlled tool execution system.
+// for Prizm V3's controlled tool execution system.
 //
 // Tools are the only way an agent can affect the outside world. Every tool
 // call goes through a deterministic policy check before execution, and every
@@ -8,7 +8,7 @@ package tool
 
 import "context"
 
-// Tool is the interface that every Prism tool must implement.
+// Tool is the interface that every Prizm tool must implement.
 // Built-in tools (echo, list_dir, read_file, write_file_dry_run) implement
 // this, and future custom tools will too.
 type Tool interface {

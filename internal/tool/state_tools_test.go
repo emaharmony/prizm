@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/state"
+	"github.com/emaharmony/prizm/internal/state"
 )
 
 // mockStateManager implements StateManager for testing.

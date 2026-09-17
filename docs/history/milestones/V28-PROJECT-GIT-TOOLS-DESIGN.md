@@ -50,9 +50,9 @@ The policy layer recognizes project and git tools:
 Tools are visible through:
 
 ```bash
-prism tool list
-prism tool run project_overview --input '{"path":"."}' --workspace .
-prism tool run git_status --input '{}' --workspace .
+prizm tool list
+prizm tool run project_overview --input '{"path":"."}' --workspace .
+prizm tool run git_status --input '{}' --workspace .
 ```
 
 In serve/chat mode, tools are exposed to agents according to channel role:
@@ -76,4 +76,4 @@ Relevant scenarios:
 
 ## Notes
 
-V28 is the point where Prism agents became practical for codebase inspection rather than only single-file reads.
+V28 is the point where Prizm agents became practical for codebase inspection rather than only single-file reads.

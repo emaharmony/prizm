@@ -3,7 +3,7 @@ package delegation
 import (
 	"testing"
 
-	"github.com/emaharmony/prism/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/orchestrator"
 )
 
 func TestCanDelegate_PrimaryAgent(t *testing.T) {

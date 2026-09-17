@@ -33,7 +33,7 @@ def _make_memory(project_id: str = "test-project", source_type: str = "agent") -
         confidence_score=0.9,
         source_type=source_type,
         source_ref="",
-        source_agent="prism:lumi",
+        source_agent="prizm:lumi",
         status="active",
         created_at=now,
         updated_at=now,

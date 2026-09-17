@@ -7,9 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/event"
-	"github.com/emaharmony/prism/internal/remembrance"
-	"github.com/emaharmony/prism/internal/stage"
+	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/remembrance"
+	"github.com/emaharmony/prizm/internal/stage"
 )
 
 // ── Remembrance E2E Integration Tests ──────────────────────────
@@ -44,14 +44,14 @@ func TestE2E_RemembranceCaptureContext(t *testing.T) {
 		case "/v1/context/build":
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{
-				"project_id": "prism",
+				"project_id": "prizm",
 				"agent_id": "lumi",
-				"task": "what is prism",
+				"task": "what is prizm",
 				"selected_memories": ["mem_e2e_001"],
-				"context_markdown": "# Retrieved Remembrance Context\n\n## Relevant Context\n- Prism is an event-native agentic environment\n",
+				"context_markdown": "# Retrieved Remembrance Context\n\n## Relevant Context\n- Prizm is an event-native agentic environment\n",
 				"context_json": {
 					"selected_memories": [
-						{"memory_id": "mem_e2e_001", "title": "Prism", "summary": "Prism is an event-native agentic environment", "score": 0.9, "reason": "relevant"}
+						{"memory_id": "mem_e2e_001", "title": "Prizm", "summary": "Prizm is an event-native agentic environment", "score": 0.9, "reason": "relevant"}
 					]
 				},
 				"token_count": 100
@@ -75,10 +75,10 @@ func TestE2E_RemembranceCaptureContext(t *testing.T) {
 	// --- Turn 1: Agent produces output → capture it ---
 	rc1 := &stage.RunContext{
 		RunID:       "run_e2e_001",
-		Task:        "what is prism",
+		Task:        "what is prizm",
 		Agent:       "lumi",
-		Project:     "prism",
-		LLMResponse: "Prism is an event-native agentic environment that orchestrates AI agents through a NATS bus.",
+		Project:     "prizm",
+		LLMResponse: "Prizm is an event-native agentic environment that orchestrates AI agents through a NATS bus.",
 	}
 
 	newRC1, result1, err := s.Execute(context.Background(), rc1)
@@ -108,9 +108,9 @@ func TestE2E_RemembranceCaptureContext(t *testing.T) {
 	// --- Turn 2: Next turn → context should be available ---
 	rc2 := &stage.RunContext{
 		RunID:       "run_e2e_002",
-		Task:        "tell me more about prism",
+		Task:        "tell me more about prizm",
 		Agent:       "lumi",
-		Project:     "prism",
+		Project:     "prizm",
 		LLMResponse: "", // No new output yet, just context retrieval
 	}
 
@@ -145,7 +145,7 @@ func TestE2E_RemembranceGracefulDegradation(t *testing.T) {
 		RunID:       "run_graceful_001",
 		Task:        "test task",
 		Agent:       "lumi",
-		Project:     "prism",
+		Project:     "prizm",
 		LLMResponse: "This is a test response.",
 	}
 
@@ -178,7 +178,7 @@ func TestE2E_RemembranceDisabled(t *testing.T) {
 		RunID:       "run_disabled_001",
 		Task:        "test task",
 		Agent:       "lumi",
-		Project:     "prism",
+		Project:     "prizm",
 		LLMResponse: "Response text.",
 	}
 
@@ -209,7 +209,7 @@ func TestE2E_RemembranceRequiredFailure(t *testing.T) {
 		RunID:       "run_required_001",
 		Task:        "test task",
 		Agent:       "lumi",
-		Project:     "prism",
+		Project:     "prizm",
 		LLMResponse: "Response text.",
 	}
 
@@ -232,11 +232,11 @@ func TestE2E_RemembranceClientBuildContext(t *testing.T) {
 		case "/v1/context/build":
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{
-				"project_id": "prism",
+				"project_id": "prizm",
 				"agent_id": "lumi",
-				"task": "prism architecture",
+				"task": "prizm architecture",
 				"selected_memories": ["m1"],
-				"context_markdown": "# Retrieved Remembrance Context\n\n## Relevant Context\n- Prism uses NATS JetStream\n",
+				"context_markdown": "# Retrieved Remembrance Context\n\n## Relevant Context\n- Prizm uses NATS JetStream\n",
 				"context_json": {
 					"selected_memories": [
 						{"memory_id": "m1", "title": "NATS", "summary": "NATS bus", "score": 0.9, "reason": "relevant"}
@@ -259,7 +259,7 @@ func TestE2E_RemembranceClientBuildContext(t *testing.T) {
 	}
 
 	// Test BuildContext
-	resp, err := client.BuildContext("prism architecture", "prism", "lumi", 5)
+	resp, err := client.BuildContext("prizm architecture", "prizm", "lumi", 5)
 	if err != nil {
 		t.Fatalf("BuildContext error: %v", err)
 	}

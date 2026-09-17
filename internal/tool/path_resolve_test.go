@@ -33,11 +33,11 @@ func TestFuzzyResolvePath_ExactPath(t *testing.T) {
 func TestFuzzyResolvePath_FuzzyMatch(t *testing.T) {
 	tmpDir := t.TempDir()
 	bassbookDir := filepath.Join(tmpDir, "bassbook")
-	prismDir := filepath.Join(tmpDir, "prism")
+	prizmDir := filepath.Join(tmpDir, "prizm")
 	if err := os.MkdirAll(bassbookDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(prismDir, 0755); err != nil {
+	if err := os.MkdirAll(prizmDir, 0755); err != nil {
 		t.Fatal(err)
 	}
 

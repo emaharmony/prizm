@@ -1,0 +1,391 @@
+{
+  "system_name": "Prizm Autonomous Workflow System (PAWS)",
+  "version": "1.0",
+  "date": "2026-06-23",
+  "author": "Mango (design), for Lumi review",
+  "summary": "Structural redesign of the project_work wake handler to make Prizm genuinely self-sufficient. Every failure mode is addressed with code-level enforcement, not just prompt engineering.",
+
+  "failure_modes_analyzed": [
+    {
+      "mode": "Read-only paralysis",
+      "root_cause": "No iteration budget per phase. LLM can spend all 20 iterations reading files without ever writing. The prompt says 'write by iteration 5' but the LLM ignores it.",
+      "fix": "Hard iteration caps per workflow phase enforced in Go code"
+    },
+    {
+      "mode": "Works on main branch",
+      "root_cause": "No code-level enforcement that a branch must exist before write_file is allowed. The prompt says 'create a branch' but the LLM skips it.",
+      "fix": "Pre-flight check: write_file is denied if current branch is 'main' or 'master'"
+    },
+    {
+      "mode": "Never commits or pushes",
+      "root_cause": "No enforcement that commit+push must happen after writes. The prompt says to do it but the LLM declares 'final' without committing.",
+      "fix": "Post-write enforcement: if files were written but no commit happened, the system auto-blocks 'final' and forces a commit cycle"
+    },
+    {
+      "mode": "Repeats same task every cycle",
+      "root_cause": "PROJECT_STATE.md is read but the LLM doesn't parse it as a task queue. It sees 'CSS polish' as the first thing and picks it every time.",
+      "fix": "Structured task state with explicit status markers, and code that parses PROJECT_STATE.md to find the first incomplete task"
+    },
+    {
+      "mode": "Natural language with embedded JSON",
+      "root_cause": "The fallback parser handles it, but the LLM wastes tokens on prose before the JSON. This reduces effective iteration count.",
+      "fix": "Stronger prompt enforcement + token budget per iteration to penalize prose"
+    },
+    {
+      "mode": "No feedback loop",
+      "root_cause": "Prizm never sees review feedback. She pushes code, reports to Discord, and the next cycle starts fresh with no awareness of what Lumi said about her last PR.",
+      "fix": "Inject recent Discord messages + NATS agent messages into the prompt, and add a self-review step that reads git_diff before committing"
+    }
+  ],
+
+  "components": [
+    {
+      "name": "Workflow Phase Enforcer",
+      "purpose": "Enforce a strict phase sequence with hard iteration caps per phase. The LLM cannot spend all iterations in one phase.",
+      "implementation": "In runToolLoopWake, replace the flat 20-iteration loop with a phased loop. Each phase has its own max iterations. When a phase exhausts its budget, the system forces progression to the next phase by injecting a directive message. If the LLM refuses to progress, the system terminates the run with a clear error.",
+      "priority": 1,
+      "details": {
+        "phases": [
+          {"name": "ORIENT", "max_iterations": 3, "allowed_tools": ["read_file", "git_status", "git_log", "git_branch_list", "project_overview", "list_dir"], "description": "Read PROJECT_STATE.md and check git state. Must pick a task by end of phase."},
+          {"name": "BRANCH", "max_iterations": 2, "allowed_tools": ["git_branch_list", "git_status"], "description": "Create a feature branch. If already on a feature branch, skip."},
+          {"name": "IMPLEMENT", "max_iterations": 8, "allowed_tools": ["read_file", "write_file", "list_dir", "search_files", "git_status", "git_diff"], "description": "Write code. read_file is allowed but counted — after 3 reads, the system injects 'You have read enough. Write now.'"},
+          {"name": "SELF_REVIEW", "max_iterations": 2, "allowed_tools": ["git_diff", "git_status", "read_file"], "description": "Review own changes. Read the diff. Check for obvious errors."},
+          {"name": "COMMIT_PUSH", "max_iterations": 3, "allowed_tools": ["git_add", "git_commit", "git_push", "git_status"], "description": "Stage, commit, push. Must complete all three."},
+          {"name": "UPDATE_STATE", "max_iterations": 2, "allowed_tools": ["write_file", "read_file"], "description": "Update PROJECT_STATE.md with what was done."},
+          {"name": "REPORT", "max_iterations": 1, "allowed_tools": [], "description": "Emit final response. No tools allowed — must be a summary."}
+        ],
+        "enforcement": "Go code tracks current phase and iteration count within phase. When phase budget is exhausted, the system injects: 'PHASE {name} COMPLETE. Moving to {next_phase}. You MUST now {next_phase_action}.' If the LLM tries to use a tool not allowed in the current phase, the tool is denied with: 'Tool {name} is not allowed in phase {phase}. You are in the {phase} phase. You should be {expected_action}.'"
+      }
+    },
+    {
+      "name": "Branch Protection Gate",
+      "purpose": "Prevent any write_file, git_add, git_commit, or git_push from executing while on main/master branch.",
+      "implementation": "In the tool executor's ExecuteWithPolicy, add a pre-execution check for mutation tools. Before allowing write_file, git_add, git_commit, or git_push, run `git branch --show-current` in the target repo. If the result is 'main' or 'master', deny the tool with: 'Cannot mutate on main branch. Create a feature branch first using: git checkout -b feature/bb-{task-name}'. This is a code-level gate, not a prompt suggestion.",
+      "priority": 1,
+      "details": {
+        "protected_branches": ["main", "master"],
+        "gated_tools": ["write_file", "write_file_proposal", "git_add", "git_commit", "git_push"],
+        "error_message": "BRANCH PROTECTION: You are on '{branch}'. Mutations are blocked on protected branches. Create a feature branch first (e.g., 'feature/bb-{task}').",
+        "implementation_note": "Add a new method to the executor or a BranchGuard wrapper that checks git branch before allowing mutations. The check should be cached per-run to avoid running git branch --show-current on every tool call."
+      }
+    },
+    {
+      "name": "Commit-Push Enforcement",
+      "purpose": "Ensure that if files were written during a run, a commit and push MUST happen before the run can end with 'final'.",
+      "implementation": "Track a boolean `filesWritten` in the tool loop. Set to true whenever write_file succeeds. When the LLM emits a 'final' response, check: if filesWritten is true AND no git_commit has succeeded in this run, reject the final response and inject: 'You wrote files but have not committed. You MUST stage, commit, and push before finishing. Use git_add, then git_commit, then git_push.' Only allow 'final' after commit+push complete.",
+      "priority": 1,
+      "details": {
+        "tracked_state": {
+          "files_written": "bool — set on successful write_file",
+          "files_staged": "bool — set on successful git_add",
+          "committed": "bool — set on successful git_commit",
+          "pushed": "bool — set on successful git_push"
+        },
+        "final_gate": "If files_written && !committed: reject final, inject commit directive. If committed && !pushed: reject final, inject push directive. Only allow final when (files_written && committed && pushed) || !files_written."
+      }
+    },
+    {
+      "name": "Structured Task State Parser",
+      "purpose": "Parse PROJECT_STATE.md to find the first incomplete task deterministically, so Prizm never picks the same task twice.",
+      "implementation": "Add a Go function that reads PROJECT_STATE.md and extracts task status from structured markers. The function returns the first task with status 'incomplete' or no status marker. This task ID is injected into the prompt as: 'YOUR ASSIGNED TASK: {task_id} — {task_description}. Do not pick any other task.' The LLM no longer chooses — the system assigns.",
+      "priority": 1,
+      "details": {
+        "marker_format": "Tasks in PROJECT_STATE.md use markers: `[ ]` = incomplete, `[x]` = complete, `[~]` = in progress. Example: `- [ ] Task 2: Commit Current Design System`",
+        "parser_logic": "Scan PROJECT_STATE.md for lines matching `- [ ]` or `### Task N:` patterns. Return the first incomplete task. If none found, return the first task under 'FEATURE PRIORITY' that doesn't have ✅.",
+        "injection": "The parsed task is injected into the system prompt as a non-negotiable assignment. The prompt says: 'YOUR ASSIGNED TASK (do not deviate): {task}'",
+        "fallback": "If parsing fails, inject the raw PROJECT_STATE.md content and let the LLM pick — but with stronger instructions to pick the FIRST incomplete task."
+      }
+    },
+    {
+      "name": "Self-Review Step",
+      "purpose": "Force Prizm to review her own changes before committing, catching obvious errors.",
+      "implementation": "After the IMPLEMENT phase and before COMMIT_PUSH, inject a mandatory SELF_REVIEW phase. The system runs git_diff automatically and feeds the diff into the prompt with: 'Review your changes above. Check for: syntax errors, missing imports, broken references, incomplete logic. If you find issues, fix them now. If clean, proceed to commit.' The LLM gets 2 iterations to review and fix.",
+      "priority": 2,
+      "details": {
+        "auto_diff": "System runs git_diff in the repo and injects the output into the prompt at the start of SELF_REVIEW phase. The LLM doesn't need to call git_diff — it's given.",
+        "review_prompt": "You are now in SELF_REVIEW. Below is the diff of your changes. Review it carefully:\n\n{git_diff_output}\n\nCheck for:\n1. Syntax errors or typos\n2. Missing imports or references\n3. Incomplete logic or TODOs left in code\n4. Does this actually complete the assigned task?\n\nIf issues found: fix them with write_file.\nIf clean: respond with 'REVIEW_PASSED' to proceed to commit."
+      }
+    },
+    {
+      "name": "Feedback Loop Injector",
+      "purpose": "Inject review feedback from previous cycles so Prizm learns and improves.",
+      "implementation": "Already partially implemented (recent Discord messages + NATS agent messages are injected). Enhance by: (1) searching for messages from Lumi (ID 1512994928769237002) that mention 'Prizm', 'BassBook', or the last branch name, (2) extracting any review comments or directives, (3) injecting them as 'FEEDBACK FROM LAST CYCLE' at the top of the prompt. Also read the last run's output.md from runs/ to see what was reported.",
+      "priority": 2,
+      "details": {
+        "discord_scan": "Scan recent channel messages for any from Lumi that contain 'Prizm', 'BassBook', 'review', 'fix', 'branch', or the previous branch name. Extract and inject as feedback.",
+        "nats_scan": "Already done — agent messages from OpenClaw Lumi are injected.",
+        "run_history": "Read the most recent runs/wake_project_work_*/output.md to see what Prizm reported last cycle. Inject as 'Your last report: {summary}'. This helps Prizm not repeat herself.",
+        "branch_tracking": "Store the last branch name in a state file (runs/last_branch.txt). On next wake, read it and inject: 'Last cycle you worked on branch: {branch}. Check if it was merged or needs continuation.'"
+      }
+    },
+    {
+      "name": "Token Budget & JSON Enforcement",
+      "purpose": "Reduce wasted tokens on natural language prose before JSON tool calls.",
+      "implementation": "Two-part fix: (1) In the prompt, add: 'CRITICAL: Every response must be PURE JSON. No prose, no markdown, no explanations before the JSON. Start your response with { and end with }. Any text outside the JSON will be discarded.' (2) In the Go parser, if the response is >200 chars and doesn't start with {, trim it aggressively to find the JSON. Add a counter — if >3 responses in a run are prose+JSON, inject a warning: 'STOP writing prose. PURE JSON only. Your last 3 responses had prose before JSON. This wastes iterations.'",
+      "priority": 3,
+      "details": {
+        "prompt_rule": "Add to tool instructions: 'FORMAT RULE: Every response must be pure JSON starting with {. No introductory text, no markdown fences, no explanations. The system parses JSON only. Prose before JSON is discarded and wastes your iteration budget.'",
+        "parser_enhancement": "In ParseAgentOutputWithFallback, if the response is >300 chars and the first non-whitespace char is not {, log a warning and aggressively scan for the first { to start parsing from there.",
+        "prose_counter": "Track how many responses in the current run contained prose before JSON. If >=3, inject a stern warning into the next user message."
+      }
+    },
+    {
+      "name": "Run History & Continuity Tracker",
+      "purpose": "Give Prizm awareness of what happened in previous cycles so she doesn't repeat work or lose context.",
+      "implementation": "Write a small state file at runs/current_work_state.json after each project_work run. Contains: last_branch, last_task_id, last_commit_hash, last_status (completed/incomplete/blocked), files_modified[]. On next wake, read this file and inject into the prompt. This gives Prizm continuity across cycles without relying on her memory.",
+      "priority": 2,
+      "details": {
+        "state_file": "runs/current_work_state.json",
+        "contents": {
+          "last_run_id": "wake_project_work_1719000000",
+          "last_branch": "feature/bb-design-system",
+          "last_task_id": "task-2",
+          "last_commit": "abc123def",
+          "status": "completed",
+          "files_modified": ["apps/web/src/app/globals.css", "apps/web/tailwind.config.ts"],
+          "completed_at": "2026-06-23T14:00:00Z"
+        },
+        "injection": "At start of ORIENT phase, read this file and inject: 'PREVIOUS CYCLE: You worked on branch {branch}, task {task_id}, commit {commit}. Status: {status}. Files modified: {files}.'"
+      }
+    },
+    {
+      "name": "Tool Result Summarizer",
+      "purpose": "Prevent context window bloat from large tool results (e.g., reading a 2000-line file).",
+      "implementation": "In the tool loop, after receiving a tool result, truncate it before feeding back to the LLM. For read_file results >3000 chars, truncate to first 1500 + last 500 chars with a '... [content truncated, {N} total chars] ...' marker. For list_dir results >100 entries, show first 50 + '... and {N} more'. This keeps the context window manageable and prevents the LLM from getting lost in large outputs.",
+      "priority": 3,
+      "details": {
+        "read_file_truncation": "If content >3000 chars, return first 1500 + '\\n... [truncated: {total} chars total] ...\\n' + last 500 chars.",
+        "list_dir_truncation": "If entries >100, return first 50 + '... and {remaining} more entries'.",
+        "git_diff_truncation": "Already implemented (50000 char cap).",
+        "project_overview_truncation": "If file_count >30, return first 20 files + summary of remaining."
+      }
+    },
+    {
+      "name": "Dead Man's Switch / Stuck Detector",
+      "purpose": "Detect when the LLM is stuck in a loop (repeating the same tool call, getting the same error, or producing the same output) and break the loop.",
+      "implementation": "Track the last 3 tool calls and their results. If the same tool is called 3 times in a row with the same input, or if the LLM produces the same response text 3 times in a row, inject: 'YOU ARE STUCK. You have called {tool} with the same input 3 times. Try a completely different approach or move to the next phase.' If it happens again, force-terminate the run with an error report.",
+      "priority": 3,
+      "details": {
+        "tool_repetition_detection": "Hash the tool name + JSON input. If same hash appears 3 consecutive times, trigger stuck warning.",
+        "response_repetition_detection": "Hash the LLM response text. If same hash appears 3 consecutive times, trigger stuck warning.",
+        "escalation": "First detection: inject warning. Second detection: force phase transition. Third detection: terminate run."
+      }
+    }
+  ],
+
+  "workflow_steps": [
+    {
+      "step": 1,
+      "name": "ORIENT — Read State & Pick Task",
+      "action": "Read PROJECT_STATE.md and runs/current_work_state.json. Parse task list to find first incomplete task. Check git status and current branch.",
+      "max_iterations": 3,
+      "enforcement": "Hard cap in Go code. After 3 iterations, system forces progression to BRANCH phase by injecting a directive. If no task was picked, system assigns the first incomplete task from its own parser.",
+      "fallback": "If PROJECT_STATE.md can't be read, use the creative brief path as fallback. If no task can be determined, report error and terminate."
+    },
+    {
+      "step": 2,
+      "name": "BRANCH — Create Feature Branch",
+      "action": "If on main/master, create branch feature/bb-{task-slug}. If already on a feature branch, verify it matches the assigned task.",
+      "max_iterations": 2,
+      "enforcement": "Branch Protection Gate blocks all mutations until off main/master. System checks current branch before allowing progression to IMPLEMENT. If still on main after 2 iterations, system runs git checkout -b itself with a generated branch name.",
+      "fallback": "If git branch creation fails (e.g., auth), report error and terminate. Do not proceed to IMPLEMENT on main."
+    },
+    {
+      "step": 3,
+      "name": "IMPLEMENT — Write Code",
+      "action": "Write files to complete the assigned task. Read files only when necessary to understand existing code before modifying it.",
+      "max_iterations": 8,
+      "enforcement": "Read counter: after 3 read_file calls in this phase, inject 'You have read enough. Write code now.' After 5 iterations without a write_file, inject 'You have not written any files. The IMPLEMENT phase requires writing code. Write now or this run will be marked incomplete.' After 8 iterations, force progression to SELF_REVIEW even if work is incomplete.",
+      "fallback": "If no files were written after 8 iterations, mark run as 'incomplete — no files written' and proceed to REPORT phase to explain why."
+    },
+    {
+      "step": 4,
+      "name": "SELF_REVIEW — Review Changes",
+      "action": "System runs git_diff automatically. LLM reviews the diff for errors, missing pieces, or incomplete work.",
+      "max_iterations": 2,
+      "enforcement": "System runs git_diff and injects output. LLM must respond with REVIEW_PASSED or make fixes. If fixes are made, git_diff runs again. After 2 iterations, force progression.",
+      "fallback": "If git_diff is empty (no changes), skip this phase. If LLM doesn't respond with REVIEW_PASSED, proceed anyway but mark run as 'self-review skipped'."
+    },
+    {
+      "step": 5,
+      "name": "COMMIT_PUSH — Stage, Commit, Push",
+      "action": "git_add the changed files, git_commit with descriptive message, git_push to remote.",
+      "max_iterations": 3,
+      "enforcement": "Commit-Push Enforcement component: final response is blocked until commit+push complete. System tracks files_staged, committed, pushed booleans. If any step fails, feed error back to LLM for retry.",
+      "fallback": "If git_push fails (auth), commit locally and report the push failure. Do not loop on push retries. If git_commit fails (nothing to commit), skip and proceed."
+    },
+    {
+      "step": 6,
+      "name": "UPDATE_STATE — Update PROJECT_STATE.md",
+      "action": "Write to PROJECT_STATE.md: mark completed task as [x], add commit hash, update status notes.",
+      "max_iterations": 2,
+      "enforcement": "System checks if PROJECT_STATE.md was modified. If not modified after 2 iterations, system auto-generates a state update based on tracked run data and writes it.",
+      "fallback": "If write fails, log error and proceed to REPORT. The state update is important but not critical."
+    },
+    {
+      "step": 7,
+      "name": "REPORT — Final Summary",
+      "action": "Emit final JSON response summarizing: task completed, branch, commit hash, files changed, next task, any blockers.",
+      "max_iterations": 1,
+      "enforcement": "No tools allowed in this phase. Must be a final JSON response. If LLM tries to call a tool, deny it and remind: 'You are in REPORT phase. Emit your final summary now.'",
+      "fallback": "If LLM doesn't produce valid final response, system generates a mechanical summary from tracked run data."
+    }
+  ],
+
+  "prompt_changes": [
+    {
+      "section": "project_work prompt — opening",
+      "old": "You are the project work agent. You work autonomously on assigned projects. You do NOT need permission — the assignment IS your permission.",
+      "new": "You are the project work agent. You work autonomously on assigned projects. You do NOT need permission — the assignment IS your permission. You operate in STRICT PHASES. The system enforces phase transitions — you cannot skip phases or spend all your time reading.",
+      "reason": "Sets expectation that the system enforces structure, not just suggests it."
+    },
+    {
+      "section": "project_work prompt — Step 1",
+      "old": "### Step 1: Check Project State (1-2 tool calls max)\nRead /Users/ema/projects/repos/BassBook/PROJECT_STATE.md if it exists.",
+      "new": "### Step 1: ORIENT Phase (MAX 3 ITERATIONS)\nRead /Users/ema/projects/repos/BassBook/PROJECT_STATE.md. The system will assign you a specific task from this file. You do not choose — the system tells you what to work on. Also check git_status and git_branch_list.",
+      "reason": "Removes task choice from LLM. System assigns based on parsed state."
+    },
+    {
+      "section": "project_work prompt — Step 3",
+      "old": "### Step 3: Decide What To Do\nBased on project state and git status, pick ONE concrete task:",
+      "new": "### Step 3: IMPLEMENT Phase (MAX 8 ITERATIONS)\nYour assigned task is injected by the system. Execute it. Write code. You may read files to understand existing code, but after 3 reads the system will force you to start writing. You MUST produce at least one write_file in this phase.",
+      "reason": "Task is assigned, not chosen. Read budget is enforced."
+    },
+    {
+      "section": "project_work prompt — Step 4",
+      "old": "### Step 4: Create Branch (if needed)\nCreate a feature branch: feature/bb-{task-name}\nUse git tools or the branch creation command.",
+      "new": "### Step 4: BRANCH Phase (MAX 2 ITERATIONS)\nIf on main/master, you MUST create a feature branch. The system BLOCKS all file writes and git mutations while on main. You cannot proceed to IMPLEMENT until you are on a feature branch. Branch naming: feature/bb-{task-slug}.",
+      "reason": "Makes branch creation non-optional by explaining the enforcement mechanism."
+    },
+    {
+      "section": "project_work prompt — new section",
+      "old": "(not present)",
+      "new": "### Step 4.5: SELF_REVIEW Phase (MAX 2 ITERATIONS)\nAfter writing code, the system will show you your git diff. Review it for:\n- Syntax errors or typos\n- Missing imports or references\n- Incomplete logic\n- Does this actually complete the assigned task?\nIf issues found, fix them. If clean, respond with REVIEW_PASSED.",
+      "reason": "Adds mandatory self-review step that was completely missing."
+    },
+    {
+      "section": "project_work prompt — Step 6",
+      "old": "### Step 6: Stage, Commit, Push\n- git_add to stage your changes\n- git_commit with a clear message: \"feat: description\" or \"fix: description\"\n- git_push to push to remote",
+      "new": "### Step 6: COMMIT_PUSH Phase (MAX 3 ITERATIONS)\nYou MUST complete all three: git_add, git_commit, git_push. The system will NOT allow you to finish the run until you have committed and pushed. If you try to end early, your final response will be rejected.",
+      "reason": "Makes commit+push non-optional by explaining the enforcement."
+    },
+    {
+      "section": "project_work prompt — Step 7",
+      "old": "### Step 7: Update Project State\nWrite to /Users/ema/projects/repos/BassBook/PROJECT_STATE.md:",
+      "new": "### Step 7: UPDATE_STATE Phase (MAX 2 ITERATIONS)\nUpdate PROJECT_STATE.md to mark your task complete. Use [x] for completed tasks. Add your commit hash. The system tracks whether you actually update the file.",
+      "reason": "Makes state update a tracked, enforced phase."
+    },
+    {
+      "section": "project_work prompt — Critical Rules",
+      "old": "- DO NOT just read files and report. You MUST write code, commit, and push.\n- DO NOT spend more than 3 iterations on reading. Start writing by iteration 5.\n- DO NOT create branches on main. Always use feature/bb-{name}.",
+      "new": "- The system enforces phase progression. You cannot skip phases.\n- The system blocks mutations on main branch. You MUST be on a feature branch.\n- The system blocks final response until commit+push complete.\n- The system assigns your task — you do not choose.\n- The system shows you your diff for self-review before commit.",
+      "reason": "Replaces 'please do this' with 'the system enforces this'. Changes the LLM's mental model from suggestions to constraints."
+    },
+    {
+      "section": "project_work prompt — Tool Calling Format",
+      "old": "## Tool Calling Format\nRespond with JSON:\n- Tool request: {\"type\": \"tool_request\", \"tool\": \"tool_name\", \"input\": {\"key\": \"value\"}}\n- Final response: {\"type\": \"final\", \"content\": \"your summary\"}\n\nOne tool request per response.",
+      "new": "## Tool Calling Format (CRITICAL)\nEvery response MUST be PURE JSON. Start with {. End with }. NO prose, NO markdown fences, NO explanations before the JSON. The system parses JSON only. Any text outside the JSON object is discarded and wastes your iteration budget.\n\nValid shapes:\n- Tool request: {\"type\": \"tool_request\", \"tool\": \"tool_name\", \"input\": {\"key\": \"value\"}}\n- Final response: {\"type\": \"final\", \"content\": \"your summary\"}\n\nOne tool request per response. The system executes it and gives you the result.",
+      "reason": "Eliminates the prose+JSON pattern that wastes iterations and tokens."
+    },
+    {
+      "section": "project_work prompt — new section at end",
+      "old": "(not present)",
+      "new": "## Phase Awareness\nThe system tracks which phase you are in. If you try to use a tool not allowed in your current phase, it will be denied. Pay attention to phase transition messages from the system. They tell you what phase you're entering and what is expected.",
+      "reason": "Makes the LLM aware that phases are enforced and tool availability changes by phase."
+    }
+  ],
+
+  "code_changes": [
+    {
+      "file": "cmd/prizm-cli/wake_handler.go — runToolLoopWake function",
+      "change": "Replace the flat 20-iteration loop with a phased loop. Define phases as a slice of Phase structs: {Name, MaxIterations, AllowedTools, TransitionMessage, OnExhaustAction}. Track currentPhaseIndex, iterationInPhase. After each LLM response, check if phase budget exhausted → advance phase and inject transition message. Before executing a tool, check if tool name is in current phase's AllowedTools (empty list = all allowed). If not allowed, return error result without executing.",
+      "reason": "This is the core structural change. Without phase enforcement, all other fixes are just prompt suggestions that the LLM can ignore."
+    },
+    {
+      "file": "cmd/prizm-cli/wake_handler.go — runToolLoopWake function",
+      "change": "Add run state tracking variables: filesWritten (bool), filesStaged (bool), committed (bool), pushed (bool), readCount (int, per phase), proseResponseCount (int). Update these on each tool result. When LLM emits 'final' type, check commit-push gate before accepting.",
+      "reason": "Enables Commit-Push Enforcement and read budget tracking."
+    },
+    {
+      "file": "cmd/prizm-cli/wake_handler.go — new function parseProjectState",
+      "change": "Add a Go function that reads PROJECT_STATE.md and extracts the first incomplete task. Parse lines matching `- [ ] Task N: ...` or `### Task N` without ✅. Return task ID, description, and priority. Call this at start of ORIENT phase and inject result into prompt.",
+      "reason": "Removes task selection from the LLM entirely. The system assigns the task."
+    },
+    {
+      "file": "cmd/prizm-cli/wake_handler.go — new function checkBranchProtection",
+      "change": "Add a function that runs `git branch --show-current` in the target repo and returns the branch name. Cache result per-run. Call before allowing any mutation tool. If branch is 'main' or 'master', return error.",
+      "reason": "Branch Protection Gate — code-level enforcement that mutations can't happen on main."
+    },
+    {
+      "file": "cmd/prizm-cli/wake_handler.go — runToolLoopWake, before tool execution",
+      "change": "Before executing write_file, git_add, git_commit, git_push: call checkBranchProtection. If on protected branch, return error result to LLM without executing. The error message tells the LLM to create a branch.",
+      "reason": "Integrates branch protection into the tool execution flow."
+    },
+    {
+      "file": "cmd/prizm-cli/wake_handler.go — runToolLoopWake, on 'final' response",
+      "change": "Before accepting a 'final' response: if filesWritten && !committed, reject with message 'COMMIT REQUIRED: You wrote files but have not committed. Use git_add then git_commit.' If committed && !pushed, reject with 'PUSH REQUIRED: You committed but have not pushed. Use git_push.' Append rejection as a user message and continue loop.",
+      "reason": "Commit-Push Enforcement — the LLM cannot end the run without committing and pushing."
+    },
+    {
+      "file": "cmd/prizm-cli/wake_handler.go — runToolLoopWake, SELF_REVIEW phase start",
+      "change": "At the start of SELF_REVIEW phase, automatically run git_diff in the repo. Inject the diff output into the prompt as a system message: '## Your Changes (git diff)\n```diff\n{diff_output}\n```\n\nReview these changes for errors. Respond REVIEW_PASSED if clean, or fix issues with write_file.'",
+      "reason": "Self-Review Step — system provides the diff, LLM reviews it."
+    },
+    {
+      "file": "cmd/prizm-cli/wake_handler.go — runToolLoopWake, tool result formatting",
+      "change": "Add ToolResultSummarizer: before feeding tool result back to LLM, truncate large outputs. read_file >3000 chars → first 1500 + last 500. list_dir >100 entries → first 50 + count. project_overview >30 files → first 20 + summary.",
+      "reason": "Prevents context window bloat that causes the LLM to lose track of its task."
+    },
+    {
+      "file": "cmd/prizm-cli/wake_handler.go — runToolLoopWake, stuck detection",
+      "change": "Track last 3 tool calls (name + input hash) and last 3 LLM responses (content hash). If 3 consecutive identical tool calls or 3 consecutive identical responses, inject stuck warning. On 4th repetition, force phase transition. On 5th, terminate run.",
+      "reason": "Dead Man's Switch — breaks infinite loops automatically."
+    },
+    {
+      "file": "cmd/prizm-cli/wake_handler.go — runToolLoopWake, prose detection",
+      "change": "After ParseAgentOutputWithFallback, check if the raw response had >100 chars of text before the JSON. If so, increment proseResponseCount. If proseResponseCount >=3, inject warning: 'STOP writing prose before JSON. Your last 3 responses wasted iterations on text that was discarded. PURE JSON only.'",
+      "reason": "Trains the LLM to stop the prose+JSON pattern by making the cost visible."
+    },
+    {
+      "file": "cmd/prizm-cli/wake_handler.go — writeRunSummary or new function",
+      "change": "After a successful project_work run, write runs/current_work_state.json with: last_branch, last_task_id, last_commit_hash, status, files_modified, completed_at. On next wake, read this file in ORIENT phase and inject into prompt.",
+      "reason": "Run History & Continuity — gives Prizm awareness across cycles."
+    },
+    {
+      "file": "cmd/prizm-cli/wake_handler.go — handleScheduledEvent, project_work prompt building",
+      "change": "Before building the project_work prompt, call parseProjectState() to get the assigned task. Inject it as: '## SYSTEM-ASSIGNED TASK (do not deviate)\nTask: {task_id}\nDescription: {task_description}\nPriority: {priority}\n\nThis is the ONLY task you should work on this cycle.' Also read runs/current_work_state.json and inject previous cycle info.",
+      "reason": "Task assignment and continuity injection happen before the LLM even sees the prompt."
+    },
+    {
+      "file": "internal/agent/parser.go — ParseAgentOutputWithFallback",
+      "change": "Add prose detection: if the raw response is >300 chars and the first non-whitespace character is not '{', log a warning. Enhance the embedded JSON scanner to start searching from the first '{' in the text rather than scanning for 'tool_request' strings. This handles cases where the JSON is at the end of a long prose block.",
+      "reason": "Better fallback parsing for prose+JSON responses, plus logging to track how often this happens."
+    },
+    {
+      "file": "internal/tool/policy.go — EvaluatePolicyForAgent",
+      "change": "Add a new case for 'git_checkout' tool if we add one, or add a pre-execution branch check hook. The policy itself doesn't need changes since branch protection is enforced at the executor level, not the policy level.",
+      "reason": "Branch protection is better enforced at executor level where we have repo path context."
+    }
+  ],
+
+  "mango_review_points": [
+    "After each project_work cycle completes, Mango should review the run output (posted to Discord) and check:",
+    "1. Did Prizm actually complete the assigned task? (Check PROJECT_STATE.md was updated)",
+    "2. Did Prizm create a proper feature branch? (Check branch name follows feature/bb-{task} convention)",
+    "3. Did Prizm commit and push? (Check git log for new commit)",
+    "4. Is the code quality acceptable? (Spot-check the diff for obvious errors)",
+    "5. Did Prizm pick the RIGHT task? (Verify she worked on the first incomplete task, not a repeat)",
+    "6. Did Prizm's report match what actually happened? (Cross-reference report with git log)",
+    "Mango should post review feedback to Discord, tagging Prizm with specific, actionable notes.",
+    "If Prizm made errors, Mango should update PROJECT_STATE.md with corrections or new tasks.",
+    "Review frequency: at least once per day, ideally after every project_work cycle while Mango is active."
+  ],
+
+  "implementation_notes": {
+    "phased_loop_pseudocode": "phases := []Phase{...}; phaseIdx := 0; iterInPhase := 0; for phaseIdx < len(phases) && totalIterations < 20 { phase := phases[phaseIdx]; if iterInPhase >= phase.MaxIterations { phaseIdx++; iterInPhase = 0; injectPhaseTransition(phaseIdx); continue; } response := callLLM(); parsed := parseResponse(response); if parsed.Type == 'tool_request' { if !phase.AllowsTool(parsed.ToolName) { injectToolDenied(phase, parsed.ToolName); continue; } result := executeTool(parsed); updateRunState(result); feedResultToLLM(result); } iterInPhase++; }",
+    "branch_check_caching": "Run git branch --show-current once at start of run, cache result. Re-check after any git checkout operation. This avoids running the command on every tool call.",
+    "task_parser_markers": "PROJECT_STATE.md should use consistent markers: `- [ ]` for incomplete, `- [x]` for complete, `- [~]` for in-progress. The parser looks for these patterns under 'FEATURE PRIORITY' or 'REMAINING' sections.",
+    "backward_compatibility": "All changes are additive. The existing flat loop behavior is preserved as a fallback if phase configuration is disabled. The AutoApproveMutations flag still controls approval gating.",
+    "testing_strategy": "Each component should be testable independently: (1) Phase enforcer with mock LLM responses, (2) Branch protection with a test git repo, (3) Commit-push enforcement with tracked state, (4) Task parser with sample PROJECT_STATE.md files, (5) Stuck detector with repeated mock responses."
+  }
+}

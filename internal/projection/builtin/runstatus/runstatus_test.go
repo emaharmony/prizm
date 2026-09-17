@@ -3,7 +3,7 @@ package runstatus
 import (
 	"testing"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 func TestRunStatusProjection_Name(t *testing.T) {
@@ -36,8 +36,8 @@ func TestRunStatusProjection_LifecycleTransitions(t *testing.T) {
 	p := New()
 
 	// Task created
-	p.Apply(event.NewEvent("prism.task.created", "test", map[string]any{
-		"task": "hello world", "project": "prism", "agent": "lumi",
+	p.Apply(event.NewEvent("prizm.task.created", "test", map[string]any{
+		"task": "hello world", "project": "prizm", "agent": "lumi",
 	}))
 	snap := p.Snapshot()
 	if snap["status"] != "created" {
@@ -48,8 +48,8 @@ func TestRunStatusProjection_LifecycleTransitions(t *testing.T) {
 	}
 
 	// Task started
-	p.Apply(event.NewEvent("prism.task.started", "test", map[string]any{
-		"task": "hello world", "project": "prism", "agent": "lumi",
+	p.Apply(event.NewEvent("prizm.task.started", "test", map[string]any{
+		"task": "hello world", "project": "prizm", "agent": "lumi",
 	}))
 	snap = p.Snapshot()
 	if snap["status"] != "running" {
@@ -57,8 +57,8 @@ func TestRunStatusProjection_LifecycleTransitions(t *testing.T) {
 	}
 
 	// Task completed
-	p.Apply(event.NewEvent("prism.task.completed", "test", map[string]any{
-		"task": "hello world", "project": "prism", "agent": "lumi",
+	p.Apply(event.NewEvent("prizm.task.completed", "test", map[string]any{
+		"task": "hello world", "project": "prizm", "agent": "lumi",
 	}))
 	snap = p.Snapshot()
 	if snap["status"] != "completed" {
@@ -69,13 +69,13 @@ func TestRunStatusProjection_LifecycleTransitions(t *testing.T) {
 func TestRunStatusProjection_FailedRun(t *testing.T) {
 	p := New()
 
-	p.Apply(event.NewEvent("prism.task.created", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.task.created", "test", map[string]any{
 		"task": "failing task",
 	}))
-	p.Apply(event.NewEvent("prism.task.started", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.task.started", "test", map[string]any{
 		"task": "failing task",
 	}))
-	p.Apply(event.NewEvent("prism.task.failed", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.task.failed", "test", map[string]any{
 		"task": "failing task", "error": "something went wrong",
 	}))
 
@@ -92,7 +92,7 @@ func TestRunStatusProjection_Idempotency(t *testing.T) {
 	p := New()
 
 	// Apply the same created event twice
-	evt := event.NewEvent("prism.task.created", "test", map[string]any{
+	evt := event.NewEvent("prizm.task.created", "test", map[string]any{
 		"task": "idempotent test",
 	})
 	p.Apply(evt)
@@ -108,7 +108,7 @@ func TestRunStatusProjection_IgnoresUnrelatedEvents(t *testing.T) {
 	p := New()
 
 	// Apply an unrelated event type
-	p.Apply(event.NewEvent("prism.tool.requested", "test", nil))
+	p.Apply(event.NewEvent("prizm.tool.requested", "test", nil))
 
 	snap := p.Snapshot()
 	if snap["status"] != "unknown" {
@@ -119,7 +119,7 @@ func TestRunStatusProjection_IgnoresUnrelatedEvents(t *testing.T) {
 func TestRunStatusProjection_MetadataFromPayload(t *testing.T) {
 	p := New()
 
-	evt := event.NewEvent("prism.task.created", "test", map[string]any{
+	evt := event.NewEvent("prizm.task.created", "test", map[string]any{
 		"task": "metadata test", "project": "myproject", "agent": "assistant",
 	})
 

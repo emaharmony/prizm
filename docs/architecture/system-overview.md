@@ -4,7 +4,7 @@ The framework, not the model, owns lifecycle and effects.
 
 ```mermaid
 flowchart LR
-  ingress["CLI / API / scheduler / integrations"] --> runtime["Prism lifecycle"]
+  ingress["CLI / API / scheduler / integrations"] --> runtime["Prizm lifecycle"]
   runtime --> context["Context + routing + planning"]
   context --> model["Untrusted model boundary"]
   model --> proposal["Output / tool request / mutation proposal"]

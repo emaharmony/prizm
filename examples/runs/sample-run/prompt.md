@@ -1,13 +1,13 @@
-# Prism Prompt — Sample Run
+# Prizm Prompt — Sample Run
 
 ## Agent
 lumi
 
 ## Project
-prism
+prizm
 
 ## Task
-Explain the Prism event lifecycle
+Explain the Prizm event lifecycle
 
 ## Rules
 - Follow the task directly

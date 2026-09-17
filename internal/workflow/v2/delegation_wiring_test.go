@@ -20,7 +20,7 @@ func delegConfig() *WorkflowConfig {
 }
 
 func TestHandleDelegateHappyPath(t *testing.T) {
-	dm := NewDelegationManager("prism.agent.x", "prism.agent.x.complete")
+	dm := NewDelegationManager("prizm.agent.x", "prizm.agent.x.complete")
 	engine := NewEngine(delegConfig(), nil, dm)
 	engine.GetState().Plan = &PlanGraph{Tasks: []PlanTask{{ID: "T2", Description: "build the thing", Agent: "mango", Status: "pending"}}}
 
@@ -70,7 +70,7 @@ func TestHandleDelegateGuards(t *testing.T) {
 // End-to-end: the model delegates a task, its completion arrives as an external
 // event, and the task_completion gate then passes.
 func TestDriveDelegatesAndCompletes(t *testing.T) {
-	dm := NewDelegationManager("prism.agent.x", "prism.agent.x.complete")
+	dm := NewDelegationManager("prizm.agent.x", "prizm.agent.x.complete")
 	engine := NewEngine(delegConfig(), nil, dm)
 	engine.GetState().Plan = &PlanGraph{Tasks: []PlanTask{{ID: "T2", Description: "x", Agent: "mango", Status: "pending"}}}
 	ch := engine.GetExternalEventChannel()

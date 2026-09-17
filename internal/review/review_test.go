@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 func TestReviewerGenerateNoMutation(t *testing.T) {
@@ -161,7 +161,7 @@ func TestWriteReviewArtifact(t *testing.T) {
 	}
 
 	content := string(data)
-	if !strings.Contains(content, "# Prism Review") {
+	if !strings.Contains(content, "# Prizm Review") {
 		t.Error("expected review.md to contain title")
 	}
 	if !strings.Contains(content, "run_123") {

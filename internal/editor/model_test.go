@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/orchestrator"
 )
 
 func TestConfigToEditorState(t *testing.T) {
@@ -486,7 +486,7 @@ func TestWriteConfigToFile(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	path := dir + "/prism.yaml"
+	path := dir + "/prizm.yaml"
 	if err := WriteConfigToFile(state, path, dir); err != nil {
 		t.Fatalf("WriteConfigToFile error: %v", err)
 	}
@@ -514,7 +514,7 @@ func TestWriteConfigToFile_InvalidState(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	path := dir + "/prism.yaml"
+	path := dir + "/prizm.yaml"
 	err := WriteConfigToFile(state, path, dir)
 	if err == nil {
 		t.Error("expected error for invalid state")
@@ -530,10 +530,10 @@ func TestValidateWritePath(t *testing.T) {
 		path string
 		ok   bool
 	}{
-		{"abs within jail", filepath.Join(base, "prism.yaml"), true},
+		{"abs within jail", filepath.Join(base, "prizm.yaml"), true},
 		{"relative within jail", "config.yaml", true},
 		{"nested within jail", filepath.Join(base, "sub", "config.yml"), true},
-		{"absolute outside jail", "/etc/prism/config.yml", false}, // escapes jail
+		{"absolute outside jail", "/etc/prizm/config.yml", false}, // escapes jail
 		{"relative traversal", "../../../etc/passwd.yaml", false}, // escapes jail
 		{"wrong extension", filepath.Join(base, "config.json"), false},
 		{"traversal back in", filepath.Join(base, "..", filepath.Base(base), "ok.yaml"), true},

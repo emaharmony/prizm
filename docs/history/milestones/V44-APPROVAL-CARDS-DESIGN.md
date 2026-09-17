@@ -14,9 +14,9 @@ Interactive buttons make the high-stakes human-in-the-loop moment one click.
 The correctness-critical core is pure and unit-tested; the discordgo wiring is thin
 glue over it.
 
-### Button codec (`cmd/prism-cli/approval_buttons.go`)
+### Button codec (`cmd/prizm-cli/approval_buttons.go`)
 
-- `encodeFeedbackButtonID(gate, action, runID)` → `prismfb:<gate>:<action>:<runID>`;
+- `encodeFeedbackButtonID(gate, action, runID)` → `prizmfb:<gate>:<action>:<runID>`;
   `decodeFeedbackButtonID` parses it back and rejects foreign/malformed IDs.
 - `buildFeedbackButtons(phase, runID)` returns the gate's buttons: approve /
   changes / reject for FEEDBACK_PRE, approve / changes for FEEDBACK_POST (a
@@ -40,13 +40,13 @@ glue over it.
 
 - The feedback notifier attaches `buildFeedbackButtons(phase, runID)` to the gate
   message (the typed commands still work in parallel).
-- `prism serve` registers an `OnButton` handler that runs `feedbackButtonPayload`
-  and publishes to `prism.workflow.feedback.response` — the same subject the typed
+- `prizm serve` registers an `OnButton` handler that runs `feedbackButtonPayload`
+  and publishes to `prizm.workflow.feedback.response` — the same subject the typed
   path uses, so the engine resume logic is unchanged.
 
 ## Tests
 
-`cmd/prism-cli/approval_buttons_test.go`: id encode/decode + foreign/malformed
+`cmd/prizm-cli/approval_buttons_test.go`: id encode/decode + foreign/malformed
 rejection; button sets per gate with round-tripping ids; payload mapping for
 pre/post × approve/changes/reject; and guards (foreign id, non-`gl-` run, unknown
 action). The discordgo send/interaction glue is covered by build + the existing

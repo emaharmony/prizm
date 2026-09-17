@@ -1,4 +1,4 @@
-// Package sqlite registers Prism's SQLite database/sql driver.
+// Package sqlite registers Prizm's SQLite database/sql driver.
 package sqlite
 
 import _ "modernc.org/sqlite" // CGO-free SQLite driver

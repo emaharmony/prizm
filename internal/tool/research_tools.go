@@ -5,17 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/emaharmony/prizm/internal/memory"
 )
 
 // research_tools.go provides the read-only RESEARCH-phase tools: web_search and
 // memory_search. Both are PolicyApproved (no filesystem mutation). They let the
 // gated loop's PROBE/RESEARCH phases reach outside the codebase — the web and
-// Prism's Remembrance memory — instead of only grepping local files.
+// Prizm's Remembrance memory — instead of only grepping local files.
 
 // MemorySearcher is the minimal surface the memory_search tool needs. The
 // *remembrance.Client satisfies it; using an interface here avoids a
@@ -24,14 +27,21 @@ type MemorySearcher interface {
 	Search(query, mode, category, tier string, limit int) (map[string]any, error)
 }
 
-// MemorySearchTool queries Prism's Remembrance memory service mid-loop.
+// LocalMemoryStore is the minimal surface for local markdown memory fallback.
+type LocalMemoryStore interface {
+	Search(ctx context.Context, query string, limit int) ([]memory.Memory, error)
+}
+
+// MemorySearchTool queries Prizm's long-term memory mid-loop.
+// It tries Recall (Remembrance) first, then falls back to local MarkdownStore.
 type MemorySearchTool struct {
-	Searcher MemorySearcher
+	Searcher    MemorySearcher   // Recall client (nil = disabled)
+	LocalStore  LocalMemoryStore  // Local fallback (nil = no fallback)
 }
 
 func (t *MemorySearchTool) Name() string { return "memory_search" }
 func (t *MemorySearchTool) Description() string {
-	return "Searches Prism's long-term memory (Remembrance) for relevant past context, decisions, and facts."
+	return "Searches Prizm's long-term memory (Remembrance) for relevant past context, decisions, and facts."
 }
 func (t *MemorySearchTool) Schema() ToolSchema {
 	return ToolSchema{
@@ -42,23 +52,54 @@ func (t *MemorySearchTool) Schema() ToolSchema {
 		Output: ParamSpec{Type: "object", Description: "Matching memories with scores and snippets"},
 	}
 }
-func (t *MemorySearchTool) Execute(_ context.Context, input map[string]any) (ToolResult, error) {
+func (t *MemorySearchTool) Execute(ctx context.Context, input map[string]any) (ToolResult, error) {
 	query, ok := input["query"].(string)
 	if !ok || strings.TrimSpace(query) == "" {
 		return ToolResult{Success: false, Error: "required parameter 'query' must be a non-empty string"}, nil
-	}
-	if t.Searcher == nil {
-		return ToolResult{Success: false, Error: "memory search is not configured (Remembrance disabled)"}, nil
 	}
 	limit := 5
 	if l, ok := input["limit"].(float64); ok && l > 0 {
 		limit = int(l)
 	}
-	results, err := t.Searcher.Search(query, "hybrid", "", "", limit)
-	if err != nil {
-		return ToolResult{Success: false, Error: fmt.Sprintf("memory search failed: %v", err)}, nil
+
+	log.Printf("[MEMORY-SEARCH] query=%q limit=%d searcher=%v localStore=%v", query, limit, t.Searcher != nil, t.LocalStore != nil)
+
+	// Try Recall first. Use "keyword" mode for fast, reliable results.
+	// "balanced" and "hybrid" modes can hang due to FTS5 WAL issues.
+	if t.Searcher != nil {
+		results, err := t.Searcher.Search(query, "keyword", "", "", limit)
+		if err == nil && results != nil {
+			return ToolResult{Success: true, Output: results}, nil
+		}
+		log.Printf("[MEMORY-SEARCH] Recall search failed: err=%v, trying local fallback", err)
 	}
-	return ToolResult{Success: true, Output: results}, nil
+
+	// Fallback to local store
+	if t.LocalStore != nil {
+		memories, err := t.LocalStore.Search(ctx, query, limit)
+		if err != nil {
+			log.Printf("[MEMORY-SEARCH] local store search error: %v", err)
+		} else if len(memories) > 0 {
+			output := map[string]any{
+				"source":  "local",
+				"results": memories,
+				"count":   len(memories),
+			}
+			return ToolResult{Success: true, Output: output}, nil
+		} else {
+			// Empty search grounding: when search returns no results, tell the agent
+			// to admit ignorance rather than fabricating details.
+			output := map[string]any{
+				"source":  "local",
+				"results": []any{},
+				"count":   0,
+				"guidance": "No memories found for this query. If you don't have relevant memories about this topic, say 'I don't have that in my records' — do NOT fabricate or guess specific details about your own identity, project history, or relationships.",
+			}
+			return ToolResult{Success: true, Output: output}, nil
+		}
+	}
+
+	return ToolResult{Success: false, Error: "memory search is not configured (both Remembrance and local store are unavailable)"}, nil
 }
 
 // WebSearchConfig configures the web_search tool. It targets a generic JSON
@@ -66,13 +107,16 @@ func (t *MemorySearchTool) Execute(_ context.Context, input map[string]any) (Too
 // query string and returns JSON works (Brave, Serper, SearXNG, etc.).
 type WebSearchConfig struct {
 	// Endpoint is the search API base URL. The query is added as the QueryParam.
-	// Read from PRISM_WEBSEARCH_URL when empty.
+	// Read from PRIZM_WEBSEARCH_URL when empty.
 	Endpoint string
 	// QueryParam is the query string parameter name (default "q").
+	// Read from PRIZM_WEBSEARCH_QUERY_PARAM when empty.
 	QueryParam string
-	// APIKey, when set, is sent as a Bearer token. Read from PRISM_WEBSEARCH_KEY.
+	// APIKey, when set, is sent as a Bearer token. Read from PRIZM_WEBSEARCH_KEY.
 	APIKey string
 	// AuthHeader overrides the header name for the key (default "Authorization").
+	// Read from PRIZM_WEBSEARCH_AUTH_HEADER when empty.
+	// For Brave Search, set this to "X-Subscription-Token".
 	AuthHeader string
 }
 
@@ -102,27 +146,33 @@ func (t *WebSearchTool) Execute(ctx context.Context, input map[string]any) (Tool
 
 	endpoint := t.Config.Endpoint
 	if endpoint == "" {
-		endpoint = os.Getenv("PRISM_WEBSEARCH_URL")
+		endpoint = os.Getenv("PRIZM_WEBSEARCH_URL")
 	}
 	if endpoint == "" {
-		return ToolResult{Success: false, Error: "web search is not configured — set PRISM_WEBSEARCH_URL (and PRISM_WEBSEARCH_KEY if required)"}, nil
+		return ToolResult{Success: false, Error: "web search is not configured — set PRIZM_WEBSEARCH_URL (and PRIZM_WEBSEARCH_KEY if required)"}, nil
 	}
 	apiKey := t.Config.APIKey
 	if apiKey == "" {
-		apiKey = os.Getenv("PRISM_WEBSEARCH_KEY")
+		apiKey = os.Getenv("PRIZM_WEBSEARCH_KEY")
 	}
 	queryParam := t.Config.QueryParam
+	if queryParam == "" {
+		queryParam = os.Getenv("PRIZM_WEBSEARCH_QUERY_PARAM")
+	}
 	if queryParam == "" {
 		queryParam = "q"
 	}
 	authHeader := t.Config.AuthHeader
+	if authHeader == "" {
+		authHeader = os.Getenv("PRIZM_WEBSEARCH_AUTH_HEADER")
+	}
 	if authHeader == "" {
 		authHeader = "Authorization"
 	}
 
 	u, err := url.Parse(endpoint)
 	if err != nil {
-		return ToolResult{Success: false, Error: fmt.Sprintf("invalid PRISM_WEBSEARCH_URL: %v", err)}, nil
+		return ToolResult{Success: false, Error: fmt.Sprintf("invalid PRIZM_WEBSEARCH_URL: %v", err)}, nil
 	}
 	q := u.Query()
 	q.Set(queryParam, query)
@@ -166,8 +216,8 @@ func (t *WebSearchTool) Execute(ctx context.Context, input map[string]any) (Tool
 
 // RegisterResearchTools adds web_search and memory_search to the registry.
 // Pass a nil searcher to register memory_search in a disabled state.
-func RegisterResearchTools(registry *Registry, searcher MemorySearcher, webCfg WebSearchConfig) *Registry {
-	registry.Register(&MemorySearchTool{Searcher: searcher})
+func RegisterResearchTools(registry *Registry, searcher MemorySearcher, localStore LocalMemoryStore, webCfg WebSearchConfig) *Registry {
+	registry.Register(&MemorySearchTool{Searcher: searcher, LocalStore: localStore})
 	registry.Register(&WebSearchTool{Config: webCfg})
 	return registry
 }

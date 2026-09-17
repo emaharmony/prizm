@@ -1,11 +1,11 @@
-// Package discordbot provides the Discord bot adapter for Prism V20.
+// Package discordbot provides the Discord bot adapter for Prizm V20.
 //
 // Unlike the existing webhook-based discord adapter (which only posts
 // run summaries), this adapter implements a full Discord bot gateway:
 //   - Inbound: Receives Discord messages → publishes `<agent-id>.channel.received` events
 //   - Outbound: Subscribes to `<agent-id>.channel.sent` events → sends Discord messages
 //
-// This is the adapter that makes Prism live on Discord — you can talk to
+// This is the adapter that makes Prizm live on Discord — you can talk to
 // it and it talks back.
 //
 // Uses discordgo (bwmarrin/discordgo) for the Discord gateway connection.
@@ -13,6 +13,7 @@ package discordbot
 
 import (
 	"context"
+	"bytes"
 	"fmt"
 	"log"
 	"strings"
@@ -29,7 +30,7 @@ const MessageLimit = 2000
 // chunks right at Discord's hard limit.
 const MessageChunkLimit = 1900
 
-// BotAdapter connects Prism to Discord as a bot for bidirectional messaging.
+// BotAdapter connects Prizm to Discord as a bot for bidirectional messaging.
 type BotAdapter struct {
 	token    string
 	session  *discordgo.Session
@@ -46,7 +47,7 @@ type BotAdapter struct {
 // Implementations typically route the message to the agent router.
 type MessageHandler func(msg *InboundMessage)
 
-// InboundMessage represents a Discord message coming into Prism.
+// InboundMessage represents a Discord message coming into Prizm.
 type InboundMessage struct {
 	ChannelID string // Discord channel ID
 	UserID    string // Discord user ID
@@ -58,7 +59,7 @@ type InboundMessage struct {
 	MessageID string // Discord message ID (for replies)
 }
 
-// OutboundMessage represents a message going from Prism to Discord.
+// OutboundMessage represents a message going from Prizm to Discord.
 type OutboundMessage struct {
 	ChannelID string          // Discord channel to send to
 	Content   string          // Message content
@@ -77,8 +78,8 @@ type MessageButton struct {
 }
 
 // ButtonHandler is called when a user clicks an interactive button, with the
-// button's custom ID and the clicking user's id/name.
-type ButtonHandler func(customID, userID, userName string)
+// button's custom ID, the clicking user's id/name, and the channel ID.
+type ButtonHandler func(customID, userID, userName, channelID string)
 
 // NewBotAdapter creates a new Discord bot adapter with the given bot token.
 func NewBotAdapter(token string) *BotAdapter {
@@ -190,7 +191,7 @@ func (b *BotAdapter) onInteractionCreate(s *discordgo.Session, ic *discordgo.Int
 	b.mu.RUnlock()
 	log.Printf("[DISCORD] dispatching to %d button handlers", len(hs))
 	for _, h := range hs {
-		h(customID, userID, userName)
+		h(customID, userID, userName, ic.ChannelID)
 	}
 }
 
@@ -461,4 +462,31 @@ func safeSplitIndex(content string, maxLen int) int {
 	// Fallback: skip the first rune entirely
 	_, size := utf8.DecodeRuneInString(content)
 	return size
+}
+
+// SendAudio sends an audio file to a Discord channel as a voice message.
+// The audio data should be a WAV file. It's sent as an attachment with
+// the flag 8192 (IS_VOICE_MESSAGE) so Discord renders it as a voice clip.
+func (b *BotAdapter) SendAudio(channelID string, audio []byte) error {
+	if b.session == nil {
+		return fmt.Errorf("discord-bot: not connected")
+	}
+
+	// Create a reader for the audio data
+	audioReader := bytes.NewReader(audio)
+
+	// Send as a file attachment with voice message flag
+	files := []*discordgo.File{
+		{
+			Name:        "voice.wav",
+			ContentType: "audio/wav",
+			Reader:      audioReader,
+		},
+	}
+
+	_, err := b.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+		Files: files,
+		Flags: 8192, // IS_VOICE_MESSAGE
+	})
+	return err
 }

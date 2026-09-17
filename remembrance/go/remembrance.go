@@ -1,4 +1,4 @@
-package prism
+package prizm
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 )
 
 // RemembranceClient is the Go interface for calling the Remembrance memory service.
-// This is what the Prism agent runtime uses before executing an agent.
+// This is what the Prizm agent runtime uses before executing an agent.
 type RemembranceClient interface {
 	BuildContext(ctx context.Context, req BuildContextRequest) (*BuildContextResponse, error)
 	SearchMemory(ctx context.Context, req SearchMemoryRequest) (*SearchMemoryResponse, error)

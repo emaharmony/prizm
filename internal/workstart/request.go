@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/emaharmony/prism/internal/orchestrator"
-	"github.com/emaharmony/prism/internal/safety"
+	"github.com/emaharmony/prizm/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/safety"
 )
 
 // Request is the shared contract for starting agentic project work from
@@ -90,7 +90,7 @@ func ResolveRepoPath(cfg *orchestrator.Config, repoPath string) (string, error) 
 	}
 	roots := ConfiguredWriteRoots(cfg)
 	if len(roots) == 0 {
-		return "", fmt.Errorf("no configured write roots; set prism.write_roots before starting work in an explicit path")
+		return "", fmt.Errorf("no configured write roots; set prizm.write_roots before starting work in an explicit path")
 	}
 	resolved, err := safety.ResolveAndContainMulti(roots, repoPath)
 	if err != nil {
@@ -99,7 +99,7 @@ func ResolveRepoPath(cfg *orchestrator.Config, repoPath string) (string, error) 
 	return resolved, nil
 }
 
-// Resolve applies Prism's project-location rules:
+// Resolve applies Prizm's project-location rules:
 // configured project first, explicit repo_path second, otherwise ask with a
 // recommendation from the first configured write root.
 func Resolve(cfg *orchestrator.Config, req Request) (*Resolution, error) {
@@ -184,7 +184,7 @@ func locationQuestion(cfg *orchestrator.Config, res *Resolution, reason string) 
 		res.Recommendation = filepath.Join(root, SafeProjectName(name))
 		res.Question = fmt.Sprintf("I need a confirmed project folder before creating files. Recommended path: %s", res.Recommendation)
 	} else {
-		res.Question = "I need a confirmed project folder before creating files, but no prism.write_roots are configured."
+		res.Question = "I need a confirmed project folder before creating files, but no prizm.write_roots are configured."
 	}
 	return res
 }

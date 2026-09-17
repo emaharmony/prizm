@@ -1,4 +1,4 @@
-// Package stage provides Prism's pipeline execution engine.
+// Package stage provides Prizm's pipeline execution engine.
 //
 // EventPublishStage publishes all accumulated events to NATS.
 // It runs after PersistenceStage, ensuring events are durably stored
@@ -10,7 +10,7 @@ package stage
 import (
 	"context"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // NatsPublisher is the interface for publishing events to NATS.
@@ -90,17 +90,17 @@ func (s *EventPublishStage) Rollback(ctx context.Context, rc *RunContext) error 
 // Events use the format: <source>.<action> (e.g., "lumi.llm.completed")
 func eventSubject(evt event.Event) string {
 	// If the event has a source that looks like an agent ID, use it as prefix
-	if evt.Source != "" && evt.Source != "prism" && evt.Source != "prism-cli" {
+	if evt.Source != "" && evt.Source != "prizm" && evt.Source != "prizm-cli" {
 		return evt.Source + "." + eventTypeToAction(evt.Type)
 	}
 	return evt.Type
 }
 
 // eventTypeToAction extracts the action part of an event type.
-// E.g., "prism.run.started" → "run.started"
+// E.g., "prizm.run.started" → "run.started"
 func eventTypeToAction(eventType string) string {
-	// Strip "prism." prefix if present
-	if len(eventType) > 6 && eventType[:6] == "prism." {
+	// Strip "prizm." prefix if present
+	if len(eventType) > 6 && eventType[:6] == "prizm." {
 		return eventType[6:]
 	}
 	return eventType

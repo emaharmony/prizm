@@ -1,4 +1,4 @@
-﻿# Prism Troubleshooting
+﻿# Prizm Troubleshooting
 
 Common setup and runtime issues for new users, with concrete commands. Run all
 commands from the repository root (the folder with `go.mod`).
@@ -23,18 +23,18 @@ Go build/run and workflow discovery are relative to the repo root. If commands
 fail with missing packages or missing workflows, `cd` to the folder containing
 `go.mod` and retry.
 
-## `package cmd/prism-cli is not in std`
+## `package cmd/prizm-cli is not in std`
 
 Use a relative package path with the leading `./`:
 
 ```bash
-go run ./cmd/prism-cli
+go run ./cmd/prizm-cli
 ```
 
 not:
 
 ```bash
-go run cmd/prism-cli
+go run cmd/prizm-cli
 ```
 
 ## Workflow not found
@@ -43,17 +43,17 @@ Workflows load from `examples/workflows/`. List registered names and run from
 the repo root:
 
 ```bash
-go run ./cmd/prism-cli workflow list
+go run ./cmd/prizm-cli workflow list
 ```
 
 ## Config not found
 
-`prism.yaml` is not required for the echo demo. For serve/chat, create it and
+`prizm.yaml` is not required for the echo demo. For serve/chat, create it and
 pass `--config`:
 
 ```bash
-cp prism.yaml.example prism.yaml
-go run ./cmd/prism-cli config --config prism.yaml
+cp prizm.yaml.example prizm.yaml
+go run ./cmd/prizm-cli config --config prizm.yaml
 ```
 
 ## YAML parse error
@@ -61,7 +61,7 @@ go run ./cmd/prism-cli config --config prism.yaml
 Validate and summarize your config:
 
 ```bash
-go run ./cmd/prism-cli config --config prism.yaml
+go run ./cmd/prizm-cli config --config prizm.yaml
 ```
 
 Check indentation (spaces, not tabs), quoting of values with special characters,
@@ -79,7 +79,7 @@ Some actions are denied by design (e.g. `run_command` shell execution). Inspect
 the rules:
 
 ```bash
-go run ./cmd/prism-cli policy list
+go run ./cmd/prizm-cli policy list
 ```
 
 The `reason` on the matching rule explains why. See
@@ -89,7 +89,7 @@ The `reason` on the matching rule explains why. See
 
 Even when policy allows an action, local validators enforce input safety (e.g.
 workspace path checks for `read_file`/`write`). Ensure paths fall under the
-configured `read_roots` / `write_roots` in `prism.yaml`.
+configured `read_roots` / `write_roots` in `prizm.yaml`.
 
 ## Artifacts not written
 
@@ -99,17 +99,17 @@ directory is writable and check the run id echoed by the command. See
 
 ## Dashboard not loading
 
-The dashboard is served by `prism serve` on the API port (`prism.port + 1`,
+The dashboard is served by `prizm serve` on the API port (`prizm.port + 1`,
 default `8322`). Confirm serve mode is running and open
-`http://localhost:8322/`. `prism dashboard` starts a separate read-only view.
+`http://localhost:8322/`. `prizm dashboard` starts a separate read-only view.
 
 ## Provider / model not configured
 
-The echo demo needs no model. For `prism run` with a real model, pass a provider
-and model, or configure agents in `prism.yaml`:
+The echo demo needs no model. For `prizm run` with a real model, pass a provider
+and model, or configure agents in `prizm.yaml`:
 
 ```bash
-go run ./cmd/prism-cli run --task "hello" --provider ollama --model llama3.2
+go run ./cmd/prizm-cli run --task "hello" --provider ollama --model llama3.2
 ```
 
 ## API key missing
@@ -128,7 +128,7 @@ Remembrance is optional and disabled by default. If enabled, start the Python
 service and check health:
 
 ```bash
-go run ./cmd/prism-cli remembrance health
+go run ./cmd/prizm-cli remembrance health
 ```
 
 ## MCP connection failed
@@ -136,7 +136,7 @@ go run ./cmd/prism-cli remembrance health
 Probe the server before enabling it in `mcp_servers`:
 
 ```bash
-go run ./cmd/prism-cli mcp probe <name>
+go run ./cmd/prizm-cli mcp probe <name>
 ```
 
 ## Tests failing
@@ -155,12 +155,12 @@ go test ./internal/checksum/ -v -count=1
 
 ## Windows-specific notes
 
-- Use `.\prism-current.exe` style paths in PowerShell; chain commands with `;`,
+- Use `.\prizm-current.exe` style paths in PowerShell; chain commands with `;`,
   not `&&`.
 - Use forward slashes or escaped backslashes in YAML paths (e.g. `D:/projects`).
 - See [docs/WINDOWS_SETUP.md](../getting-started/WINDOWS_SETUP.md) for a full walkthrough.
 
 ## macOS / Linux notes
 
-- Prefer `go build -o prism ./cmd/prism-cli` and run `./prism`.
+- Prefer `go build -o prizm ./cmd/prizm-cli` and run `./prizm`.
 - Paths are case-sensitive on Linux; match file names exactly.

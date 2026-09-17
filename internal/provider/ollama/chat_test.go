@@ -3,14 +3,15 @@ package ollama_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/provider"
-	"github.com/emaharmony/prism/internal/provider/ollama"
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/provider/ollama"
 )
 
 func TestChatProviderImplementsInterface(t *testing.T) {
@@ -261,6 +262,60 @@ func TestChatProviderModelError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not found") {
 		t.Errorf("expected 'not found' in error, got: %v", err)
+	}
+}
+
+func TestChatProviderQuotaExhaustedFailsFastWithoutRetry(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"message": "you have reached your weekly usage limit, upgrade for higher limits"}`))
+	}))
+	defer server.Close()
+
+	cp := ollama.NewChatProvider(server.URL)
+	req := provider.ChatGenerateRequest{
+		Model:    "quota-test",
+		Messages: []provider.ChatMessage{{Role: "user", Content: "test"}},
+	}
+
+	_, err := cp.ChatGenerate(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for quota-exhausted 429")
+	}
+	if !errors.Is(err, provider.ErrQuotaExhausted) {
+		t.Errorf("expected error to wrap provider.ErrQuotaExhausted, got: %v", err)
+	}
+	if requestCount != 1 {
+		t.Errorf("quota-exhausted 429 should not be retried (no backoff burned), got %d requests", requestCount)
+	}
+}
+
+func TestChatProviderGenericRateLimitStillRetries(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"message": "rate limited, please slow down"}`))
+	}))
+	defer server.Close()
+
+	cp := ollama.NewChatProvider(server.URL)
+	req := provider.ChatGenerateRequest{
+		Model:    "test",
+		Messages: []provider.ChatMessage{{Role: "user", Content: "test"}},
+	}
+
+	_, err := cp.ChatGenerate(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for persistent 429")
+	}
+	if errors.Is(err, provider.ErrQuotaExhausted) {
+		t.Error("a generic rate-limit message should not be classified as quota exhaustion")
+	}
+	if requestCount != 4 {
+		t.Errorf("generic 429 should still retry up to 4 attempts, got %d requests", requestCount)
 	}
 }
 

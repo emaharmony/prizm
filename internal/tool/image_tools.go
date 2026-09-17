@@ -32,16 +32,16 @@ const (
 // to environment variables so deployment matches the web_search pattern.
 type ImageToolsConfig struct {
 	// ReferencesDir is where images are saved. Must sit within the agent's
-	// write roots. Empty -> PRISM_IMAGE_DIR, then "references".
+	// write roots. Empty -> PRIZM_IMAGE_DIR, then "references".
 	ReferencesDir string
 	// WorkspaceRoot is the primary workspace root for safe output_dir resolution.
 	// Empty disables containment checks.
 	WorkspaceRoot string
 	// AllowedPaths are extra write roots that output_dir may target.
 	AllowedPaths []string
-	// ImageSearchEndpoint is a JSON image-search endpoint. Empty -> PRISM_IMAGE_SEARCH_URL.
+	// ImageSearchEndpoint is a JSON image-search endpoint. Empty -> PRIZM_IMAGE_SEARCH_URL.
 	ImageSearchEndpoint string
-	// ImageSearchKey is an optional bearer token. Empty -> PRISM_IMAGE_SEARCH_KEY.
+	// ImageSearchKey is an optional bearer token. Empty -> PRIZM_IMAGE_SEARCH_KEY.
 	ImageSearchKey string
 	// ImageSearchQueryParam is the query parameter name for image search. Empty -> q.
 	ImageSearchQueryParam string
@@ -58,14 +58,14 @@ type ImageToolsConfig struct {
 	// CodexRunner and CodexLookPath are injectable seams for tests.
 	CodexRunner   ImageCommandRunner
 	CodexLookPath imageLookPathFunc
-	// ImageGenEndpoint is a text->image HTTP endpoint. Empty -> PRISM_IMAGEGEN_URL.
+	// ImageGenEndpoint is a text->image HTTP endpoint. Empty -> PRIZM_IMAGEGEN_URL.
 	ImageGenEndpoint string
-	// ImageGenKey is an optional bearer token. Empty -> PRISM_IMAGEGEN_KEY.
+	// ImageGenKey is an optional bearer token. Empty -> PRIZM_IMAGEGEN_KEY.
 	ImageGenKey string
 	// VisionBaseURL is the Ollama base URL for analyze_image. Empty ->
-	// PRISM_VISION_URL, then OLLAMA_BASE_URL, then http://localhost:11434.
+	// PRIZM_VISION_URL, then OLLAMA_BASE_URL, then http://localhost:11434.
 	VisionBaseURL string
-	// VisionModel is the vision-capable model tag. Empty -> PRISM_VISION_MODEL,
+	// VisionModel is the vision-capable model tag. Empty -> PRIZM_VISION_MODEL,
 	// then the default VLM.
 	VisionModel string
 }
@@ -74,7 +74,7 @@ func (c ImageToolsConfig) referencesDir() string {
 	if c.ReferencesDir != "" {
 		return c.ReferencesDir
 	}
-	if d := os.Getenv("PRISM_IMAGE_DIR"); d != "" {
+	if d := os.Getenv("PRIZM_IMAGE_DIR"); d != "" {
 		return d
 	}
 	return defaultReferencesDir
@@ -84,21 +84,21 @@ func (c ImageToolsConfig) imageGenEndpoint() string {
 	if c.ImageGenEndpoint != "" {
 		return c.ImageGenEndpoint
 	}
-	return os.Getenv("PRISM_IMAGEGEN_URL")
+	return os.Getenv("PRIZM_IMAGEGEN_URL")
 }
 
 func (c ImageToolsConfig) imageGenKey() string {
 	if c.ImageGenKey != "" {
 		return c.ImageGenKey
 	}
-	return os.Getenv("PRISM_IMAGEGEN_KEY")
+	return os.Getenv("PRIZM_IMAGEGEN_KEY")
 }
 
 func (c ImageToolsConfig) visionBaseURL() string {
 	if c.VisionBaseURL != "" {
 		return c.VisionBaseURL
 	}
-	if u := os.Getenv("PRISM_VISION_URL"); u != "" {
+	if u := os.Getenv("PRIZM_VISION_URL"); u != "" {
 		return u
 	}
 	if u := os.Getenv("OLLAMA_BASE_URL"); u != "" {
@@ -111,7 +111,7 @@ func (c ImageToolsConfig) visionModel() string {
 	if c.VisionModel != "" {
 		return c.VisionModel
 	}
-	if m := os.Getenv("PRISM_VISION_MODEL"); m != "" {
+	if m := os.Getenv("PRIZM_VISION_MODEL"); m != "" {
 		return m
 	}
 	return defaultVisionModel
@@ -203,7 +203,7 @@ func (t *GenerateImageTool) Execute(ctx context.Context, input map[string]any) (
 	}
 	endpoint := t.Config.imageGenEndpoint()
 	if endpoint == "" {
-		return ToolResult{Success: false, Error: "image generation is not configured — set PRISM_IMAGEGEN_URL (and PRISM_IMAGEGEN_KEY if required)"}, nil
+		return ToolResult{Success: false, Error: "image generation is not configured — set PRIZM_IMAGEGEN_URL (and PRIZM_IMAGEGEN_KEY if required)"}, nil
 	}
 
 	reqBody, _ := json.Marshal(map[string]any{"prompt": prompt})

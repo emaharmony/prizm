@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/autopatch"
-	"github.com/emaharmony/prism/internal/delegation"
-	"github.com/emaharmony/prism/internal/editor"
-	"github.com/emaharmony/prism/internal/orchestrator"
-	"github.com/emaharmony/prism/internal/session"
-	"github.com/emaharmony/prism/internal/task"
-	v2 "github.com/emaharmony/prism/internal/workflow/v2"
+	"github.com/emaharmony/prizm/internal/autopatch"
+	"github.com/emaharmony/prizm/internal/delegation"
+	"github.com/emaharmony/prizm/internal/editor"
+	"github.com/emaharmony/prizm/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/session"
+	"github.com/emaharmony/prizm/internal/task"
+	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 )
 
 type fakeAutoPatchStarter struct {
@@ -77,7 +77,7 @@ func newTestAPI(t *testing.T) (*Server, func()) {
 
 	// Config for orchestrator
 	cfg := &orchestrator.Config{
-		Prism: orchestrator.PrismConfig{
+		Prizm: orchestrator.PrizmConfig{
 			DataDir: dir,
 		},
 		Agents: []orchestrator.AgentConfig{
@@ -718,7 +718,7 @@ func TestAPI_CostsReturnsWorkflowTokenNumbers(t *testing.T) {
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		t.Fatalf("mkdir run dir: %v", err)
 	}
-	eventLine := `{"id":"evt_cost","type":"prism.llm.completed","source":"test","timestamp":"2026-07-08T00:00:00Z","payload":{"provider":"openai","model":"gpt-4o"},"metadata":{"agent":"agent1","token_usage":{"prompt_tokens":120,"completion_tokens":80,"total_tokens":200,"estimated_cost_usd":0.002}}}` + "\n"
+	eventLine := `{"id":"evt_cost","type":"prizm.llm.completed","source":"test","timestamp":"2026-07-08T00:00:00Z","payload":{"provider":"openai","model":"gpt-4o"},"metadata":{"agent":"agent1","token_usage":{"prompt_tokens":120,"completion_tokens":80,"total_tokens":200,"estimated_cost_usd":0.002}}}` + "\n"
 	if err := os.WriteFile(filepath.Join(runDir, "events.jsonl"), []byte(eventLine), 0o644); err != nil {
 		t.Fatalf("write events: %v", err)
 	}

@@ -1,4 +1,4 @@
-// Package agent provides Prism's agent model and registry (V13).
+// Package agent provides Prizm's agent model and registry (V13).
 //
 // An Agent is a named LLM-backed entity with declared capabilities. Agents
 // collaborate through the event stream — they don't message each other

@@ -5,19 +5,19 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // ToolExecuteFunc executes a tool by name with the given input.
-// The caller provides the implementation (e.g., connecting to Prism's tool.Executor).
+// The caller provides the implementation (e.g., connecting to Prizm's tool.Executor).
 type ToolExecuteFunc func(ctx context.Context, toolName string, input map[string]any) (map[string]any, error)
 
 // GateEvaluateFunc evaluates a gate by name with the given input.
-// The caller provides the implementation (e.g., connecting to Prism's gate.Evaluator).
+// The caller provides the implementation (e.g., connecting to Prizm's gate.Evaluator).
 type GateEvaluateFunc func(ctx context.Context, gateName string, input map[string]any) (map[string]any, error)
 
 // DispatchRunFunc runs a dispatch adapter with the given input.
-// The caller provides the implementation (e.g., connecting to Prism's dispatch.Dispatcher).
+// The caller provides the implementation (e.g., connecting to Prizm's dispatch.Dispatcher).
 type DispatchRunFunc func(ctx context.Context, adapterName string, input map[string]any) (map[string]any, error)
 
 // StepHandlers provides function-based handlers for each step type.
@@ -289,6 +289,6 @@ func (r *Runner) Run(ctx context.Context, w *Workflow, input map[string]any) (*R
 // emit sends an event through the emitter if one is set.
 func (r *Runner) emit(eventType string, payload map[string]any) {
 	if r.emitter != nil {
-		r.emitter(eventType, "prism-workflow", payload)
+		r.emitter(eventType, "prizm-workflow", payload)
 	}
 }

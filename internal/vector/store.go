@@ -1,4 +1,4 @@
-// Package vector provides Prism's vector search capability (V15).
+// Package vector provides Prizm's vector search capability (V15).
 //
 // Vector search enables semantic similarity queries over events, runs, and
 // artifacts. "Find runs similar to this task", "what events are related to X",
@@ -11,7 +11,7 @@
 //   - SQLiteVectorStore for persistence + in-memory HNSW-like index
 //   - Built-in providers: Mock (deterministic test), OpenAI, Ollama
 //
-// The pure-Go index maintains Prism's single-binary deployment story.
+// The pure-Go index maintains Prizm's single-binary deployment story.
 // No external vector database required. For V17+, a pgvector adapter
 // can be added for horizontal scale.
 package vector

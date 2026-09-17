@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/gitx"
+	"github.com/emaharmony/prizm/internal/gitx"
 )
 
 // initGitRepo creates a git repo with one commit on "main" in a temp dir and
@@ -22,8 +22,8 @@ func initGitRepo(t *testing.T) string {
 		}
 	}
 	mustRun("init", "-b", "main")
-	mustRun("config", "user.email", "test@prism.local")
-	mustRun("config", "user.name", "Prism Test")
+	mustRun("config", "user.email", "test@prizm.local")
+	mustRun("config", "user.name", "Prizm Test")
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("hello\n"), 0644); err != nil {
 		t.Fatal(err)
 	}

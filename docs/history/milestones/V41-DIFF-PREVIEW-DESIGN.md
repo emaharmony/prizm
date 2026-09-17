@@ -38,7 +38,7 @@ tested without a real repo; `execGit` is the production `git -C <repo> …` runn
 
 ## Tests
 
-`cmd/prism-cli/workflow_feedback_notifier_test.go`: merge-base path (diffs
+`cmd/prizm-cli/workflow_feedback_notifier_test.go`: merge-base path (diffs
 `base...HEAD`), fallback to last commit when no base ref, empty on all-fail / no
 repo path, and truncation of oversized output.
 

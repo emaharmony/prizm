@@ -10,7 +10,7 @@ func TestShouldRespond_ManagerRoom(t *testing.T) {
 		"hey",
 		"+1",
 		"lol",
-		"what's the status of prism?",
+		"what's the status of prizm?",
 		"fix the bug",
 		"",
 	}

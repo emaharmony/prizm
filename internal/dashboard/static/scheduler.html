@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Cron Jobs · Prism</title>
+<title>Cron Jobs · Prizm</title>
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
 <nav class="nav">
-  <span class="brand">◆ Prism</span>
+  <span class="brand">◆ Prizm</span>
   <a href="/index.html">Runs</a>
   <a href="/v2.html">Status</a>
   <a href="/scheduler.html" class="active">Cron Jobs</a>
@@ -19,7 +19,7 @@
 
 <div class="container">
   <h1 class="page-title">Cron Jobs</h1>
-  <p class="page-sub">Schedule recurring wake actions. Each job fires a NATS event on its cron schedule; the wake handler runs the action. Changes are saved to <span class="mono">prism.yaml</span> and apply after a <span class="mono">prism serve</span> restart.</p>
+  <p class="page-sub">Schedule recurring wake actions. Each job fires a NATS event on its cron schedule; the wake handler runs the action. Changes are saved to <span class="mono">prizm.yaml</span> and apply after a <span class="mono">prizm serve</span> restart.</p>
 
   <div id="banner" class="banner"></div>
 
@@ -65,7 +65,7 @@ const ACTION_LABELS = {
   project_work: "Project work (gated loop)",
   memory_consolidation: "Memory consolidation",
 };
-const DEFAULT_EVENT = "prism.task.scheduled";
+const DEFAULT_EVENT = "prizm.task.scheduled";
 let ACTIONS = [];
 let jobs = [];
 
@@ -219,7 +219,7 @@ async function save() {
       method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body)
     });
     const res = await r.json();
-    if (r.ok) banner("✓ Saved " + res.jobs + " job(s) to prism.yaml. ⟳ Restart `prism serve` to apply.", "ok");
+    if (r.ok) banner("✓ Saved " + res.jobs + " job(s) to prizm.yaml. ⟳ Restart `prizm serve` to apply.", "ok");
     else banner("✗ " + (res.error || ("HTTP " + r.status)), "err");
   } catch (e) { banner("Save failed: " + e, "err"); }
   finally { btn.disabled = false; }

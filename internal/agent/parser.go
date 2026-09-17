@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/emaharmony/prism/internal/tool"
+	"github.com/emaharmony/prizm/internal/tool"
 )
 
 // AgentResponseType distinguishes between a final text response and a tool request.
@@ -229,7 +229,7 @@ func BuildToolPromptSuffix(toolInfos []tool.ToolInfo, workspaceRoot string, allo
 	sb.WriteString("\nYou may make at most ONE tool request per response. If you need multiple tool calls, respond with the first one and the system will provide results.\n")
 	sb.WriteString("\n### V4: File Mutation Approval\n")
 	sb.WriteString("File mutations require approval. You may propose a file change using write_file_proposal.\n")
-	sb.WriteString("Do not claim that a file was changed unless Prism returns a successful mutation.applied event.\n")
-	sb.WriteString("If your proposal is approved, the file will be written by Prism and you will receive a mutation.applied confirmation.\n")
+	sb.WriteString("Do not claim that a file was changed unless Prizm returns a successful mutation.applied event.\n")
+	sb.WriteString("If your proposal is approved, the file will be written by Prizm and you will receive a mutation.applied confirmation.\n")
 	return sb.String()
 }

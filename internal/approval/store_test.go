@@ -10,7 +10,7 @@ func TestApprovalStoreFileExistence(t *testing.T) {
 	store := NewStore(tmpDir)
 
 	policy := PolicyDecision{Decision: "requires_approval", Reason: "test"}
-	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prism", "write_file", "test.txt", "hello", policy)
+	a := NewApproval("run_01KM", "corr_01KM", "test-cli", "prizm", "write_file", "test.txt", "hello", policy)
 
 	if err := store.Save(a); err != nil {
 		t.Fatalf("failed to save: %v", err)
@@ -28,8 +28,8 @@ func TestApprovalStoreSaveIdempotentOnSameRun(t *testing.T) {
 	store := NewStore(tmpDir)
 
 	policy := PolicyDecision{Decision: "requires_approval", Reason: "test"}
-	a1 := NewApproval("run_01KM", "corr_01KM", "test-cli", "prism", "write_file", "file1.txt", "content1", policy)
-	a2 := NewApproval("run_01KM", "corr_01KM", "test-cli", "prism", "write_file", "file2.txt", "content2", policy)
+	a1 := NewApproval("run_01KM", "corr_01KM", "test-cli", "prizm", "write_file", "file1.txt", "content1", policy)
+	a2 := NewApproval("run_01KM", "corr_01KM", "test-cli", "prizm", "write_file", "file2.txt", "content2", policy)
 
 	store.Save(a1)
 	store.Save(a2)
@@ -44,8 +44,8 @@ func TestApprovalStoreSaveIdempotentOnSameRun(t *testing.T) {
 
 func TestNewApprovalDifferentRunIDs(t *testing.T) {
 	policy := PolicyDecision{Decision: "requires_approval", Reason: "test"}
-	a1 := NewApproval("run_A", "corr_A", "test", "prism", "write_file", "test.txt", "x", policy)
-	a2 := NewApproval("run_B", "corr_B", "test", "prism", "write_file", "test.txt", "x", policy)
+	a1 := NewApproval("run_A", "corr_A", "test", "prizm", "write_file", "test.txt", "x", policy)
+	a2 := NewApproval("run_B", "corr_B", "test", "prizm", "write_file", "test.txt", "x", policy)
 
 	if a1.ApprovalID == a2.ApprovalID {
 		t.Error("different runs should produce different approval IDs")

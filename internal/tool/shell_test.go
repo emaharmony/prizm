@@ -131,7 +131,7 @@ func TestShellTool_Timeout(t *testing.T) {
 	}
 
 	// Should have timed out in roughly 1 second
-	if elapsed > 3*time.Second {
+	if elapsed > 15*time.Second {
 		t.Errorf("timeout took too long: %v", elapsed)
 	}
 

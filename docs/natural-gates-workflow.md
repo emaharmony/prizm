@@ -23,29 +23,29 @@ The Natural Gates Workflow System replaces hardcoded iteration-based loops with 
 ## Natural Gates
 
 ### Assumption Tracking
-Prism declares assumptions during PROBE:
+Prizm declares assumptions during PROBE:
 ```
 ASSUMPTION: The API supports pagination | confidence: 0.3 | criticality: high
 ```
 Gate exits when weighted score < 2.0 (blocker=4x, high=2x, medium=1x, low=0.5x).
 
 ### Confidence Tracking
-Prism declares confidence during RESEARCH:
+Prizm declares confidence during RESEARCH:
 ```
 CONFIDENCE: codebase_understanding | 0.8 | reason: read all relevant files
 ```
 7 domains. Gate uses weakest-link principle — overall = minimum across all domains.
 
 ### Plan Completeness
-Prism declares tasks during PLAN:
+Prizm declares tasks during PLAN:
 ```
-TASK: T1 | description: Fix auth flow | agent: prism | depends_on: [] | success: sign-in works end-to-end
+TASK: T1 | description: Fix auth flow | agent: prizm | depends_on: [] | success: sign-in works end-to-end
 ```
 Gate evaluates: tasks identified (30%), resources assigned (30%), dependencies (20%), success criteria (10%), risk mitigation (10%).
 
 ## Multi-Agent Delegation
 
-Prism can delegate tasks to:
+Prizm can delegate tasks to:
 - **Mango** (deepseek-v4-pro) — code review, data structuring, computation
 - **Junie** (JetBrains) — refactoring, test writing, debugging
 - **Lumi** (OpenClaw) — architecture, creative direction, consultation
@@ -108,13 +108,13 @@ phases:
 ## CLI
 ```bash
 # View current workflow status
-prism workflow v2 status
+prizm workflow v2 status
 
 # List all workflow runs
-prism workflow v2 list
+prizm workflow v2 list
 
 # Export state as JSON
-prism workflow v2 export
+prizm workflow v2 export
 ```
 
 ## V36 Enforcement (Preserved in EXECUTION)

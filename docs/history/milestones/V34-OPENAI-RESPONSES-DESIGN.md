@@ -31,7 +31,7 @@ It:
 
 ### Serve Integration
 
-`cmd/prism-cli/cmd_serve.go` creates the Responses provider when an agent config uses `provider: openai_responses`.
+`cmd/prizm-cli/cmd_serve.go` creates the Responses provider when an agent config uses `provider: openai_responses`.
 
 Unsupported provider errors list the currently supported serve-mode providers:
 
@@ -43,7 +43,7 @@ Unsupported provider errors list the currently supported serve-mode providers:
 
 ### Config Example
 
-`prism.yaml.example` includes a commented API-backed agent example.
+`prizm.yaml.example` includes a commented API-backed agent example.
 
 ```yaml
 # - id: openai-reviewer

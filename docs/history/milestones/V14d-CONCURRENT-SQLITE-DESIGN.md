@@ -2,11 +2,11 @@
 
 ## Mission
 
-Prism needs to handle concurrent runs safely and persist state reliably.
+Prizm needs to handle concurrent runs safely and persist state reliably.
 V14d adds SQLite for event storage, run locking for concurrent safety,
 and SHA-256 checksums for artifact integrity.
 
-**Prism is React for AI.** State must be durable and consistent. SQLite
+**Prizm is React for AI.** State must be durable and consistent. SQLite
 gives us ACID guarantees. Run locks prevent concurrent mutation. Checksums
 prove artifacts weren't tampered with.
 
@@ -46,14 +46,14 @@ type EventFilter struct {
 
 Key design decisions:
 - **SQLite WAL mode** for concurrent reads. Writers are serialized but readers
-  never block. This is the correct tradeoff for Prism's workload (many reads,
+  never block. This is the correct tradeoff for Prizm's workload (many reads,
   occasional writes).
 - **JSONL remains the interchange format.** SQLite is the primary store, but
   we still write events.jsonl for human readability and debugging.
-  `prism run --export` dumps SQLite to JSONL.
+  `prizm run --export` dumps SQLite to JSONL.
 - **Migration-free schema.** Single table `events` with JSON payload.
   No schema migrations to worry about.
-- **Default path:** `~/.prism/prism.db` (configurable via `--db-path`).
+- **Default path:** `~/.prizm/prizm.db` (configurable via `--db-path`).
 
 ### 2. Run Locking
 
@@ -85,7 +85,7 @@ Key design decisions:
 ### 3. Artifact Checksums
 
 SHA-256 checksums for all written artifacts. If an artifact is tampered
-with after Prism writes it, the next run can detect it.
+with after Prizm writes it, the next run can detect it.
 
 ```go
 // internal/checksum/checksum.go
@@ -113,7 +113,7 @@ Key design decisions:
 
 ### 4. Embedded Bus (--embedded-bus)
 
-For getting started without NATS, `prism run --embedded-bus` starts an
+For getting started without NATS, `prizm run --embedded-bus` starts an
 in-process NATS server.
 
 ```go
@@ -130,14 +130,14 @@ This eliminates the "install NATS first" friction for new users.
 
 ```bash
 # New flags
-prism run --db-path ~/.prism/prism.db    # Custom SQLite path
-prism run --embedded-bus                   # Start in-process NATS
-prism run --recover <run_id>              # Skip lock for crash recovery
+prizm run --db-path ~/.prizm/prizm.db    # Custom SQLite path
+prizm run --embedded-bus                   # Start in-process NATS
+prizm run --recover <run_id>              # Skip lock for crash recovery
 
 # New commands
-prism db init                              # Initialize the database
-prism db export <run_id>                   # Export run events to JSONL
-prism db stats                             # Show database statistics
+prizm db init                              # Initialize the database
+prizm db export <run_id>                   # Export run events to JSONL
+prizm db stats                             # Show database statistics
 ```
 
 ## File Structure
@@ -159,7 +159,7 @@ internal/
 │   └── checksum_test.go   # NEW: Checksum tests
 ├── bus/
 │   └── embedded.go        # NEW: In-process NATS server
-cmd/prism-cli/
+cmd/prizm-cli/
 │   ├── cmd_run.go          # Updated: --db-path, --embedded-bus, --recover
 │   ├── cmd_db.go          # NEW: db init, db export, db stats
 │   └── main.go            # Updated: register db command
@@ -174,8 +174,8 @@ cmd/prism-cli/
 5. `internal/checksum/checksum.go` — ComputeChecksum, VerifyChecksum, WriteWithChecksum, ReadWithChecksum
 6. `internal/checksum/checksum_test.go` — All checksum operations tested
 7. `internal/bus/embedded.go` — StartEmbeddedBus with in-process NATS
-8. `cmd/prism-cli/cmd_db.go` — db init, db export, db stats commands
-9. `cmd/prism-cli/cmd_run.go` — Updated with --db-path, --embedded-bus, --recover flags
+8. `cmd/prizm-cli/cmd_db.go` — db init, db export, db stats commands
+9. `cmd/prizm-cli/cmd_run.go` — Updated with --db-path, --embedded-bus, --recover flags
 10. All 414+ existing tests pass unchanged
 11. New tests for all new packages
 12. Design doc: `docs/V14d-CONCURRENT-SQLITE-DESIGN.md`

@@ -1,4 +1,4 @@
-// Package remembrance provides a Prism adapter for the Remembrance memory layer.
+// Package remembrance provides a Prizm adapter for the Remembrance memory layer.
 //
 // Remembrance is a universal memory system for AI agents. It provides:
 //   - Knowledge graph (entities, edges, facts)
@@ -7,14 +7,14 @@
 //   - Dream cycle (automated maintenance)
 //   - MCP + REST + CLI interfaces
 //
-// This adapter wraps Remembrance's REST API, allowing Prism workflows
+// This adapter wraps Remembrance's REST API, allowing Prizm workflows
 // to capture memories, search context, query the knowledge graph,
 // and trigger the dream cycle natively.
 //
 // Architecture Decision: The adapter communicates via HTTP to the
 // Remembrance service (default remcli.DefaultBaseURL). This keeps
-// Prism and Remembrance as separate processes — Remembrance is
-// Python, Prism is Go. The adapter is thin: it translates Prism
+// Prizm and Remembrance as separate processes — Remembrance is
+// Python, Prizm is Go. The adapter is thin: it translates Prizm
 // adapter calls to HTTP requests.
 package remembrance
 
@@ -25,8 +25,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/emaharmony/prism/internal/adapter"
-	remcli "github.com/emaharmony/prism/internal/remembrance"
+	"github.com/emaharmony/prizm/internal/adapter"
+	remcli "github.com/emaharmony/prizm/internal/remembrance"
 )
 
 // Adapter implements adapter.Adapter for Remembrance memory layer.

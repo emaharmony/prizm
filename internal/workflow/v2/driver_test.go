@@ -49,7 +49,7 @@ func testConfig() *WorkflowConfig {
 }
 
 func planResponse() string {
-	return "TASK: T1 | description: do the thing | agent: prism | success: it works\n" +
+	return "TASK: T1 | description: do the thing | agent: prizm | success: it works\n" +
 		"PLAN_COMPLETE\n" + `{"type":"final","content":"plan ready"}`
 }
 

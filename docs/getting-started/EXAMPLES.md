@@ -1,8 +1,8 @@
-﻿# Prism Examples
+﻿# Prizm Examples
 
 A guided tour of the example configurations and demo flows shipped in the repo.
 All commands assume you are at the repository root. Use `go run
-./cmd/prism-cli ...` or a built `prism` binary.
+./cmd/prizm-cli ...` or a built `prizm` binary.
 
 ## Demo Index
 
@@ -24,8 +24,8 @@ All commands assume you are at the repository root. Use `go run
 **Run:**
 
 ```bash
-go run ./cmd/prism-cli workflow show demo.echo_tool
-go run ./cmd/prism-cli workflow run demo.echo_tool
+go run ./cmd/prizm-cli workflow show demo.echo_tool
+go run ./cmd/prizm-cli workflow run demo.echo_tool
 ```
 
 **Expected output:** the workflow runs the `echo` tool and reports a completed
@@ -52,8 +52,8 @@ List the rules, then evaluate a JSON request. Create `request.json`:
 ```
 
 ```bash
-go run ./cmd/prism-cli policy list
-go run ./cmd/prism-cli policy evaluate --input request.json
+go run ./cmd/prizm-cli policy list
+go run ./cmd/prizm-cli policy evaluate --input request.json
 ```
 
 **Expected output:** `run_command` is denied by the `deny_shell_execution` rule;
@@ -74,9 +74,9 @@ go run ./cmd/prism-cli policy evaluate --input request.json
 ```bash
 # 1. Run a workflow/task that proposes a file mutation.
 # 2. List pending approvals:
-go run ./cmd/prism-cli approval list
+go run ./cmd/prizm-cli approval list
 # 3. Approve or deny:
-go run ./cmd/prism-cli approval approve <id> --by ema
+go run ./cmd/prizm-cli approval approve <id> --by ema
 ```
 
 **What to inspect:** approval records and the resulting events.
@@ -90,8 +90,8 @@ go run ./cmd/prism-cli approval approve <id> --by ema
 **Run:**
 
 ```bash
-go run ./cmd/prism-cli adapter list
-go run ./cmd/prism-cli workflow run demo.adapter_echo
+go run ./cmd/prizm-cli adapter list
+go run ./cmd/prizm-cli workflow run demo.adapter_echo
 ```
 
 **Expected output:** the echo adapter returns the dispatched message. The
@@ -107,12 +107,12 @@ go run ./cmd/prism-cli workflow run demo.adapter_echo
 **Run:**
 
 ```bash
-go run ./cmd/prism-cli runs
-go run ./cmd/prism-cli runs latest --json
+go run ./cmd/prizm-cli runs
+go run ./cmd/prizm-cli runs latest --json
 ```
 
 **What to inspect:** each artifact and how events chain together. For a live
-gated-loop run, `prism watch` and `prism trace <run_id>` show progress and the
+gated-loop run, `prizm watch` and `prizm trace <run_id>` show progress and the
 causal event DAG.
 
 ## Example 6 — Multi-Agent Workflow
@@ -122,7 +122,7 @@ causal event DAG.
 **Files:** [`examples/workflows/demo-agents.yaml`](../../examples/workflows/demo-agents.yaml)
 
 > Status: Experimental. This flow requires configured agents (see
-> [`prism.yaml.example`](../../prism.yaml.example)) and a working provider (e.g.
+> [`prizm.yaml.example`](../../prizm.yaml.example)) and a working provider (e.g.
 > Ollama). Without configured agents, use it as a structural reference.
 
 **What to inspect:** delegation events (`agent.delegated`, `agent.completed`) in

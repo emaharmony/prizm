@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/orchestrator"
-	"github.com/emaharmony/prism/internal/provider"
-	"github.com/emaharmony/prism/internal/session"
-	"github.com/emaharmony/prism/internal/task"
+	"github.com/emaharmony/prizm/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/session"
+	"github.com/emaharmony/prizm/internal/task"
 )
 
 // fakeChatProvider implements both provider.Provider and provider.ChatProvider
@@ -105,7 +105,7 @@ func newInvocationTestAPIWithIdle(t *testing.T, agents []orchestrator.AgentConfi
 	}
 
 	cfg := &orchestrator.Config{
-		Prism:    orchestrator.PrismConfig{DataDir: dir},
+		Prizm:    orchestrator.PrizmConfig{DataDir: dir},
 		Agents:   agents,
 		Sessions: orchestrator.SessionConfig{MaxContextMessages: 50, CompactionStrategy: "truncate"},
 	}
@@ -338,7 +338,7 @@ func invokeAndWait(t *testing.T, s *Server, agentID, body string) map[string]any
 }
 
 // TestAPI_AgentInvoke_ConversationRetainsHistory is the core regression for the
-// "prism-eddie forgets the previous answer" bug: a second call sharing a
+// "prizm-eddie forgets the previous answer" bug: a second call sharing a
 // conversation_id must see the first exchange threaded into the prompt.
 func TestAPI_AgentInvoke_ConversationRetainsHistory(t *testing.T) {
 	agents := []orchestrator.AgentConfig{invokableAgent("eddie")}

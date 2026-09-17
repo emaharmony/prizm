@@ -6,8 +6,8 @@ Split `runner.go` (1199 lines) from a monolithic function into a composable
 Stage pipeline. Each stage is an event producer. The pipeline IS the event-driven
 architecture. Add streaming LLM responses so events are visible as they happen.
 
-**Prism is React for AI.** When state changes (events), actions fire automatically.
-The event bus IS the render loop. React::setState → re-render :: Prism::emitEvent → runActions.
+**Prizm is React for AI.** When state changes (events), actions fire automatically.
+The event bus IS the render loop. React::setState → re-render :: Prizm::emitEvent → runActions.
 
 ## Why V14a First
 
@@ -283,14 +283,14 @@ func (s *LLMStage) Execute(ctx context.Context, rc *RunContext) (*RunContext, *S
 **Streaming path:**
 1. Call `GenerateStream()` → get a `<-chan TokenChunk`
 2. Read tokens from the channel
-3. Every 50ms (or 5 tokens), emit a `prism.llm.token` event with batched tokens
-4. On completion, emit `prism.llm.completed` with full response
-5. Token events go to NATS subject `PRISM_TOKENS` (1h retention, max 10000 messages)
+3. Every 50ms (or 5 tokens), emit a `prizm.llm.token` event with batched tokens
+4. On completion, emit `prizm.llm.completed` with full response
+5. Token events go to NATS subject `PRIZM_TOKENS` (1h retention, max 10000 messages)
 6. Token events are NOT written to events.jsonl (only `llm.completed` is persisted)
 
 **Synchronous path (backward compat):**
 1. Call `Generate()` → get full response
-2. Emit `prism.llm.completed` immediately
+2. Emit `prizm.llm.completed` immediately
 3. No token events
 
 ### Mock Streaming Provider
@@ -370,13 +370,13 @@ internal/
 5. StreamingProvider interface with GenerateStream method
 6. Mock streaming provider with simulated timing
 7. Ollama streaming provider with 50ms token batching
-8. Token events on separate NATS stream `PRISM_TOKENS` (1h retention)
+8. Token events on separate NATS stream `PRIZM_TOKENS` (1h retention)
 9. Token events excluded from events.jsonl (only llm.completed persisted)
 10. All 351+ existing tests pass unchanged (Runner API unchanged)
 11. `runner.go` reduced to ~200 lines (thin wrapper around Pipeline)
 12. Each stage is independently testable with mock dependencies
 13. Design doc: `docs/V14a-DECOMPOSE-STREAM-DESIGN.md`
-14. Version: `prism v0.14.0`
+14. Version: `prizm v0.14.0`
 
 ## What V14a Does NOT Include
 

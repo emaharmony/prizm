@@ -3,7 +3,7 @@ package approval
 import (
 	"testing"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 func TestApprovalStateProjection_Name(t *testing.T) {
@@ -25,7 +25,7 @@ func TestApprovalStateProjection_FullLifecycle(t *testing.T) {
 	p := New()
 
 	// Approval requested
-	p.Apply(event.NewEvent("prism.approval.requested", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.approval.requested", "test", map[string]any{
 		"approval_id":     "appr_001",
 		"mutation_type":   "write_file",
 		"target_path":     "/src/main.go",
@@ -43,7 +43,7 @@ func TestApprovalStateProjection_FullLifecycle(t *testing.T) {
 	}
 
 	// Approval granted
-	p.Apply(event.NewEvent("prism.approval.granted", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.approval.granted", "test", map[string]any{
 		"approval_id": "appr_001",
 	}))
 	snap = p.Snapshot()
@@ -63,10 +63,10 @@ func TestApprovalStateProjection_FullLifecycle(t *testing.T) {
 func TestApprovalStateProjection_Denied(t *testing.T) {
 	p := New()
 
-	p.Apply(event.NewEvent("prism.approval.requested", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.approval.requested", "test", map[string]any{
 		"approval_id": "appr_002",
 	}))
-	p.Apply(event.NewEvent("prism.approval.denied", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.approval.denied", "test", map[string]any{
 		"approval_id": "appr_002",
 	}))
 
@@ -85,10 +85,10 @@ func TestApprovalStateProjection_Denied(t *testing.T) {
 func TestApprovalStateProjection_Expired(t *testing.T) {
 	p := New()
 
-	p.Apply(event.NewEvent("prism.approval.requested", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.approval.requested", "test", map[string]any{
 		"approval_id": "appr_003",
 	}))
-	p.Apply(event.NewEvent("prism.approval.expired", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.approval.expired", "test", map[string]any{
 		"approval_id": "appr_003",
 	}))
 
@@ -103,16 +103,16 @@ func TestApprovalStateProjection_Expired(t *testing.T) {
 func TestApprovalStateProjection_MultipleApprovals(t *testing.T) {
 	p := New()
 
-	p.Apply(event.NewEvent("prism.approval.requested", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.approval.requested", "test", map[string]any{
 		"approval_id": "appr_010",
 	}))
-	p.Apply(event.NewEvent("prism.approval.requested", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.approval.requested", "test", map[string]any{
 		"approval_id": "appr_011",
 	}))
-	p.Apply(event.NewEvent("prism.approval.requested", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.approval.requested", "test", map[string]any{
 		"approval_id": "appr_012",
 	}))
-	p.Apply(event.NewEvent("prism.approval.granted", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.approval.granted", "test", map[string]any{
 		"approval_id": "appr_010",
 	}))
 
@@ -129,7 +129,7 @@ func TestApprovalStateProjection_MultipleApprovals(t *testing.T) {
 
 func TestApprovalStateProjection_IgnoresUnrelatedEvents(t *testing.T) {
 	p := New()
-	p.Apply(event.NewEvent("prism.task.created", "test", nil))
+	p.Apply(event.NewEvent("prizm.task.created", "test", nil))
 
 	snap := p.Snapshot()
 	totalCount, _ := snap["total_count"].(int)

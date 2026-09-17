@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/provider"
-	"github.com/emaharmony/prism/internal/provider/gemini"
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/provider/gemini"
 )
 
 // ---------- Streaming tests ----------

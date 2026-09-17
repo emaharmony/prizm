@@ -152,7 +152,7 @@ func (t *CollectReferenceImagesTool) collectWithCodex(ctx context.Context, promp
 		return nil, "codex unavailable or unauthenticated: " + truncateStr(reason, 300), nil
 	}
 
-	lastMsg, err := os.CreateTemp("", "prism-codex-image-*.json")
+	lastMsg, err := os.CreateTemp("", "prizm-codex-image-*.json")
 	if err != nil {
 		return nil, fmt.Sprintf("codex temp output failed: %v", err), nil
 	}
@@ -206,7 +206,7 @@ func (t *CollectReferenceImagesTool) collectWithCodex(ctx context.Context, promp
 func (t *CollectReferenceImagesTool) collectWithSearch(ctx context.Context, prompt string, count int, dir, prefix string, offset int, client *http.Client) ([]string, []string, error) {
 	sources := t.Config.imageSearchSources()
 	if len(sources) == 0 {
-		return nil, nil, fmt.Errorf("image search is not configured - set PRISM_IMAGE_SEARCH_URL or PRISM_WEBSEARCH_URL")
+		return nil, nil, fmt.Errorf("image search is not configured - set PRIZM_IMAGE_SEARCH_URL or PRIZM_WEBSEARCH_URL")
 	}
 	var errs []string
 	for _, source := range sources {
@@ -275,18 +275,18 @@ func resolveImageOutputDir(cfg ImageToolsConfig, input map[string]any) (string, 
 
 func (c ImageToolsConfig) imageSearchSources() []imageSearchSource {
 	var sources []imageSearchSource
-	if endpoint := strings.TrimSpace(firstNonEmptyImage(c.ImageSearchEndpoint, os.Getenv("PRISM_IMAGE_SEARCH_URL"))); endpoint != "" {
+	if endpoint := strings.TrimSpace(firstNonEmptyImage(c.ImageSearchEndpoint, os.Getenv("PRIZM_IMAGE_SEARCH_URL"))); endpoint != "" {
 		sources = append(sources, imageSearchSource{
 			Endpoint:   endpoint,
-			APIKey:     firstNonEmptyImage(c.ImageSearchKey, os.Getenv("PRISM_IMAGE_SEARCH_KEY")),
-			QueryParam: firstNonEmptyImage(c.ImageSearchQueryParam, os.Getenv("PRISM_IMAGE_SEARCH_QUERY_PARAM"), "q"),
+			APIKey:     firstNonEmptyImage(c.ImageSearchKey, os.Getenv("PRIZM_IMAGE_SEARCH_KEY")),
+			QueryParam: firstNonEmptyImage(c.ImageSearchQueryParam, os.Getenv("PRIZM_IMAGE_SEARCH_QUERY_PARAM"), "q"),
 		})
 	}
-	if endpoint := strings.TrimSpace(os.Getenv("PRISM_WEBSEARCH_URL")); endpoint != "" && !sameEndpoint(endpoint, sources) {
+	if endpoint := strings.TrimSpace(os.Getenv("PRIZM_WEBSEARCH_URL")); endpoint != "" && !sameEndpoint(endpoint, sources) {
 		sources = append(sources, imageSearchSource{
 			Endpoint:   endpoint,
-			APIKey:     os.Getenv("PRISM_WEBSEARCH_KEY"),
-			QueryParam: firstNonEmptyImage(os.Getenv("PRISM_WEBSEARCH_QUERY_PARAM"), "q"),
+			APIKey:     os.Getenv("PRIZM_WEBSEARCH_KEY"),
+			QueryParam: firstNonEmptyImage(os.Getenv("PRIZM_WEBSEARCH_QUERY_PARAM"), "q"),
 		})
 	}
 	return sources
@@ -400,7 +400,7 @@ func codexImagePrompt(prompt string, count int) string {
 		},
 	}
 	b, _ := json.Marshal(payload)
-	return "Prism Scout needs reference images. If this Codex runtime has an image generation service/tool available, use it and return ONLY JSON matching the contract below. If no image service/tool is available, return ONLY {\"available\":false,\"images\":[],\"reason\":\"image output unavailable\"}. Do not include markdown or commentary.\n" + string(b)
+	return "Prizm Scout needs reference images. If this Codex runtime has an image generation service/tool available, use it and return ONLY JSON matching the contract below. If no image service/tool is available, return ONLY {\"available\":false,\"images\":[],\"reason\":\"image output unavailable\"}. Do not include markdown or commentary.\n" + string(b)
 }
 
 func parseImageCandidatesFromText(text string) ([]imageCandidate, string) {

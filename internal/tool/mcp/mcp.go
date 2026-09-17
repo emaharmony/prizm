@@ -1,6 +1,6 @@
 // Package mcp adapts external Model Context Protocol (MCP) tool servers into
-// Prism's tool.Tool abstraction, so remote MCP tools register into the standard
-// tool.Registry and inherit Prism's whole execution substrate — policy gating,
+// Prizm's tool.Tool abstraction, so remote MCP tools register into the standard
+// tool.Registry and inherit Prizm's whole execution substrate — policy gating,
 // approval, path/write enforcement, and audit events — with no engine change.
 //
 // This package is transport-agnostic: it depends only on the Client interface
@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/emaharmony/prism/internal/tool"
+	"github.com/emaharmony/prizm/internal/tool"
 )
 
 // ToolDef is an MCP tool definition as returned by `tools/list`.
@@ -31,14 +31,14 @@ type CallResult struct {
 	Raw     map[string]any // full result for callers that want structure
 }
 
-// Client is the minimal MCP surface Prism needs from a server. A concrete
+// Client is the minimal MCP surface Prizm needs from a server. A concrete
 // transport implements this; tests provide a mock.
 type Client interface {
 	ListTools(ctx context.Context) ([]ToolDef, error)
 	CallTool(ctx context.Context, name string, args map[string]any) (CallResult, error)
 }
 
-// ToolName builds the namespaced Prism tool name for an MCP tool, so tools from
+// ToolName builds the namespaced Prizm tool name for an MCP tool, so tools from
 // different servers can't collide and are easy to identify/policy-scope.
 func ToolName(server, tool string) string {
 	return "mcp_" + sanitize(server) + "_" + sanitize(tool)
@@ -95,7 +95,7 @@ func (m *mappedTool) Execute(ctx context.Context, input map[string]any) (tool.To
 	return tr, nil
 }
 
-// SchemaFromJSON maps an MCP JSON-Schema input object to a Prism ToolSchema.
+// SchemaFromJSON maps an MCP JSON-Schema input object to a Prizm ToolSchema.
 // Unknown/missing fields degrade gracefully to an empty input set.
 func SchemaFromJSON(js map[string]any) tool.ToolSchema {
 	schema := tool.ToolSchema{Input: map[string]tool.ParamSpec{}, Output: tool.ParamSpec{Type: "object", Description: "MCP tool result"}}

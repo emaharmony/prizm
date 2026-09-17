@@ -1,4 +1,4 @@
-// Package tool implements Prism's tool execution system (V3+) — the controlled way
+// Package tool implements Prizm's tool execution system (V3+) — the controlled way
 // an AI agent interacts with the outside world.
 //
 // The key insight: the LLM doesn't decide what tools can do. A deterministic Policy
@@ -9,7 +9,7 @@
 //
 // Why is the LLM NOT in charge of policy? Because an LLM can be tricked via prompt
 // injection. If the LLM could decide "yes, write to /etc/passwd", a clever prompt
-// could make it say yes. By keeping policy deterministic, Prism is safe even if
+// could make it say yes. By keeping policy deterministic, Prizm is safe even if
 // the model is compromised.
 //
 // Current policies (V4):
@@ -25,7 +25,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/emaharmony/prism/internal/safety"
+	"github.com/emaharmony/prizm/internal/safety"
 )
 
 // PolicyConfig holds the configuration for policy decisions.
@@ -62,6 +62,23 @@ type PolicyConfig struct {
 	// text reaching the model, so they default to approval-required and only run
 	// unattended when an operator explicitly turns this on.
 	AutoApproveMCP bool
+
+	// SafeShellPolicy classifies shell commands that are safe enough to
+	// auto-run even in gated mode (e.g. the tier_1 allowlist: read-only
+	// git/build/test commands). It is deliberately separate from
+	// AutoApproveMutations — a command that fails this check still falls
+	// through to the normal requires_approval gate rather than being denied.
+	// The hard blocklist inside EvaluateShellPolicy is always enforced
+	// first, regardless of this policy's tier.
+	SafeShellPolicy ShellPolicy
+
+	// FrozenPaths is a list of file paths that are governance-frozen. Any write
+	// operation targeting these paths is denied regardless of other policy
+	// settings. Populated by the governance loader on startup. Supports exact
+	// paths, directory prefixes (ending in /), and glob patterns.
+	FrozenPaths []string
+	// FrozenPathReasons maps frozen path patterns to their governance reason.
+	FrozenPathReasons map[string]string
 }
 
 // DefaultPolicyConfig returns a PolicyConfig with sensible defaults.
@@ -161,10 +178,26 @@ func EvaluatePolicyForAgent(cfg PolicyConfig, toolName, agentID string, input ma
 	case "use_skill":
 		return PolicyResult{Decision: PolicyApproved, Reason: "use_skill returns skill instructions, read-only"}
 
+	// State management tools — track working state, not code mutation.
+	case "set_active_task", "clear_active_task", "state_get":
+		return PolicyResult{Decision: PolicyApproved, Reason: fmt.Sprintf("%s is state management, always approved", toolName)}
+
+	// State mutation tools — persist working state, not code. Approval-gated
+	// because they mutate the agent's durable working state; a human should
+	// confirm before recording a decision, blocking an item, or rewriting context.
+	case "update_context", "record_decision", "add_blocked", "unblock":
+		if cfg.AutoApproveMutations {
+			return PolicyResult{Decision: PolicyApproved, Reason: fmt.Sprintf("auto-approve: %s approved for autonomous wake action", toolName)}
+		}
+		return PolicyResult{Decision: PolicyRequiresApproval, Reason: fmt.Sprintf("%s mutates working state, requires approval", toolName)}
+
 	case "write_file_dry_run":
 		return PolicyResult{Decision: PolicyApproved, Reason: "write_file_dry_run is a read-only preview, no mutation"}
 
 	case "write_file_proposal":
+		if frozenPath, reason := cfg.checkFrozenPath(input); frozenPath != "" {
+			return PolicyResult{Decision: PolicyDenied, Reason: fmt.Sprintf("governance: %s (frozen path: %s)", reason, frozenPath)}
+		}
 		if agentID != "" && !cfg.CanAgentProposeWrites(agentID) {
 			return PolicyResult{Decision: PolicyDenied, Reason: fmt.Sprintf("agent %q is not allowed to propose file mutations; route write requests through the orchestrator", agentID)}
 		}
@@ -187,6 +220,9 @@ func EvaluatePolicyForAgent(cfg PolicyConfig, toolName, agentID string, input ma
 
 	case "write_file":
 		if cfg.AutoApproveMutations {
+			if frozenPath, reason := cfg.checkFrozenPath(input); frozenPath != "" {
+				return PolicyResult{Decision: PolicyDenied, Reason: fmt.Sprintf("governance: %s (frozen path: %s)", reason, frozenPath)}
+			}
 			return PolicyResult{Decision: PolicyApproved, Reason: "auto-approve: direct write approved for autonomous wake action"}
 		}
 		return PolicyResult{Decision: PolicyDenied, Reason: "direct write_file is denied — use write_file_proposal for approval-gated mutations"}
@@ -228,6 +264,10 @@ func EvaluatePolicyForAgent(cfg PolicyConfig, toolName, agentID string, input ma
 
 	// V28: Git mutation tools — require approval
 	case "git_add", "git_commit", "git_push", "create_pr":
+		// Governance check: deny if targeting a frozen path
+		if frozenPath, reason := cfg.checkFrozenPath(input); frozenPath != "" {
+			return PolicyResult{Decision: PolicyDenied, Reason: fmt.Sprintf("governance: %s (frozen path: %s)", reason, frozenPath)}
+		}
 		if agentID != "" && !cfg.CanAgentProposeWrites(agentID) {
 			return PolicyResult{Decision: PolicyDenied, Reason: fmt.Sprintf("agent %q is not allowed to propose git mutations; route write requests through the orchestrator", agentID)}
 		}
@@ -239,12 +279,20 @@ func EvaluatePolicyForAgent(cfg PolicyConfig, toolName, agentID string, input ma
 	// V60: Shell tool — policy is enforced internally by ShellTool.Execute()
 	// which checks the hard blocklist and tier-based allowlist.
 	// External policy allows it through; the tool itself enforces safety.
+	case "plan_create", "plan_list", "plan_update", "plan_approve", "plan_reject":
+		return PolicyResult{Decision: PolicyApproved, Reason: fmt.Sprintf("plan management: %s is allowed", toolName)}
+
 	case "shell":
 		if agentID != "" && !cfg.CanAgentProposeWrites(agentID) {
 			return PolicyResult{Decision: PolicyDenied, Reason: fmt.Sprintf("agent %q is not allowed to use shell; route through the orchestrator", agentID)}
 		}
 		if cfg.AutoApproveMutations {
 			return PolicyResult{Decision: PolicyApproved, Reason: "auto-approve: shell tool approved for free mode / autonomous wake action"}
+		}
+		if command, _ := input["command"].(string); command != "" {
+			if safeResult := EvaluateShellPolicy(cfg.SafeShellPolicy, command); safeResult.Allowed {
+				return PolicyResult{Decision: PolicyApproved, Reason: fmt.Sprintf("auto-approve: safe command — %s", safeResult.Reason)}
+			}
 		}
 		return PolicyResult{Decision: PolicyRequiresApproval, Reason: "shell tool requires approval in gated mode"}
 
@@ -380,3 +428,70 @@ func resolvePath(workspaceRoot, relPath string) string {
 // Path containment is now provided by internal/safety.IsWithinRoot.
 // The local implementation has been removed to eliminate duplication.
 // All path containment checks should use safety.IsWithinRoot or safety.ResolveAndContain.
+
+// checkFrozenPath checks if the tool input targets a frozen path.
+// Returns the matched frozen path pattern and reason if found.
+func (cfg PolicyConfig) checkFrozenPath(input map[string]any) (string, string) {
+	if len(cfg.FrozenPaths) == 0 {
+		return "", ""
+	}
+	// Extract the target path from tool input
+	targetPath, ok := extractPathFromInput(input)
+	if !ok || targetPath == "" {
+		return "", ""
+	}
+	for _, frozenPath := range cfg.FrozenPaths {
+		if pathMatchesFrozen(targetPath, frozenPath) {
+			reason := fmt.Sprintf("path %s is frozen", frozenPath)
+			if cfg.FrozenPathReasons != nil {
+				if r, ok := cfg.FrozenPathReasons[frozenPath]; ok {
+					reason = r
+				}
+			}
+			return frozenPath, reason
+		}
+	}
+	return "", ""
+}
+
+// extractPathFromInput extracts the file path from a tool's input parameters.
+func extractPathFromInput(input map[string]any) (string, bool) {
+	for _, key := range []string{"path", "file_path", "target_path", "filepath", "filename"} {
+		if v, ok := input[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s, true
+			}
+		}
+	}
+	return "", false
+}
+
+// pathMatchesFrozen checks if a target path matches a frozen path pattern.
+// Supports exact paths, directory prefixes (ending in /), and glob patterns.
+func pathMatchesFrozen(target, frozen string) bool {
+	target = filepath.Clean(target)
+	isDir := strings.HasSuffix(frozen, "/")
+	cleanFrozen := filepath.Clean(frozen)
+
+	if isDir {
+		if strings.HasPrefix(target, cleanFrozen+string(filepath.Separator)) || target == cleanFrozen {
+			return true
+		}
+		return false
+	}
+
+	if target == cleanFrozen {
+		return true
+	}
+
+	if matched, err := filepath.Match(cleanFrozen, target); err == nil && matched {
+		return true
+	}
+
+	base := filepath.Base(target)
+	if matched, err := filepath.Match(cleanFrozen, base); err == nil && matched {
+		return true
+	}
+
+	return false
+}

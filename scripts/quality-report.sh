@@ -26,7 +26,7 @@ report=$(mktemp)
 failed=0
 
 {
-  echo '# Prism quality report'
+  echo '# Prizm quality report'
   echo
   echo "Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo

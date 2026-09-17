@@ -4,8 +4,8 @@ import (
 	"log"
 	"strings"
 
-	"github.com/emaharmony/prism/internal/cost"
-	"github.com/emaharmony/prism/internal/provider"
+	"github.com/emaharmony/prizm/internal/cost"
+	"github.com/emaharmony/prizm/internal/provider"
 )
 
 // Recorder adapts the usage Store to the provider.UsageRecorder interface: it

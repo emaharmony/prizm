@@ -1,7 +1,7 @@
-# Default Prism Policy Configuration
+# Default Prizm Policy Configuration
 #
 # Policy decides permission. Local validators still enforce input safety.
-# This file provides safe defaults for core Prism operations.
+# This file provides safe defaults for core Prizm operations.
 # Capability.RequiresApproval is advisory — policy is authoritative.
 
 policies:
@@ -30,7 +30,7 @@ policies:
     reason: "list_files is allowlisted for workspace-scoped listing."
 
   - id: deny_shell_execution
-    description: Block shell execution in core Prism.
+    description: Block shell execution in core Prizm.
     match:
       action: tool.execute
       resource.name: run_command

@@ -8,11 +8,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/emaharmony/prism/internal/projection"
-	approvalproj "github.com/emaharmony/prism/internal/projection/builtin/approval"
-	"github.com/emaharmony/prism/internal/projection/builtin/runstatus"
-	"github.com/emaharmony/prism/internal/projection/builtin/toolhistory"
-	"github.com/emaharmony/prism/internal/safety"
+	"github.com/emaharmony/prizm/internal/projection"
+	approvalproj "github.com/emaharmony/prizm/internal/projection/builtin/approval"
+	"github.com/emaharmony/prizm/internal/projection/builtin/runstatus"
+	"github.com/emaharmony/prizm/internal/projection/builtin/toolhistory"
+	"github.com/emaharmony/prizm/internal/safety"
 
 	"gopkg.in/yaml.v3"
 )

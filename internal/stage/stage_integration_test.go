@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/event"
-	mockpkg "github.com/emaharmony/prism/internal/provider/mock"
-	"github.com/emaharmony/prism/internal/tool"
+	"github.com/emaharmony/prizm/internal/event"
+	mockpkg "github.com/emaharmony/prizm/internal/provider/mock"
+	"github.com/emaharmony/prizm/internal/tool"
 )
 
 func TestConnectionStage_Validate(t *testing.T) {
@@ -47,7 +47,7 @@ func TestConnectionStage_Validate(t *testing.T) {
 func TestConnectionStage_Execute(t *testing.T) {
 	tmpDir := t.TempDir()
 	stage := &ConnectionStage{RunDir: tmpDir}
-	rc := &RunContext{RunID: "run_test", Task: "hello", Project: "prism", Agent: "lumi"}
+	rc := &RunContext{RunID: "run_test", Task: "hello", Project: "prizm", Agent: "lumi"}
 
 	newRC, result, err := stage.Execute(context.Background(), rc)
 	if err != nil {
@@ -130,7 +130,7 @@ func TestLLMStage_Sync(t *testing.T) {
 	rc := &RunContext{
 		RunID:        "run_llm_test",
 		Task:         "say hello",
-		Project:      "prism",
+		Project:      "prizm",
 		Agent:        "lumi",
 		Provider:     mockpkg.New(),
 		ProviderName: "mock",
@@ -184,7 +184,7 @@ func TestLLMStage_Streaming(t *testing.T) {
 	rc := &RunContext{
 		RunID:        "run_stream_test",
 		Task:         "stream hello",
-		Project:      "prism",
+		Project:      "prizm",
 		Agent:        "lumi",
 		Provider:     mockpkg.New(),
 		ProviderName: "mock",
@@ -249,7 +249,7 @@ func TestPersistenceStage_Execute(t *testing.T) {
 	rc := &RunContext{
 		RunID:        "run_persist_test",
 		Task:         "test task",
-		Project:      "prism",
+		Project:      "prizm",
 		Agent:        "lumi",
 		ProviderName: "mock",
 		Model:        "mock-model",
@@ -291,7 +291,7 @@ func TestPersistenceStage_Rollback(t *testing.T) {
 	rc := &RunContext{
 		RunID:        "run_rollback_test",
 		Task:         "test task",
-		Project:      "prism",
+		Project:      "prizm",
 		Agent:        "lumi",
 		ProviderName: "mock",
 		Model:        "mock-model",
@@ -343,7 +343,7 @@ func TestFullPipeline_Integration(t *testing.T) {
 	rc := &RunContext{
 		RunID:        "run_integration_test",
 		Task:         "integration test task",
-		Project:      "prism",
+		Project:      "prizm",
 		Agent:        "lumi",
 		Provider:     mockpkg.New(),
 		ProviderName: "mock",

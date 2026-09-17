@@ -23,8 +23,8 @@ try {
     & go test '-coverpkg=./...' ./... -count=1 -args "-test.gocoverdir=$covdataDir"
     if ($LASTEXITCODE -ne 0) { throw "instrumented test suite failed" }
 
-    $coverageBinary = Join-Path $resultDir "prism-cover.exe"
-    & go build '-cover' '-coverpkg=./...' "-o=$coverageBinary" ./cmd/prism-cli
+    $coverageBinary = Join-Path $resultDir "prizm-cover.exe"
+    & go build '-cover' '-coverpkg=./...' "-o=$coverageBinary" ./cmd/prizm-cli
     if ($LASTEXITCODE -ne 0) { throw "instrumented CLI build failed" }
 
     function Invoke-Smoke([string[]]$Arguments) {
@@ -39,10 +39,10 @@ try {
     try {
         Invoke-Smoke @('--help')
         Invoke-Smoke @('version')
-        Invoke-Smoke @('config', '--config', 'prism.yaml.example', '--json')
-        Invoke-Smoke @('doctor', '--config', 'prism.yaml.example', '--json')
+        Invoke-Smoke @('config', '--config', 'prizm.yaml.example', '--json')
+        Invoke-Smoke @('doctor', '--config', 'prizm.yaml.example', '--json')
         Invoke-Smoke @('preview', '--workflow', 'examples/workflows/gated-loop.yaml')
-        Invoke-Smoke @('context', 'show', '--workspace-root', 'prism-workspace.example', '--context', 'soul')
+        Invoke-Smoke @('context', 'show', '--workspace-root', 'prizm-workspace.example', '--context', 'soul')
         Invoke-Smoke @('workflow', 'list')
         Invoke-Smoke @('workflow', 'show', 'demo.echo_tool')
         Invoke-Smoke @('workflow', 'run', 'demo.echo_tool', '--run-dir', 'test-results/coverage/cli-runs')
@@ -57,11 +57,11 @@ try {
         Invoke-Smoke @('adapter', 'health', 'echo')
         Invoke-Smoke @('projection', 'list')
         Invoke-Smoke @('skills', '--json')
-        Invoke-Smoke @('mcp', '--config', 'prism.yaml.example', '--json')
+        Invoke-Smoke @('mcp', '--config', 'prizm.yaml.example', '--json')
         Invoke-Smoke @('scan', '--json')
         Invoke-Smoke @('search', '--query', 'coverage', '--provider', 'mock')
         Invoke-Smoke @('approval', 'list')
-        Invoke-Smoke @('status', '--config', 'prism.yaml.example')
+        Invoke-Smoke @('status', '--config', 'prizm.yaml.example')
 
         $sampleDir = Join-Path $resultDir 'sample-data/run_01JR0SAMPLE0'
         New-Item -ItemType Directory -Force -Path $sampleDir | Out-Null

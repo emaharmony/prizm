@@ -1,4 +1,4 @@
-// Package policy provides a central policy engine for Prism.
+// Package policy provides a central policy engine for Prizm.
 //
 // V8 introduces the Core Policy Engine — a reusable, declarative policy layer
 // that answers: Is this action allowed? Denied? Does it require approval? Why?

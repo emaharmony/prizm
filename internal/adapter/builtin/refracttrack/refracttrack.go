@@ -1,17 +1,17 @@
 // Package refracttrack implements the Refract Track adapter (V14c).
 //
-// Refract Track is Prism's first real adapter. It auto-logs project progress
+// Refract Track is Prizm's first real adapter. It auto-logs project progress
 // when tasks complete. The model doesn't track progress — the event system does.
 //
-// When a `prism.task.completed` event fires, Refract Track automatically
+// When a `prizm.task.completed` event fires, Refract Track automatically
 // creates a progress entry with the task description, status, agent, and
 // timestamp. No manual action needed.
 //
 // This IS the thesis in action: state changes trigger actions automatically.
 // The event bus is the render loop. React::setState → re-render ::
-// Prism::emitEvent → runActions.
+// Prizm::emitEvent → runActions.
 //
-// Storage is JSONL at ~/.prism/refract-track/<project>/progress.jsonl.
+// Storage is JSONL at ~/.prizm/refract-track/<project>/progress.jsonl.
 // Each entry is a JSON object with task, status, agent, and timestamp.
 package refracttrack
 
@@ -23,12 +23,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/emaharmony/prism/internal/adapter"
+	"github.com/emaharmony/prizm/internal/adapter"
 )
 
 // RefractTrackAdapter auto-logs project progress from task completion events.
 type RefractTrackAdapter struct {
-	storagePath string // ~/.prism/refract-track/
+	storagePath string // ~/.prizm/refract-track/
 }
 
 // progressEntry is a single progress log entry.
@@ -42,10 +42,10 @@ type progressEntry struct {
 }
 
 // New creates a new RefractTrackAdapter.
-// Storage path defaults to ~/.prism/refract-track/.
+// Storage path defaults to ~/.prizm/refract-track/.
 func New() *RefractTrackAdapter {
 	homeDir, _ := os.UserHomeDir()
-	storagePath := filepath.Join(homeDir, ".prism", "refract-track")
+	storagePath := filepath.Join(homeDir, ".prizm", "refract-track")
 	return &RefractTrackAdapter{storagePath: storagePath}
 }
 

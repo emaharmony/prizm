@@ -60,7 +60,7 @@ func (e *EventLogger) Log(eventType, runID, agentID string, metadata map[string]
 		entry[k] = v
 	}
 	// Simple structured log — V21 will publish to NATS with the same event types.
-	// These map 1:1 to NATS subjects: run.started → prism.run.started, etc.
+	// These map 1:1 to NATS subjects: run.started → prizm.run.started, etc.
 	log.Printf("[RUN] event=%s run=%s agent=%s", eventType, runID, agentID)
 }
 

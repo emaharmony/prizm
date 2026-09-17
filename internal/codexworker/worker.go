@@ -1,4 +1,4 @@
-// Package codexworker runs subscription-backed Codex CLI tasks for Prism.
+// Package codexworker runs subscription-backed Codex CLI tasks for Prizm.
 package codexworker
 
 import (
@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/crossprism"
+	"github.com/emaharmony/prizm/internal/crossprizm"
 )
 
 const (
@@ -105,7 +105,7 @@ func NormalizeConfig(cfg Config) Config {
 		cfg.MaxConcurrency = DefaultMaxConcurrency
 	}
 	if cfg.DataDir == "" {
-		cfg.DataDir = filepath.Join(".", ".prism", "data", "codex")
+		cfg.DataDir = filepath.Join(".", ".prizm", "data", "codex")
 	}
 	return cfg
 }
@@ -134,7 +134,7 @@ func ValidateConfig(cfg Config) error {
 	return nil
 }
 
-// RunTask runs Codex for an existing Prism task.
+// RunTask runs Codex for an existing Prizm task.
 func (w *Worker) RunTask(ctx context.Context, taskID, description string, contextData map[string]any) (map[string]any, error) {
 	if !w.cfg.Enabled {
 		return nil, fmt.Errorf("codexworker: disabled")
@@ -216,15 +216,15 @@ func (w *Worker) RunTask(ctx context.Context, taskID, description string, contex
 	return result, nil
 }
 
-// HandleCrossPrismTask runs a signed cross-Prism task request through Codex.
-func (w *Worker) HandleCrossPrismTask(ctx context.Context, msg crossprism.Message) (*crossprism.Message, error) {
-	if msg.MessageType != crossprism.TypeTaskRequest {
+// HandleCrossPrizmTask runs a signed cross-Prizm task request through Codex.
+func (w *Worker) HandleCrossPrizmTask(ctx context.Context, msg crossprizm.Message) (*crossprizm.Message, error) {
+	if msg.MessageType != crossprizm.TypeTaskRequest {
 		return nil, nil
 	}
 	taskID := "codex-" + safeID(firstNonEmpty(msg.CorrelationID, msg.Nonce, fmt.Sprintf("%d", time.Now().UnixNano())))
-	description := crossprism.RequestText(msg)
+	description := crossprizm.RequestText(msg)
 	contextData := map[string]any{
-		"source":         "cross_prism",
+		"source":         "cross_prizm",
 		"from":           msg.From,
 		"to":             msg.To,
 		"correlation_id": msg.CorrelationID,
@@ -234,13 +234,13 @@ func (w *Worker) HandleCrossPrismTask(ctx context.Context, msg crossprism.Messag
 
 	result, err := w.RunTask(ctx, taskID, description, contextData)
 	if err != nil {
-		return &crossprism.Message{
-			MessageType: crossprism.TypeTaskResult,
+		return &crossprizm.Message{
+			MessageType: crossprizm.TypeTaskResult,
 			Response:    responseFromResult(taskID, result, true),
 		}, nil
 	}
-	return &crossprism.Message{
-		MessageType: crossprism.TypeTaskResult,
+	return &crossprizm.Message{
+		MessageType: crossprizm.TypeTaskResult,
 		Response:    responseFromResult(taskID, result, false),
 	}, nil
 }
@@ -298,7 +298,7 @@ func (osRunner) Run(ctx context.Context, executable string, args []string, stdin
 
 func buildPrompt(taskID, description string, contextData map[string]any) string {
 	var b strings.Builder
-	b.WriteString("# Prism Codex Task\n\n")
+	b.WriteString("# Prizm Codex Task\n\n")
 	b.WriteString("Task ID: ")
 	b.WriteString(taskID)
 	b.WriteString("\n\n")
@@ -429,4 +429,4 @@ func safeID(value string) string {
 
 var safeIDPattern = regexp.MustCompile(`[^A-Za-z0-9_.-]+`)
 
-var _ crossprism.TaskAdapter = (*Worker)(nil)
+var _ crossprizm.TaskAdapter = (*Worker)(nil)

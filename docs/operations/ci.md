@@ -1,6 +1,6 @@
 # Continuous Integration
 
-Prism uses GitHub Actions for continuous integration to ensure code quality and cross-platform compatibility.
+Prizm uses GitHub Actions for continuous integration to ensure code quality and cross-platform compatibility.
 
 All third-party actions across all three workflows (`ci.yml`, `release.yml`,
 `external-links.yml`) are pinned to immutable commit SHAs, not mutable
@@ -24,7 +24,7 @@ The main workflow runs on every push and pull request.
 *   **test-windows:**
     *   Verifies build on Windows.
     *   Runs basic safety, config, and run tests.
-    *   Executes `prism doctor` smoke test to verify CLI initialization.
+    *   Executes `prizm doctor` smoke test to verify CLI initialization.
 *   **test-python:**
     *   Installs dependencies and runs `pytest` for the Remembrance service.
 
@@ -44,7 +44,7 @@ go test -race ./internal/bus/... ./internal/event/... [etc] -count=1
 ```powershell
 go build ./...
 go test ./internal/safety/... ./internal/config/... ./internal/run/... -count=1
-go run ./cmd/prism-cli doctor
+go run ./cmd/prizm-cli doctor
 ```
 
 ### Python

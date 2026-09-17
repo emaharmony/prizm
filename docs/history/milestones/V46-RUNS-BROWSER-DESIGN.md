@@ -1,4 +1,4 @@
-# V46 — `prism runs`: Browse Past Runs & Reports
+# V46 — `prizm runs`: Browse Past Runs & Reports
 
 **Status:** Source-current
 **Last Updated:** 2026-06-29
@@ -13,8 +13,8 @@ open a report from the terminal.
 ## Design
 
 ```
-prism runs [--dir runs/gated-loop]            # list recent runs, newest first
-prism runs <run-id> [--dir runs/gated-loop]   # print that run's REPORT.md
+prizm runs [--dir runs/gated-loop]            # list recent runs, newest first
+prizm runs <run-id> [--dir runs/gated-loop]   # print that run's REPORT.md
 ```
 
 A read-only consumer of the artifacts the loop already writes — the flat
@@ -36,22 +36,22 @@ engine or core change.
 
 ## Tests
 
-`cmd/prism-cli/cmd_runs_test.go`: lists state + report runs with correct status and
+`cmd/prizm-cli/cmd_runs_test.go`: lists state + report runs with correct status and
 report flags; a report-only run (no state file) still appears; render output
 includes glyphs/markers/counts and an empty-state line; `readRunReport` returns
 content and errors on a missing report.
 
 ## State summary fallback (follow-up)
 
-`prism runs <id>` originally errored when a run had no `REPORT.md` (in-progress,
+`prizm runs <id>` originally errored when a run had no `REPORT.md` (in-progress,
 blocked, or fallback-completed runs). It now falls back via `showRunDetail`: print
 the report if present, otherwise a parsed **state summary** from
 `workflow-<id>.json` — status, token totals, verification outcome, per-phase status
-+ gate scores (ordered by entry time), and delegations. So `prism runs <id>` always
++ gate scores (ordered by entry time), and delegations. So `prizm runs <id>` always
 yields useful output regardless of where the run is in its lifecycle.
 `formatRunStateSummary` is pure and unit-tested.
 
-`prism runs latest` resolves to the most recent run (newest by mtime, via
+`prizm runs latest` resolves to the most recent run (newest by mtime, via
 `latestRunID`) so an operator doesn't need to remember the `gl-<timestamp>` id — it
 composes with the report/state detail and `--json`.
 

@@ -17,7 +17,7 @@ func (m *Model) Render() string {
 func RenderFrame(s Snapshot, frame int) string {
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "PRISM PANEL")
+	fmt.Fprintf(&b, "PRIZM PANEL")
 	if s.Workflow != "" {
 		fmt.Fprintf(&b, " - %s", s.Workflow)
 	}

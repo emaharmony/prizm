@@ -1,4 +1,4 @@
-// Package stage provides Prism's pipeline execution engine.
+// Package stage provides Prizm's pipeline execution engine.
 //
 // RoutingStage routes an inbound message to the appropriate agent
 // and resolves the LLM provider and model configuration.
@@ -10,10 +10,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/emaharmony/prism/internal/event"
-	"github.com/emaharmony/prism/internal/provider"
-	"github.com/emaharmony/prism/internal/router"
-	"github.com/emaharmony/prism/internal/session"
+	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/router"
+	"github.com/emaharmony/prizm/internal/session"
 )
 
 // RoutingStage routes a message to an agent and resolves the provider/model.
@@ -61,7 +61,7 @@ func (s *RoutingStage) Execute(ctx context.Context, rc *RunContext) (*RunContext
 	// Resolve agent configuration
 	agentCfg, ok := s.AgentConfigs[result.AgentID]
 	if !ok {
-		evt := event.NewEvent("prism.routing.failed", "routing-stage", map[string]any{
+		evt := event.NewEvent("prizm.routing.failed", "routing-stage", map[string]any{
 			"run_id":   rc.RunID,
 			"agent_id": result.AgentID,
 			"error":    "no configuration for agent",
@@ -77,7 +77,7 @@ func (s *RoutingStage) Execute(ctx context.Context, rc *RunContext) (*RunContext
 	// Resolve the LLM provider
 	llmProvider, err := s.Providers.Get(agentCfg.Model)
 	if err != nil {
-		evt := event.NewEvent("prism.routing.failed", "routing-stage", map[string]any{
+		evt := event.NewEvent("prizm.routing.failed", "routing-stage", map[string]any{
 			"run_id":   rc.RunID,
 			"agent_id": result.AgentID,
 			"model":    agentCfg.Model,
@@ -94,7 +94,7 @@ func (s *RoutingStage) Execute(ctx context.Context, rc *RunContext) (*RunContext
 	duration := time.Since(start).Milliseconds()
 
 	// Emit routing completed event
-	evt := event.NewEvent("prism.routing.completed", "routing-stage", map[string]any{
+	evt := event.NewEvent("prizm.routing.completed", "routing-stage", map[string]any{
 		"run_id":      rc.RunID,
 		"agent_id":    result.AgentID,
 		"model":       agentCfg.Model,

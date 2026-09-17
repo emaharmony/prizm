@@ -2,12 +2,12 @@
 
 > *What context should this agent receive before doing this task?*
 
-Remembrance is a framework-native memory system for AI agents. It provides semantic retrieval, context injection, and event-driven memory ingestion — built from the ground up for the Prism event-driven agent platform.
+Remembrance is a framework-native memory system for AI agents. It provides semantic retrieval, context injection, and event-driven memory ingestion — built from the ground up for the Prizm event-driven agent platform.
 
 ## Architecture
 
 ```
-Go Core (Prism)                    Python (Remembrance)
+Go Core (Prizm)                    Python (Remembrance)
 ├── Agent Runtime                  ├── Event Consumer
 ├── Task Runner                    ├── Memory Ingest Pipeline
 ├── Native Event Manager           ├── Embedding Provider (Ollama)
@@ -85,8 +85,8 @@ final_score = vector_similarity * 0.65
 The Go client (`go/remembrance.go`) provides a `RemembranceClient` interface:
 
 ```go
-client := prism.NewRemembranceClient("http://localhost:18790")
-context, err := client.BuildContext(ctx, prism.BuildContextRequest{
+client := prizm.NewRemembranceClient("http://localhost:18790")
+context, err := client.BuildContext(ctx, prizm.BuildContextRequest{
     ProjectID: "my-project",
     AgentID:   "lumi",
     Task:      "Implement the event consumer",
@@ -101,7 +101,7 @@ context, err := client.BuildContext(ctx, prism.BuildContextRequest{
 - **LanceDB** for vector storage (local, embedded, no server needed)
 - **SQLite** for metadata, audit logs, memory events
 - **Ollama nomic-embed-text** for embeddings (768 dimensions)
-- **Go HTTP client** for Prism integration
+- **Go HTTP client** for Prizm integration
 
 ## Security (V1)
 
@@ -114,4 +114,4 @@ context, err := client.BuildContext(ctx, prism.BuildContextRequest{
 
 ## License
 
-Part of the Prism project.
+Part of the Prizm project.

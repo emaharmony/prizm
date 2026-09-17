@@ -1,8 +1,8 @@
-// Package invocation implements Prism's Agent Invocation API: a minimal,
+// Package invocation implements Prizm's Agent Invocation API: a minimal,
 // public, single-shot "ask a configured agent one question, get a
 // structured result back" primitive over HTTP.
 //
-// This exists because Prism had no production-ready external contract for
+// This exists because Prizm had no production-ready external contract for
 // "submit a prompt to a named agent, get a result" — the session/stage
 // pipeline is interactive-turn-oriented, and the workflow/delegation
 // machinery is either in-process-only or feature-flagged off by default.
@@ -49,7 +49,7 @@ type Invocation struct {
 // Store holds invocations in memory, keyed by ID. Invocations are
 // short-lived (seconds, not sessions) — callers are expected to poll or
 // stream for a result within the invocation's lifetime, so durability
-// across a Prism restart isn't a requirement here, unlike session state.
+// across a Prizm restart isn't a requirement here, unlike session state.
 type Store struct {
 	mu          sync.RWMutex
 	invocations map[string]*Invocation

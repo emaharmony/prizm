@@ -1,33 +1,33 @@
-﻿# Prism Command Reference
+﻿# Prizm Command Reference
 
-Every major `prism` CLI command grouped by purpose, with what it does and an
-example. Commands are shown as `prism <command>`; when running from source use
-`go run ./cmd/prism-cli <command>`.
+Every major `prizm` CLI command grouped by purpose, with what it does and an
+example. Commands are shown as `prizm <command>`; when running from source use
+`go run ./cmd/prizm-cli <command>`.
 
-> This list mirrors `prism --help` (the grouped usage in `cmd/prism-cli`). If a
-> command differs from your build, prefer the output of `prism --help`.
+> This list mirrors `prizm --help` (the grouped usage in `cmd/prizm-cli`). If a
+> command differs from your build, prefer the output of `prizm --help`.
 
 ## Overview
 
 Run the built-in help to see the grouped command list at any time:
 
 ```bash
-go run ./cmd/prism-cli --help
+go run ./cmd/prizm-cli --help
 ```
 
-Prism has no single top-level "global flags" set; most flags are per-command
+Prizm has no single top-level "global flags" set; most flags are per-command
 (e.g. `--config`, `--json`, `--project`, `--agent`).
 
 ## Run & Interact
 
 | Command | Action | Status | Example |
 |---|---|---|---|
-| `prism run --task <desc>` | Run a one-shot task lifecycle | Preview | `prism run --task "Explain event-driven architecture" --provider ollama --model llama3.2` |
-| `prism chat` | Interactive terminal chat | Preview | `prism chat --config prism.yaml --agent astraea` |
-| `prism serve` | Start the persistent daemon (API, dashboard, bot) | Preview | `prism serve --config prism.yaml` |
+| `prizm run --task <desc>` | Run a one-shot task lifecycle | Preview | `prizm run --task "Explain event-driven architecture" --provider ollama --model llama3.2` |
+| `prizm chat` | Interactive terminal chat | Preview | `prizm chat --config prizm.yaml --agent astraea` |
+| `prizm serve` | Start the persistent daemon (API, dashboard, bot) | Preview | `prizm serve --config prizm.yaml` |
 
-`prism run` expects a NATS bus at `nats://localhost:4222`; use `serve` for
-embedded NATS or start `cmd/prism-bus` separately. Key `run` flags:
+`prizm run` expects a NATS bus at `nats://localhost:4222`; use `serve` for
+embedded NATS or start `cmd/prizm-bus` separately. Key `run` flags:
 `--provider`, `--model`, `--temperature`, `--max-tokens`, `--timeout`,
 `--dry-run-prompt`, `--project`, `--agent`, `--run-dir`, `--memory-enabled`.
 
@@ -35,97 +35,102 @@ embedded NATS or start `cmd/prism-bus` separately. Key `run` flags:
 
 | Command | Action | Status | Example |
 |---|---|---|---|
-| `prism config wizard` | Interactive setup — generate a `prism.yaml` | Preview | `prism config wizard --out prism.yaml` |
-| `prism config import <file>` | Convert an OpenClaw JSON to `prism.yaml` | Preview | `prism config import openclaw.json --out prism.yaml` |
+| `prizm config wizard` | Interactive setup — generate a `prizm.yaml` | Preview | `prizm config wizard --out prizm.yaml` |
+| `prizm config import <file>` | Convert an OpenClaw JSON to `prizm.yaml` | Preview | `prizm config import openclaw.json --out prizm.yaml` |
 
 ## Inspect & Validate
 
 | Command | Action | Status | Example |
 |---|---|---|---|
-| `prism config` | Validate `prism.yaml` and summarize it | Preview | `prism config --config prism.yaml --json` |
-| `prism doctor` | Preflight check of run dependencies | Preview | `prism doctor --config prism.yaml --json` |
-| `prism preview` | Static preview of the gated-loop workflow | Preview | `prism preview --workflow examples/workflows/gated-loop.yaml` |
-| `prism agent list\|show <name>` | List / show registered agents | Preview | `prism agent list` |
-| `prism tool list\|run <name>` | List / run built-in tools | Preview | `prism tool run echo --input '{"text":"hi"}'` |
-| `prism validation list\|run <name>` | List / run validation profiles | Preview | `prism validation list` |
-| `prism context show` | Show context that would be injected | Preview | `prism context show --context soul,agents` |
+| `prizm config` | Validate `prizm.yaml` and summarize it | Preview | `prizm config --config prizm.yaml --json` |
+| `prizm doctor` | Preflight check of run dependencies | Preview | `prizm doctor --config prizm.yaml --json` |
+| `prizm preview` | Static preview of the gated-loop workflow | Preview | `prizm preview --workflow examples/workflows/gated-loop.yaml` |
+| `prizm agent list\|show <name>` | List / show registered agents | Preview | `prizm agent list` |
+| `prizm tool list\|run <name>` | List / run built-in tools | Preview | `prizm tool run echo --input '{"text":"hi"}'` |
+| `prizm validation list\|run <name>` | List / run validation profiles | Preview | `prizm validation list` |
+| `prizm context show` | Show context that would be injected | Preview | `prizm context show --context soul,agents` |
 
 ## Workflow Commands
 
 | Command | Action | Status | Example |
 |---|---|---|---|
-| `prism workflow list` | List registered workflows | Preview | `prism workflow list` |
-| `prism workflow show <name>` | Show a workflow's steps | Preview | `prism workflow show demo.echo_tool` |
-| `prism workflow run <name>` | Run a named workflow | Preview | `prism workflow run demo.echo_tool` |
-| `prism workflow status <run_id>` | Show a workflow run's status | Preview | `prism workflow status <run_id>` |
-| `prism workflow start` | Start a gated-loop run for a project | Preview | `prism workflow start --project example --prompt "..."` |
+| `prizm workflow list` | List registered workflows | Preview | `prizm workflow list` |
+| `prizm workflow show <name>` | Show a workflow's steps | Preview | `prizm workflow show demo.echo_tool` |
+| `prizm workflow run <name>` | Run a named workflow | Preview | `prizm workflow run demo.echo_tool` |
+| `prizm workflow status <run_id>` | Show a workflow run's status | Preview | `prizm workflow status <run_id>` |
+| `prizm workflow cancel <run_id>` | Request durable multi-agent cancellation | Phase 1 | `prizm workflow cancel <run_id>` |
+| `prizm workflow resume <run_id>` | Safely resume a durable multi-agent run | Phase 1 | `prizm workflow resume <run_id>` |
+| `prizm workflow report <run_id>` | Show a terminal multi-agent report | Phase 1 | `prizm workflow report <run_id> --json` |
+| `prizm workflow start` | Start a gated-loop run for a project | Preview | `prizm workflow start --project example --prompt "..."` |
 
-`workflow run` accepts optional `--input <file.json>` and `--run-dir <dir>`.
-Artifacts land in the run directory: `events.jsonl`, `prompt.md`, `output.md`,
-`summary.json`.
+Generic `workflow run` accepts optional `--input <file.json>` and
+`--run-dir <dir>`. The `multi-agent-software-task` workflow requires a strict
+JSON input and also accepts `--config <prizm.yaml>`. Its status and report
+commands support `--json`. See the
+[Multi-Agent Workflow](../MULTI_AGENT_WORKFLOW.md) for its input and artifacts.
 
 ## Policy Commands
 
 | Command | Action | Status | Example |
 |---|---|---|---|
-| `prism policy list` | List policy rules | Preview | `prism policy list` |
-| `prism policy evaluate --input <file>` | Evaluate a JSON policy request | Preview | `prism policy evaluate --input request.json` |
+| `prizm policy list` | List policy rules | Preview | `prizm policy list` |
+| `prizm policy evaluate --input <file>` | Evaluate a JSON policy request | Preview | `prizm policy evaluate --input request.json` |
 
 ## Approval Commands
 
 | Command | Action | Status | Example |
 |---|---|---|---|
-| `prism approval list` | List approvals | Preview | `prism approval list` |
-| `prism approval show <id>` | Show one approval | Preview | `prism approval show <id> --run <run_id>` |
-| `prism approval approve <id>` | Approve a mutation | Preview | `prism approval approve <id> --by ema` |
-| `prism approval deny <id>` | Deny a mutation | Preview | `prism approval deny <id> --by ema` |
+| `prizm approval list` | List approvals | Preview | `prizm approval list` |
+| `prizm approval show <id>` | Show one approval | Preview | `prizm approval show <id> --run <run_id>` |
+| `prizm approval approve <id>` | Approve a mutation | Preview | `prizm approval approve <id> --by ema` |
+| `prizm approval deny <id>` | Deny a mutation | Preview | `prizm approval deny <id> --by ema` |
 
 ## Observe Runs
 
 | Command | Action | Status | Example |
 |---|---|---|---|
-| `prism watch` | Live view of a running gated-loop workflow | Preview | `prism watch --config prism.yaml` |
-| `prism runs [<id>\|latest]` | List runs / show a run's report | Preview | `prism runs latest --json` |
-| `prism cost <run_id>` | Show token usage and cost report | Preview | `prism cost <run_id>` |
-| `prism trace <run_id>` | Show event trace (causal DAG) | Preview | `prism trace <run_id>` |
-| `prism dashboard` | Start the local read-only dashboard | Preview | `prism dashboard --port 8080` |
-| `prism status` | Show live service status | Preview | `prism status` |
-| `prism health` | Check bus health | Preview | `prism health` |
+| `prizm watch` | Live view of a running gated-loop workflow | Preview | `prizm watch --config prizm.yaml` |
+| `prizm runs [<id>\|latest]` | List runs / show a run's report | Preview | `prizm runs latest --json` |
+| `prizm cost <run_id>` | Show token usage and cost report | Preview | `prizm cost <run_id>` |
+| `prizm trace <run_id>` | Show event trace (causal DAG) | Preview | `prizm trace <run_id>` |
+| `prizm dashboard` | Start the local read-only dashboard | Preview | `prizm dashboard --port 8080` |
+| `prizm status` | Show live service status | Preview | `prizm status` |
+| `prizm health` | Check bus health | Preview | `prizm health` |
 
 ## Adapter Commands
 
 | Command | Action | Status | Example |
 |---|---|---|---|
-| `prism adapter list\|show\|health [<name>]` | Inspect adapters | Preview | `prism adapter list` |
+| `prizm adapter list\|show\|health [<name>]` | Inspect adapters | Preview | `prizm adapter list` |
 
 ## MCP Commands
 
 | Command | Action | Status | Example |
 |---|---|---|---|
-| `prism mcp` | List configured MCP servers | Experimental | `prism mcp --json` |
-| `prism mcp probe <name>` | Live-probe a server's tools | Experimental | `prism mcp probe filesystem` |
+| `prizm mcp` | List configured MCP servers | Experimental | `prizm mcp --json` |
+| `prizm mcp probe <name>` | Live-probe a server's tools | Experimental | `prizm mcp probe filesystem` |
 
 ## Skills Commands
 
 | Command | Action | Status | Example |
 |---|---|---|---|
-| `prism skills` | List SKILL.md skills | Experimental | `prism skills --json` |
-| `prism skills show <name>` | Show a skill's instructions | Experimental | `prism skills show <name>` |
+| `prizm skills` | List SKILL.md skills | Experimental | `prizm skills --json` |
+| `prizm skills show <name>` | Show a skill's instructions | Experimental | `prizm skills show <name>` |
 
 ## Self-Patching Commands
 
 | Command | Action | Status | Example |
 |---|---|---|---|
-| `prism scan` | Scan for issues (`--start` fixes the top one) | Experimental | `prism scan --severity high --json` |
+| `prizm scan` | Scan for issues (`--start` fixes the top one) | Experimental | `prizm scan --severity high --json` |
 
 ## Advanced Commands
 
 | Command | Action | Status | Example |
 |---|---|---|---|
-| `prism search --query <text>` | Search the vector store | Experimental | `prism search --query "event bus"` |
-| `prism projection list\|rebuild\|query` | Manage CQRS projection snapshots | Experimental | `prism projection list` |
-| `prism remembrance health\|status\|serve` | Manage the Remembrance memory service | Experimental | `prism remembrance health` |
-| `prism version` | Print version | Preview | `prism version` |
+| `prizm search --query <text>` | Search the vector store | Experimental | `prizm search --query "event bus"` |
+| `prizm projection list\|rebuild\|query` | Manage CQRS projection snapshots | Experimental | `prizm projection list` |
+| `prizm remembrance health\|status\|serve` | Manage the Remembrance memory service | Experimental | `prizm remembrance health` |
+| `prizm version` | Print version | Preview | `prizm version` |
 
 ## Command Cheat Sheet
 
@@ -138,31 +143,31 @@ go test ./...
 ### See available workflows
 
 ```bash
-go run ./cmd/prism-cli workflow list
+go run ./cmd/prizm-cli workflow list
 ```
 
 ### Run the first workflow
 
 ```bash
-go run ./cmd/prism-cli workflow run demo.echo_tool
+go run ./cmd/prizm-cli workflow run demo.echo_tool
 ```
 
 ### Inspect run status
 
 ```bash
-go run ./cmd/prism-cli workflow status <run_id>
+go run ./cmd/prizm-cli workflow status <run_id>
 ```
 
 ### Start serve mode (API + dashboard)
 
 ```bash
-go run ./cmd/prism-cli serve --config prism.yaml
+go run ./cmd/prizm-cli serve --config prizm.yaml
 ```
 
 ### Open the read-only dashboard
 
 ```bash
-go run ./cmd/prism-cli dashboard
+go run ./cmd/prizm-cli dashboard
 ```
 
 ## Common Command Flows

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Usage · Prism</title>
+<title>Usage · Prizm</title>
 <link rel="stylesheet" href="/app.css">
 <style>
   .range-row { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 20px; }
@@ -43,7 +43,7 @@
 
 <main id="main-content" class="container">
   <h1 class="page-title">Token Usage</h1>
-  <p class="page-sub">Where your tokens go, over time. Every LLM call routed through Prism (invoke, chat, workflow) is recorded — switch the range to spot spikes and leakage. Estimated cost uses the built-in pricing table and is approximate.</p>
+  <p class="page-sub">Where your tokens go, over time. Every LLM call routed through Prizm (invoke, chat, workflow) is recorded — switch the range to spot spikes and leakage. Estimated cost uses the built-in pricing table and is approximate.</p>
 
   <div id="banner" class="banner"></div>
 
@@ -78,7 +78,7 @@
 
 <script src="/app.js"></script>
 <script>
-const ui = window.PrismUI;
+const ui = window.PrizmUI;
 const $ = s => document.querySelector(s);
 const banner = (msg, kind) => { const b = $("#banner"); b.textContent = msg; b.className = "banner show " + kind; };
 let currentRange = "day";

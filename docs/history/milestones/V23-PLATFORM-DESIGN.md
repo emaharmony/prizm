@@ -6,7 +6,7 @@
 
 ## Overview
 
-V23 transforms Prism from a CLI + Discord tool into a platform with an HTTP API, real-time event streaming, and multi-Prism communication. This is the foundation for V24 (Visual Representations) and V25 (Visual Workflow Editor).
+V23 transforms Prizm from a CLI + Discord tool into a platform with an HTTP API, real-time event streaming, and multi-Prizm communication. This is the foundation for V24 (Visual Representations) and V25 (Visual Workflow Editor).
 
 ## Milestones
 
@@ -47,19 +47,19 @@ Upgrade the existing dashboard to use the new API. Add real-time event stream, c
 - Cost tracking summary
 - Session list with last active time
 
-### M4.3: Multi-Prism Communication
+### M4.3: Multi-Prizm Communication
 
-Two Prism environments can discover each other and exchange events/tasks.
+Two Prizm environments can discover each other and exchange events/tasks.
 
 **Design:**
-- NATS leafnode or gateway for cross-Prism communication
-- Each Prism advertises its agents on a shared subject
-- Tasks can be delegated to agents on remote Prisms
+- NATS leafnode or gateway for cross-Prizm communication
+- Each Prizm advertises its agents on a shared subject
+- Tasks can be delegated to agents on remote Prizms
 - Events propagate across the mesh with origin tagging
 
 **Implementation:**
-- `internal/bridge/bridge.go` — Bridge manages connections to remote Prisms
-- Bridge config in `prism.yaml`: remote endpoints, shared secrets
+- `internal/bridge/bridge.go` — Bridge manages connections to remote Prizms
+- Bridge config in `prizm.yaml`: remote endpoints, shared secrets
 - Events published with `origin` field to prevent loops
 - Health checks on remote connections
 
@@ -83,7 +83,7 @@ Deferred to after V24/V25 scope is clearer.
 2. **SSE for real-time** — simpler than WebSocket, works with proxies, native browser support
 3. **API versioning** — `/api/v1/` prefix for future compatibility
 4. **Dashboard is still self-contained** — no React, no npm, inline HTML+CSS+JS
-5. **Multi-Prism uses NATS gateway** — not HTTP, to preserve event bus semantics
+5. **Multi-Prizm uses NATS gateway** — not HTTP, to preserve event bus semantics
 6. **Bridge events tagged with origin** — prevents loops in mesh topology
 7. **Adapter SDK uses Go interfaces** — no plugins, no CGO, compile-time safety
 

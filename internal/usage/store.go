@@ -1,5 +1,5 @@
 // Package usage provides persistent, time-bucketed token-usage tracking for
-// Prism. Every LLM call routed through the provider registry is recorded here
+// Prizm. Every LLM call routed through the provider registry is recorded here
 // with its timestamp, agent, provider, model, and source, so the dashboard can
 // graph usage over session / day / week / month / year / lifetime and surface
 // where tokens are going (leakage detection).

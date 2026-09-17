@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/emaharmony/prism/internal/safety"
+	"github.com/emaharmony/prizm/internal/safety"
 )
 
 // ToolPaths holds the path configuration for filesystem tools.

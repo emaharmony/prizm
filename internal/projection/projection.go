@@ -1,8 +1,8 @@
-// Package projection provides state projections over Prism event streams.
+// Package projection provides state projections over Prizm event streams.
 //
 // A projection is a pure function of events: given a sequence of events,
 // it computes a read-only snapshot of some aspect of system state.
-// Projections are the "read side" of Prism's event-sourced architecture.
+// Projections are the "read side" of Prizm's event-sourced architecture.
 //
 // Why projections? Instead of querying a database, you project events
 // into pre-computed indexes. Each projection subscribes to specific event
@@ -10,7 +10,7 @@
 // get the same projection. No side effects, no external state.
 //
 // This is the CQRS/Event Sourcing pattern adapted for local-file-based
-// systems. Prism stores events (events.jsonl); projections are derived
+// systems. Prizm stores events (events.jsonl); projections are derived
 // views of those events. You can always rebuild a projection from scratch
 // by replaying the event stream.
 //
@@ -30,7 +30,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // Projection computes a read-only snapshot from a sequence of events.

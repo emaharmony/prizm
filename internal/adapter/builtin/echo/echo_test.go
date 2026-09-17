@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/adapter"
+	"github.com/emaharmony/prizm/internal/adapter"
 )
 
 func TestEchoAdapter_Name(t *testing.T) {

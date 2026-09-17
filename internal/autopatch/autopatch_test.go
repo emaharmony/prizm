@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/validation"
+	"github.com/emaharmony/prizm/internal/validation"
 )
 
 var errInjected = errors.New("injected pr failure")

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/task"
+	"github.com/emaharmony/prizm/internal/task"
 )
 
 // TestTracker_StuckTasks finds tasks stuck in_progress.

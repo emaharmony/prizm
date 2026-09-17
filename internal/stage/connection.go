@@ -1,4 +1,4 @@
-// Package stage provides Prism's pipeline execution engine (V14a).
+// Package stage provides Prizm's pipeline execution engine (V14a).
 //
 // ConnectionStage validates configuration, creates the run directory,
 // and establishes the NATS connection. It's the first stage in every
@@ -12,7 +12,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // ConnectionStage validates configuration and creates the run directory.
@@ -63,7 +63,7 @@ func (s *ConnectionStage) Execute(ctx context.Context, rc *RunContext) (*RunCont
 	newRC := rc.WithRunDir(runPath)
 
 	// Emit task.created event
-	evt := event.NewEvent(event.V1EventTypes.TaskCreated, "prism-cli", map[string]any{
+	evt := event.NewEvent(event.V1EventTypes.TaskCreated, "prizm-cli", map[string]any{
 		"run_id":   rc.RunID,
 		"task":     rc.Task,
 		"project":  rc.Project,

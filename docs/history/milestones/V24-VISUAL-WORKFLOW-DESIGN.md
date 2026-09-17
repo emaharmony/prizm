@@ -6,7 +6,7 @@
 
 ## Overview
 
-V24 generates visual representations of Prism's workflows — agents, delegation flows, approval gates, feedback loops, event streams. These are auto-generated from the running Prism config and state, rendered as SVG diagrams that can be viewed in the dashboard or exported.
+V24 generates visual representations of Prizm's workflows — agents, delegation flows, approval gates, feedback loops, event streams. These are auto-generated from the running Prizm config and state, rendered as SVG diagrams that can be viewed in the dashboard or exported.
 
 V25 will make these editable (diagrams become config), but V24 focuses on **accurate, beautiful, read-only visualizations**.
 
@@ -43,7 +43,7 @@ Shows approval flows:
 ### 5. Event Flow Diagram
 Shows the event bus topology:
 - Per-agent namespaces (lumi.*, mango.*, remembrance.*)
-- System events (prism.*)
+- System events (prizm.*)
 - Adapter events (adapter.discord.*)
 - Registered actions (event → action triggers)
 
@@ -53,7 +53,7 @@ Shows the event bus topology:
 - Go package `internal/workflow/` generates SVG diagrams
 - Uses `github.com/ajstarks/svgo` for SVG rendering
 - Each diagram type is a separate function
-- Config-driven: reads from `prism.yaml` and runtime state
+- Config-driven: reads from `prizm.yaml` and runtime state
 - API endpoint: `GET /api/v1/workflows/{type}/svg`
 
 ### Diagram Conventions

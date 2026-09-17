@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/emaharmony/prism/internal/task"
+	"github.com/emaharmony/prizm/internal/task"
 	"github.com/nats-io/nats.go"
 )
 
@@ -143,12 +143,13 @@ func (e *Engine) Complete(ctx context.Context, taskID string, result map[string]
 		return fmt.Errorf("delegation: complete task %s: %w", taskID, err)
 	}
 
-	// Publish task.completed event
+	// Publish task.completed event with context for downstream consumers
 	event := map[string]any{
 		"v":            1,
 		"task_id":      taskID,
 		"completed_by": t.DelegatedTo,
 		"status":       string(task.StatusCompleted),
+		"context_data": t.Context,
 	}
 
 	if result != nil {

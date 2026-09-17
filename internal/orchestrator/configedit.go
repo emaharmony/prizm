@@ -1,7 +1,7 @@
-// configedit.go provides surgical, comment-preserving edits to prism.yaml so a
+// configedit.go provides surgical, comment-preserving edits to prizm.yaml so a
 // UI (or any caller) can change one section without rewriting the whole file.
 //
-// The problem: prism.yaml is loaded by overlaying onto DefaultConfig(), so a
+// The problem: prizm.yaml is loaded by overlaying onto DefaultConfig(), so a
 // naive "load Config → marshal → write" round-trip would bloat the file with
 // every default value and drop all comments. Instead we edit the YAML *node
 // tree* in place: only the targeted key's value is replaced, and yaml.v3
@@ -21,7 +21,7 @@ import (
 // intermediate mappings as needed. Comments and ordering on untouched nodes are
 // preserved. An empty/whitespace src starts from an empty document.
 //
-// Example: SetYAMLPath(data, []string{"prism", "scheduler"}, schedulerCfg).
+// Example: SetYAMLPath(data, []string{"prizm", "scheduler"}, schedulerCfg).
 func SetYAMLPath(src []byte, path []string, value any) ([]byte, error) {
 	if len(path) == 0 {
 		return nil, fmt.Errorf("configedit: empty path")
@@ -47,7 +47,7 @@ func SetYAMLPath(src []byte, path []string, value any) ([]byte, error) {
 		return nil, err
 	}
 
-	// Encode with 2-space indent to match prism.yaml's convention (yaml.v3's
+	// Encode with 2-space indent to match prizm.yaml's convention (yaml.v3's
 	// default is 4), keeping the diff to just the edited keys.
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
@@ -206,7 +206,7 @@ func SetAgentFields(src []byte, agentID string, fields map[string]any) ([]byte, 
 	return buf.Bytes(), nil
 }
 
-// ValidateAndWrite validates newBytes as a full prism.yaml (via the same loader
+// ValidateAndWrite validates newBytes as a full prizm.yaml (via the same loader
 // serve uses) and, only on success, writes it atomically to path (temp file +
 // rename). A validation failure returns an error and leaves path untouched.
 func ValidateAndWrite(path string, newBytes []byte) error {

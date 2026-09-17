@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Prism — Gated Loop Editor</title>
+<title>Prizm — Gated Loop Editor</title>
 <style>
   :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#c9d1d9; --accent:#58a6ff; --ok:#3fb950; --warn:#d29922; --err:#f85149; }
   * { box-sizing:border-box; }
@@ -56,7 +56,7 @@
       <button class="primary" onclick="saveConfig()">💾 Save workflow</button>
       <button onclick="loadConfig()">↻ Reload</button>
     </div>
-    <p><small class="help">Order is execution order. Gate types: assumption_threshold, confidence_threshold, plan_completeness, approval, task_completion, review_pass, report_completeness. Saving requires <code>prism.workflow_config</code> to be set.</small></p>
+    <p><small class="help">Order is execution order. Gate types: assumption_threshold, confidence_threshold, plan_completeness, approval, task_completion, review_pass, report_completeness. Saving requires <code>prizm.workflow_config</code> to be set.</small></p>
   </section>
 
   <aside style="display:flex; flex-direction:column; gap:16px;">
@@ -220,11 +220,11 @@ function logLine(type, payload){
 }
 
 function connectEvents(){
-  const es = new EventSource(API + '/api/v1/events/stream?subject=' + encodeURIComponent('prism.workflow.>'));
+  const es = new EventSource(API + '/api/v1/events/stream?subject=' + encodeURIComponent('prizm.workflow.>'));
   const names = ['workflow.started','phase.entered','phase.gate_check','phase.exited','phase.fallback',
     'workflow.paused','feedback.requested','workflow.iteration','workflow.completed','workflow.blocked'];
   names.forEach(n => {
-    es.addEventListener('prism.workflow.' + n, ev => {
+    es.addEventListener('prizm.workflow.' + n, ev => {
       try { const d = JSON.parse(ev.data); logLine(n, d.payload || d); } catch { logLine(n, null); }
     });
   });

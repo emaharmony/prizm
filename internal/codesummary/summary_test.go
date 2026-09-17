@@ -13,12 +13,31 @@ func TestRequestMatches(t *testing.T) {
 		msg  string
 		want bool
 	}{
-		{"Read the Prism codebase and summarize it", true},
-		{"Can you give me an architecture overview of the Prism repo?", true},
+		{"Read the Prizm codebase and summarize it", true},
+		{"Can you give me an architecture overview of the Prizm repo?", true},
 		{"summarize the code project", true},
 		{"review the workflow editor", false},
 		{"hello", false},
 		{"what is the status?", false},
+
+		// Previously-failing natural phrasings (the bug being fixed)
+		{"analyse this", true},
+		{"analyze this", true},
+		{"analyse it", true},
+		{"can you analyze it?", true},
+		{"can you analyse it?", true},
+		{"run an analysis", true},
+		{"run a full analysis please", true},
+		{"give me an analysis", true},
+		{"do an analysis on it", true},
+		{"summarize this", true},
+		{"give me a summary", true},
+		{"codebase overview please", true},
+		{"repo summary", true},
+
+		// Guard against regression / over-broadening
+		{"give me an analysis of the workflow editor", false}, // workflow-editor veto beats strong phrases
+		{"can you explain this error?", false},                // "explain this" deliberately not a strong trigger
 	}
 	for _, tt := range tests {
 		t.Run(tt.msg, func(t *testing.T) {
@@ -37,7 +56,7 @@ func TestRunWritesArtifacts(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "internal", "thing", "thing.go"), "// Package thing does work.\npackage thing\n")
 	mustWrite(t, filepath.Join(root, "internal", "thing", "thing_test.go"), "package thing\n")
 	mustWrite(t, filepath.Join(root, "docs", "TASKS.md"), "# Tasks\n")
-	mustWrite(t, filepath.Join(root, ".prism", "data", "ignored.go"), "package ignored\n")
+	mustWrite(t, filepath.Join(root, ".prizm", "data", "ignored.go"), "package ignored\n")
 
 	out := filepath.Join(root, "artifacts")
 	result, err := Run(context.Background(), Config{
@@ -45,7 +64,7 @@ func TestRunWritesArtifacts(t *testing.T) {
 		ArtifactDir: out,
 		TaskID:      "task-test",
 		AgentID:     "astraea",
-		Project:     "prism",
+		Project:     "prizm",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -58,7 +77,7 @@ func TestRunWritesArtifacts(t *testing.T) {
 		t.Fatalf("read report: %v", err)
 	}
 	text := string(report)
-	for _, want := range []string{"Prism Codebase Architecture Summary", "cmd/app/main.go", "internal/thing"} {
+	for _, want := range []string{"Prizm Codebase Architecture Summary", "cmd/app/main.go", "internal/thing"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("report missing %q:\n%s", want, text)
 		}

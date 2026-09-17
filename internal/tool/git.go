@@ -1,4 +1,4 @@
-// Package tool provides git tools for Prism agents.
+// Package tool provides git tools for Prizm agents.
 //
 // Git tools are split into read-only (always allowed) and mutation (requires approval).
 //
@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/emaharmony/prism/internal/gitx"
+	"github.com/emaharmony/prizm/internal/gitx"
 )
 
 // gitRefPattern matches safe git ref/remote names: letters, digits, and the

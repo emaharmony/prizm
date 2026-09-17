@@ -3,7 +3,7 @@ package toolhistory
 import (
 	"testing"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 func TestToolHistoryProjection_Name(t *testing.T) {
@@ -25,19 +25,19 @@ func TestToolHistoryProjection_FullLifecycle(t *testing.T) {
 	p := New()
 
 	// Tool requested
-	p.Apply(event.NewEvent("prism.tool.requested", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.tool.requested", "test", map[string]any{
 		"tool_name": "echo", "policy_decision": "allowed",
 	}))
 	// Tool approved
-	p.Apply(event.NewEvent("prism.tool.approved", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.tool.approved", "test", map[string]any{
 		"tool_name": "echo",
 	}))
 	// Tool started
-	p.Apply(event.NewEvent("prism.tool.started", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.tool.started", "test", map[string]any{
 		"tool_name": "echo",
 	}))
 	// Tool completed
-	p.Apply(event.NewEvent("prism.tool.completed", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.tool.completed", "test", map[string]any{
 		"tool_name": "echo", "result": "hello world",
 	}))
 
@@ -65,10 +65,10 @@ func TestToolHistoryProjection_FullLifecycle(t *testing.T) {
 func TestToolHistoryProjection_Denied(t *testing.T) {
 	p := New()
 
-	p.Apply(event.NewEvent("prism.tool.requested", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.tool.requested", "test", map[string]any{
 		"tool_name": "run_command", "policy_decision": "denied",
 	}))
-	p.Apply(event.NewEvent("prism.tool.denied", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.tool.denied", "test", map[string]any{
 		"tool_name": "run_command",
 	}))
 
@@ -88,24 +88,24 @@ func TestToolHistoryProjection_MultipleCalls(t *testing.T) {
 	p := New()
 
 	// First tool call (echo)
-	p.Apply(event.NewEvent("prism.tool.requested", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.tool.requested", "test", map[string]any{
 		"tool_name": "echo",
 	}))
-	p.Apply(event.NewEvent("prism.tool.approved", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.tool.approved", "test", map[string]any{
 		"tool_name": "echo",
 	}))
-	p.Apply(event.NewEvent("prism.tool.completed", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.tool.completed", "test", map[string]any{
 		"tool_name": "echo",
 	}))
 
 	// Second tool call (read_file)
-	p.Apply(event.NewEvent("prism.tool.requested", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.tool.requested", "test", map[string]any{
 		"tool_name": "read_file",
 	}))
-	p.Apply(event.NewEvent("prism.tool.approved", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.tool.approved", "test", map[string]any{
 		"tool_name": "read_file",
 	}))
-	p.Apply(event.NewEvent("prism.tool.completed", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.tool.completed", "test", map[string]any{
 		"tool_name": "read_file",
 	}))
 
@@ -130,13 +130,13 @@ func TestToolHistoryProjection_MultipleCalls(t *testing.T) {
 func TestToolHistoryProjection_FailedCall(t *testing.T) {
 	p := New()
 
-	p.Apply(event.NewEvent("prism.tool.requested", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.tool.requested", "test", map[string]any{
 		"tool_name": "read_file",
 	}))
-	p.Apply(event.NewEvent("prism.tool.started", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.tool.started", "test", map[string]any{
 		"tool_name": "read_file",
 	}))
-	p.Apply(event.NewEvent("prism.tool.failed", "test", map[string]any{
+	p.Apply(event.NewEvent("prizm.tool.failed", "test", map[string]any{
 		"tool_name": "read_file", "error": "file not found",
 	}))
 
@@ -157,7 +157,7 @@ func TestToolHistoryProjection_FailedCall(t *testing.T) {
 
 func TestToolHistoryProjection_IgnoresUnrelatedEvents(t *testing.T) {
 	p := New()
-	p.Apply(event.NewEvent("prism.task.created", "test", nil))
+	p.Apply(event.NewEvent("prizm.task.created", "test", nil))
 
 	snap := p.Snapshot()
 	summary := snap["summary"].(map[string]int)

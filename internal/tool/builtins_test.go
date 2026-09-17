@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -131,6 +132,44 @@ func TestReadFileToolMissingPath(t *testing.T) {
 	}
 	if result.Success {
 		t.Error("read_file without path should fail")
+	}
+}
+
+func TestReadFileToolMaxLines(t *testing.T) {
+	tmpDir := t.TempDir()
+	lines := make([]string, 50)
+	for i := 0; i < 50; i++ {
+		lines[i] = fmt.Sprintf("line %d", i+1)
+	}
+	testContent := strings.Join(lines, "\n")
+	os.WriteFile(filepath.Join(tmpDir, "long.txt"), []byte(testContent), 0644)
+
+	tool := &ReadFileTool{WorkspaceRoot: tmpDir, MaxFileSize: 1024 * 1024}
+
+	// With max_lines=10, should get first 10 lines + truncation notice
+	result, err := tool.Execute(context.Background(), map[string]any{"path": "long.txt", "max_lines": float64(10)})
+	if err != nil {
+		t.Fatalf("read_file with max_lines should not error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("read_file with max_lines should succeed, got: %s", result.Error)
+	}
+	content := result.Output["content"].(string)
+	if !strings.Contains(content, "line 10") {
+		t.Error("max_lines result should contain line 10")
+	}
+	if strings.Contains(content, "line 11") {
+		t.Error("max_lines result should NOT contain line 11")
+	}
+	if !strings.Contains(content, "40 more lines") {
+		t.Error("max_lines result should contain truncation notice")
+	}
+
+	// Without max_lines, should get full content
+	result2, _ := tool.Execute(context.Background(), map[string]any{"path": "long.txt"})
+	fullContent := result2.Output["content"].(string)
+	if !strings.Contains(fullContent, "line 50") {
+		t.Error("full read should contain line 50")
 	}
 }
 

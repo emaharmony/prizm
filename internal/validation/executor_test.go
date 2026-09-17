@@ -136,9 +136,9 @@ func TestRegistryEmptyAndUnregister(t *testing.T) {
 }
 
 func TestValidationEnvironmentIsAllowlisted(t *testing.T) {
-	t.Setenv("PRISM_SHOULD_NOT_LEAK", "secret")
+	t.Setenv("PRIZM_SHOULD_NOT_LEAK", "secret")
 	env := strings.Join(validationEnvironment(), "\n")
-	if strings.Contains(env, "PRISM_SHOULD_NOT_LEAK") {
+	if strings.Contains(env, "PRIZM_SHOULD_NOT_LEAK") {
 		t.Fatal("non-allowlisted environment variable leaked into validation")
 	}
 	if !strings.Contains(env, "PATH=") {

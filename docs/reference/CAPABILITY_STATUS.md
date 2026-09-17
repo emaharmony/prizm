@@ -1,10 +1,10 @@
-﻿# Prism Capability Status
+﻿# Prizm Capability Status
 
-Prism is a preview-stage, source-available project. This page summarizes which
+Prizm is a preview-stage, source-available project. This page summarizes which
 capabilities are safe to rely on versus experimental. It is a guide, not a
-guarantee — always confirm against the source and `prism --help`.
+guarantee — always confirm against the source and `prizm --help`.
 
-> Prism is not open source and is not production-ready. Do not treat any
+> Prizm is not open source and is not production-ready. Do not treat any
 > capability as production-grade.
 
 ## Status Legend
@@ -19,7 +19,7 @@ guarantee — always confirm against the source and `prism --help`.
 
 | Area | Status | Notes |
 |---|---|---|
-| Build & test (`cmd/prism-cli`, `go test ./...`) | Preview/Stable | Core developer workflow |
+| Build & test (`cmd/prizm-cli`, `go test ./...`) | Preview/Stable | Core developer workflow |
 | Workflow runtime (`workflow list/show/run/status`) | Preview/Stable | Echo demo is the canonical first run |
 | Built-in tools (`tool list/run`) | Preview | Local validators enforce input safety |
 | Policy engine (`policy list/evaluate`) | Preview | Default rules in `policies/default.yaml` |
@@ -27,14 +27,14 @@ guarantee — always confirm against the source and `prism --help`.
 | Adapters (`adapter ...`, echo adapter) | Preview | Domain adapters gated by policy |
 | Serve mode (API, SSE, dashboard) | Preview | Loopback by default; token required off-loopback |
 | Run inspection (`runs`, `cost`, `trace`, `watch`) | Preview | Artifacts: events.jsonl, prompt.md, output.md, summary.json |
-| Config tooling (`config`, `doctor`, `config wizard`) | Preview | Validate/summarize `prism.yaml` |
+| Config tooling (`config`, `doctor`, `config wizard`) | Preview | Validate/summarize `prizm.yaml` |
 | Multi-agent delegation | Experimental | Requires configured agents + provider |
 | Providers (Ollama/OpenAI/Anthropic/Gemini/Claude Code) | Experimental | API-backed providers need credentials |
 | Scheduler (cron jobs) | Experimental | Disabled by default |
 | MCP tool servers | Experimental | Disabled by default; probe before enabling |
 | Remembrance memory service | Experimental | Separate Python service, disabled by default |
 | Autopatch / self-patching (`scan`) | Experimental | Disabled by default |
-| Cross-Prism bridge / Factory handoff | Experimental | Disabled by default |
+| Cross-Prizm bridge / Factory handoff | Experimental | Disabled by default |
 | Vector search / projections | Experimental | Advanced/optional |
 | Free Mode / shell tool (V60) | Experimental | Disabled by default; single-owner Discord bypass of the approval gate — see [Safety Model](../concepts/SAFETY.md#free-mode-owner-authorized-mutation-mode) |
 

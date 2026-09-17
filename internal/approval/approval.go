@@ -1,5 +1,5 @@
-// Package approval implements Prism V4's approval-gated mutation model.
-// Approvals are the gate between an agent proposing a file change and Prism
+// Package approval implements Prizm V4's approval-gated mutation model.
+// Approvals are the gate between an agent proposing a file change and Prizm
 // actually performing it. Every approval is persisted as a JSON artifact and
 // every state transition is emitted as an event.
 package approval
@@ -38,6 +38,12 @@ const (
 	MutationWriteFile       = "write_file"
 	MutationCreateDirectory = "create_directory"
 	MutationApplyPatch      = "apply_patch"
+	// MutationToolCall represents "re-invoke this exact tool with this exact
+	// input, for real, now that a human approved it" — used for any
+	// approval-gated tool whose Execute() performs a real, non-file-write
+	// side effect (shell, git_checkout, git_add, git_commit, git_push,
+	// create_pr, mcp_* tools). See Approval.ToolName/Input.
+	MutationToolCall = "tool_call"
 )
 
 // PolicyDecision constants.
@@ -55,10 +61,15 @@ type Approval struct {
 	Status        string         `json:"status"` // pending, approved, denied, expired
 	RequestedBy   string         `json:"requested_by"`
 	Project       string         `json:"project"`
-	MutationType  string         `json:"mutation_type"` // write_file, create_directory, apply_patch
+	MutationType  string         `json:"mutation_type"` // write_file, create_directory, apply_patch, tool_call
 	TargetPath    string         `json:"target_path"`
 	Content       string         `json:"content,omitempty"`
 	Preview       string         `json:"preview,omitempty"`
+	// ToolName and Input preserve the original tool call for MutationToolCall
+	// approvals, so mutation.Executor can re-invoke the exact same tool with
+	// the exact same input after a human approves it.
+	ToolName string         `json:"tool_name,omitempty"`
+	Input    map[string]any `json:"input,omitempty"`
 	CreatedAt     time.Time      `json:"created_at"`
 	ExpiresAt     *time.Time     `json:"expires_at,omitempty"`
 	ApprovedBy    string         `json:"approved_by,omitempty"`

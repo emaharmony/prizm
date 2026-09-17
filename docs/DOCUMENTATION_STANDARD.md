@@ -1,4 +1,4 @@
-# Prism Documentation Standard
+# Prizm Documentation Standard
 
 The conventions for docs in this repository. It exists so every doc reads as one
 consistent set. Follow it when adding or editing documentation.
@@ -25,18 +25,18 @@ consistent set. Follow it when adding or editing documentation.
   `YAML_REFERENCE.md`).
 - Design notes use `V<n>-TOPIC-DESIGN.md` (e.g. `V59-AGENT-INVOCATION-API-DESIGN.md`).
 - A few legacy top-level docs predate this rule and keep their names
-  (`PRISM-VISION.md`, `EVENT-MANUAL.md`, `natural-gates-workflow.md`); don't rename
+  (`PRIZM-VISION.md`, `EVENT-MANUAL.md`, `natural-gates-workflow.md`); don't rename
   them casually — it breaks inbound links.
 
 ## Structure
 
-1. **Title** — a single `#` H1, product-prefixed where natural: `# Prism <Thing>`
-   or `# <Action> with Prism`.
+1. **Title** — a single `#` H1, product-prefixed where natural: `# Prizm <Thing>`
+   or `# <Action> with Prizm`.
 2. **Purpose** — 1–3 sentences immediately under the title saying what the doc is
    and who it's for.
 3. **Preview/license note** — where relevant, a `>` blockquote linking
    [`../LICENSE`](../LICENSE) and [Capability Status](reference/CAPABILITY_STATUS.md), noting
-   Prism is source-available and preview-stage.
+   Prizm is source-available and preview-stage.
 4. **Body** — `##` sections. Use tables for structured facts (requirements,
    options, capabilities). Use fenced code blocks with a language hint, and give
    both `bash` and PowerShell variants where the commands differ on Windows.

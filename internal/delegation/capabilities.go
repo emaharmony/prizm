@@ -3,7 +3,7 @@ package delegation
 import (
 	"fmt"
 
-	"github.com/emaharmony/prism/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/orchestrator"
 )
 
 // Capabilities defines what an agent can do.

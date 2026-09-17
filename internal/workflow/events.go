@@ -12,13 +12,13 @@ var V7EventTypes = struct {
 	WorkflowStepFailed    string
 	WorkflowStepSkipped   string
 }{
-	WorkflowStarted:       "prism.workflow.started",
-	WorkflowCompleted:     "prism.workflow.completed",
-	WorkflowFailed:        "prism.workflow.failed",
-	WorkflowPaused:        "prism.workflow.paused",
-	WorkflowResumed:       "prism.workflow.resumed",
-	WorkflowStepStarted:   "prism.workflow.step.started",
-	WorkflowStepCompleted: "prism.workflow.step.completed",
-	WorkflowStepFailed:    "prism.workflow.step.failed",
-	WorkflowStepSkipped:   "prism.workflow.step.skipped",
+	WorkflowStarted:       "prizm.workflow.started",
+	WorkflowCompleted:     "prizm.workflow.completed",
+	WorkflowFailed:        "prizm.workflow.failed",
+	WorkflowPaused:        "prizm.workflow.paused",
+	WorkflowResumed:       "prizm.workflow.resumed",
+	WorkflowStepStarted:   "prizm.workflow.step.started",
+	WorkflowStepCompleted: "prizm.workflow.step.completed",
+	WorkflowStepFailed:    "prizm.workflow.step.failed",
+	WorkflowStepSkipped:   "prizm.workflow.step.skipped",
 }

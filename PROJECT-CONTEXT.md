@@ -1,14 +1,14 @@
-# PROJECT-CONTEXT.md — Prism
+# PROJECT-CONTEXT.md — Prizm
 > Universal project context file. Auto-loaded by Lumi for any work on this project.
 > Format: structured, scannable, no fluff. Update when milestones complete or architecture changes.
 
 ## Identity
-- **Name:** Prism
+- **Name:** Prizm
 - **Type:** Event-Native AI Agent Platform
 - **Tagline:** One beam of light. One event. A spectrum of reactions.
 - **Born:** 2026-05-07
 - **Status:** Pre-M1 (core components prototyped, not yet integrated end-to-end)
-- **Repo:** `/Users/ema/projects/repos/prism/`
+- **Repo:** `/Users/ema/projects/repos/prizm/`
 - **Branch:** `main` (only branch)
 - **Design Doc:** `docs/DESIGN.md`
 
@@ -22,35 +22,35 @@
 
 ## Implemented Components
 
-### ✅ prism-bus (Go binary)
+### ✅ prizm-bus (Go binary)
 - Embedded NATS JetStream server
 - Canonical Event schema (id, type, source, timestamp, correlation_id, parent_id, payload, metadata)
-- PRISM stream: subjects `prism.>`, 1M msgs max, 1GB, 7-day retention, file storage
+- PRIZM stream: subjects `prizm.>`, 1M msgs max, 1GB, 7-day retention, file storage
 - Built-in durable consumers: logger, decision-handler, memory-store
 - Test events: publishes 3 demo events on startup (channel.received → agent.decision → memory.stored)
-- **File:** `cmd/prism-bus/main.go`
-- **Binary:** `prism-bus` (22.8MB, in repo root)
+- **File:** `cmd/prizm-bus/main.go`
+- **Binary:** `prizm-bus` (22.8MB, in repo root)
 
-### ✅ prism-agent (Go binary)
+### ✅ prizm-agent (Go binary)
 - Connects to NATS bus, subscribes to configured subjects
 - Configurable: `-name`, `-subs`, `-model`, `-bus` flags
-- Default subscription: `prism.>` (all events)
+- Default subscription: `prizm.>` (all events)
 - Durable consumers per subject, heartbeat every 30s
-- Emits `prism.agent.started` and `prism.agent.stopped` lifecycle events
-- **File:** `cmd/prism-agent/main.go`
-- **Binary:** `prism-agent` (9.0MB, in repo root)
+- Emits `prizm.agent.started` and `prizm.agent.stopped` lifecycle events
+- **File:** `cmd/prizm-agent/main.go`
+- **Binary:** `prizm-agent` (9.0MB, in repo root)
 
-### ✅ Python SDK (`sdk/prism/`)
-- `PrismClient` — async NATS connection, emit/subscribe
+### ✅ Python SDK (`sdk/prizm/`)
+- `PrizmClient` — async NATS connection, emit/subscribe
 - Event model with Pydantic validation
 - Tool registry: `register_tool()` + `call_tool()` with request/response over events
-- Decorators: `@prism.on()`, `@prism.emit()`, `@prism.tool()`, `@prism.agent()`, `@prism.run()`
-- **Files:** `sdk/prism/client.py`, `event.py`, `_global.py`, `agents/`, `channels/`, `tools/`
+- Decorators: `@prizm.on()`, `@prizm.emit()`, `@prizm.tool()`, `@prizm.agent()`, `@prizm.run()`
+- **Files:** `sdk/prizm/client.py`, `event.py`, `_global.py`, `agents/`, `channels/`, `tools/`
 
 ### ✅ Channel Adapters
-- **Discord** (`sdk/prism/channels/discord.py`) — receives messages, emits `prism.channel.received`
-- **Telegram** (`sdk/prism/channels/telegram.py`) — receives messages, emits `prism.channel.received`
-- Both translate channel formats → canonical Prism Event schema
+- **Discord** (`sdk/prizm/channels/discord.py`) — receives messages, emits `prizm.channel.received`
+- **Telegram** (`sdk/prizm/channels/telegram.py`) — receives messages, emits `prizm.channel.received`
+- Both translate channel formats → canonical Prizm Event schema
 
 ### ✅ Remembrance (Memory Layer)
 - FastAPI server on configurable port
@@ -69,7 +69,7 @@
 ## NOT Yet Implemented
 - [ ] Agent runtime with actual LLM calls (Go orchestrating Python agents)
 - [ ] gRPC bridge between Go runtime and Python SDK
-- [ ] Migration tool (`prism migrate --from-openclaw`)
+- [ ] Migration tool (`prizm migrate --from-openclaw`)
 - [ ] Web UI (real-time event stream viewer)
 - [ ] Cron scheduler (time-based event producers)
 - [ ] State manager (CQRS projections)
@@ -80,7 +80,7 @@
 ```json
 {
   "id": "evt_<timestamp>_<counter>",
-  "type": "prism.<domain>.<action>",
+  "type": "prizm.<domain>.<action>",
   "source": "agent or component name",
   "timestamp": "ISO 8601 UTC",
   "correlation_id": "links events in same workflow",
@@ -91,13 +91,13 @@
 ```
 
 ## Subject Tree
-- `prism.agent.*` — agent lifecycle (spawned, decision, output, error, completed, started, stopped, heartbeat)
-- `prism.tool.*` — tool invocations (called, result, error, registered)
-- `prism.memory.*` — memory operations (stored, retrieved, consolidated)
-- `prism.channel.*` — channel messages (received, sent)
-- `prism.cron.*` — scheduled triggers (triggered, completed)
-- `prism.session.*` — session lifecycle (created, ended)
-- `prism.state.*` — state mutations (changed)
+- `prizm.agent.*` — agent lifecycle (spawned, decision, output, error, completed, started, stopped, heartbeat)
+- `prizm.tool.*` — tool invocations (called, result, error, registered)
+- `prizm.memory.*` — memory operations (stored, retrieved, consolidated)
+- `prizm.channel.*` — channel messages (received, sent)
+- `prizm.cron.*` — scheduled triggers (triggered, completed)
+- `prizm.session.*` — session lifecycle (created, ended)
+- `prizm.state.*` — state mutations (changed)
 
 ## Key Decisions
 | Decision | Choice | Rationale |
@@ -105,7 +105,7 @@
 | Scope | Full platform, event-native, source-available | Ema controls the whole stack |
 | Runtime | Go core + Python SDK | Go for event backbone; Python for agent ergonomics |
 | Event bus | NATS JetStream | Persistence, replay, consumer groups, wildcards, Go-native |
-| Migration | OpenClaw config import | Read openclaw.json → emit Prism config |
+| Migration | OpenClaw config import | Read openclaw.json → emit Prizm config |
 | Memory | Event-sourced + projections + vector search | Immutable audit trail, time-travel debugging |
 
 ## Dependencies
@@ -116,10 +116,10 @@
 ## Commands
 ```bash
 # Start the bus
-cd /Users/ema/projects/repos/prism && ./prism-bus
+cd /Users/ema/projects/repos/prizm && ./prizm-bus
 
 # Start an agent
-./prism-agent -name lumi -subs "prism.agent.*,prism.channel.received" -model glm-5.1:cloud
+./prizm-agent -name lumi -subs "prizm.agent.*,prizm.channel.received" -model glm-5.3-flash:cloud
 
 # Start Remembrance
 cd remembrance && uvicorn remembrance.app:app --reload --port 8900
@@ -129,15 +129,15 @@ python sdk/examples/minimal.py
 python sdk/examples/full_app.py
 ```
 
-## Migration Path (OpenClaw → Prism)
-| OpenClaw | Prism |
+## Migration Path (OpenClaw → Prizm)
+| OpenClaw | Prizm |
 |----------|-------|
-| `channels.discord` | Channel adapter: `prism.channel.received.discord` |
-| `session.dmScope` | Session config: `prism.session.*` |
-| `hooks.internal` | Event subscriptions: `prism.agent.*` → handler |
-| `plugins.entries` | Tool registrations: `prism.tool.registered.*` |
+| `channels.discord` | Channel adapter: `prizm.channel.received.discord` |
+| `session.dmScope` | Session config: `prizm.session.*` |
+| `hooks.internal` | Event subscriptions: `prizm.agent.*` → handler |
+| `plugins.entries` | Tool registrations: `prizm.tool.registered.*` |
 | `gateway.bind` | Runtime config: host/port |
 | `models.*` | LLM provider config in agent definitions |
-| Memory DB (`MEMORY.md`) | Import as `prism.memory.stored` events |
-| Cron jobs | `prism.cron.triggered.*` with schedule config |
-| Sub-agent spawns | `prism.agent.spawned` with parent correlation |
+| Memory DB (`MEMORY.md`) | Import as `prizm.memory.stored` events |
+| Cron jobs | `prizm.cron.triggered.*` with schedule config |
+| Sub-agent spawns | `prizm.agent.spawned` with parent correlation |

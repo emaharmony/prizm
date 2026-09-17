@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/emaharmony/prism/internal/skill"
+	"github.com/emaharmony/prizm/internal/skill"
 )
 
 // UseSkillTool lets an agent invoke a registered skill by name: it returns the

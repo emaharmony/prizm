@@ -13,7 +13,7 @@ try {
         @('internal/version/version.go', "var Version = `"$version`""),
         @('sdk/pyproject.toml', "version = `"$version`""),
         @('remembrance/pyproject.toml', "version = `"$version`""),
-        @('sdk/prism/__init__.py', "__version__ = `"$version`""),
+        @('sdk/prizm/__init__.py', "__version__ = `"$version`""),
         @('remembrance/src/remembrance/__init__.py', "__version__ = `"$version`""),
         @('CHANGELOG.md', "## [$version]")
     )
@@ -23,8 +23,8 @@ try {
         }
     }
 
-    $actual = (& go run ./cmd/prism-cli version).Trim()
-    if ($actual -ne "prism v$version") { throw "CLI version mismatch: $actual" }
+    $actual = (& go run ./cmd/prizm-cli version).Trim()
+    if ($actual -ne "prizm v$version") { throw "CLI version mismatch: $actual" }
     "version contract: v$version"
 } finally {
     Pop-Location

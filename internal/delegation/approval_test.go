@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/task"
+	"github.com/emaharmony/prizm/internal/task"
 )
 
 func TestApprovalManager_RequestApproval(t *testing.T) {

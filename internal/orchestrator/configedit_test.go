@@ -11,7 +11,7 @@ import (
 
 func TestSetYAMLPath_PreservesCommentsAndSiblings(t *testing.T) {
 	src := `# top comment
-prism:
+prizm:
   instance_id: "astraea"   # inline comment
   port: 8321
   scheduler:
@@ -23,7 +23,7 @@ remembrance:
   enabled: true
   url: "http://localhost:18790"
 `
-	// Replace prism.scheduler with a new value.
+	// Replace prizm.scheduler with a new value.
 	type job struct {
 		Name     string `yaml:"name"`
 		Schedule string `yaml:"schedule"`
@@ -34,9 +34,9 @@ remembrance:
 		Enabled bool  `yaml:"enabled"`
 		Jobs    []job `yaml:"jobs"`
 	}
-	newSched := sched{Enabled: true, Jobs: []job{{Name: "status-report", Schedule: "0 */2 * * *", Event: "prism.task.scheduled", Enabled: true}}}
+	newSched := sched{Enabled: true, Jobs: []job{{Name: "status-report", Schedule: "0 */2 * * *", Event: "prizm.task.scheduled", Enabled: true}}}
 
-	out, err := SetYAMLPath([]byte(src), []string{"prism", "scheduler"}, newSched)
+	out, err := SetYAMLPath([]byte(src), []string{"prizm", "scheduler"}, newSched)
 	if err != nil {
 		t.Fatalf("SetYAMLPath: %v", err)
 	}
@@ -61,10 +61,10 @@ remembrance:
 }
 
 func TestSetYAMLPath_CreatesMissingPath(t *testing.T) {
-	src := `prism:
+	src := `prizm:
   instance_id: "x"
 `
-	out, err := SetYAMLPath([]byte(src), []string{"prism", "scheduler", "enabled"}, true)
+	out, err := SetYAMLPath([]byte(src), []string{"prizm", "scheduler", "enabled"}, true)
 	if err != nil {
 		t.Fatalf("SetYAMLPath: %v", err)
 	}
@@ -72,19 +72,19 @@ func TestSetYAMLPath_CreatesMissingPath(t *testing.T) {
 	if err := yaml.Unmarshal(out, &m); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	prism, _ := m["prism"].(map[string]any)
-	scheduler, _ := prism["scheduler"].(map[string]any)
+	prizm, _ := m["prizm"].(map[string]any)
+	scheduler, _ := prizm["scheduler"].(map[string]any)
 	if scheduler["enabled"] != true {
-		t.Fatalf("expected prism.scheduler.enabled=true, got: %#v", m)
+		t.Fatalf("expected prizm.scheduler.enabled=true, got: %#v", m)
 	}
 	// instance_id preserved.
-	if prism["instance_id"] != "x" {
-		t.Fatalf("instance_id not preserved: %#v", prism)
+	if prizm["instance_id"] != "x" {
+		t.Fatalf("instance_id not preserved: %#v", prizm)
 	}
 }
 
 func TestSetYAMLPath_EmptySource(t *testing.T) {
-	out, err := SetYAMLPath(nil, []string{"prism", "port"}, 9000)
+	out, err := SetYAMLPath(nil, []string{"prizm", "port"}, 9000)
 	if err != nil {
 		t.Fatalf("SetYAMLPath: %v", err)
 	}
@@ -92,15 +92,15 @@ func TestSetYAMLPath_EmptySource(t *testing.T) {
 	if err := yaml.Unmarshal(out, &m); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	prism, _ := m["prism"].(map[string]any)
-	if prism["port"] != 9000 {
-		t.Fatalf("expected prism.port=9000, got %#v", m)
+	prizm, _ := m["prizm"].(map[string]any)
+	if prizm["port"] != 9000 {
+		t.Fatalf("expected prizm.port=9000, got %#v", m)
 	}
 }
 
 func TestSetYAMLPath_ReplaceScalarInPlace(t *testing.T) {
-	src := "prism:\n  port: 8321\n  log_level: info\n"
-	out, err := SetYAMLPath([]byte(src), []string{"prism", "port"}, 9999)
+	src := "prizm:\n  port: 8321\n  log_level: info\n"
+	out, err := SetYAMLPath([]byte(src), []string{"prizm", "port"}, 9999)
 	if err != nil {
 		t.Fatalf("SetYAMLPath: %v", err)
 	}
@@ -111,8 +111,8 @@ func TestSetYAMLPath_ReplaceScalarInPlace(t *testing.T) {
 
 func TestValidateAndWrite_RejectsInvalidLeavesFileUntouched(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "prism.yaml")
-	original := "prism:\n  instance_id: good\nagents:\n  - id: a\n    role: r\n    model: m\n    provider: ollama\n"
+	path := filepath.Join(dir, "prizm.yaml")
+	original := "prizm:\n  instance_id: good\nagents:\n  - id: a\n    role: r\n    model: m\n    provider: ollama\n"
 	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -130,8 +130,8 @@ func TestValidateAndWrite_RejectsInvalidLeavesFileUntouched(t *testing.T) {
 
 func TestValidateAndWrite_WritesValid(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "prism.yaml")
-	valid := "prism:\n  instance_id: fresh\n"
+	path := filepath.Join(dir, "prizm.yaml")
+	valid := "prizm:\n  instance_id: fresh\n"
 	if err := ValidateAndWrite(path, []byte(valid)); err != nil {
 		t.Fatalf("ValidateAndWrite: %v", err)
 	}

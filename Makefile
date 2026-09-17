@@ -2,7 +2,7 @@
 
 # Development
 dev:                           ## Run in development mode
-	go run ./cmd/prism-cli run --task "hello world" --project dev --agent lumi
+	go run ./cmd/prizm-cli run --task "hello world" --project dev --agent lumi
 
 # Testing
 test:                          ## Run all tests
@@ -18,17 +18,17 @@ test-short:                    ## Run tests without race detector (faster)
 
 # Building
 build:                         ## Build binary for current platform
-	CGO_ENABLED=0 go build -o prism ./cmd/prism-cli/
+	CGO_ENABLED=0 go build -o prizm ./cmd/prizm-cli/
 
 build-all:                     ## Cross-compile for all platforms
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o prism-linux-amd64 ./cmd/prism-cli/
-	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o prism-darwin-arm64 ./cmd/prism-cli/
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o prism-windows-amd64.exe ./cmd/prism-cli/
-	@echo "Built: prism-linux-amd64, prism-darwin-arm64, prism-windows-amd64.exe"
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o prizm-linux-amd64 ./cmd/prizm-cli/
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o prizm-darwin-arm64 ./cmd/prizm-cli/
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o prizm-windows-amd64.exe ./cmd/prizm-cli/
+	@echo "Built: prizm-linux-amd64, prizm-darwin-arm64, prizm-windows-amd64.exe"
 
 build-panel:                   ## Build the desktop pet panel (own module; needs cgo + a C compiler)
-	cd cmd/prism-panel && CGO_ENABLED=1 go build -o ../../prism-panel .
-	@echo "Built: prism-panel (run alongside \`prism serve\`)"
+	cd cmd/prizm-panel && CGO_ENABLED=1 go build -o ../../prizm-panel .
+	@echo "Built: prizm-panel (run alongside \`prizm serve\`)"
 
 # Linting
 lint:                          ## Run linters
@@ -43,7 +43,7 @@ ci: lint                       ## Run the full CI gate (vet, build, test)
 
 # Docker
 docker-build:                  ## Build Docker image
-	docker build -t prism:latest .
+	docker build -t prizm:latest .
 
 docker-run:                    ## Run in Docker
 	docker-compose up -d
@@ -53,5 +53,5 @@ docker-stop:                   ## Stop Docker containers
 
 # Clean
 clean:                         ## Remove build artifacts
-	rm -f prism prism-linux-amd64 prism-darwin-arm64 prism-windows-amd64.exe prism-panel prism-panel.exe coverage.out coverage.html
+	rm -f prizm prizm-linux-amd64 prizm-darwin-arm64 prizm-windows-amd64.exe prizm-panel prizm-panel.exe coverage.out coverage.html
 	go clean ./...

@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // ReportFromDataDir aggregates cost events from <dataDir>/<runID>/events.jsonl.
@@ -32,7 +32,7 @@ func ReportFromEventsFile(runID, eventsFile string) (*CostReport, error) {
 	return ReportFromEvents(runID, f)
 }
 
-// ReportFromEvents aggregates prism.llm.* token usage from a JSONL event stream.
+// ReportFromEvents aggregates prizm.llm.* token usage from a JSONL event stream.
 func ReportFromEvents(runID string, r io.Reader) (*CostReport, error) {
 	tracker := NewCostTracker(runID)
 	scanner := bufio.NewScanner(r)
@@ -46,7 +46,7 @@ func ReportFromEvents(runID string, r io.Reader) (*CostReport, error) {
 		if err := json.Unmarshal([]byte(line), &evt); err != nil {
 			continue
 		}
-		if evt.Type != "prism.llm.completed" && evt.Type != "prism.llm.failed" {
+		if evt.Type != "prizm.llm.completed" && evt.Type != "prizm.llm.failed" {
 			continue
 		}
 		usage := usageFromEvent(evt)

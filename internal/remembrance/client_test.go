@@ -35,7 +35,7 @@ func TestBuildContextWithOptionsSendsOwnerAndLocalHints(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"project_id":"prism","owner_id":"owner-1","agent_id":"lumi","task":"hello","selected_memories":[],"context_markdown":"","token_count":0}`))
+		_, _ = w.Write([]byte(`{"project_id":"prizm","owner_id":"owner-1","agent_id":"lumi","task":"hello","selected_memories":[],"context_markdown":"","token_count":0}`))
 	}))
 	defer server.Close()
 
@@ -43,7 +43,7 @@ func TestBuildContextWithOptionsSendsOwnerAndLocalHints(t *testing.T) {
 	resp, err := client.BuildContextWithOptions(BuildContextRequest{
 		OwnerID:            "owner-1",
 		AgentID:            "lumi",
-		ProjectID:          "prism",
+		ProjectID:          "prizm",
 		Task:               "hello",
 		LocalRecentSummary: "recent exact context",
 		ChannelContext:     "discord channel",
@@ -58,7 +58,7 @@ func TestBuildContextWithOptionsSendsOwnerAndLocalHints(t *testing.T) {
 	for key, want := range map[string]any{
 		"owner_id":             "owner-1",
 		"agent_id":             "lumi",
-		"project_id":           "prism",
+		"project_id":           "prizm",
 		"task":                 "hello",
 		"local_recent_summary": "recent exact context",
 		"channel_context":      "discord channel",
@@ -97,11 +97,11 @@ func TestCaptureWithMetadataSendsSourceFields(t *testing.T) {
 		Summary:         "summary",
 		SourceRef:       "run-1",
 		ImportanceScore: 0.8,
-		ProjectID:       "prism",
+		ProjectID:       "prizm",
 		Title:           "title",
 		Content:         "content",
 		SourceType:      "agent",
-		SourceAgent:     "prism:lumi",
+		SourceAgent:     "prizm:lumi",
 	})
 	if err != nil {
 		t.Fatalf("CaptureWithMetadata: %v", err)

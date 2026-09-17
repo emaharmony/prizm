@@ -5,7 +5,7 @@
 
 ## Mission
 
-V16 makes Prism events *intelligent*. Every event now carries enriched metadata — how long it took, what it cost, whether it succeeded, and what should happen next. This transforms Prism from a passive event logger into an active observability system that can answer: "What happened? How long did it take? What did it cost? What went wrong? What should we try next?"
+V16 makes Prizm events *intelligent*. Every event now carries enriched metadata — how long it took, what it cost, whether it succeeded, and what should happen next. This transforms Prizm from a passive event logger into an active observability system that can answer: "What happened? How long did it take? What did it cost? What went wrong? What should we try next?"
 
 ## What Changed
 
@@ -32,7 +32,7 @@ type EventMetadata struct {
 
 **DurationMs** — Wall-clock time for this event's action, in milliseconds. Already scattered in payloads as `duration_ms`; now promoted to first-class metadata.
 
-**Outcome** — Categorizes the result: `success`, `failure`, `timeout`, `skipped`. Previously you had to infer outcome from the event type (e.g., `prism.task.failed` = failure). Now every completion event carries an explicit outcome.
+**Outcome** — Categorizes the result: `success`, `failure`, `timeout`, `skipped`. Previously you had to infer outcome from the event type (e.g., `prizm.task.failed` = failure). Now every completion event carries an explicit outcome.
 
 **TokenUsage** — Detailed token breakdown replacing the flat `TokenCost`:
 
@@ -64,14 +64,14 @@ type CostReport struct {
 }
 ```
 
-- `CostTracker` listens to `prism.llm.completed` and `prism.llm.failed` events
+- `CostTracker` listens to `prizm.llm.completed` and `prizm.llm.failed` events
 - Accumulates token counts and estimated costs
 - Writes `cost_report.json` to the run directory
-- Exposes via CLI: `prism cost <run_id>`
+- Exposes via CLI: `prizm cost <run_id>`
 
 ### 3. Event Trace Visualization
 
-New CLI command `prism trace <run_id>` reconstructs the causal DAG from parent_id chains and prints a human-readable trace:
+New CLI command `prizm trace <run_id>` reconstructs the causal DAG from parent_id chains and prints a human-readable trace:
 
 ```
 task.created (evt_01JXA) run_abc
@@ -96,8 +96,8 @@ New event types for cost tracking:
 
 | Event | When | Key Payload |
 |-------|------|-------------|
-| `prism.cost.tracked` | Token usage recorded for an LLM call | `provider`, `model`, `prompt_tokens`, `completion_tokens`, `estimated_cost_usd` |
-| `prism.cost.reported` | Cost report generated for a run | `run_id`, `total_tokens`, `estimated_cost_usd` |
+| `prizm.cost.tracked` | Token usage recorded for an LLM call | `provider`, `model`, `prompt_tokens`, `completion_tokens`, `estimated_cost_usd` |
+| `prizm.cost.reported` | Cost report generated for a run | `run_id`, `total_tokens`, `estimated_cost_usd` |
 
 ### 5. Event Schema Validation (Lightweight)
 
@@ -105,11 +105,11 @@ New package `internal/event/schema.go` validates event payloads against expected
 
 ```go
 var Schemas = map[string]Schema{
-    "prism.task.started": {
+    "prizm.task.started": {
         Required: []string{"task", "provider"},
         Optional: []string{"model", "agent"},
     },
-    "prism.llm.completed": {
+    "prizm.llm.completed": {
         Required: []string{"provider", "model"},
         Optional: []string{"prompt_tokens", "completion_tokens", "latency_ms"},
     },
@@ -123,13 +123,13 @@ This is lightweight — just required/optional field checks, not JSON Schema val
 
 1. **Enrichment is additive** — All V16 fields are optional (`omitempty`). V1 consumers continue to work unchanged. No breaking changes.
 
-2. **Outcome is explicit** — Instead of inferring success/failure from event type suffix, every event carries `outcome`. This makes filtering and querying straightforward: `prism events --outcome failure`.
+2. **Outcome is explicit** — Instead of inferring success/failure from event type suffix, every event carries `outcome`. This makes filtering and querying straightforward: `prizm events --outcome failure`.
 
 3. **TokenUsage replaces TokenCost** — `TokenCost` (int) is deprecated but not removed. New code uses `TokenUsage` (struct). Both are serialized; `TokenCost` is derived from `TokenUsage.TotalTokens` for backward compat.
 
-4. **Cost aggregation is event-driven** — `CostTracker` subscribes to LLM events and accumulates. No polling, no database queries. The cost report is written when `prism.task.completed` is emitted.
+4. **Cost aggregation is event-driven** — `CostTracker` subscribes to LLM events and accumulates. No polling, no database queries. The cost report is written when `prizm.task.completed` is emitted.
 
-5. **Trace visualization is read-only** — `prism trace` reads `events.jsonl` and reconstructs the DAG. No new storage, no projections. Pure computation from existing data.
+5. **Trace visualization is read-only** — `prizm trace` reads `events.jsonl` and reconstructs the DAG. No new storage, no projections. Pure computation from existing data.
 
 6. **Schema validation is opt-in** — Call `event.Validate(evt)` before persisting. In production, this can be disabled for performance. In development, it catches bugs early.
 
@@ -142,8 +142,8 @@ This is lightweight — just required/optional field checks, not JSON Schema val
 | `internal/cost/` | Token cost aggregation and reporting | `tracker.go`, `report.go`, `pricing.go`, `tracker_test.go` |
 | `internal/event/schema.go` | Lightweight event payload validation | `schema.go`, `schema_test.go` |
 | `internal/event/event.go` | Enriched EventMetadata + TokenUsage | Modified |
-| `cmd/prism-cli/cmd_cost.go` | `prism cost` CLI command | New |
-| `cmd/prism-cli/cmd_trace.go` | `prism trace` CLI command | New |
+| `cmd/prizm-cli/cmd_cost.go` | `prizm cost` CLI command | New |
+| `cmd/prizm-cli/cmd_trace.go` | `prizm trace` CLI command | New |
 
 ## Test Coverage
 
@@ -159,7 +159,7 @@ This is lightweight — just required/optional field checks, not JSON Schema val
 
 These were considered but deferred:
 
-- **Data governance / PII scrubbing** — Owned by Remembrance, not Prism core. Mango score: Impact 5, Feasibility 5, Uniqueness 3.
+- **Data governance / PII scrubbing** — Owned by Remembrance, not Prizm core. Mango score: Impact 5, Feasibility 5, Uniqueness 3.
 - **Security audit adapter** — V8 policy events already provide this. Mango score: Impact 5, Feasibility 6, Uniqueness 3.
 - **Agent inbox (subscription filtering)** — V9 adapters already subscribe to specific subjects.
 - **Resource governor (rate limiting)** — Complex, needs separate design.

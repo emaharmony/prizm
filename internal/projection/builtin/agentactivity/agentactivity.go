@@ -23,8 +23,8 @@
 package agentactivity
 
 import (
-	"github.com/emaharmony/prism/internal/agent"
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/agent"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // AgentActivitySnapshot is the output of the agent_activity projection.

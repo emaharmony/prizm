@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/adapter"
-	remcli "github.com/emaharmony/prism/internal/remembrance"
+	"github.com/emaharmony/prizm/internal/adapter"
+	remcli "github.com/emaharmony/prizm/internal/remembrance"
 )
 
 func TestAdapterName(t *testing.T) {
@@ -91,9 +91,9 @@ func TestAdapterExecuteCapture(t *testing.T) {
 				"confidence":    0.92,
 				"category":      "project",
 				"tier":          "persist",
-				"summary":       "Ema decided Prism stays domain-agnostic",
-				"entities":      []string{"ema", "prism"},
-				"new_entities":  []string{"prism"},
+				"summary":       "Ema decided Prizm stays domain-agnostic",
+				"entities":      []string{"ema", "prizm"},
+				"new_entities":  []string{"prizm"},
 				"edges_created": 2,
 			})
 		}
@@ -105,7 +105,7 @@ func TestAdapterExecuteCapture(t *testing.T) {
 	a := NewAdapter(cfg)
 
 	result, err := a.Execute(t.Context(), "capture", map[string]any{
-		"text":   "Ema decided Prism stays domain-agnostic",
+		"text":   "Ema decided Prizm stays domain-agnostic",
 		"source": "test",
 	})
 	if err != nil {
@@ -134,7 +134,7 @@ func TestAdapterExecuteSearch(t *testing.T) {
 	a := NewAdapter(cfg)
 
 	result, err := a.Execute(t.Context(), "search", map[string]any{
-		"query": "Prism",
+		"query": "Prizm",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

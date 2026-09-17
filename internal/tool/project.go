@@ -22,7 +22,7 @@ type SearchFilesTool struct {
 
 func (t *SearchFilesTool) Name() string { return "search_files" }
 func (t *SearchFilesTool) Description() string {
-	return "Searches for a text pattern across project files (like grep). Returns matching lines with file paths and line numbers. Use this to find where functions, types, or patterns are defined or used."
+	return "Searches for text patterns across project files (like grep). All space-separated keywords in the pattern must be present in matching lines (AND logic, case-insensitive). Returns matching lines with file paths and line numbers. Use this to find where functions, types, or patterns are defined or used, or to search memory files for past decisions."
 }
 func (t *SearchFilesTool) Schema() ToolSchema {
 	return ToolSchema{
@@ -42,6 +42,12 @@ func (t *SearchFilesTool) Execute(ctx context.Context, input map[string]any) (To
 	}
 	if pattern == "" {
 		return ToolResult{Success: false, Error: "pattern must not be empty"}, nil
+	}
+
+	// Split pattern into keywords for AND logic (case-insensitive)
+	keywords := strings.Fields(strings.ToLower(pattern))
+	if len(keywords) == 0 {
+		return ToolResult{Success: false, Error: "no keywords in pattern"}, nil
 	}
 
 	searchDir := "."
@@ -93,7 +99,16 @@ func (t *SearchFilesTool) Execute(ctx context.Context, input map[string]any) (To
 		lineNum := 0
 		for scanner.Scan() {
 			lineNum++
-			if strings.Contains(scanner.Text(), pattern) {
+			// Multi-keyword AND: all keywords must be present (case-insensitive)
+			lineLower := strings.ToLower(scanner.Text())
+			allMatch := true
+			for _, kw := range keywords {
+				if !strings.Contains(lineLower, kw) {
+					allMatch = false
+					break
+				}
+			}
+			if allMatch {
 				totalMatches++
 				if len(matches) < maxResults {
 					lineText := scanner.Text()
@@ -138,13 +153,13 @@ type ProjectOverviewTool struct {
 
 func (t *ProjectOverviewTool) Name() string { return "project_overview" }
 func (t *ProjectOverviewTool) Description() string {
-	return "Provides an overview of a project: reads README, package manifest, config files, and builds a directory tree. Set deep_dive=true to also read key architecture files (Prisma schema, API modules, Program.cs, configs, etc.) and get recent git history for deeper understanding. Always use deep_dive=true when you need to understand a project's architecture and current direction."
+	return "Provides an overview of a project: reads README, package manifest, config files, and builds a directory tree. Set deep_dive=true to also read key architecture files (Prizma schema, API modules, Program.cs, configs, etc.) and get recent git history for deeper understanding. Always use deep_dive=true when you need to understand a project's architecture and current direction."
 }
 func (t *ProjectOverviewTool) Schema() ToolSchema {
 	return ToolSchema{
 		Input: map[string]ParamSpec{
 			"path":      {Type: "string", Description: "Project root path. Use an absolute path for projects outside the workspace, or a path relative to the workspace root (default: '.')", Required: false},
-			"deep_dive": {Type: "boolean", Description: "If true, also read key architecture files from subdirectories (Prisma schema, API modules, config files, etc.) for deeper understanding", Required: false},
+			"deep_dive": {Type: "boolean", Description: "If true, also read key architecture files from subdirectories (Prizma schema, API modules, config files, etc.) for deeper understanding", Required: false},
 		},
 		Output: ParamSpec{Type: "object", Description: "Project overview with key files, directory tree, and optionally architecture files"},
 	}
@@ -157,7 +172,7 @@ var keyFiles = map[string]bool{
 	"pyproject.toml": true, "requirements.txt": true, "Gemfile": true,
 	"pom.xml": true, "build.gradle": true, "CMakeLists.txt": true,
 	"Makefile": true, "Dockerfile": true, "docker-compose.yaml": true, "docker-compose.yml": true,
-	".env.example": true, "prism.yaml": true, "prism.yaml.example": true,
+	".env.example": true, "prizm.yaml": true, "prizm.yaml.example": true,
 	"tsconfig.json": true, "next.config.js": true, "next.config.mjs": true,
 	"vite.config.ts": true, "webpack.config.js": true,
 }
@@ -188,8 +203,8 @@ func (t *ProjectOverviewTool) Execute(ctx context.Context, input map[string]any)
 			continue // file doesn't exist, skip
 		}
 		content := string(data)
-		if len(content) > 5000 { // cap key file reads at 5KB
-			content = content[:5000] + "\n... (truncated)"
+		if len(content) > 2000 { // cap key file reads at 2KB for context efficiency
+			content = content[:2000] + "\n... (truncated)"
 		}
 		keyFileContents = append(keyFileContents, map[string]any{
 			"file":    filename,
@@ -228,8 +243,8 @@ func (t *ProjectOverviewTool) Execute(ctx context.Context, input map[string]any)
 					continue
 				}
 				content := string(data)
-				if len(content) > 8000 { // cap architecture files at 8KB
-					content = content[:8000] + "\n... (truncated)"
+				if len(content) > 3000 { // cap architecture files at 3KB for context efficiency
+					content = content[:3000] + "\n... (truncated)"
 				}
 				archContents = append(archContents, map[string]any{
 					"file":    relPath,
@@ -312,9 +327,9 @@ func buildDirectoryTree(root, workspaceRoot string, maxDepth int) []map[string]a
 // These are files that reveal the tech stack, data model, routing, service structure,
 // and key configuration — not source code implementation details.
 var architectureFilePatterns = []string{
-	// Prisma / ORM
-	"packages/db/prisma/schema.prisma",
-	"prisma/schema.prisma",
+	// Prizma / ORM
+	"packages/db/prizma/schema.prizma",
+	"prizma/schema.prizma",
 	// .NET API
 	"apps/api/Program.cs",
 	"apps/api/BassBook.Api.csproj",
@@ -370,7 +385,7 @@ func findArchitectureFiles(root string) ([]string, error) {
 
 	// Also scan for common architecture markers that might not be in the pattern list
 	architectureMarkers := []string{
-		"schema.prisma", "Program.cs", "appsettings.json",
+		"schema.prizma", "Program.cs", "appsettings.json",
 		"next.config.js", "next.config.mjs", "next.config.ts",
 	}
 

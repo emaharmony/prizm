@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/emaharmony/prism/internal/task"
+	"github.com/emaharmony/prizm/internal/task"
 )
 
 // Tracker monitors task lifecycle and provides end-to-end tracking.

@@ -208,7 +208,7 @@ func (c *StdioClient) Initialize(ctx context.Context) error {
 	_, err := c.conn.Call(ctx, "initialize", map[string]any{
 		"protocolVersion": "2024-11-05",
 		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]any{"name": "prism", "version": "1"},
+		"clientInfo":      map[string]any{"name": "prizm", "version": "1"},
 	})
 	if err != nil {
 		return fmt.Errorf("mcp initialize: %w", err)

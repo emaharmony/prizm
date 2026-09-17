@@ -6,29 +6,29 @@ from it; don't publish it verbatim.
 
 ## One-Sentence Description
 
-Prism is a Go event-native AI agent runtime where the framework — not the
+Prizm is a Go event-native AI agent runtime where the framework — not the
 model — owns lifecycle, policy, approvals, budgets, validation, and
 persistence, and agents operate strictly inside those boundaries.
 
 ## Central Message
 
-> Most agent systems begin with the model and add control later. Prism
+> Most agent systems begin with the model and add control later. Prizm
 > begins with the runtime: lifecycle, policy, approvals, tools, budgets,
 > validation, persistence, and observability are owned by the framework.
 
 ## Three Possible Hooks
 
 1. **The control-first framing.** "Every agent framework promises
-   guardrails. Most bolt them onto the model after the fact. Prism starts
+   guardrails. Most bolt them onto the model after the fact. Prizm starts
    from the other end: a deterministic policy engine decides what's allowed
    before any model output can act — the model never approves its own
    mutations."
 2. **The verification-gate angle.** "An agent that writes code and never
-   runs the tests isn't autonomous, it's unsupervised. Prism's gated dev
+   runs the tests isn't autonomous, it's unsupervised. Prizm's gated dev
    loop won't let a phase complete until an allowlisted build/test profile
    actually passes — and feeds the real failure back to the model instead
    of trusting its own report."
-3. **The honest-preview angle.** "We're publishing Prism in public preview
+3. **The honest-preview angle.** "We're publishing Prizm in public preview
    with the actual numbers: verified test counts, known Windows-only test
    gaps, and one safety feature (Free Mode) documented in enough detail to
    tell you exactly what it does and doesn't protect against. No inflated
@@ -73,7 +73,7 @@ passes with these numbers" rather than "CI-verified coverage" until it is.
 
 ## Recommended Screenshots
 
-- Dashboard live overview (`http://localhost:8322/` after `prism serve`) —
+- Dashboard live overview (`http://localhost:8322/` after `prizm serve`) —
   **not yet captured**, needed before publishing.
 - Terminal output of the five-minute echo-workflow demo.
 - The execution-lifecycle diagram from the README.
@@ -81,10 +81,10 @@ passes with these numbers" rather than "CI-verified coverage" until it is.
 ## Demo Sequence (for a video or GIF)
 
 1. `git clone` + `go build`.
-2. `go run ./cmd/prism-cli workflow run demo.echo_tool` — no API key, no
+2. `go run ./cmd/prizm-cli workflow run demo.echo_tool` — no API key, no
    config file needed.
 3. Open `runs/<run_id>/events.jsonl` to show the event trail.
-4. `prism serve` → open the dashboard → show the run appearing live.
+4. `prizm serve` → open the dashboard → show the run appearing live.
 5. (Optional, more advanced) show an approval gate pausing a mutation and a
    human approving it via the dashboard or Discord button.
 
@@ -110,7 +110,7 @@ passes with these numbers" rather than "CI-verified coverage" until it is.
 
 ## Repository
 
-`https://github.com/emaharmony/prism`
+`https://github.com/emaharmony/prizm`
 
 ## Candidate Version
 

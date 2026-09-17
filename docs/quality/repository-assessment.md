@@ -1,6 +1,6 @@
-# Repository Assessment: Prism
+# Repository Assessment: Prizm
 
-This document provides a baseline assessment of the Prism repository as of 2026-07-09.
+This document provides a baseline assessment of the Prizm repository as of 2026-07-09.
 
 ## Current Repository Inventory
 
@@ -13,20 +13,20 @@ This document provides a baseline assessment of the Prism repository as of 2026-
     *   `internal/api`, `internal/dashboard`: External interfaces.
     *   `internal/autopatch`, `internal/subagent`: Advanced autonomous features.
 *   **Command-Line Applications:**
-    *   `cmd/prism-cli`: Primary entry point (`prism`).
-    *   `cmd/prism-bus`: Standalone NATS bus.
-    *   `cmd/prism-agent`: Standalone agent runner.
+    *   `cmd/prizm-cli`: Primary entry point (`prizm`).
+    *   `cmd/prizm-bus`: Standalone NATS bus.
+    *   `cmd/prizm-agent`: Standalone agent runner.
 *   **Services:**
-    *   `prism serve`: Integrated daemon.
+    *   `prizm serve`: Integrated daemon.
     *   `remembrance`: Separate Python-based memory service.
 *   **Integrations:** Discord, MCP, Codex, Claude Code, Roblox Factory, Firecrawl.
-*   **Runtime Directories:** `runs/`, `prism-data/`, `prism-workspace/`.
+*   **Runtime Directories:** `runs/`, `prizm-data/`, `prizm-workspace/`.
 *   **Generated Directories:** `bin/` (if used), `runs/`.
 *   **Test Packages:** 60 packages in `internal/`, plus `internal/integration`.
 *   **CI Workflows:** `.github/workflows/ci.yml` (Linux-only, basic).
 *   **Release Artifacts:** No automated release pipeline found; manual builds mentioned in README.
 *   **Documentation Categories:** Getting Started, Config, Architecture, Reference, Design (V-series).
-*   **Experimental Systems:** Sub-agents, Autopatch, Cross-Prism, Bridge, Remembrance.
+*   **Experimental Systems:** Sub-agents, Autopatch, Cross-Prizm, Bridge, Remembrance.
 
 ## Current Quality Baseline
 
@@ -43,7 +43,7 @@ This document provides a baseline assessment of the Prism repository as of 2026-
 *   **Current version:** 0.1.0-preview (inferred from development state).
 *   **Current stability status:** Public Preview.
 *   **Current release process:** Manual.
-*   **Known generated or runtime files committed:** `prism.exe`, `prism-cli.exe`, `prism-bus.exe` etc. in root; some `runs/` may be tracked.
+*   **Known generated or runtime files committed:** `prizm.exe`, `prizm-cli.exe`, `prizm-bus.exe` etc. in root; some `runs/` may be tracked.
 
 ## Risk Assessment
 
@@ -60,7 +60,7 @@ This document provides a baseline assessment of the Prism repository as of 2026-
 | Cross-agent Delegation | Medium | Async NATS-based delegation is powerful but hard to trace. |
 | Scheduler Reliability | Medium | In-process cron; subject to process restarts. |
 | Generated-file Hygiene | High | Binaries and runtime data tracked in root; unclear separation. |
-| Configuration Complexity | Medium | Single large `prism.yaml` with many experimental flags. |
+| Configuration Complexity | Medium | Single large `prizm.yaml` with many experimental flags. |
 | Provider-specific Coupling | Low | Good abstraction in `internal/provider`. |
 | Windows Compatibility | High | Documented but not verified in CI; path handling (backslashes) is a common risk. |
 | Documentation Drift | Medium | High volume of "V-series" design docs vs current implementation. |
@@ -73,7 +73,7 @@ This document provides a baseline assessment of the Prism repository as of 2026-
 *   **Testing (8/10):** Good unit test coverage, but full race detector reveals hidden issues.
 *   **CI (7/10):** Basic; lacks multi-platform support and comprehensive race/integration coverage.
 *   **Documentation (8/10):** Extensive but overwhelming; historical docs mix with current reference.
-*   **Developer Experience (8/10):** `prism doctor` and golden path are great; setup can be complex.
+*   **Developer Experience (8/10):** `prizm doctor` and golden path are great; setup can be complex.
 *   **Repository Hygiene (7/10):** Root directory is cluttered with binaries and runtime state.
 *   **Maintainability (9/10):** Logical package layout; minimal external dependencies.
 *   **Release Readiness (7/10):** Lacks automated release process and artifact management.

@@ -5,7 +5,7 @@
 
 ## Problem
 
-The inspection commands (`prism doctor`, `prism runs`) printed human-formatted
+The inspection commands (`prizm doctor`, `prizm runs`) printed human-formatted
 text only. For an autonomous-dev platform, those are exactly the commands a CI
 gate, a startup script, or a dashboard wants to consume programmatically — and
 scraping emoji-decorated text is brittle.
@@ -15,14 +15,14 @@ scraping emoji-decorated text is brittle.
 Both commands gain a `--json` flag that emits structured output; default behavior
 (human text + exit codes) is unchanged.
 
-- **`prism doctor --json`** → `{"checks":[{"name","status","detail"}],"result":"ok|warn|fail"}`.
+- **`prizm doctor --json`** → `{"checks":[{"name","status","detail"}],"result":"ok|warn|fail"}`.
   `status` is `OK|WARN|FAIL` per check; `result` is the overall worst. The process
-  still exits non-zero when any check FAILs, so `prism doctor --json` works as a CI
+  still exits non-zero when any check FAILs, so `prizm doctor --json` works as a CI
   gate whose body a script can also parse.
-- **`prism runs --json`** → an array of
+- **`prizm runs --json`** → an array of
   `{"run_id","status","started_at","has_report","modified"}`, newest first.
   `modified` is RFC3339 (omitted when unknown).
-- **`prism runs <id> --json`** → structured per-run detail
+- **`prizm runs <id> --json`** → structured per-run detail
   `{"run_id","workflow","status","started_at","prompt_tokens","completion_tokens",
   "verification":{...},"phases":[{"name","status","iterations","gate_score"}],
   "delegations":[{...}]}`, loaded from the run's state file (errors if absent, since
@@ -34,13 +34,13 @@ the JSON shape is unit-tested directly.
 
 ## Tests
 
-`cmd/prism-cli/cmd_doctor_test.go` (`TestDoctorToJSON`): valid JSON, `result` is
+`cmd/prizm-cli/cmd_doctor_test.go` (`TestDoctorToJSON`): valid JSON, `result` is
 `warn` with a warning present and `fail` once a check fails.
-`cmd/prism-cli/cmd_runs_test.go` (`TestRunsToJSON`): valid JSON array with the
+`cmd/prizm-cli/cmd_runs_test.go` (`TestRunsToJSON`): valid JSON array with the
 expected `run_id`/`status`/`has_report` fields. `TestRunStateToJSON`: per-run detail
 JSON includes header, token totals, verification, phases, and delegations.
 
 ## Follow-ups
 
-Other read-only commands (`prism preview`, `prism status`) could gain `--json` on
+Other read-only commands (`prizm preview`, `prizm status`) could gain `--json` on
 the same pattern if tooling needs them.

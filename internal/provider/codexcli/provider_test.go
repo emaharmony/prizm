@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/provider"
+	"github.com/emaharmony/prizm/internal/provider"
 )
 
 type fakeRunner struct {

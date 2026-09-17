@@ -107,7 +107,7 @@ func TestToolRelevanceGate_IncludeFilePath(t *testing.T) {
 	gate := NewToolRelevanceGate(true)
 	tools := []string{"read_file", "search_files"}
 
-	result := gate.Evaluate("Look at /Users/ema/projects/repos/prism/main.go", tools)
+	result := gate.Evaluate("Look at /Users/ema/projects/repos/prizm/main.go", tools)
 	if result.Decision != ToolDecisionInclude {
 		t.Errorf("expected Include for message with file path, got %v", result.Decision)
 	}

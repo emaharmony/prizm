@@ -31,7 +31,7 @@ type NatsPublisher interface {
 type Job struct {
 	Name     string         // Human-readable job name (e.g., "daily-review")
 	Schedule CronSchedule   // When to run
-	Event    string         // NATS subject to publish (e.g., "prism.task.scheduled")
+	Event    string         // NATS subject to publish (e.g., "prizm.task.scheduled")
 	Payload  map[string]any // JSON payload for the event
 	Enabled  bool           // Whether this job is active
 }

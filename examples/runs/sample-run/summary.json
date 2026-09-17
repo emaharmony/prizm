@@ -1,11 +1,11 @@
 {
   "run_id": "run_01JR0SAMPLE0",
   "status": "completed",
-  "project": "prism",
+  "project": "prizm",
   "agent": "lumi",
   "provider": "mock",
   "model": "mock-model",
-  "task": "Explain the Prism event lifecycle",
+  "task": "Explain the Prizm event lifecycle",
   "created_at": "2026-05-15T10:00:00Z",
   "completed_at": "2026-05-15T10:00:03Z",
   "duration_ms": 3000,

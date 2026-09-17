@@ -41,6 +41,19 @@ type CapabilityToolScope struct{}
 func DefaultToolScope() ToolScope { return CapabilityToolScope{} }
 
 func (CapabilityToolScope) Allowed(runtime AgentRuntime, tool string) bool {
+	if runtime.EnforceAllowedTools {
+		allowed := false
+		for _, candidate := range runtime.AllowedTools {
+			if candidate == tool {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return false
+		}
+	}
+
 	required := requiredCapability(tool)
 	if required == "" {
 		return true

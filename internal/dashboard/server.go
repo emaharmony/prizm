@@ -1,13 +1,13 @@
-// Package dashboard provides a local web dashboard for Prism.
+// Package dashboard provides a local web dashboard for Prizm.
 //
-// Start with: prism dashboard
+// Start with: prizm dashboard
 // Opens at: http://localhost:8080
 //
 // The dashboard reads local run data (events, summaries, projections,
 // policies) and serves it through a simple HTTP API. The UI is a
 // self-contained HTML page with embedded CSS and JavaScript.
 //
-// Why no framework? Prism is a Go tool. The dashboard should feel like
+// Why no framework? Prizm is a Go tool. The dashboard should feel like
 // part of that tool — self-contained, no build step, no npm, no Webpack.
 // One HTML file with inline CSS and JS, embedded in the Go binary.
 // This means simplicity and zero deployment complexity, at the cost of
@@ -32,8 +32,8 @@ var staticFS embed.FS
 
 // StaticFileServer returns an http.Handler that serves the embedded dashboard
 // UI (the static/ HTML, CSS pages). It lets other servers — notably the API
-// server started by `prism serve` — host the UI same-origin, so the editors no
-// longer require a separate `prism dashboard` process plus CORS.
+// server started by `prizm serve` — host the UI same-origin, so the editors no
+// longer require a separate `prizm dashboard` process plus CORS.
 func StaticFileServer() (http.Handler, error) {
 	subFS, err := fs.Sub(staticFS, "static")
 	if err != nil {
@@ -42,7 +42,7 @@ func StaticFileServer() (http.Handler, error) {
 	return http.FileServer(http.FS(subFS)), nil
 }
 
-// Server serves the Prism dashboard over HTTP.
+// Server serves the Prizm dashboard over HTTP.
 //
 // The server binds to localhost and serves:
 //   - GET /          → Dashboard HTML (self-contained SPA)
@@ -97,7 +97,7 @@ func (s *Server) ListenAndServe() error {
 		addr = ":" + addr
 	}
 
-	fmt.Printf("Prism Dashboard: http://localhost%s\n", addr)
+	fmt.Printf("Prizm Dashboard: http://localhost%s\n", addr)
 	fmt.Println("Press Ctrl+C to stop")
 	return http.ListenAndServe(addr, s.mux)
 }

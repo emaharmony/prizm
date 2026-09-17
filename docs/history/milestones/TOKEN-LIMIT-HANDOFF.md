@@ -18,12 +18,12 @@ Find token-related defaults and autonomous run paths that allowed project work t
 - Delegated task packets carry `max_tokens`; sub-agent loops honor the parent remaining budget, support `-1`, stop before more tool work once exhausted, and return usage plus prior partial artifacts on budget errors.
 - Delegated sub-agent prompt/completion tokens roll up into the parent workflow budget.
 - V36 wake tool loops use the resolved project/default/unlimited ceiling instead of a hardcoded run cap and estimate zero-usage provider responses.
-- `prism context show` / run context injection no longer default to unbounded context: `0` resolves to `4000`, `-1` is explicit no truncation, and `< -1` is rejected.
-- Cost event aggregation moved into `internal/cost`; `GET /api/v1/costs`, `prism cost`, and REPORT artifacts expose token totals, ceilings, remaining budget, status, and estimated cost when event logs include cost data.
-- `prism cost` can now fall back to workflow state for token/budget fields even when an events file is missing.
+- `prizm context show` / run context injection no longer default to unbounded context: `0` resolves to `4000`, `-1` is explicit no truncation, and `< -1` is rejected.
+- Cost event aggregation moved into `internal/cost`; `GET /api/v1/costs`, `prizm cost`, and REPORT artifacts expose token totals, ceilings, remaining budget, status, and estimated cost when event logs include cost data.
+- `prizm cost` can now fall back to workflow state for token/budget fields even when an events file is missing.
 - Default constants are disambiguated with compatibility aliases: `DefaultRunTokenCeiling`, `DefaultSubAgentTokenBudget`, and `DefaultRunResponseTokens`.
 - YAML/docs/dashboard labels now document `-1 = unlimited`, `0 = default` for run/project token budgets.
-- `.claude/commands/prism-loop.md` was checked; it adds loop discipline only: finish dirty work, update docs/state, run build/vet/test, commit.
+- `.claude/commands/prizm-loop.md` was checked; it adds loop discipline only: finish dirty work, update docs/state, run build/vet/test, commit.
 
 ## Regression Coverage
 
@@ -42,14 +42,14 @@ Added or updated tests for:
 - `read_project` aggregate token truncation;
 - `REPORT.md` token budget section;
 - real `/api/v1/costs` token/budget fields;
-- `prism cost` budget/remaining display and workflow-state fallback.
+- `prizm cost` budget/remaining display and workflow-state fallback.
 
 ## Verification
 
 Focused gate:
 
 ```powershell
-go test ./internal/workflow/v2 ./internal/subagent ./cmd/prism-cli ./internal/orchestrator ./internal/runtrack ./internal/tool ./internal/api ./internal/cost
+go test ./internal/workflow/v2 ./internal/subagent ./cmd/prizm-cli ./internal/orchestrator ./internal/runtrack ./internal/tool ./internal/api ./internal/cost
 ```
 
 Final gates:

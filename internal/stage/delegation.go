@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/emaharmony/prism/internal/delegation"
-	"github.com/emaharmony/prism/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/delegation"
+	"github.com/emaharmony/prizm/internal/orchestrator"
 )
 
 // delegationPattern matches delegation intent markers in LLM output.

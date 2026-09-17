@@ -1,4 +1,4 @@
-// Package stage provides Prism's pipeline execution engine (V14a).
+// Package stage provides Prizm's pipeline execution engine (V14a).
 //
 // LLMStage builds the prompt, calls the LLM provider, and collects the response.
 // It's the core of every run — the "thinking" stage.
@@ -17,8 +17,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/emaharmony/prism/internal/event"
-	"github.com/emaharmony/prism/internal/provider"
+	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/provider"
 )
 
 // LLMStage calls the LLM provider with the task prompt and collects the response.

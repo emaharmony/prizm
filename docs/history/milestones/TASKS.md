@@ -1,4 +1,4 @@
-# Prism Task Tracker
+# Prizm Task Tracker
 
 **Last Updated:** 2026-06-09
 **Status:** Source is current through V34-era work. This tracker reflects living state, not historical release tags.
@@ -18,14 +18,14 @@
 
 | Area | Status | Notes |
 |------|--------|-------|
-| Persistent daemon | Done | `prism serve`, health server, graceful shutdown, config loading |
-| Embedded/external NATS | Done | Empty `prism.nats_url` means embedded NATS in serve mode |
+| Persistent daemon | Done | `prizm serve`, health server, graceful shutdown, config loading |
+| Embedded/external NATS | Done | Empty `prizm.nats_url` means embedded NATS in serve mode |
 | Sessions | Done | SQLite sessions, idle timeout, compaction settings |
 | Agent routing | Done | Direct addressing, mention routing, primary fallback |
 | Discord adapter | Done | Gateway bot, sends/replies/splits long messages |
 | Actions | Done | YAML actions with wildcard trigger matching |
-| One-shot run mode | Done | `prism run --task ...` lifecycle and artifacts |
-| Interactive chat | Done | `prism chat` with config, tools, state, and plans |
+| One-shot run mode | Done | `prizm run --task ...` lifecycle and artifacts |
+| Interactive chat | Done | `prizm chat` with config, tools, state, and plans |
 
 ---
 
@@ -90,7 +90,7 @@
 
 | Area | Status | Notes |
 |------|--------|-------|
-| Cross-Prism protocol | Done | Signed allowlisted subjects |
+| Cross-Prizm protocol | Done | Signed allowlisted subjects |
 | Bridge config | Done | `bridge.enabled`, `mode`, `secret_env`, `allowed_subjects` |
 | Factory handoff | Active | Optional report/validation queue writer |
 | Scheduler | Active | Cron-style jobs publish NATS events |
@@ -116,5 +116,5 @@
 
 - Run `go test ./... -count=1` before handoff.
 - Run focused tests for touched runtime areas when changing code.
-- Verify README/onboarding commands against `prism --help` or CLI source.
+- Verify README/onboarding commands against `prizm --help` or CLI source.
 - Keep checked-in binaries out of documentation as a source of truth.

@@ -14,9 +14,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/emaharmony/prism/internal/provider"
-	"github.com/emaharmony/prism/internal/retry"
-	"github.com/emaharmony/prism/internal/sse"
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/retry"
+	"github.com/emaharmony/prizm/internal/sse"
 )
 
 // GenerateStream calls the Gemini streamGenerateContent API with streaming enabled.

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/task"
+	"github.com/emaharmony/prizm/internal/task"
 	"github.com/nats-io/nats.go"
 )
 

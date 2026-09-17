@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Workspace · Prism</title>
+<title>Workspace · Prizm</title>
 <link rel="stylesheet" href="/app.css">
 <style>
   .file-tabs { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 14px; }
@@ -36,7 +36,7 @@
 
 <main id="main-content" class="container">
   <h1 class="page-title">Workspace</h1>
-  <p class="page-sub">Tune agent behavior from here. Edit the shared context files (personalities, roster, rules) or a single agent's per-agent fields. Changes apply after a <span class="mono">prism serve</span> restart.</p>
+  <p class="page-sub">Tune agent behavior from here. Edit the shared context files (personalities, roster, rules) or a single agent's per-agent fields. Changes apply after a <span class="mono">prizm serve</span> restart.</p>
 
   <div id="banner" class="banner"></div>
 
@@ -63,7 +63,7 @@
   <section id="panel-agents" hidden>
     <div class="card">
       <h2>Agent behavior</h2>
-      <p class="card-hint">Edit one agent's personality and interaction rules. Written surgically to <span class="mono">prism.yaml</span> — other agents and comments are preserved.</p>
+      <p class="card-hint">Edit one agent's personality and interaction rules. Written surgically to <span class="mono">prizm.yaml</span> — other agents and comments are preserved.</p>
       <div class="field" style="margin-top:14px;max-width:340px;">
         <label>Agent</label>
         <select id="agentSelect"></select>
@@ -93,7 +93,7 @@
 
 <script src="/app.js"></script>
 <script>
-const ui = window.PrismUI;
+const ui = window.PrizmUI;
 const $ = s => document.querySelector(s);
 const banner = (msg, kind) => { const b = $("#banner"); b.textContent = msg; b.className = "banner show " + kind; window.scrollTo(0,0); };
 
@@ -142,7 +142,7 @@ $("#saveFile").addEventListener("click", async () => {
     await ui.request("/workspace/files/" + encodeURIComponent(activeFile), {
       method:"PUT", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({ content: $("#fileEditor").value }) });
-    banner(`✓ Saved ${activeFile}. ⟳ Restart \`prism serve\` (or wait for the next context build) to apply.`, "ok");
+    banner(`✓ Saved ${activeFile}. ⟳ Restart \`prizm serve\` (or wait for the next context build) to apply.`, "ok");
     loadFiles();
   } catch (e) { banner("Save failed: " + e.message, "err"); }
   finally { btn.disabled = false; }
@@ -211,7 +211,7 @@ $("#saveAgent").addEventListener("click", async () => {
   try {
     await ui.request("/config/agents/" + encodeURIComponent(id), {
       method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify(patch) });
-    banner(`✓ Saved agent ${id} to prism.yaml. ⟳ Restart \`prism serve\` to apply.`, "ok");
+    banner(`✓ Saved agent ${id} to prizm.yaml. ⟳ Restart \`prizm serve\` to apply.`, "ok");
     // refresh local copy so re-selecting shows saved state
     const a = agents.find(x => x.id === id);
     if (a) { a.conversation_postfix = patch.conversation_postfix; a.context = context; a.state_actions = state_actions; }

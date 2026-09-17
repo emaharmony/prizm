@@ -6,7 +6,7 @@
 
 ## Overview
 
-V24 generates static SVG diagrams from Prism config. V25 makes them **editable** — drag agents, connect delegation paths, add/remove nodes, and the changes write back to `prism.yaml`.
+V24 generates static SVG diagrams from Prizm config. V25 makes them **editable** — drag agents, connect delegation paths, add/remove nodes, and the changes write back to `prizm.yaml`.
 
 The key insight: the diagram IS the config. Edit the diagram, edit the system.
 
@@ -15,11 +15,11 @@ The key insight: the diagram IS the config. Edit the diagram, edit the system.
 ### Data Flow
 
 ```
-prism.yaml → ConfigLoader → AgentConfig[] → EditorState → SVG Renderer
+prizm.yaml → ConfigLoader → AgentConfig[] → EditorState → SVG Renderer
                                                      ↕
                                               Drag/Drop/Edit
                                                      ↕
-                                          EditorState → ConfigWriter → prism.yaml
+                                          EditorState → ConfigWriter → prizm.yaml
 ```
 
 ### Editor State Model
@@ -73,7 +73,7 @@ type EditorState struct {
 
 ### Config Writer
 
-The ConfigWriter takes an EditorState and produces a valid `prism.yaml`:
+The ConfigWriter takes an EditorState and produces a valid `prizm.yaml`:
 
 - Agent nodes → `agents:` section
 - Delegation edges → `subscriptions:` on agents
@@ -88,7 +88,7 @@ Replace the static V24 workflow tab with an interactive editor:
 2. **Toolbar** — Add agent, add edge, delete, save, reset
 3. **Properties panel** — Click node to edit role, model, capabilities
 4. **Edge drawing** — Click source node → drag to target node → creates edge
-5. **Save** — PUT to /api/v1/workflows/editor → writes prism.yaml
+5. **Save** — PUT to /api/v1/workflows/editor → writes prizm.yaml
 
 ### Layout Algorithm
 
@@ -109,4 +109,4 @@ Manual layout: nodes store position, edges route automatically.
 | M6.3 | Dashboard interactive editor | ✅ |
 | M6.4 | Config round-trip test | ✅ |
 | M6.5 | Edge drawing + deletion | ✅ |
-| M6.6 | Save/write-back to prism.yaml | ⬜ |
+| M6.6 | Save/write-back to prizm.yaml | ⬜ |

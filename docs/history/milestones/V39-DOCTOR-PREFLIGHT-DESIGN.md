@@ -1,4 +1,4 @@
-# V39 — `prism doctor`: Preflight Health Check
+# V39 — `prizm doctor`: Preflight Health Check
 
 **Status:** Source-current
 **Last Updated:** 2026-06-29
@@ -13,12 +13,12 @@ readiness up front.
 
 ## Design
 
-`prism doctor` runs a set of checks against `prism.yaml` and the environment and
+`prizm doctor` runs a set of checks against `prizm.yaml` and the environment and
 prints an OK / WARN / FAIL report. Exit code is non-zero when any check **FAILs**,
 so it works in CI and startup scripts.
 
 ```
-prism doctor [--config prism.yaml]
+prizm doctor [--config prizm.yaml]
 ```
 
 ### Checks
@@ -51,7 +51,7 @@ HTTP), with short timeouts.
 
 ## Tests
 
-`cmd/prism-cli/cmd_doctor_test.go`: workspace (ok/fail/warn + probe cleanup),
+`cmd/prizm-cli/cmd_doctor_test.go`: workspace (ok/fail/warn + probe cleanup),
 provider auth (present / missing-names-env-var / no-agents), validation profile
 (registered / unknown), git remote (present / absent), NATS embedded, Remembrance
 disabled, and `worstStatus`/`renderDoctor` severity + result lines.

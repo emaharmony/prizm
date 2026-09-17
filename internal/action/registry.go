@@ -1,14 +1,14 @@
-// Package action provides the registered actions system for Prism V20.
+// Package action provides the registered actions system for Prizm V20.
 //
 // Registered actions are event-triggered behaviors — when an event matches
 // a trigger pattern, the corresponding action is executed. This is the
-// webhook-style system that makes Prism reactive without model commands.
+// webhook-style system that makes Prizm reactive without model commands.
 //
 // Example:
 //
 //	actions:
 //	  - trigger: "*.tool.completed"
-//	    action: "prism.cost.track"
+//	    action: "prizm.cost.track"
 //	    enabled: true
 //
 //	When any agent emits a tool.completed event, the cost tracker
@@ -20,7 +20,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // Action defines an event-triggered behavior.

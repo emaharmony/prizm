@@ -1,7 +1,7 @@
-// Package run implements the lifecycle orchestrator for Prism — the central engine
+// Package run implements the lifecycle orchestrator for Prizm — the central engine
 // that takes a task, runs the full V1→V5 pipeline, and produces an event log.
 //
-// What is Prism? An event-native AI agent platform. Every user request becomes a
+// What is Prizm? An event-native AI agent platform. Every user request becomes a
 // "run" that flows through a deterministic lifecycle of events published to NATS.
 //
 // The V1→V5 versioning represents the platform's evolution, not API versions:
@@ -30,18 +30,18 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/emaharmony/prism/internal/event"
-	"github.com/emaharmony/prism/internal/prompt"
-	"github.com/emaharmony/prism/internal/provider"
-	mockpkg "github.com/emaharmony/prism/internal/provider/mock"
-	"github.com/emaharmony/prism/internal/remembrance"
-	"github.com/emaharmony/prism/internal/review"
-	"github.com/emaharmony/prism/internal/tool"
-	"github.com/emaharmony/prism/internal/validation"
+	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/prompt"
+	"github.com/emaharmony/prizm/internal/provider"
+	mockpkg "github.com/emaharmony/prizm/internal/provider/mock"
+	"github.com/emaharmony/prizm/internal/remembrance"
+	"github.com/emaharmony/prizm/internal/review"
+	"github.com/emaharmony/prizm/internal/tool"
+	"github.com/emaharmony/prizm/internal/validation"
 
-	agentpkg "github.com/emaharmony/prism/internal/agent"
-	"github.com/emaharmony/prism/internal/approval"
-	"github.com/emaharmony/prism/internal/mutation"
+	agentpkg "github.com/emaharmony/prizm/internal/agent"
+	"github.com/emaharmony/prizm/internal/approval"
+	"github.com/emaharmony/prizm/internal/mutation"
 )
 
 // RunConfig holds the configuration for a run.
@@ -159,7 +159,7 @@ func (r *Runner) Run() (*RunResult, error) {
 	r.sessionID = event.NewSessionID()
 	r.startedAt = time.Now().UTC().Format(time.RFC3339Nano)
 
-	log.Printf("prism: starting run %s", r.runID)
+	log.Printf("prizm: starting run %s", r.runID)
 
 	// Default provider for V1 backward compat
 	if r.config.Provider == nil {
@@ -189,7 +189,7 @@ func (r *Runner) Run() (*RunResult, error) {
 	}
 
 	// 1. Connect to NATS
-	nc, err := nats.Connect(r.config.BusURL, nats.Name(fmt.Sprintf("prism-run-%s", r.runID)))
+	nc, err := nats.Connect(r.config.BusURL, nats.Name(fmt.Sprintf("prizm-run-%s", r.runID)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
 	}
@@ -202,18 +202,18 @@ func (r *Runner) Run() (*RunResult, error) {
 	}
 	r.js = js
 
-	// Ensure the PRISM stream exists
+	// Ensure the PRIZM stream exists
 	r.ensureStream()
 
 	// 2. Emit task.created
-	evt := r.emit(event.V1EventTypes.TaskCreated, "prism-cli", map[string]any{
+	evt := r.emit(event.V1EventTypes.TaskCreated, "prizm-cli", map[string]any{
 		"task":    r.config.Task,
 		"project": r.config.Project,
 		"agent":   r.config.Agent,
 	})
 
 	// 3. Emit task.started
-	evt = r.emitWithParent(event.V1EventTypes.TaskStarted, "prism-cli", map[string]any{
+	evt = r.emitWithParent(event.V1EventTypes.TaskStarted, "prizm-cli", map[string]any{
 		"task":    r.config.Task,
 		"project": r.config.Project,
 		"agent":   r.config.Agent,
@@ -221,10 +221,10 @@ func (r *Runner) Run() (*RunResult, error) {
 	r.taskStartedID = evt.ID
 
 	// 4. Optional: Remembrance context hook
-	// Remembrance is Prism's memory service — it fetches relevant past context
+	// Remembrance is Prizm's memory service — it fetches relevant past context
 	// for the current task. When enabled, we emit BOTH V1 and V2 context events.
-	// Why duplicate? V1 (`prism.memory.context_requested`) exists for backward
-	// compatibility with early consumers. V2 (`prism.context.requested`) is the
+	// Why duplicate? V1 (`prizm.memory.context_requested`) exists for backward
+	// compatibility with early consumers. V2 (`prizm.context.requested`) is the
 	// canonical new-style event. New consumers should listen to V2 events only.
 	var contextStr string
 	memoryStatus := "none" // "none", "injected", "failed"
@@ -233,14 +233,14 @@ func (r *Runner) Run() (*RunResult, error) {
 		r.memClient = remembrance.NewClient(r.config.MemoryURL)
 
 		// Emit V1 memory.context_requested (backward compat)
-		r.emitWithParent(event.V1EventTypes.MemoryContextRequested, "prism-cli", map[string]any{
+		r.emitWithParent(event.V1EventTypes.MemoryContextRequested, "prizm-cli", map[string]any{
 			"task":    r.config.Task,
 			"project": r.config.Project,
 			"agent":   r.config.Agent,
 		}, evt.ID)
 
 		// Emit V2 context.requested
-		r.emitWithParent(event.V2EventTypes.ContextRequested, "prism-cli", map[string]any{
+		r.emitWithParent(event.V2EventTypes.ContextRequested, "prizm-cli", map[string]any{
 			"task":    r.config.Task,
 			"project": r.config.Project,
 			"agent":   r.config.Agent,
@@ -249,17 +249,17 @@ func (r *Runner) Run() (*RunResult, error) {
 		ctxResp, err := r.memClient.BuildContext(r.config.Task, r.config.Project, r.config.Agent, remembrance.DefaultContextMaxTokens)
 		if err != nil {
 			// Memory failed
-			log.Printf("prism: remembrance context failed: %v", err)
+			log.Printf("prizm: remembrance context failed: %v", err)
 			memoryStatus = "failed"
 
 			// V1 backward compat
-			r.emitWithParent(event.V1EventTypes.MemoryContextFailed, "prism-cli", map[string]any{
+			r.emitWithParent(event.V1EventTypes.MemoryContextFailed, "prizm-cli", map[string]any{
 				"task":  r.config.Task,
 				"error": err.Error(),
 			}, evt.ID)
 
 			// V2 context.failed
-			r.emitWithParent(event.V2EventTypes.ContextFailed, "prism-cli", map[string]any{
+			r.emitWithParent(event.V2EventTypes.ContextFailed, "prizm-cli", map[string]any{
 				"task":  r.config.Task,
 				"error": err.Error(),
 			}, evt.ID)
@@ -276,7 +276,7 @@ func (r *Runner) Run() (*RunResult, error) {
 			if ctxResp.ContextMarkdown != "" {
 				contextStr = ctxResp.ContextMarkdown
 				memoryStatus = "injected"
-				log.Printf("prism: remembrance context built (%d sources, markdown)", len(ctxResp.SelectedMemories))
+				log.Printf("prizm: remembrance context built (%d sources, markdown)", len(ctxResp.SelectedMemories))
 			} else if ctxResp.ContextJSON != nil && len(ctxResp.ContextJSON.Memories) > 0 {
 				var contextParts []string
 				for _, mem := range ctxResp.ContextJSON.Memories {
@@ -289,27 +289,27 @@ func (r *Runner) Run() (*RunResult, error) {
 			}
 
 			// V1 backward compat
-			r.emitWithParent(event.V1EventTypes.MemoryContextBuilt, "prism-cli", map[string]any{
+			r.emitWithParent(event.V1EventTypes.MemoryContextBuilt, "prizm-cli", map[string]any{
 				"task":          r.config.Task,
 				"sources_count": len(ctxResp.SelectedMemories),
 			}, evt.ID)
 
 			// V2 context.injected
-			r.emitWithParent(event.V2EventTypes.ContextInjected, "prism-cli", map[string]any{
+			r.emitWithParent(event.V2EventTypes.ContextInjected, "prizm-cli", map[string]any{
 				"task":          r.config.Task,
 				"sources_count": len(ctxResp.SelectedMemories),
 			}, evt.ID)
 		} else {
 			// No context available (404)
-			log.Printf("prism: no remembrance context available")
+			log.Printf("prizm: no remembrance context available")
 			memoryStatus = "failed"
 
-			r.emitWithParent(event.V1EventTypes.MemoryContextFailed, "prism-cli", map[string]any{
+			r.emitWithParent(event.V1EventTypes.MemoryContextFailed, "prizm-cli", map[string]any{
 				"task":  r.config.Task,
 				"error": "no context available",
 			}, evt.ID)
 
-			r.emitWithParent(event.V2EventTypes.ContextFailed, "prism-cli", map[string]any{
+			r.emitWithParent(event.V2EventTypes.ContextFailed, "prizm-cli", map[string]any{
 				"task":  r.config.Task,
 				"error": "no context available",
 			}, evt.ID)
@@ -321,7 +321,7 @@ func (r *Runner) Run() (*RunResult, error) {
 	}
 
 	// 5. Emit agent.started
-	agentEvt := r.emitWithParent(event.V1EventTypes.AgentStarted, "prism-cli", map[string]any{
+	agentEvt := r.emitWithParent(event.V1EventTypes.AgentStarted, "prizm-cli", map[string]any{
 		"agent":   r.config.Agent,
 		"task":    r.config.Task,
 		"project": r.config.Project,
@@ -340,14 +340,14 @@ func (r *Runner) Run() (*RunResult, error) {
 	promptContent := prompt.BuildPrompt(r.config.Agent, r.config.Project, r.config.Task, contextStr)
 	runDir := filepath.Join(r.config.RunDir, r.runID)
 	if err := prompt.WritePrompt(runDir, promptContent); err != nil {
-		log.Printf("prism: failed to write prompt.md: %v", err)
+		log.Printf("prizm: failed to write prompt.md: %v", err)
 		return r.fail(fmt.Sprintf("failed to write prompt: %v", err))
 	}
 
 	// 7. Dry run prompt — skip LLM, complete task
 	if r.config.DryRunPrompt {
-		log.Printf("prism: dry-run mode — prompt written, skipping LLM call")
-		r.emitWithParent(event.V1EventTypes.AgentCompleted, "prism-cli", map[string]any{
+		log.Printf("prizm: dry-run mode — prompt written, skipping LLM call")
+		r.emitWithParent(event.V1EventTypes.AgentCompleted, "prizm-cli", map[string]any{
 			"agent":     r.config.Agent,
 			"dry_run":   true,
 			"prompt.md": true,
@@ -361,7 +361,7 @@ func (r *Runner) Run() (*RunResult, error) {
 				break
 			}
 		}
-		r.emitWithParent(event.V1EventTypes.TaskCompleted, "prism-cli", map[string]any{
+		r.emitWithParent(event.V1EventTypes.TaskCompleted, "prizm-cli", map[string]any{
 			"task":    r.config.Task,
 			"project": r.config.Project,
 			"agent":   r.config.Agent,
@@ -395,7 +395,7 @@ func (r *Runner) Run() (*RunResult, error) {
 			return nil, fmt.Errorf("failed to persist run data: %w", err)
 		}
 
-		log.Printf("prism: dry-run %s completed (%d events, %dms)", r.runID, len(r.events), durationMs)
+		log.Printf("prizm: dry-run %s completed (%d events, %dms)", r.runID, len(r.events), durationMs)
 		return &RunResult{
 			RunID:       r.runID,
 			Status:      "completed",
@@ -411,7 +411,7 @@ func (r *Runner) Run() (*RunResult, error) {
 	}
 
 	// 8. Emit llm.requested
-	llmReqEvt := r.emitWithParent(event.V2EventTypes.LLMRequested, "prism-cli", map[string]any{
+	llmReqEvt := r.emitWithParent(event.V2EventTypes.LLMRequested, "prizm-cli", map[string]any{
 		"model":       r.config.Model,
 		"temperature": r.config.Temperature,
 		"max_tokens":  r.config.MaxTokens,
@@ -437,16 +437,16 @@ func (r *Runner) Run() (*RunResult, error) {
 
 	if err != nil {
 		// LLM failed
-		log.Printf("prism: LLM generate failed: %v", err)
+		log.Printf("prizm: LLM generate failed: %v", err)
 
 		// llm.failed
-		llmFailedEvt := r.emitWithParent(event.V2EventTypes.LLMFailed, "prism-cli", map[string]any{
+		llmFailedEvt := r.emitWithParent(event.V2EventTypes.LLMFailed, "prizm-cli", map[string]any{
 			"error":        err.Error(),
 			"context_done": errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled),
 		}, llmReqEvt.ID)
 
 		// agent.failed (V2) — parent is llm.failed (causal chain: llm.requested → llm.failed → agent.failed)
-		r.emitWithParent(event.V2EventTypes.AgentFailed, "prism-cli", map[string]any{
+		r.emitWithParent(event.V2EventTypes.AgentFailed, "prizm-cli", map[string]any{
 			"agent": r.config.Agent,
 			"error": err.Error(),
 		}, llmFailedEvt.ID)
@@ -455,7 +455,7 @@ func (r *Runner) Run() (*RunResult, error) {
 	}
 
 	// 10. LLM succeeded — emit llm.completed
-	llmCompletedEvt := r.emitWithParent(event.V2EventTypes.LLMCompleted, "prism-cli", map[string]any{
+	llmCompletedEvt := r.emitWithParent(event.V2EventTypes.LLMCompleted, "prizm-cli", map[string]any{
 		"model":         genResp.Model,
 		"provider":      genResp.Provider,
 		"latency_ms":    genResp.LatencyMS,
@@ -466,7 +466,7 @@ func (r *Runner) Run() (*RunResult, error) {
 
 	// 10b. V3: Parse LLM output for tool requests
 	// The LLM's raw output is parsed for a structured JSON block that tells
-	// Prism which tool to call. The expected format is a JSON object with:
+	// Prizm which tool to call. The expected format is a JSON object with:
 	//   {"type": "tool_request", "tool_name": "...", "tool_input": {...}}
 	// If the LLM just provides a plain text answer (no tool request), we use
 	// the raw output directly as the final response.
@@ -486,7 +486,7 @@ func (r *Runner) Run() (*RunResult, error) {
 		agentResp := agentpkg.ParseAgentOutput(genResp.Text)
 
 		if agentResp.Type == agentpkg.ResponseToolRequest {
-			log.Printf("prism: LLM requested tool %q", agentResp.ToolName)
+			log.Printf("prizm: LLM requested tool %q", agentResp.ToolName)
 
 			toolResultVal, execErr := r.config.ToolExecutor.ExecuteWithPolicy(
 				context.Background(),
@@ -497,7 +497,7 @@ func (r *Runner) Run() (*RunResult, error) {
 				agentResp.ToolInput,
 			)
 			if execErr != nil {
-				log.Printf("prism: tool execution failed: %v", execErr)
+				log.Printf("prizm: tool execution failed: %v", execErr)
 			}
 			toolResult = &toolResultVal
 			err = execErr
@@ -505,9 +505,9 @@ func (r *Runner) Run() (*RunResult, error) {
 			policyResult := tool.EvaluatePolicy(r.config.ToolPolicy, agentResp.ToolName, agentResp.ToolInput)
 
 			// V4: Check if this is pending approval
-			// The approval workflow: agent proposes a mutation → Prism emits
+			// The approval workflow: agent proposes a mutation → Prizm emits
 			// mutation.proposed + approval.requested → a human reviews and
-			// runs `prism approval approve <id>` or `prism approval deny <id>`.
+			// runs `prizm approval approve <id>` or `prizm approval deny <id>`.
 			// Until the human acts, the run stays in pending_approval status.
 			if policyResult.Decision == tool.PolicyRequiresApproval {
 				pendingApproval = true
@@ -522,7 +522,7 @@ func (r *Runner) Run() (*RunResult, error) {
 				}
 
 				// Emit mutation.proposed
-				r.emit(event.V4EventTypes.MutationProposed, "prism-cli", map[string]any{
+				r.emit(event.V4EventTypes.MutationProposed, "prizm-cli", map[string]any{
 					"tool_name":       agentResp.ToolName,
 					"mutation_type":   "write_file",
 					"target_path":     agentResp.ToolInput["path"],
@@ -532,7 +532,7 @@ func (r *Runner) Run() (*RunResult, error) {
 				})
 
 				// Emit approval.requested
-				r.emit(event.V4EventTypes.ApprovalRequested, "prism-cli", map[string]any{
+				r.emit(event.V4EventTypes.ApprovalRequested, "prizm-cli", map[string]any{
 					"tool_name":       agentResp.ToolName,
 					"correlation_id":  r.correlationID,
 					"policy_decision": string(policyResult.Decision),
@@ -577,7 +577,7 @@ func (r *Runner) Run() (*RunResult, error) {
 			toolResultPath := filepath.Join(runDir, "tool_result.json")
 			if toolData, jsonErr := json.MarshalIndent(toolResult, "", "  "); jsonErr == nil {
 				if writeErr := os.WriteFile(toolResultPath, append(toolData, '\n'), 0644); writeErr != nil {
-					log.Printf("prism: failed to write tool_result.json: %v", writeErr)
+					log.Printf("prizm: failed to write tool_result.json: %v", writeErr)
 				}
 			}
 
@@ -605,7 +605,7 @@ func (r *Runner) Run() (*RunResult, error) {
 	// (roughly 2-3 sentences), but short enough to keep event payloads compact
 	// in NATS. Events are the communication backbone — bloated events slow
 	// everything downstream. The full output lives in output.md.
-	agentCompletedEvt := r.emitWithParent(event.V1EventTypes.AgentCompleted, "prism-cli", map[string]any{
+	agentCompletedEvt := r.emitWithParent(event.V1EventTypes.AgentCompleted, "prizm-cli", map[string]any{
 		"agent":   r.config.Agent,
 		"status":  "completed",
 		"summary": genResp.Text[:min(len(genResp.Text), 200)], // Truncate to 200 chars — this is for the event payload only, not the full output. The complete text is saved in output.md.
@@ -614,12 +614,12 @@ func (r *Runner) Run() (*RunResult, error) {
 	// 12. Write output.md
 	outputPath := filepath.Join(runDir, "output.md")
 	if err := prompt.WriteOutput(runDir, outputText); err != nil {
-		log.Printf("prism: failed to write output.md: %v", err)
+		log.Printf("prizm: failed to write output.md: %v", err)
 		return r.fail(fmt.Sprintf("failed to write output: %v", err))
 	}
 
 	// Emit output.written
-	r.emitWithParent(event.V2EventTypes.OutputWritten, "prism-cli", map[string]any{
+	r.emitWithParent(event.V2EventTypes.OutputWritten, "prizm-cli", map[string]any{
 		"path":         outputPath,
 		"agent":        r.config.Agent,
 		"output_bytes": len(outputText),
@@ -632,7 +632,7 @@ func (r *Runner) Run() (*RunResult, error) {
 	}
 
 	// 14. Emit task.completed
-	taskCompletedEvt := r.emitWithParent(event.V1EventTypes.TaskCompleted, "prism-cli", map[string]any{
+	taskCompletedEvt := r.emitWithParent(event.V1EventTypes.TaskCompleted, "prizm-cli", map[string]any{
 		"task":    r.config.Task,
 		"project": r.config.Project,
 		"agent":   r.config.Agent,
@@ -674,7 +674,7 @@ func (r *Runner) Run() (*RunResult, error) {
 				},
 			}, "", "  ")
 			os.WriteFile(approvalPath, append(approvalData, '\n'), 0644)
-			log.Printf("prism: approval artifact written to %s", approvalPath)
+			log.Printf("prizm: approval artifact written to %s", approvalPath)
 		}
 	}
 
@@ -708,7 +708,7 @@ func (r *Runner) Run() (*RunResult, error) {
 		return nil, fmt.Errorf("failed to persist run data: %w", err)
 	}
 
-	log.Printf("prism: run %s completed (%d events, %dms)", r.runID, len(r.events), durationMs)
+	log.Printf("prizm: run %s completed (%d events, %dms)", r.runID, len(r.events), durationMs)
 
 	return &RunResult{
 		RunID:          r.runID,
@@ -740,13 +740,13 @@ func (r *Runner) failWithLLMError(msg string, llmError string) (*RunResult, erro
 	if parentID == "" {
 		// Fallback: if task.started was never emitted (extreme edge case),
 		// use plain emit so we still log the failure.
-		r.emit(event.V1EventTypes.TaskFailed, "prism-cli", map[string]any{
+		r.emit(event.V1EventTypes.TaskFailed, "prizm-cli", map[string]any{
 			"task":    r.config.Task,
 			"project": r.config.Project,
 			"error":   msg,
 		})
 	} else {
-		r.emitWithParent(event.V1EventTypes.TaskFailed, "prism-cli", map[string]any{
+		r.emitWithParent(event.V1EventTypes.TaskFailed, "prizm-cli", map[string]any{
 			"task":    r.config.Task,
 			"project": r.config.Project,
 			"error":   msg,
@@ -813,15 +813,15 @@ func (r *Runner) buildEvent(eventType, source string, payload map[string]any) ev
 func (r *Runner) publishEvent(evt event.Event) {
 	data, err := evt.ToJSON()
 	if err != nil {
-		log.Printf("prism: failed to marshal event %s: %v", evt.ID, err)
+		log.Printf("prizm: failed to marshal event %s: %v", evt.ID, err)
 		return
 	}
 	if r.js == nil {
-		log.Printf("prism: event %s not published (no NATS connection)", evt.ID[:24])
+		log.Printf("prizm: event %s not published (no NATS connection)", evt.ID[:24])
 		return
 	}
 	if _, err := r.js.Publish(evt.Type, data); err != nil {
-		log.Printf("prism: failed to publish event %s: %v", evt.ID, err)
+		log.Printf("prizm: failed to publish event %s: %v", evt.ID, err)
 	} else {
 		log.Printf("  💎 [%s] id=%s", evt.Type, evt.ID[:24])
 	}
@@ -860,11 +860,11 @@ func (r *Runner) emitWithParent(eventType, source string, payload map[string]any
 	return evt
 }
 
-// ensureStream creates the PRISM stream if it doesn't exist.
+// ensureStream creates the PRIZM stream if it doesn't exist.
 func (r *Runner) ensureStream() {
 	_, err := r.js.AddStream(&nats.StreamConfig{
-		Name:      "PRISM",
-		Subjects:  []string{"prism.>"},
+		Name:      "PRIZM",
+		Subjects:  []string{"prizm.>"},
 		Retention: nats.LimitsPolicy,
 		MaxMsgs:   1000000,
 		MaxBytes:  1024 * 1024 * 1024,
@@ -876,9 +876,9 @@ func (r *Runner) ensureStream() {
 		// Any other error is unexpected and logged at warning level.
 		if errors.Is(err, nats.ErrStreamNameAlreadyInUse) ||
 			strings.Contains(err.Error(), "already in use") {
-			log.Printf("prism: stream PRISM already exists (reusing)")
+			log.Printf("prizm: stream PRIZM already exists (reusing)")
 		} else {
-			log.Printf("prism: WARNING: failed to ensure stream PRISM: %v", err)
+			log.Printf("prizm: WARNING: failed to ensure stream PRIZM: %v", err)
 		}
 	}
 }
@@ -901,11 +901,11 @@ func (r *Runner) persist(summary event.Summary) (eventsPath, summaryPath string,
 	for _, evt := range r.events {
 		data, err := evt.ToJSON()
 		if err != nil {
-			log.Printf("prism: failed to marshal event %s: %v", evt.ID, err)
+			log.Printf("prizm: failed to marshal event %s: %v", evt.ID, err)
 			continue
 		}
 		if _, err := f.Write(append(data, '\n')); err != nil {
-			log.Printf("prism: failed to write event %s: %v", evt.ID, err)
+			log.Printf("prizm: failed to write event %s: %v", evt.ID, err)
 		}
 	}
 
@@ -925,8 +925,8 @@ func (r *Runner) persist(summary event.Summary) (eventsPath, summaryPath string,
 		return "", "", fmt.Errorf("failed to write summary: %w", err)
 	}
 
-	log.Printf("prism: persisted %d events to %s", len(r.events), eventsPath)
-	log.Printf("prism: summary written to %s", summaryPath)
+	log.Printf("prizm: persisted %d events to %s", len(r.events), eventsPath)
+	log.Printf("prizm: summary written to %s", summaryPath)
 
 	return eventsPath, summaryPath, nil
 }
@@ -1035,7 +1035,7 @@ func (r *Runner) RunReview(runDir, mutationStatus string, filesChanged []string,
 
 	// Update summary.json with validation and review metadata
 	if err := r.updateSummaryWithV5(runDir, validSummaries, reviewResult, artifactPath); err != nil {
-		log.Printf("prism: failed to update summary with V5 metadata: %v", err)
+		log.Printf("prizm: failed to update summary with V5 metadata: %v", err)
 		// Non-fatal: review and validation artifacts are already written
 	}
 
@@ -1081,7 +1081,7 @@ func (r *Runner) ApproveWithValidation(runDir, approvalID, approvedBy, workspace
 		for _, profileName := range profiles {
 			result, valErr := r.RunValidation(runDir, profileName)
 			if valErr != nil {
-				log.Printf("prism: validation %q error: %v", profileName, valErr)
+				log.Printf("prizm: validation %q error: %v", profileName, valErr)
 				validationResults = append(validationResults, validation.Result{
 					Profile: profileName,
 					Status:  "error",
@@ -1098,7 +1098,7 @@ func (r *Runner) ApproveWithValidation(runDir, approvalID, approvedBy, workspace
 	// Generate review
 	reviewResult, reviewArtifactPath, reviewErr := r.RunReview(runDir, mutationStatus, filesChanged, validationResults)
 	if reviewErr != nil {
-		log.Printf("prism: review generation failed: %v", reviewErr)
+		log.Printf("prizm: review generation failed: %v", reviewErr)
 		// Non-fatal: validation artifacts are already written
 	}
 
@@ -1185,7 +1185,7 @@ func (r *Runner) appendEventsToFile(runDir string) {
 	// Read existing events from the file
 	existingData, err := os.ReadFile(eventsPath)
 	if err != nil {
-		log.Printf("prism: failed to read existing events for append: %v", err)
+		log.Printf("prizm: failed to read existing events for append: %v", err)
 		return
 	}
 
@@ -1202,7 +1202,7 @@ func (r *Runner) appendEventsToFile(runDir string) {
 	if existingCount < len(r.events) {
 		f, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
-			log.Printf("prism: failed to open events file for append: %v", err)
+			log.Printf("prizm: failed to open events file for append: %v", err)
 			return
 		}
 		defer f.Close()
@@ -1210,11 +1210,11 @@ func (r *Runner) appendEventsToFile(runDir string) {
 		for _, evt := range r.events[existingCount:] {
 			data, err := evt.ToJSON()
 			if err != nil {
-				log.Printf("prism: failed to marshal event %s: %v", evt.ID, err)
+				log.Printf("prizm: failed to marshal event %s: %v", evt.ID, err)
 				continue
 			}
 			if _, err := f.Write(append(data, '\n')); err != nil {
-				log.Printf("prism: failed to write event %s: %v", evt.ID, err)
+				log.Printf("prizm: failed to write event %s: %v", evt.ID, err)
 			}
 		}
 	}

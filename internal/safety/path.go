@@ -1,4 +1,4 @@
-// Package safety provides shared safety utilities for Prism.
+// Package safety provides shared safety utilities for Prizm.
 //
 // The primary purpose is path containment: ensuring that file operations
 // stay within the workspace root. This logic was previously duplicated
@@ -30,7 +30,7 @@ import (
 //  3. Compute the relative path from root to target
 //  4. If the relative path starts with "..", the target is outside root
 //
-// This is the single canonical implementation for Prism's path safety.
+// This is the single canonical implementation for Prizm's path safety.
 // All packages that need path containment should use this function
 // instead of implementing their own.
 func IsWithinRoot(absPath, absRoot string) bool {

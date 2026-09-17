@@ -2,7 +2,7 @@
 
 Status: Accepted
 
-Prism models are untrusted generators inside a deterministic lifecycle. The
+Prizm models are untrusted generators inside a deterministic lifecycle. The
 runtime owns routing, policy, capability checks, approvals, validation,
 persistence, and execution boundaries. Integrations may request actions but
 must use the same Core gates. Models may not approve their own mutations or

@@ -8,17 +8,17 @@ import (
 	"sort"
 	"strings"
 
-	prismctx "github.com/emaharmony/prism/internal/context"
-	"github.com/emaharmony/prism/internal/orchestrator"
-	"github.com/emaharmony/prism/internal/scheduler"
+	prizmctx "github.com/emaharmony/prizm/internal/context"
+	"github.com/emaharmony/prizm/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/scheduler"
 )
 
 // This file implements the dashboard config + scheduler editors. Writes are
-// surgical (orchestrator.SetYAMLPath) so prism.yaml keeps its comments and
+// surgical (orchestrator.SetYAMLPath) so prizm.yaml keeps its comments and
 // untouched sections, and validated (orchestrator.ValidateAndWrite) before they
-// land. Changes apply on the next `prism serve` restart.
+// land. Changes apply on the next `prizm serve` restart.
 
-const defaultSchedulerEvent = "prism.task.scheduled"
+const defaultSchedulerEvent = "prizm.task.scheduled"
 
 // --- GET /api/v1/config ------------------------------------------------------
 
@@ -77,13 +77,13 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := configResponse{
 		Settings: settingsView{
-			InstanceID:           cfg.Prism.InstanceID,
-			Workspace:            cfg.Prism.Workspace,
-			OllamaURL:            cfg.Prism.OllamaURL,
-			Port:                 cfg.Prism.Port,
-			LogLevel:             cfg.Prism.LogLevel,
-			WorkflowConfig:       cfg.Prism.WorkflowConfig,
-			SchedulerEnabled:     cfg.Prism.Scheduler.Enabled,
+			InstanceID:           cfg.Prizm.InstanceID,
+			Workspace:            cfg.Prizm.Workspace,
+			OllamaURL:            cfg.Prizm.OllamaURL,
+			Port:                 cfg.Prizm.Port,
+			LogLevel:             cfg.Prizm.LogLevel,
+			WorkflowConfig:       cfg.Prizm.WorkflowConfig,
+			SchedulerEnabled:     cfg.Prizm.Scheduler.Enabled,
 			AutopatchEnabled:     cfg.Autopatch.Enabled,
 			AutopatchMode:        cfg.Autopatch.Mode,
 			AutopatchMaxAttempts: cfg.Autopatch.MaxAttempts,
@@ -94,11 +94,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			RemembranceURL:       cfg.Remembrance.URL,
 			RemembranceTimeout:   cfg.Remembrance.TimeoutSeconds,
 		},
-		SchedulerEnabled:   cfg.Prism.Scheduler.Enabled,
+		SchedulerEnabled:   cfg.Prizm.Scheduler.Enabled,
 		ConfigPath:         s.configPath,
 		WorkflowConfigPath: s.workflowConfigPath,
 	}
-	for _, j := range cfg.Prism.Scheduler.Jobs {
+	for _, j := range cfg.Prizm.Scheduler.Jobs {
 		action, _ := j.Payload["action"].(string)
 		resp.Jobs = append(resp.Jobs, jobView{
 			Name: j.Name, Schedule: j.Schedule, Event: j.Event,
@@ -111,7 +111,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 // --- PUT /api/v1/config/settings ---------------------------------------------
 
 // settingsPatch is a partial update: only non-nil fields are written, so the UI
-// can send just what changed and every other key in prism.yaml is untouched.
+// can send just what changed and every other key in prizm.yaml is untouched.
 type settingsPatch struct {
 	InstanceID     *string `json:"instance_id"`
 	Workspace      *string `json:"workspace"`
@@ -166,13 +166,13 @@ func (s *Server) handleConfigSettings(w http.ResponseWriter, r *http.Request) {
 		val  any
 		set  bool
 	}{
-		{[]string{"prism", "instance_id"}, deref(p.InstanceID), p.InstanceID != nil},
-		{[]string{"prism", "workspace"}, deref(p.Workspace), p.Workspace != nil},
-		{[]string{"prism", "ollama_url"}, deref(p.OllamaURL), p.OllamaURL != nil},
-		{[]string{"prism", "port"}, derefInt(p.Port), p.Port != nil},
-		{[]string{"prism", "log_level"}, deref(p.LogLevel), p.LogLevel != nil},
-		{[]string{"prism", "workflow_config"}, deref(p.WorkflowConfig), p.WorkflowConfig != nil},
-		{[]string{"prism", "scheduler", "enabled"}, derefBool(p.SchedulerEnabled), p.SchedulerEnabled != nil},
+		{[]string{"prizm", "instance_id"}, deref(p.InstanceID), p.InstanceID != nil},
+		{[]string{"prizm", "workspace"}, deref(p.Workspace), p.Workspace != nil},
+		{[]string{"prizm", "ollama_url"}, deref(p.OllamaURL), p.OllamaURL != nil},
+		{[]string{"prizm", "port"}, derefInt(p.Port), p.Port != nil},
+		{[]string{"prizm", "log_level"}, deref(p.LogLevel), p.LogLevel != nil},
+		{[]string{"prizm", "workflow_config"}, deref(p.WorkflowConfig), p.WorkflowConfig != nil},
+		{[]string{"prizm", "scheduler", "enabled"}, derefBool(p.SchedulerEnabled), p.SchedulerEnabled != nil},
 		{[]string{"autopatch", "enabled"}, derefBool(p.AutopatchEnabled), p.AutopatchEnabled != nil},
 		{[]string{"autopatch", "mode"}, deref(p.AutopatchMode), p.AutopatchMode != nil},
 		{[]string{"autopatch", "max_attempts"}, derefInt(p.AutopatchMaxAttempts), p.AutopatchMaxAttempts != nil},
@@ -217,7 +217,7 @@ type schedulerPatch struct {
 	Jobs    []schedulerJobPatch `json:"jobs"`
 }
 
-// schedulerYAML mirrors the on-disk prism.scheduler shape for marshalling.
+// schedulerYAML mirrors the on-disk prizm.scheduler shape for marshalling.
 type schedulerYAML struct {
 	Enabled bool           `yaml:"enabled"`
 	Jobs    []schedulerJob `yaml:"jobs"`
@@ -290,7 +290,7 @@ func (s *Server) handleConfigScheduler(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "read config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	src, err = orchestrator.SetYAMLPath(src, []string{"prism", "scheduler"}, out)
+	src, err = orchestrator.SetYAMLPath(src, []string{"prizm", "scheduler"}, out)
 	if err != nil {
 		writeJSONError(w, "edit scheduler: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -380,8 +380,8 @@ func (s *Server) handleConfigAgents(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	// Advertise the known context source keys so the UI can offer a picker.
-	available := make([]string, 0, len(prismctx.NamedSources))
-	for key := range prismctx.NamedSources {
+	available := make([]string, 0, len(prizmctx.NamedSources))
+	for key := range prizmctx.NamedSources {
 		available = append(available, key)
 	}
 	sort.Strings(available)

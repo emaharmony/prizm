@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	v2 "github.com/emaharmony/prism/internal/workflow/v2"
+	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 )
 
 // runner.go implements a production TaskRunner: a bounded single-agent tool
@@ -123,14 +123,21 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 		maxTokens = r.maxTokens
 	}
 	totalPrompt, totalCompletion := 0, 0
+	iterations, toolCalls, deniedToolCalls := 0, 0, 0
 	// usage snapshots the accumulated token counts onto any RunResult (success or
 	// failure) so delegated spend is never lost from the parent budget.
 	usage := func(r RunResult) RunResult {
 		r.PromptTokens, r.CompletionTokens = totalPrompt, totalCompletion
+		r.Iterations, r.ToolCalls, r.DeniedToolCalls = iterations, toolCalls, deniedToolCalls
 		return r
 	}
 
-	for i := 0; i < r.maxIterations; i++ {
+	maxIterations := r.maxIterations
+	if runtime.MaxIterations > 0 && runtime.MaxIterations < maxIterations {
+		maxIterations = runtime.MaxIterations
+	}
+
+	for i := 0; i < maxIterations; i++ {
 		if err := ctx.Err(); err != nil {
 			return usage(RunResult{}), err
 		}
@@ -139,6 +146,7 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 		if err != nil {
 			return usage(RunResult{}), fmt.Errorf("model turn %d: %w", i+1, err)
 		}
+		iterations = i + 1
 		totalPrompt += turn.PromptTokens
 		totalCompletion += turn.CompletionTokens
 		messages = append(messages, v2.Message{Role: "assistant", Content: turn.Text})
@@ -158,10 +166,12 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 			messages = append(messages, v2.Message{Role: "user", Content: "Respond with a tool call or a final answer."})
 			continue
 		}
+		toolCalls++
 
 		// Per-agent tool scoping: deny out-of-role tools before execution and
 		// feed the denial back so the agent adapts (not fatal).
 		if r.scope != nil && !r.scope.Allowed(runtime, action.Tool) {
+			deniedToolCalls++
 			messages = append(messages, v2.Message{Role: "user", Content: fmt.Sprintf("Tool %q is not permitted for agent %q (role scope). Use a tool within your role or give your final answer.", action.Tool, runtime.AgentID)})
 			continue
 		}
@@ -177,7 +187,7 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 
 	}
 
-	return usage(RunResult{Artifacts: artifacts.result()}), fmt.Errorf("task %q did not complete within %d iterations", packet.TaskID, r.maxIterations)
+	return usage(RunResult{Artifacts: artifacts.result()}), fmt.Errorf("task %q did not complete within %d iterations", packet.TaskID, maxIterations)
 }
 
 // artifactSet dedupes file paths touched during a run so the completion reports

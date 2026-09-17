@@ -1,4 +1,4 @@
-// Package bus provides NATS integration and embedded bus support for Prism.
+// Package bus provides NATS integration and embedded bus support for Prizm.
 //
 // V14d adds the --embedded-bus flag for getting started without installing
 // NATS separately. StartEmbeddedBus launches an in-process NATS server,
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"time"
 
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -43,7 +44,7 @@ func StartEmbeddedBus(port int) (string, func(), error) {
 	}
 
 	cfg := &natsserver.Options{
-		// Bind the embedded bus to loopback only. Cross-Prism instances on the
+		// Bind the embedded bus to loopback only. Cross-Prizm instances on the
 		// same host connect via the returned nats://127.0.0.1 URL; exposing the
 		// bus to the network is a deliberate future step using an external NATS.
 		Host:           "127.0.0.1",
@@ -78,7 +79,7 @@ func StartEmbeddedBus(port int) (string, func(), error) {
 // This is a convenience function for connecting to either an embedded
 // or external NATS server.
 func ConnectToBus(url string) (*nats.Conn, error) {
-	nc, err := nats.Connect(url)
+	nc, err := nats.Connect(url, nats.Timeout(15*time.Second), nats.MaxReconnects(10))
 	if err != nil {
 		return nil, fmt.Errorf("bus: connect: %w", err)
 	}

@@ -9,9 +9,9 @@
 
 ## Thesis
 
-Remembrance is Prism's memory layer. It captures what agents say, extracts entities and relationships, builds context for future conversations, and maintains itself through dream cycles. This version wires Remembrance into Prism's event pipeline so memory flows automatically.
+Remembrance is Prizm's memory layer. It captures what agents say, extracts entities and relationships, builds context for future conversations, and maintains itself through dream cycles. This version wires Remembrance into Prizm's event pipeline so memory flows automatically.
 
-**Core principle:** Remembrance is a separate Python process. Prism talks to it via HTTP (synchronous reads) and NATS (async writes). No embedding, no subprocess management.
+**Core principle:** Remembrance is a separate Python process. Prizm talks to it via HTTP (synchronous reads) and NATS (async writes). No embedding, no subprocess management.
 
 ---
 
@@ -19,7 +19,7 @@ Remembrance is Prism's memory layer. It captures what agents say, extracts entit
 
 ```
 ┌─────────────┐                  ┌──────────────────┐
-│    Prism     │                  │   Remembrance    │
+│    Prizm     │                  │   Remembrance    │
 │   (Go)      │                  │   (Python)       │
 │             │                  │                  │
 │  Pipeline   │──HTTP GET───────>│  BuildContext()  │
@@ -40,7 +40,7 @@ Remembrance is Prism's memory layer. It captures what agents say, extracts entit
 1. **Async capture (fire-and-forget):** Agent output → NATS event `*.agent.output` → Remembrance auto-captures
 2. **Sync enrichment (on-demand):** Before LLM call, RemembranceStage calls `client.BuildContext()` → injects memories into prompt
 
-**Why both?** NATS capture ensures no data loss even if Prism restarts. The synchronous stage ensures context is available for the *current* turn. Idempotency keys prevent duplicates.
+**Why both?** NATS capture ensures no data loss even if Prizm restarts. The synchronous stage ensures context is available for the *current* turn. Idempotency keys prevent duplicates.
 
 ---
 
@@ -91,7 +91,7 @@ The existing `internal/adapter/builtin/remembrance/` adapter remains for action-
 1. Agent produces output
 2. EventBus publishes: lumi.agent.output { content, session_id, turn, project }
 3. NATS subscriber receives → pipeline.capture(content, source="nats:lumi")
-4. RemembranceStage also calls: client.Capture(content, source="prism:lumi")
+4. RemembranceStage also calls: client.Capture(content, source="prizm:lumi")
 5. Both use same idempotency key → dedup in pipeline
 6. Next turn: RemembranceStage calls client.BuildContext(task, project, agent)
 7. LLM receives enriched prompt with relevant memories
@@ -107,7 +107,7 @@ Steps 3 and 4 are belt-and-suspenders. If NATS is reliable, we can remove step 4
 2. **Event trigger (secondary):** After N=10 PERSIST memories, trigger a partial dream cycle
 3. **Manual:** `POST /dream` anytime for debugging
 
-The event trigger is a NATS subscription on `remembrance.dream.triggered`. Prism can publish this event after counting PERSIST captures.
+The event trigger is a NATS subscription on `remembrance.dream.triggered`. Prizm can publish this event after counting PERSIST captures.
 
 ---
 

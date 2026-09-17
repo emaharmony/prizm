@@ -8,7 +8,7 @@ import (
 )
 
 // CLICommands provides CLI access to the V2 Natural Gates workflow system.
-// Usage: prism workflow v2 <subcommand>
+// Usage: prizm workflow v2 <subcommand>
 
 // PrintWorkflowStatus prints the current workflow status in a readable format.
 func PrintWorkflowStatus(statePath string) error {

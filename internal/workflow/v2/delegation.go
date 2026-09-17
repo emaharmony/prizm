@@ -13,8 +13,8 @@ const defaultDelegationTimeout = 20 * time.Minute
 
 // DelegationManager handles multi-agent task delegation via NATS.
 type DelegationManager struct {
-	natsSubject       string                   // e.g., "prism.agent.openclaw"
-	completionSubject string                   // e.g., "prism.workflow.task.complete"
+	natsSubject       string                   // e.g., "prizm.agent.openclaw"
+	completionSubject string                   // e.g., "prizm.workflow.task.complete"
 	timeouts          map[string]time.Duration // per-agent overrides, user-configured
 	defaultTimeout    time.Duration
 	maxRetries        int
@@ -103,6 +103,9 @@ type TaskCompletion struct {
 	// HandleTaskCompletion). Zero when the worker did not report usage.
 	PromptTokens     int `json:"prompt_tokens,omitempty"`
 	CompletionTokens int `json:"completion_tokens,omitempty"`
+	Iterations       int `json:"iterations,omitempty"`
+	ToolCalls        int `json:"tool_calls,omitempty"`
+	DeniedToolCalls  int `json:"denied_tool_calls,omitempty"`
 }
 
 type CompletionArtifacts struct {

@@ -30,8 +30,8 @@ package:
 - `RemoveWorktree` (best-effort force removal), `EnsureClean` (+ exported
   `ErrDirtyWorktree`)
 - `EnsureExcluded(ctx, root, pattern)` — appends to `.git/info/exclude`
-  (repo-local, never committed) so worktrees under `<repo>/.prism/` don't make
-  the parent repo read as dirty in target repos that don't gitignore `.prism`
+  (repo-local, never committed) so worktrees under `<repo>/.prizm/` don't make
+  the parent repo read as dirty in target repos that don't gitignore `.prizm`
 - Rollback primitives for V57: `CurrentSHA`, `CurrentBranch`, `ResetHard`,
   `DeleteBranch`
 - `RunCommand`, `ResolveUnder`, `SafeID` helpers
@@ -43,15 +43,15 @@ unchanged, behavior preserved; `autopatch.ErrDirtyWorktree` aliases
 ### Config
 
 `projects[].worktree_isolation: bool` (default false) on
-`orchestrator.ProjectConfig`. Surfaced by `prism config` as
+`orchestrator.ProjectConfig`. Surfaced by `prizm config` as
 `projects: N (M worktree-isolated)` / `isolated_projects` in JSON.
 
-### RunGatedLoop wiring (`cmd/prism-cli/wake_handler.go`)
+### RunGatedLoop wiring (`cmd/prizm-cli/wake_handler.go`)
 
 When enabled, after `runID` is minted:
 
-1. `gitx.EnsureExcluded(repo, ".prism/")`, then
-   `gitx.CreateBranchWorktree(repo, <repo>/.prism/worktrees/<runID>, prism/<runID>, HEAD)`
+1. `gitx.EnsureExcluded(repo, ".prizm/")`, then
+   `gitx.CreateBranchWorktree(repo, <repo>/.prizm/worktrees/<runID>, prizm/<runID>, HEAD)`
 2. `workRoot` = the worktree path; **fail closed** — if the worktree cannot be
    created the run aborts rather than running un-isolated
 3. Everything that touches the tree now uses `workRoot` instead of `repoPath`:

@@ -16,17 +16,23 @@ import (
 	"strings"
 	"time"
 
-	v2 "github.com/emaharmony/prism/internal/workflow/v2"
+	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 )
 
 // AgentRuntime is the resolved execution surface for one agent: enough for a
 // TaskRunner to run it. Kept minimal so the resolver can be backed by the
 // orchestrator config without importing it here.
 type AgentRuntime struct {
-	AgentID      string
-	Provider     string
-	Model        string
-	Capabilities []string
+	AgentID             string
+	Provider            string
+	Model               string
+	Capabilities        []string
+	RunID               string
+	TaskID              string
+	ExecutionKey        string
+	AllowedTools        []string
+	EnforceAllowedTools bool
+	MaxIterations       int
 	// WorkDir is the isolated working directory for this task's run (set by the
 	// Worker from its WorktreeProvider). Empty = the shared/default root. The
 	// backend points file/git tools at it.
@@ -48,6 +54,9 @@ type RunResult struct {
 	// roll delegated spend into the parent run's token budget.
 	PromptTokens     int
 	CompletionTokens int
+	Iterations       int
+	ToolCalls        int
+	DeniedToolCalls  int
 }
 
 // TaskRunner executes one delegated task for a resolved agent. Implementations
@@ -131,6 +140,9 @@ func (w *Worker) Handle(ctx context.Context, packet v2.TaskPacket) v2.TaskComple
 		fc.Artifacts = result.Artifacts
 		// Even a failed/timed-out sub-agent spent tokens, so surface them to the parent budget.
 		fc.PromptTokens, fc.CompletionTokens = result.PromptTokens, result.CompletionTokens
+		fc.Iterations = result.Iterations
+		fc.ToolCalls = result.ToolCalls
+		fc.DeniedToolCalls = result.DeniedToolCalls
 		return fc
 	}
 
@@ -141,6 +153,9 @@ func (w *Worker) Handle(ctx context.Context, packet v2.TaskPacket) v2.TaskComple
 		Artifacts:        result.Artifacts,
 		PromptTokens:     result.PromptTokens,
 		CompletionTokens: result.CompletionTokens,
+		Iterations:       result.Iterations,
+		ToolCalls:        result.ToolCalls,
+		DeniedToolCalls:  result.DeniedToolCalls,
 	}
 }
 

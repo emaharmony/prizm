@@ -3,7 +3,7 @@ package policy
 import (
 	"fmt"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // Evaluator evaluates policy requests against registered rules.
@@ -49,7 +49,7 @@ func (e *Evaluator) SetEmitter(emitter EventEmitter) {
 // Evaluation order: first matching rule wins.
 // If no rule matches, the default decision is applied.
 func (e *Evaluator) Evaluate(req PolicyRequest) PolicyDecision {
-	e.emit("prism.policy.requested", map[string]any{
+	e.emit("prizm.policy.requested", map[string]any{
 		"action":   req.Action,
 		"resource": req.Resource,
 		"subject":  req.Subject,
@@ -58,7 +58,7 @@ func (e *Evaluator) Evaluate(req PolicyRequest) PolicyDecision {
 
 	decision := e.evaluateRules(req)
 
-	e.emit("prism.policy.evaluated", map[string]any{
+	e.emit("prizm.policy.evaluated", map[string]any{
 		"action":        req.Action,
 		"decision":      string(decision.Decision),
 		"rule_id":       decision.RuleID,
@@ -68,19 +68,19 @@ func (e *Evaluator) Evaluate(req PolicyRequest) PolicyDecision {
 	// Emit specific outcome event
 	switch decision.Decision {
 	case DecisionAllowed:
-		e.emit("prism.policy.allowed", map[string]any{
+		e.emit("prizm.policy.allowed", map[string]any{
 			"action":  req.Action,
 			"rule_id": decision.RuleID,
 			"reason":  decision.Reason,
 		})
 	case DecisionDenied:
-		e.emit("prism.policy.denied", map[string]any{
+		e.emit("prizm.policy.denied", map[string]any{
 			"action":  req.Action,
 			"rule_id": decision.RuleID,
 			"reason":  decision.Reason,
 		})
 	case DecisionRequiresApproval:
-		e.emit("prism.policy.approval_required", map[string]any{
+		e.emit("prizm.policy.approval_required", map[string]any{
 			"action":  req.Action,
 			"rule_id": decision.RuleID,
 			"reason":  decision.Reason,
@@ -143,6 +143,6 @@ func (e *Evaluator) Explain(req PolicyRequest) string {
 
 func (e *Evaluator) emit(eventType string, payload map[string]any) {
 	if e.emitter != nil {
-		e.emitter.Emit(eventType, "prism-policy", payload)
+		e.emitter.Emit(eventType, "prizm-policy", payload)
 	}
 }

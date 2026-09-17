@@ -13,12 +13,12 @@ team design (see docs/ROBLOX-TEAM.md, [[roblox-agent-team]]).
 Today the delegation path is half-built:
 - **Send** exists: `v2.DelegationManager.DelegateTask` builds a `TaskPacket`,
   the wake handler publishes it via `NATSPublisher` to the delegation subject.
-- **Completion routing** exists: completions on `prism.workflow.task.complete`
+- **Completion routing** exists: completions on `prizm.workflow.task.complete`
   → `NATSListener` → `ExternalEvent{task_complete}` → `HandleTaskCompletion`.
 - **MISSING (the consumer):** nothing subscribes to the delegation subject,
   runs the target agent, and publishes a `TaskCompletion`. The serve-side
   handler is a stub (`cmd_serve.go:449` "Task processing will be wired in
-  M3.1d"). Only Codex + cross-Prism are real runners.
+  M3.1d"). Only Codex + cross-Prizm are real runners.
 
 V58 builds that consumer as a production-grade, testable package and wires it in.
 
@@ -63,11 +63,11 @@ Design principles for production/long-term:
   tool loop with iteration + token budgets, tool-failure feedback, artifact
   capture, and context-deadline honoring. Model/tool specifics injected via a
   `Backend` (mock in tests; provider registry + tool executor in iteration 3).
-- [x] **3 — Serve wiring:** `cmd/prism-cli/subagent_worker.go` — resolver (config
+- [x] **3 — Serve wiring:** `cmd/prizm-cli/subagent_worker.go` — resolver (config
   agents → runtime), backend (provider registry + tool executor + reused v2
   parsers via new exported `ParseToolRequestText`/`ParseFinalText`), NATS
   completion publisher, and a subscription on the delegation subject that runs
-  task packets through the worker. Feature-flagged via `PRISM_SUBAGENT_WORKER`
+  task packets through the worker. Feature-flagged via `PRIZM_SUBAGENT_WORKER`
   (off by default → no behavior change; verified on/off in serve).
 - [x] **4 — Tool scoping + concurrency:** `ToolScope` (capability-based per-agent
   tool gating — only "code"-capable agents may mutate/git-write/use MCP build
@@ -89,12 +89,12 @@ Design principles for production/long-term:
   the 4c limitation.
 - [x] **5a — Report-only / safe run (Eggventura):** end-to-end delegation smoke
   over real embedded NATS (packet → worker → LoopRunner → completion, incl.
-  fail-closed), plus a full-system boot with `PRISM_SUBAGENT_WORKER=1` targeting
+  fail-closed), plus a full-system boot with `PRIZM_SUBAGENT_WORKER=1` targeting
   the Eggventura project (agents + worker + health up). No writes.
 - [x] **5b — Implementation run (Eggventura): DONE (2026-07-05).** Full complete-
   system run proven end-to-end. External NATS bus + serve (claude_code
-  orchestrator, Factory→Eggventura) + signed cross-Prism `task_request` →
-  Prism Factory adapter queued it → Python Factory processed it.
+  orchestrator, Factory→Eggventura) + signed cross-Prizm `task_request` →
+  Prizm Factory adapter queued it → Python Factory processed it.
   **Report-only run** first: returned an accurate, project-specific multi-agent
   audit (Planner + Reviewer + Luau safety) of the real Eggventura Rojo project
   (exit 0). Gate met → **implementation run** (`approval_mode: implementation`,
@@ -158,7 +158,7 @@ To resume: reply "proceed with 5b" (Factory up) for the real run, or re-run
   capture, deadline honoring) with a `Backend` seam. 8 runner tests incl. an
   end-to-end Worker+LoopRunner path. Still no serve wiring; green build.
 - **Iteration 3 (2026-07-05):** Wired the worker into serve behind
-  `PRISM_SUBAGENT_WORKER` (off by default): config→runtime resolver, a backend
+  `PRIZM_SUBAGENT_WORKER` (off by default): config→runtime resolver, a backend
   bound to the live provider registry + tool executor reusing the gated loop's
   JSON parsers (newly exported `v2.ParseToolRequestText`/`ParseFinalText`), and
   a NATS completion publisher. Subscribes the delegation subject and filters for
@@ -190,7 +190,7 @@ To resume: reply "proceed with 5b" (Factory up) for the real run, or re-run
 - **Iteration 5a (2026-07-05):** End-to-end smoke over real embedded NATS
   (`bus.StartEmbeddedBus`): a delegation packet round-trips packet → worker →
   LoopRunner → completion, plus a fail-closed (unknown-agent) case. Verified the
-  complete system boots with `PRISM_SUBAGENT_WORKER=1` pointed at the Eggventura
+  complete system boots with `PRIZM_SUBAGENT_WORKER=1` pointed at the Eggventura
   project (agents registered, worker started, health up) — report-only, no
   writes. Write-enabled run (5b) held for explicit authorization.
 

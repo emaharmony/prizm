@@ -1,8 +1,8 @@
 # Roblox Game-Dev Agent Team
 
-A small dev studio of Prism agents that designs and builds Roblox games. Roster,
+A small dev studio of Prizm agents that designs and builds Roblox games. Roster,
 models, tooling, and the external handoffs are described here. Personas/
-personality are a later pass — `prism-workspace/AGENTS.md` holds the shared
+personality are a later pass — `prizm-workspace/AGENTS.md` holds the shared
 roster charter for now.
 
 ## Roster
@@ -14,7 +14,7 @@ roster charter for now.
 | `muse` | Game Planner | `nemotron-3-ultra:cloud` (ollama) | strong ideation + rubric reasoning, parallel to the orchestrator |
 | `atlas` | Factory Master | `deepseek-v4-pro:cloud` (ollama) | stronger interpretation of Factory build/validation results |
 | `chisel` | Asset Maker | `qwen3.5:9b` (ollama, local) | high-volume Blender tool-calling; local avoids metering blowout |
-| `forge` | Coder (Prism Go) | `nemotron-3-ultra:cloud` (ollama) | powers autopatch / Prism self-maintenance (not Roblox work) |
+| `forge` | Coder (Prizm Go) | `nemotron-3-ultra:cloud` (ollama) | powers autopatch / Prizm self-maintenance (not Roblox work) |
 
 The registry is keyed by model, so `scout` + `chisel` share one `qwen3.5:9b`
 registration. Only `astraea` (the primary agent) may propose code writes;
@@ -29,15 +29,15 @@ idea ──► rubric score ──► plan ──► references ──► assets
 
 ## Reference-image tools (the Researcher)
 
-Native Prism tools in `internal/tool/image_tools.go`, auto-approved (read-only
+Native Prizm tools in `internal/tool/image_tools.go`, auto-approved (read-only
 w.r.t. code; they write only into safe reference/output folders):
 
 | Tool | What it does | Config (env) |
 |---|---|---|
-| `collect_reference_images` | Scout reference collector: probes local Codex image output, then falls back to configured image/web search and downloads images | `PRISM_IMAGE_SEARCH_URL`, `PRISM_IMAGE_SEARCH_KEY`, fallback `PRISM_WEBSEARCH_URL`/`PRISM_WEBSEARCH_KEY`; optional Codex CLI |
-| `fetch_image` | Download an image URL into `references/` or a safe `output_dir` | uses `PRISM_IMAGE_DIR`, default `<workspace>/references` |
-| `generate_image` | Text->image via a generic endpoint, saved to `references/` or a safe `output_dir` | `PRISM_IMAGEGEN_URL`, `PRISM_IMAGEGEN_KEY` |
-| `analyze_image` | Vision-caption a path/URL for the reference brief | `PRISM_VISION_MODEL` (default `llama3.2-vision:11b`), `PRISM_VISION_URL`/`OLLAMA_BASE_URL` |
+| `collect_reference_images` | Scout reference collector: probes local Codex image output, then falls back to configured image/web search and downloads images | `PRIZM_IMAGE_SEARCH_URL`, `PRIZM_IMAGE_SEARCH_KEY`, fallback `PRIZM_WEBSEARCH_URL`/`PRIZM_WEBSEARCH_KEY`; optional Codex CLI |
+| `fetch_image` | Download an image URL into `references/` or a safe `output_dir` | uses `PRIZM_IMAGE_DIR`, default `<workspace>/references` |
+| `generate_image` | Text->image via a generic endpoint, saved to `references/` or a safe `output_dir` | `PRIZM_IMAGEGEN_URL`, `PRIZM_IMAGEGEN_KEY` |
+| `analyze_image` | Vision-caption a path/URL for the reference brief | `PRIZM_VISION_MODEL` (default `llama3.2-vision:11b`), `PRIZM_VISION_URL`/`OLLAMA_BASE_URL` |
 
 Each degrades to a clear "not configured" result when its endpoint/model is
 unset. `collect_reference_images` treats Codex as optional: it only uses the
@@ -52,24 +52,24 @@ Setup:
 
 ```bash
 ollama pull llama3.2-vision:11b      # vision model for analyze_image
-export PRISM_IMAGE_SEARCH_URL=...    # preferred JSON image-search endpoint
-export PRISM_WEBSEARCH_URL=...       # fallback JSON search endpoint (Brave/Serper/SearXNG)
-export PRISM_IMAGEGEN_URL=...        # optional: a text->image endpoint
+export PRIZM_IMAGE_SEARCH_URL=...    # preferred JSON image-search endpoint
+export PRIZM_WEBSEARCH_URL=...       # fallback JSON search endpoint (Brave/Serper/SearXNG)
+export PRIZM_IMAGEGEN_URL=...        # optional: a text->image endpoint
 ```
 
 > **Vision model / Ollama version:** `llama3.2-vision` uses the `mllama`
 > architecture, which requires a **recent Ollama** (older builds fail with
 > `unknown model architecture: 'mllama'`). If `analyze_image` returns that
 > error, either upgrade Ollama, or use a broadly-compatible VLM instead:
-> `ollama pull llava` then `export PRISM_VISION_MODEL=llava`. The default is
-> `llama3.2-vision:11b`; override it anytime with `PRISM_VISION_MODEL`.
+> `ollama pull llava` then `export PRIZM_VISION_MODEL=llava`. The default is
+> `llama3.2-vision:11b`; override it anytime with `PRIZM_VISION_MODEL`.
 >
 ## Asset pipeline (the Asset Maker → Blender → Factory)
 
 `chisel` drives Blender through MCP (`mcp_blender_*` tools), building models from
 `scout`'s reference brief, then hands exports to the Roblox Factory.
 
-Config in `prism.yaml`:
+Config in `prizm.yaml`:
 
 ```yaml
 mcp_servers:
@@ -85,10 +85,10 @@ Requires **`uv`/`uvx` installed** and **Blender running with the MCP addon**
 continues (the rest of the team is unaffected). Adjust `command`/`args` to your
 Blender MCP install.
 
-## Rubric handshake (the Game Planner → remote Prism)
+## Rubric handshake (the Game Planner → remote Prizm)
 
-`muse` sends ideas to a **second Prism instance holding the rubric** over the
-cross-Prism bridge. Config in `prism.yaml` under `bridge.target_profiles`:
+`muse` sends ideas to a **second Prizm instance holding the rubric** over the
+cross-Prizm bridge. Config in `prizm.yaml` under `bridge.target_profiles`:
 
 ```yaml
 - name: "rubric"
@@ -101,10 +101,10 @@ cross-Prism bridge. Config in `prism.yaml` under `bridge.target_profiles`:
 `validation_request`) with `request.expected_output: validation_report` and a
 `definition_of_done` drawn from the rubric; the remote replies with the
 structured `task_response` (status, confidence, validation, recommended next
-action) defined in `CROSS_PRISM_PROTOCOL.md`.
+action) defined in `CROSS_PRIZM_PROTOCOL.md`.
 
-**Prerequisites:** both Prisms share one NATS broker (`bridge.mode: shared_nats`)
-and the same `PRISM_BRIDGE_SECRET`; set the real remote `instance_id` above.
+**Prerequisites:** both Prizms share one NATS broker (`bridge.mode: shared_nats`)
+and the same `PRIZM_BRIDGE_SECRET`; set the real remote `instance_id` above.
 
 ## Factory handoff (the Factory Master → Roblox Factory)
 
@@ -117,16 +117,16 @@ and the same `PRISM_BRIDGE_SECRET`; set the real remote `instance_id` above.
 ## Execution model (now vs. later)
 
 - **Real autonomous execution today:** `atlas` (Factory queue), `chisel`
-  (Blender MCP), and the rubric round-trip (cross-Prism) run against genuine
+  (Blender MCP), and the rubric round-trip (cross-Prizm) run against genuine
   external runners.
 - **Orchestrator-routed today:** `scout` and `muse` run either as agents you
   chat with directly, or as roles `astraea` adopts inside the gated loop by
   calling their tools — until the generic sub-agent worker lands (deferred).
-- Every agent is independently addressable now: `prism chat --agent scout`.
+- Every agent is independently addressable now: `prizm chat --agent scout`.
 
 ## Caveat
 
 The serve-mode tool suite (research/image/MCP tools) currently initializes when
-a messaging channel is configured. The production `prism.yaml` has a Discord
+a messaging channel is configured. The production `prizm.yaml` has a Discord
 channel, so the tools register. (A future cleanup can decouple tool setup from
 channels.)

@@ -1,0 +1,1839 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Prizm multi-agent run execution graph">
+<title>Multi-Agent Run · Prizm</title>
+<link rel="stylesheet" href="/app.css">
+<style>
+  .ma-run-header { display:flex; flex-wrap:wrap; align-items:center; gap: var(--space-3); margin-bottom: var(--space-2); }
+  .ma-run-header .mono { font-size: 13px; color: var(--muted); }
+  .ma-overlays { display:flex; flex-wrap:wrap; gap: var(--space-2); margin-bottom: var(--space-4); }
+  .ma-overlay { display:inline-flex; align-items:center; gap:6px; padding:5px 10px; border-radius:999px; font-size:12px; font-weight:650; border:1px solid; }
+  .ma-overlay--paused { color:#fde68a; background:var(--warning-bg); border-color:rgba(251,191,36,.35); }
+  .ma-overlay--exhausted { color:#fecdd3; background:var(--danger-bg); border-color:rgba(251,113,133,.35); }
+  .ma-overlay--waiting { color:#bfdbfe; background:var(--info-bg); border-color:rgba(96,165,250,.35); }
+
+  .ma-graph-scroll { overflow-x:auto; border:1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: var(--space-4); }
+  .ma-graph-canvas { position:relative; }
+  .ma-graph-canvas svg { position:absolute; top:0; left:0; pointer-events:none; }
+  /* Milestone 6: the SVG's own pointer-events:none (above) is a container
+     default only -- an individual child can still opt back in, and hit
+     events dispatched on that child still bubble up through the SVG to
+     #graphCanvas regardless of the parent's pointer-events value. Edge
+     shapes opt in here so they become clickable/hoverable for
+     click-to-inspect without touching the (still non-interactive) edge
+     label <text> siblings or the SVG's own decorative background. */
+  .ma-edge-path { fill:none; pointer-events:auto; cursor:pointer; }
+  .ma-edge-label { font-size:11px; font-family: inherit; }
+  .ma-edge-label tspan.glyph { font-weight:700; }
+  .ma-node { cursor:pointer; }
+  /* Focus rings for the newly-interactive node/edge elements. .ma-node is a
+     plain <div> so the site-wide `:focus-visible { box-shadow: var(--focus) }`
+     rule (app.css) already applies to it. SVG shape elements have
+     inconsistent cross-browser box-shadow support, so edges get an explicit
+     outline + drop-shadow instead, using the same accent color/opacity as
+     --focus's rgba so the two read as the same design token in practice. */
+  .ma-edge-path:focus-visible { outline:3px solid var(--accent); outline-offset:3px; filter: drop-shadow(0 0 4px rgba(167,139,250,.85)); }
+  /* Milestone 6 selection state. Named WITHOUT the "ma-node--"/"ma-edge--"
+     double-dash status-class prefix on purpose: multiagent-run.html's live
+     patch functions (applyGraphNode/applyEdgeActive) strip every class
+     matching those prefixes (except ma-node--current) when a narrow SSE
+     patch updates status, so a same-prefixed selection class would be
+     silently wiped by the very next live status update. A selected
+     node/edge must be able to coexist with --current/--active
+     simultaneously, so it is deliberately a second, independent signal:
+     shape (dashed outline / thicker stroke), never color alone. */
+  .ma-node-selected { outline:3px dashed var(--text); outline-offset:3px; }
+  .ma-node-selected-flag { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text); border:1px dashed var(--border-strong); border-radius:4px; padding:1px 4px; align-self:flex-start; }
+  .ma-edge-selected { stroke-width:5 !important; }
+
+  .ma-edge--available { stroke: var(--subtle); stroke-width:2; }
+  .ma-edge--previously_traversed { stroke: var(--info); stroke-width:2; }
+  /* Milestone 5: the active edge gets a static glow (drop-shadow, so it reads
+     correctly on both <line> and curved loopback <path> shapes) plus an
+     animated stroke-dasharray/dashoffset "marching ants" pattern. The dash
+     pattern always travels in the SVG shape's own point order — verified
+     against multiagent-graph.js's geometry builder: for every edge, p0 (the
+     shape's first point: x1/y1, or the "M" point of a curve's `d`) is always
+     the *source* node's anchor, and p2 (x2/y2, or the point after "Q") is
+     always the *destination* node's anchor (see EDGE_ANCHORS/anchorPoint +
+     the `M x y Q cx cy x y` path construction). Animating stroke-dashoffset
+     toward negative values moves the dash pattern in that same start->end
+     direction, so the dashes visibly flow from source to destination for
+     every edge, including loopback edges whose curve bends backward across
+     the fixed left-to-right layout (e.g. tester -> developer). This is
+     covered automatically by app.css's blanket
+     `@media (prefers-reduced-motion: reduce)` animation-duration/iteration
+     clamp; the explicit override below additionally swaps the *static*
+     stroke-dasharray back to a solid stroke, since a clamped-but-still-dashed
+     line would not read as "no moving dashes". */
+  .ma-edge--active {
+    stroke: var(--accent); stroke-width:3;
+    filter: drop-shadow(0 0 3px rgba(167,139,250,.7));
+    stroke-dasharray: 10 8;
+    animation: ma-edge-flow 900ms linear infinite;
+  }
+  @keyframes ma-edge-flow { to { stroke-dashoffset: -18; } }
+  .ma-edge--exhausted { stroke: var(--danger); stroke-width:2; stroke-dasharray:7 5; }
+  .ma-edge--disabled { stroke: var(--subtle); stroke-width:1.5; stroke-dasharray:2 4; }
+  .ma-edge--invalid { stroke: var(--danger); stroke-width:2; stroke-dasharray:1 4; }
+  .ma-edge-label { fill: var(--muted); }
+  .ma-edge--active + .ma-edge-label, text.ma-edge-label.is-active { fill: var(--accent); font-weight:700; }
+
+  .ma-node { position:absolute; box-sizing:border-box; display:flex; flex-direction:column; gap:4px;
+    padding:10px 12px; border-radius: var(--radius); border:2px solid var(--border-strong);
+    background: var(--surface-raised); color: var(--text); font-size:12px; }
+  /* Milestone 5: pulsing glow on the currently-active node. The first
+     box-shadow layer (a crisp 3px ring) is identical across every keyframe
+     so it never disappears mid-pulse -- only the second, blurred glow layer
+     animates -- and the node's own size/position never changes (no
+     `transform: scale`), since multiagent-graph.js's EDGE_ANCHORS compute
+     edge endpoints relative to this node's static, unscaled box. */
+  .ma-node--current { border-width:3px; box-shadow: 0 0 0 3px rgba(167,139,250,.45); animation: ma-node-pulse 1.8s ease-in-out infinite; }
+  @keyframes ma-node-pulse {
+    0%, 100% { box-shadow: 0 0 0 3px rgba(167,139,250,.45), 0 0 6px 1px rgba(167,139,250,.25); }
+    50% { box-shadow: 0 0 0 3px rgba(167,139,250,.45), 0 0 18px 5px rgba(167,139,250,.6); }
+  }
+  .ma-node-title { display:flex; align-items:center; gap:6px; font-size:13px; font-weight:700; }
+  .ma-node-glyph { display:inline-block; width:1.1em; text-align:center; }
+  .ma-node-status { font-size:11px; font-weight:650; text-transform:uppercase; letter-spacing:.03em; }
+  .ma-node-metric { font-size:11px; color: var(--muted); }
+  .ma-node-current-flag { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color: var(--accent); }
+
+  .ma-node--not_started { border-color: var(--border-strong); background: var(--surface); }
+  .ma-node--not_started .ma-node-status { color: var(--subtle); }
+  .ma-node--running { border-color: var(--info); background: var(--info-bg); }
+  .ma-node--running .ma-node-status { color: #bfdbfe; }
+  .ma-node--waiting_approval, .ma-node--waiting_validation { border-color: var(--warning); background: var(--warning-bg); }
+  .ma-node--waiting_approval .ma-node-status, .ma-node--waiting_validation .ma-node-status { color: #fde68a; }
+  .ma-node--completed { border-color: var(--success); background: var(--success-bg); }
+  .ma-node--completed .ma-node-status { color: #a7f3c4; }
+  .ma-node--failed { border-color: var(--danger); background: var(--danger-bg); }
+  .ma-node--failed .ma-node-status { color: #fecdd3; }
+  .ma-node--blocked { border-color: var(--danger); background: var(--danger-bg); border-style:dashed; }
+  .ma-node--cancelled { border-color: var(--subtle); background: var(--surface-raised); opacity:.85; }
+  .ma-node--skipped { border-color: var(--border); background: var(--surface); opacity:.6; border-style:dashed; }
+
+  .ma-fallback-note { margin-top: var(--space-2); font-size:12px; color: var(--subtle); }
+
+  .ma-side-grid { display:grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); margin-top: var(--space-4); }
+  @media (max-width: 900px) { .ma-side-grid { grid-template-columns: 1fr; } }
+
+  .budget-row { display:grid; grid-template-columns: 200px 1fr 90px 110px; align-items:center; gap: var(--space-3); padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .budget-row:last-child { border-bottom:0; }
+  .budget-row-label { font-size:12px; color: var(--text); }
+  .budget-row-value { font-size:12px; color: var(--muted); font-variant-numeric: tabular-nums; text-align:right; }
+  .budget-row-bar svg { display:block; width:100%; height:16px; }
+  .budget-track { fill: var(--surface-raised); }
+  .budget-fill--normal { fill: var(--info); }
+  .budget-fill--approaching { fill: var(--warning); }
+  .budget-fill--critical { fill: var(--danger); }
+  .budget-fill--exhausted { fill: var(--danger); }
+  .budget-unlimited { font-size:11px; color: var(--subtle); }
+  .budget-row-level { font-size:11px; font-weight:650; text-transform:uppercase; letter-spacing:.03em; text-align:right; }
+  .budget-row-level.level-normal { color: var(--subtle); }
+  .budget-row-level.level-approaching { color: var(--warning); }
+  .budget-row-level.level-critical, .budget-row-level.level-exhausted { color: var(--danger); }
+  @media (max-width: 720px) { .budget-row { grid-template-columns: 1fr; gap:4px; } .budget-row-value, .budget-row-level { text-align:left; } }
+
+  .ma-terminal-outcome { display:flex; flex-wrap:wrap; align-items:center; gap: var(--space-3); }
+  .ma-placeholder { display:none; }
+  .visually-hidden { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+
+  /* Milestone 6: inspector panel ------------------------------------------ */
+  .ma-inspector-rows { display:grid; gap:0; margin:10px 0 0; }
+  .ma-inspector-row { display:grid; grid-template-columns: 200px 1fr; gap: var(--space-3); padding:8px 0; border-bottom:1px solid var(--border); font-size:13px; }
+  .ma-inspector-row:last-child { border-bottom:0; }
+  .ma-inspector-row dt { margin:0; color: var(--muted); font-weight:650; }
+  .ma-inspector-row dd { margin:0; color: var(--text); }
+  .ma-inspector-row dd ul { margin:0; padding-left:18px; }
+  .ma-inspector-warnings { margin-top:12px; display:grid; gap:6px; }
+  .ma-inspector-warning { display:flex; gap:6px; align-items:flex-start; padding:8px 10px; border-radius: var(--radius-sm); background: var(--warning-bg); color:#fde68a; font-size:12px; }
+  .ma-inspector-warning.level-exhausted, .ma-inspector-warning.level-critical { background: var(--danger-bg); color:#fecdd3; }
+  @media (max-width: 720px) { .ma-inspector-row { grid-template-columns: 1fr; gap:2px; } }
+
+  /* Milestone 6: event timeline -------------------------------------------- */
+  .ma-timeline-list { list-style:none; margin:10px 0 0; padding:0; max-height:520px; overflow-y:auto; display:grid; gap:6px; }
+  .ma-timeline-row { display:grid; grid-template-columns: 150px 1fr; gap:2px var(--space-3); padding:8px 10px; border:1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); cursor:pointer; }
+  .ma-timeline-row:hover { background: var(--surface-hover); }
+  .ma-timeline-row--match { outline:2px dashed var(--accent); outline-offset:2px; }
+  .ma-timeline-time { grid-row:1; color: var(--muted); font-size:11px; align-self:start; }
+  .ma-timeline-type { grid-row:1; grid-column:2; font-weight:650; font-size:13px; }
+  .ma-timeline-meta { grid-column:2; color: var(--muted); font-size:12px; }
+  .ma-timeline-reason { grid-column:2; color: var(--subtle); font-size:12px; font-style:italic; }
+  @media (max-width: 620px) { .ma-timeline-row { grid-template-columns: 1fr; } .ma-timeline-type, .ma-timeline-meta, .ma-timeline-reason { grid-column:1; } }
+
+  /* Milestone 5: app.css already has a blanket
+     `@media (prefers-reduced-motion: reduce)` rule (clamping
+     animation-duration/animation-iteration-count/transition-duration to
+     .01ms/1/.01ms with !important on `*`), so ma-node-pulse and
+     ma-edge-flow above are automatically neutered site-wide with zero extra
+     work. That blanket rule does NOT touch static, non-animated properties
+     like stroke-dasharray, though -- so without this explicit override, a
+     reduced-motion active edge would still render as a static *dashed*
+     line, and per the spec that's not an acceptable stand-in for "a real
+     visual difference between active and not-active" (a static bright
+     SOLID stroke is). This block restates both elements' reduced-motion end
+     state explicitly rather than relying on animation fill-mode edge cases:
+     the active node keeps a static bright ring (no pulse), and the active
+     edge keeps a static bright solid stroke (no dashes, no motion) --
+     clearly distinct from an ordinary available/traversed edge either way. */
+  @media (prefers-reduced-motion: reduce) {
+    .ma-node--current { animation: none; box-shadow: 0 0 0 3px rgba(167,139,250,.45), 0 0 10px 3px rgba(167,139,250,.4); }
+    .ma-edge--active { animation: none; stroke-dasharray: none; stroke-dashoffset: 0; filter: drop-shadow(0 0 4px rgba(167,139,250,.8)); }
+  }
+
+  /* Milestone 8: execution replay -------------------------------------------
+     Replay reuses the exact same node/edge status classes (and therefore the
+     exact same reduced-motion treatment above) that live rendering uses --
+     nothing here introduces a new animation, so no extra
+     prefers-reduced-motion override is needed for the graph itself. This
+     block only styles the replay-only chrome (the persistent mode banner,
+     the transport controls, and a static, non-animated outline on the graph
+     container while replay is active). */
+  .ma-replay-banner { padding:10px 14px; margin: var(--space-3) 0; border-radius: var(--radius); border:1px solid rgba(96,165,250,.45); background: var(--info-bg); color:#bfdbfe; font-weight:650; font-size:13px; }
+  .ma-replay-transport { display:flex; flex-wrap:wrap; align-items:center; gap: var(--space-2); }
+  .ma-replay-progress { margin:10px 0 0; font-size:12px; color: var(--muted); }
+  .ma-replay-speed-label { display:inline-flex; align-items:center; gap:6px; font-size:12px; color: var(--muted); }
+  .ma-replay-speed-label select { font: inherit; }
+  body.ma-replay-active .ma-graph-scroll { outline:2px dashed rgba(167,139,250,.55); outline-offset:4px; }
+
+  /* Milestone 9b: loop-budget stall / near-exhaustion visualization.
+     Deliberately a SINGLE-dash "ma-edge-" prefix, not the double-dash
+     "ma-edge--" status-class prefix -- applyGraphNode/applyEdgeActive
+     (multiagent-run.html) only strip classes matching that literal
+     double-dash prefix on a narrow SSE patch, so (mirroring
+     .ma-node-selected/.ma-edge-selected above) this class survives a
+     status update instead of being silently wiped. Layered on top of
+     whatever status class the edge already has -- never replacing it -- so
+     an edge that is simultaneously "active" (the current transition) and
+     "near exhausted" (its correction loop is running low) shows both
+     facts at once: the near-exhausted color/weight wins visually via the
+     more specific compound selectors below, and the active edge's
+     marching-ants animation is explicitly cancelled (a static, non-
+     color-only treatment -- thicker stroke -- rather than relying on hue
+     alone). This is unconditional, not gated behind
+     prefers-reduced-motion: a near-exhausted edge never animates, in
+     either motion preference, so there is nothing further for that
+     media query to override here (unlike ma-edge--active, which still
+     legitimately animates for users with no reduced-motion preference). */
+  .ma-edge-path.ma-edge-near-exhausted { stroke: var(--warning); stroke-width: 4; }
+  .ma-edge-path.ma-edge--active.ma-edge-near-exhausted {
+    animation: none; stroke-dasharray: none; stroke-dashoffset: 0;
+    filter: drop-shadow(0 0 4px rgba(251,191,36,.85));
+  }
+  .ma-edge-near-exhausted + .ma-edge-label { fill: var(--warning); font-weight:700; }
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main-content">Skip to content</a>
+<nav class="nav"></nav>
+
+<main id="main-content" class="container" tabindex="-1">
+  <p class="eyebrow"><a href="/multiagent-runs.html">Multi-agent runs</a></p>
+
+  <div id="banner" class="banner" role="alert"></div>
+
+  <div id="loadState" class="loading-state" aria-live="polite" aria-busy="true">Loading run…</div>
+
+  <div id="runContent" hidden>
+    <header class="ma-run-header">
+      <div>
+        <h1 class="page-title" id="runTitle" style="margin-bottom:4px;"></h1>
+        <p class="mono" id="runMeta"></p>
+      </div>
+      <span id="statusBadge"></span>
+      <span id="currentRoleNote" class="meta"></span>
+    </header>
+
+    <div class="ma-overlays" id="runOverlays" aria-live="polite"></div>
+
+    <!-- Milestone 6: announces node/edge/run/handoff selection changes for
+         screen reader users (the inspector panel itself swaps content via a
+         plain innerHTML replacement rather than its own aria-live region, to
+         avoid double-announcing every field on every reconciliation tick). -->
+    <div id="inspectorAnnounce" class="visually-hidden" aria-live="polite"></div>
+
+    <section class="section" aria-labelledby="graph-heading" style="margin-top:0;">
+      <div class="section-heading"><div><h2 id="graph-heading" class="section-title">Execution graph</h2><p class="section-copy">Node and edge state derived from this run's persisted event history.</p></div></div>
+
+      <div class="ma-graph-scroll">
+        <div class="ma-graph-canvas" id="graphCanvas" role="group" aria-label="Execution graph nodes"></div>
+      </div>
+      <p class="ma-fallback-note" id="fallbackNote" hidden>One or more nodes are outside this page's known reference layout and were placed in an overflow row below the main graph.</p>
+
+      <div class="ma-side-grid">
+        <div class="card">
+          <h2>Nodes (text)</h2>
+          <p class="card-hint">The same node state shown above, as a table for assistive technology or a quick scan.</p>
+          <div id="nodeTable" style="margin-top:10px;"></div>
+        </div>
+        <div class="card">
+          <h2>Edges (text)</h2>
+          <p class="card-hint">The same edge state shown above, as a table.</p>
+          <div id="edgeTable" style="margin-top:10px;"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="budget-heading">
+      <div class="section-heading"><div><h2 id="budget-heading" class="section-title">Budget usage</h2><p class="section-copy">Consumption against this workflow's configured ceilings. Severity levels come directly from the server.</p></div></div>
+      <div class="card">
+        <div id="budgetRows"></div>
+      </div>
+    </section>
+
+    <section class="section" id="terminalSection" aria-labelledby="terminal-heading" hidden>
+      <div class="section-heading"><div><h2 id="terminal-heading" class="section-title">Terminal outcome</h2></div></div>
+      <div class="card ma-terminal-outcome" id="terminalOutcome"></div>
+    </section>
+
+    <!-- Milestone 8: execution replay. "Enter Replay Mode" only becomes
+         visible once the run has reached a terminal status (see
+         updateReplayEntryVisibility). Replay steps through this run's
+         already-loaded event history locally -- it never re-executes an
+         agent/tool and never makes a network request. -->
+    <section class="section" id="replaySection" aria-labelledby="replay-heading">
+      <div class="section-heading">
+        <div>
+          <h2 id="replay-heading" class="section-title">Execution replay</h2>
+          <p class="section-copy">Step through this run's persisted event history as it originally happened. Replay never re-executes any agent or tool, and makes no new network requests.</p>
+        </div>
+        <div class="actions-row">
+          <button class="btn secondary" id="enterReplayBtn" type="button" hidden>Enter Replay Mode</button>
+          <button class="btn secondary" id="exitReplayBtn" type="button" hidden>Exit Replay</button>
+        </div>
+      </div>
+
+      <div id="replayBanner" class="ma-replay-banner" role="status" aria-live="polite" hidden></div>
+
+      <div id="replayControls" class="card ma-replay-controls" hidden>
+        <div class="ma-replay-transport" role="group" aria-label="Replay playback controls">
+          <button type="button" id="replayJumpStart" class="btn secondary small" aria-label="Jump to beginning of replay">⏮ Start</button>
+          <button type="button" id="replayStepBack" class="btn secondary small" aria-label="Step back one event">◀ Back</button>
+          <button type="button" id="replayPlayPause" class="btn secondary small" aria-pressed="false" aria-label="Play replay">▶ Play</button>
+          <button type="button" id="replayStepForward" class="btn secondary small" aria-label="Step forward one event">Forward ▶</button>
+          <button type="button" id="replayJumpEnd" class="btn secondary small" aria-label="Jump to end of replay (real final state)">End ⏭</button>
+          <label class="ma-replay-speed-label" for="replaySpeed">Speed
+            <select id="replaySpeed">
+              <option value="0.5">0.5x</option>
+              <option value="1" selected>1x</option>
+              <option value="2">2x</option>
+              <option value="4">4x</option>
+            </select>
+          </label>
+        </div>
+        <p class="ma-replay-progress" id="replayProgress"></p>
+        <!-- Deliberately aria-live="polite", not "assertive", and only
+             updated on meaningful transitions (enter/exit, manual step,
+             jump, play/pause) -- not on every single auto-play tick -- to
+             avoid spamming screen reader users, matching Milestone 6's
+             restraint with #inspectorAnnounce. -->
+        <div id="replayAnnounce" class="visually-hidden" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <!-- Milestone 6: Run/Node/Edge/Handoff inspector panel (click-to-inspect
+         detail on the graph or a timeline row). Starts hidden/placeholder;
+         the inline script below removes ma-placeholder/aria-hidden the first
+         time renderInspector() runs (right after the initial snapshot load). -->
+    <section id="inspector-panel" class="section ma-placeholder" aria-hidden="true"></section>
+
+    <!-- Milestone 6: event timeline -- a windowed, paginated view of
+         snapshot.recent_events (the run's full, untruncated event history).
+         Starts hidden/placeholder for the same reason as inspector-panel above. -->
+    <section id="event-timeline" class="section ma-placeholder" aria-hidden="true"></section>
+
+    <!-- Milestone 9b: operator controls (pause/resume/cancel). Fire-and-
+         forget: a successful POST here only means "the request was
+         accepted", never "the run is now paused/resumed/cancelled" -- the
+         actual state change is reflected only once the corresponding
+         run.paused/run.resumed/run.cancelled event arrives via the live
+         SSE stream above (multiagent-live.js's derivePatches already
+         handles those event types; nothing here duplicates that). Starts
+         hidden/placeholder like inspector-panel/event-timeline above;
+         refreshOperatorControls() removes ma-placeholder/aria-hidden the
+         first time it runs (right after the initial snapshot load). -->
+    <section id="operator-controls" class="section ma-placeholder" aria-hidden="true" aria-labelledby="operator-heading">
+      <div class="section-heading">
+        <div>
+          <h2 id="operator-heading" class="section-title">Operator controls</h2>
+          <p class="section-copy">Pause, resume, or cancel this run. These buttons only request a state change — the graph and status above update once the run actually reacts, via the live event stream.</p>
+        </div>
+      </div>
+      <div class="card">
+        <div class="actions-row">
+          <button class="btn secondary" id="opPauseBtn" type="button" hidden>⏸ Pause run</button>
+          <button class="btn secondary" id="opResumeBtn" type="button" hidden>▶ Resume run</button>
+          <button class="btn danger" id="opCancelBtn" type="button" hidden>⛔ Cancel run</button>
+        </div>
+        <p class="card-hint" id="opBlockedNote" hidden></p>
+        <p class="card-hint" id="opApprovalNote" hidden></p>
+        <p class="hint" id="opStatusMsg" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <!-- Milestone 9b: dedicated aria-live region for loop-budget
+         near-exhaustion announcements, deliberately separate from
+         #inspectorAnnounce (selection-change context) and #replayAnnounce
+         (replay-transport context) -- same "one region per concern"
+         convention those two already established. -->
+    <div id="stallAnnounce" class="visually-hidden" aria-live="polite"></div>
+  </div>
+</main>
+
+<script src="/multiagent-graph.js"></script>
+<script src="/multiagent-live.js"></script>
+<script src="/multiagent-inspector.js"></script>
+<script src="/multiagent-replay.js"></script>
+<script src="/multiagent-operator.js"></script>
+<script src="/app.js"></script>
+<script>
+(() => {
+  const ui = window.PrizmUI;
+  const gm = window.PrizmMultiAgentGraph;
+  const insp = window.PrizmMultiAgentInspector;
+  const replay = window.PrizmMultiAgentReplay;
+  const op = window.PrizmMultiAgentOperator;
+  const $ = selector => document.querySelector(selector);
+
+  const NODE_GLYPHS = {
+    not_started: '○', running: '▶', waiting_approval: '⏸', waiting_validation: '⏸',
+    completed: '✓', failed: '✕', blocked: '⛔', cancelled: '⊘', skipped: '↳'
+  };
+  const EDGE_GLYPHS = {
+    available: '', previously_traversed: '✓', active: '▶', exhausted: '⛔', disabled: '⊘', invalid: '!'
+  };
+
+  function banner(message, kind) {
+    const el = $('#banner');
+    if (!message) { el.className = 'banner'; el.textContent = ''; return; }
+    el.textContent = message;
+    el.className = 'banner show ' + (kind || 'err');
+  }
+
+  function showLoadError(message) {
+    const el = $('#loadState');
+    el.removeAttribute('aria-busy');
+    el.className = 'error-state';
+    el.innerHTML = `<strong>Could not load this run</strong>${ui.escape(message)}<div class="retry"><button class="btn secondary small" id="retryLoad" type="button">Retry</button></div>`;
+    const retry = document.getElementById('retryLoad');
+    if (retry) retry.addEventListener('click', load);
+    $('#runContent').hidden = true;
+  }
+
+  function classifyError(err, runId) {
+    const message = err && err.message || 'Unknown error';
+    if (/\(404\)/.test(message)) {
+      return `Run "${runId}" was not found. It may have been removed, or the run ID in the URL is incorrect.`;
+    }
+    if (/\(503\)/.test(message)) {
+      return 'Multi-agent run inspection is not enabled on this server (no run locator configured).';
+    }
+    return `Could not load this run: ${message}`;
+  }
+
+  // ---- Header / overlays -------------------------------------------------
+
+  function renderHeader(snapshot) {
+    $('#runTitle').textContent = snapshot.run_id;
+    $('#runMeta').textContent = `Workflow ${snapshot.workflow_id || '—'} · v${snapshot.workflow_version || snapshot.schema_version || 1}`;
+    $('#statusBadge').innerHTML = ui.badge(snapshot.status);
+    // Milestone 8: reuses multiagent-replay.js's TERMINAL_RUN_STATUSES (which
+    // mirrors internal/workflow/multiagent/types.go's RunStatus.Terminal())
+    // instead of a second, separately-maintained literal list.
+    $('#currentRoleNote').textContent = (!replay.isTerminalRunStatus(snapshot.status) && snapshot.current_role)
+      ? `Current role: ${gm.humanize(snapshot.current_role)}` : '';
+  }
+
+  function renderOverlays(snapshot) {
+    const graph = snapshot.graph || {};
+    const items = [];
+    if (graph.run_paused) items.push(`<span class="ma-overlay ma-overlay--paused">⏸ Run paused</span>`);
+    if (graph.budget_exhausted) items.push(`<span class="ma-overlay ma-overlay--exhausted">⛔ Budget exhausted</span>`);
+    if (snapshot.waiting) {
+      const w = snapshot.waiting;
+      items.push(`<span class="ma-overlay ma-overlay--waiting">⏳ ${ui.escape(op.waitingKindLabel(w.kind))}${w.reason ? ' — ' + ui.escape(w.reason) : ''}${w.safe_to_retry ? ' (safe to retry)' : ''}</span>`);
+    }
+    $('#runOverlays').innerHTML = items.join('');
+  }
+
+  // ---- Graph rendering ----------------------------------------------------
+
+  function edgeLabelMarkup(edge) {
+    const glyph = EDGE_GLYPHS[edge.status] || '';
+    const prefix = glyph ? glyph + ' ' : '';
+    const traversal = edge.traversalText ? '  (' + edge.traversalText + ')' : '';
+    // Milestone 9b: nearExhaustedEdges is recomputed fresh at the top of
+    // every renderStateToUI call (see below) from
+    // snapshot.budgets.loop_traversals -- the authoritative source -- so
+    // this always reflects the latest reconciled state even though
+    // renderGraph rebuilds every edge's DOM (and therefore this label)
+    // from scratch on every call.
+    const remaining = nearExhaustedEdges[edge.id];
+    const stallBadge = remaining != null ? '  ⚠ ' + op.remainingAttemptsText(remaining) : '';
+    return prefix + edge.label + traversal + stallBadge;
+  }
+
+  function renderGraph(graph) {
+    const vm = gm.buildGraphViewModel(graph);
+    const canvas = $('#graphCanvas');
+    canvas.style.width = vm.canvasWidth + 'px';
+    canvas.style.height = vm.canvasHeight + 'px';
+    canvas.setAttribute('aria-label', `Execution graph for workflow ${vm.workflowId}, ${vm.nodes.length} nodes, ${vm.edges.length} edges`);
+    canvas.innerHTML = '';
+
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('width', String(vm.canvasWidth));
+    svg.setAttribute('height', String(vm.canvasHeight));
+    // Milestone 6: the SVG itself is no longer aria-hidden -- edge shapes are
+    // now individually focusable/clickable (see .ma-edge-path's
+    // pointer-events:auto above), and a focusable-but-aria-hidden element is
+    // an accessibility anti-pattern (present in the tab order, invisible to
+    // assistive tech). Each edge shape below carries its own role="button" +
+    // aria-label (reusing the same ariaLabel multiagent-graph.js already
+    // computes); only the redundant decorative <text> label is hidden.
+
+    vm.edges.forEach(edge => {
+      const g = edge.geometry;
+      let shape;
+      if (g.curve) {
+        shape = document.createElementNS(svgNS, 'path');
+        shape.setAttribute('d', g.path);
+      } else {
+        shape = document.createElementNS(svgNS, 'line');
+        shape.setAttribute('x1', g.x1); shape.setAttribute('y1', g.y1);
+        shape.setAttribute('x2', g.x2); shape.setAttribute('y2', g.y2);
+      }
+      shape.setAttribute('id', edge.id);
+      const nearExhaustedClass = nearExhaustedEdges[edge.id] != null ? ' ma-edge-near-exhausted' : '';
+      shape.setAttribute('class', 'ma-edge-path ' + edge.statusClass + nearExhaustedClass);
+      shape.setAttribute('tabindex', '0');
+      shape.setAttribute('role', 'button');
+      shape.setAttribute('aria-label', edge.ariaLabel);
+      svg.appendChild(shape);
+
+      const text = document.createElementNS(svgNS, 'text');
+      text.setAttribute('x', String(edge.labelPoint.x));
+      text.setAttribute('y', String(edge.labelPoint.y));
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('class', 'ma-edge-label' + (edge.status === 'active' ? ' is-active' : ''));
+      text.setAttribute('aria-hidden', 'true');
+      text.textContent = edgeLabelMarkup(edge);
+      svg.appendChild(text);
+    });
+
+    canvas.appendChild(svg);
+
+    vm.nodes.forEach(node => {
+      const el = document.createElement('div');
+      el.id = node.id;
+      el.className = 'ma-node ' + node.statusClass + (node.isCurrent ? ' ma-node--current' : '');
+      el.style.left = node.x + 'px';
+      el.style.top = node.y + 'px';
+      el.style.width = node.width + 'px';
+      el.style.height = node.height + 'px';
+      el.setAttribute('tabindex', '0');
+      el.setAttribute('role', 'button');
+      el.setAttribute('aria-label', node.ariaLabel);
+
+      const glyph = NODE_GLYPHS[node.status] || '●';
+      let html = `<span class="ma-node-title"><span class="ma-node-glyph" aria-hidden="true">${glyph}</span>${ui.escape(node.label)}</span>`;
+      html += `<span class="ma-node-status">${ui.escape(node.statusLabel)}</span>`;
+      if (node.isCurrent) html += `<span class="ma-node-current-flag">Current</span>`;
+      if (node.visitsText) html += `<span class="ma-node-metric">${ui.escape(node.visitsText)}</span>`;
+      if (node.localIterationsText) html += `<span class="ma-node-metric">${ui.escape(node.localIterationsText)}</span>`;
+      el.innerHTML = html;
+      canvas.appendChild(el);
+    });
+
+    $('#fallbackNote').hidden = vm.canvasHeight <= 460;
+
+    renderNodeTable(vm.nodes);
+    renderEdgeTable(vm.edges);
+  }
+
+  function renderNodeTable(nodes) {
+    if (!nodes.length) { $('#nodeTable').innerHTML = `<p class="card-hint">No nodes.</p>`; return; }
+    $('#nodeTable').innerHTML = `<div class="table-wrap"><table class="data-table">
+      <thead><tr><th>Node</th><th>Status</th><th>Current</th><th>Visits</th><th>Local iterations</th></tr></thead>
+      <tbody>${nodes.map(n => `<tr>
+        <td data-label="Node">${ui.escape(n.label)}</td>
+        <td data-label="Status">${ui.escape(n.statusLabel)}</td>
+        <td data-label="Current">${n.isCurrent ? 'Yes' : 'No'}</td>
+        <td data-label="Visits">${ui.escape(n.visitsText || '—')}</td>
+        <td data-label="Local iterations">${ui.escape(n.localIterationsText || '—')}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
+  function renderEdgeTable(edges) {
+    if (!edges.length) { $('#edgeTable').innerHTML = `<p class="card-hint">No edges.</p>`; return; }
+    $('#edgeTable').innerHTML = `<div class="table-wrap"><table class="data-table">
+      <thead><tr><th>From</th><th>To</th><th>Label</th><th>Status</th><th>Loopback</th><th>Traversals</th></tr></thead>
+      <tbody>${edges.map(e => `<tr>
+        <td data-label="From">${ui.escape(gm.humanize(e.from))}</td>
+        <td data-label="To">${ui.escape(gm.humanize(e.to || e.terminal))}</td>
+        <td data-label="Label">${ui.escape(e.label)}</td>
+        <td data-label="Status">${ui.escape(e.statusLabel)}</td>
+        <td data-label="Loopback">${e.isLoopback ? 'Yes' : 'No'}</td>
+        <td data-label="Traversals">${ui.escape(e.traversalText || '—')}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+  }
+
+  // ---- Budget rendering -----------------------------------------------
+
+  function renderBudgets(budgets) {
+    const entries = gm.buildBudgetViewModel(budgets);
+    $('#budgetRows').innerHTML = entries.map(entry => {
+      const valueText = entry.unlimited ? `${entry.used} used` : `${entry.used} / ${entry.limit}`;
+      const barMarkup = entry.unlimited
+        ? `<span class="budget-unlimited">∞ Unlimited</span>`
+        : `<svg viewBox="0 0 300 16" role="img" aria-label="${ui.escape(entry.ariaLabel)}">
+             <rect class="budget-track" x="0" y="0" width="300" height="16" rx="4"></rect>
+             <rect class="budget-fill--${ui.escape(entry.level)}" x="0" y="0" width="${(entry.pct * 3).toFixed(1)}" height="16" rx="4"></rect>
+           </svg>`;
+      return `<div class="budget-row">
+        <div class="budget-row-label">${ui.escape(entry.label)}</div>
+        <div class="budget-row-bar">${barMarkup}</div>
+        <div class="budget-row-value">${ui.escape(valueText)}</div>
+        <div class="budget-row-level level-${ui.escape(entry.level)}">${ui.escape(entry.level)}</div>
+      </div>`;
+    }).join('');
+  }
+
+  // ---- Terminal outcome -----------------------------------------------
+
+  function renderTerminalOutcome(outcome) {
+    const section = $('#terminalSection');
+    if (!outcome) { section.hidden = true; $('#terminalOutcome').innerHTML = ''; return; }
+    section.hidden = false;
+    $('#terminalOutcome').innerHTML = `
+      ${ui.badge(outcome.condition)}
+      <div>
+        <p style="margin:0;">${ui.escape(outcome.reason || 'No reason recorded.')}</p>
+        <p class="meta" style="margin:4px 0 0;">${ui.escape(ui.formatTime(outcome.at))}</p>
+      </div>`;
+  }
+
+  // ---- Milestone 7: unsupported workflow-definition version banner -------
+  //
+  // Purely additive to the fallback rendering multiagent-graph.js already
+  // does for an unrecognized node/edge id (an overflow row / straight
+  // line, never a crash): this only decides whether to show a visible,
+  // non-blocking warning so an operator isn't silently trusting a graph
+  // that may not represent the run's actual workflow shape. Skipped
+  // entirely while the run is already flagged unavailable (see
+  // markRunUnavailable below) so it can never clobber that more urgent
+  // banner -- applySnapshot/renderVersionBanner only run on a successful
+  // fetch, and no successful fetch happens once a run is unavailable.
+  function renderVersionBanner(snapshot) {
+    if (runUnavailable) return;
+    const message = gm.checkSnapshotCompatibility(snapshot);
+    banner(message || '', message ? 'warn' : '');
+  }
+
+  // ---- Snapshot application (reused by the SSE reducer's reconciliation) --
+
+  // lastSnapshot is the most recently applied DashboardRunSnapshot, kept for
+  // the inspector panel (which needs to re-derive Run/Node/Edge/Handoff data
+  // on every selection change, not just on the render that happened to be
+  // current at click time).
+  let lastSnapshot = null;
+
+  // Milestone 8: replayActive/replayState hold an ISOLATED copy of run
+  // state while replay mode is on -- never written into lastSnapshot, never
+  // read by the live SSE reducer. activeDisplaySnapshot() is the single
+  // place every render/inspect/announce call goes through to pick between
+  // them, so entering/exiting replay can never leave stale live data on
+  // screen or leak replay data into the live view.
+  let replayActive = false;
+  let replayState = null;
+  function activeDisplaySnapshot() {
+    return replayActive ? replayState : lastSnapshot;
+  }
+
+  // Milestone 9b: nearExhaustedEdges is the authoritative { edgeId:
+  // remainingCountOrNull } map, recomputed fresh from
+  // snapshot.budgets.loop_traversals on every renderStateToUI call (see
+  // below) via op.deriveNearExhaustedEdges -- never re-derived from a
+  // locally-tracked threshold. stallAnnounceTracker is the separate,
+  // caller-owned dedup bookkeeping op.announceDeltas expects (mirrors
+  // multiagent-live.js's createStreamState convention).
+  let nearExhaustedEdges = {};
+  const stallAnnounceTracker = op.createAnnounceTracker();
+
+  // renderStateToUI renders one complete DashboardRunSnapshot-shaped object
+  // (a real snapshot in live mode, or an isolated replay state in replay
+  // mode -- see activeDisplaySnapshot) to the DOM. It is idempotent and safe
+  // to call repeatedly. Milestone 6: recent_events (the run's full,
+  // untruncated event history, despite its name -- or, during replay, the
+  // truncated up-to-current-step slice) feeds the event timeline, and every
+  // full re-render reapplies the current node/edge selection highlight
+  // since renderGraph wipes and rebuilds the graph's DOM from scratch.
+  function renderStateToUI(snapshot) {
+    renderHeader(snapshot);
+    renderOverlays(snapshot);
+    // Milestone 9b: recomputed BEFORE renderGraph so the edge-building loop
+    // (and edgeLabelMarkup) already see the authoritative near-exhausted
+    // set for this render, then announced (deduped) after the graph/
+    // inspector have both had a chance to reflect it.
+    nearExhaustedEdges = op.deriveNearExhaustedEdges((snapshot.budgets || {}).loop_traversals);
+    renderGraph(snapshot.graph || {});
+    renderBudgets(snapshot.budgets || {});
+    renderTerminalOutcome(snapshot.terminal_outcome || null);
+    allEvents = Array.isArray(snapshot.recent_events) ? snapshot.recent_events : [];
+    applySelectionHighlight();
+    renderTimeline();
+    renderInspector();
+    announceStallChanges();
+    refreshOperatorControls();
+  }
+
+  // announceStallChanges reports (via #stallAnnounce, deduped by
+  // op.announceDeltas so a run of identical reconciliation ticks doesn't
+  // spam) any edge that just became near-exhausted or whose remaining-
+  // attempts count just changed.
+  function announceStallChanges() {
+    const changes = op.announceDeltas(stallAnnounceTracker, nearExhaustedEdges);
+    if (!changes.length) return;
+    const snap = activeDisplaySnapshot();
+    const text = changes.map(c => {
+      const edge = insp.findGraphEdge(snap, c.edgeId);
+      const label = edge ? gm.humanize(edge.from) + ' correction loop' : 'A loop';
+      return `${label}: ${op.remainingAttemptsText(c.remaining) || 'nearing exhaustion'}`;
+    }).join('. ');
+    const el = $('#stallAnnounce');
+    if (el) el.textContent = text;
+  }
+
+  // applySnapshot is the LIVE-mode entry point: it additionally records
+  // lastSnapshot (the real, authoritative run state -- Milestone 4's SSE
+  // reducer calls this directly on every debounced reconciliation) and
+  // updates the version-compatibility banner + the replay entry point's
+  // visibility, neither of which apply to a replay-mode render.
+  function applySnapshot(snapshot) {
+    lastSnapshot = snapshot;
+    renderVersionBanner(snapshot);
+    updateReplayEntryVisibility(snapshot);
+    renderStateToUI(snapshot);
+  }
+  window.applyMultiAgentSnapshot = applySnapshot;
+
+  // ---- Milestone 6: selection state, node/edge highlight, event timeline,
+  // and the Run/Node/Edge/Handoff inspector panel -------------------------
+  //
+  // selection.type is one of 'run' (default -- nothing specific selected),
+  // 'node', 'edge', or 'handoff'. selection.id is the DOM id (node:... /
+  // edge:...) for 'node'/'edge', null otherwise. This intentionally holds
+  // only an id, never a snapshot-derived object: buildNodeInspectorData /
+  // buildEdgeInspectorData re-resolve from lastSnapshot on every render, so
+  // a stale selection naturally falls away (findGraphNode/findGraphEdge
+  // return null) if a future snapshot no longer contains that id, instead
+  // of the inspector showing frozen, no-longer-true data.
+  let selection = { type: 'run', id: null };
+
+  // allEvents mirrors snapshot.recent_events (the FULL run history) plus any
+  // live SSE events applied after the last reconciliation; revealedCount is
+  // the timeline's current "how many (newest-first) rows to show" window.
+  let allEvents = [];
+  let revealedCount = 0;
+
+  const SELECTED_EDGE_MARKER = '◈ ';
+
+  function announce(text) {
+    const el = $('#inspectorAnnounce');
+    if (el) el.textContent = text;
+  }
+
+  function formatDuration(ms) {
+    if (ms == null || Number.isNaN(ms)) return '—';
+    const totalSeconds = Math.floor(ms / 1000);
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    const parts = [];
+    if (h) parts.push(h + 'h');
+    if (h || m) parts.push(m + 'm');
+    parts.push(s + 's');
+    return parts.join(' ');
+  }
+
+  function budgetText(dim) {
+    if (!dim) return '';
+    return dim.limit == null ? `${dim.used} used (unlimited)` : `${dim.used} / ${dim.limit} (${dim.level})`;
+  }
+
+  // ---- Selection highlight in the graph ------------------------------
+  //
+  // Runs after every full renderGraph() (which wipes and rebuilds all
+  // node/edge DOM) and after every direct selectNode/selectEdge/selectRun/
+  // selectHandoff call. ma-node-selected / ma-edge-selected are deliberately
+  // NOT ma-node--*/ma-edge--* prefixed (see the CSS comment above) so a
+  // narrow live-patch status update never silently strips the selection.
+  function applySelectionHighlight() {
+    document.querySelectorAll('.ma-node-selected').forEach(el => el.classList.remove('ma-node-selected'));
+    document.querySelectorAll('.ma-node-selected-flag').forEach(el => el.remove());
+    document.querySelectorAll('.ma-edge-selected').forEach(el => el.classList.remove('ma-edge-selected'));
+    document.querySelectorAll('.ma-edge-label').forEach(el => {
+      if (el.textContent.indexOf(SELECTED_EDGE_MARKER) === 0) el.textContent = el.textContent.slice(SELECTED_EDGE_MARKER.length);
+    });
+    if (selection.type === 'node' && selection.id) {
+      const el = document.getElementById(selection.id);
+      if (el) {
+        el.classList.add('ma-node-selected');
+        if (!el.querySelector('.ma-node-selected-flag')) {
+          const flag = document.createElement('span');
+          flag.className = 'ma-node-selected-flag';
+          flag.textContent = 'Selected';
+          el.appendChild(flag);
+        }
+      }
+    } else if (selection.type === 'edge' && selection.id) {
+      const el = document.getElementById(selection.id);
+      if (el) {
+        el.classList.add('ma-edge-selected');
+        const label = el.nextElementSibling;
+        if (label && label.classList && label.classList.contains('ma-edge-label') &&
+          label.textContent.indexOf(SELECTED_EDGE_MARKER) !== 0) {
+          label.textContent = SELECTED_EDGE_MARKER + label.textContent;
+        }
+      }
+    }
+  }
+
+  function highlightTimelineMatches() {
+    const list = document.getElementById('timelineList');
+    if (!list) return;
+    list.querySelectorAll('.ma-timeline-row--match').forEach(el => el.classList.remove('ma-timeline-row--match'));
+    if ((selection.type !== 'node' && selection.type !== 'edge') || !selection.id || !window.CSS || !CSS.escape) return;
+    const attr = selection.type === 'node' ? 'data-node-id' : 'data-edge-id';
+    list.querySelectorAll(`[${attr}="${CSS.escape(selection.id)}"]`).forEach(el => el.classList.add('ma-timeline-row--match'));
+  }
+
+  function selectNode(nodeId) {
+    selection = { type: 'node', id: nodeId };
+    applySelectionHighlight();
+    renderInspector();
+    highlightTimelineMatches();
+    const data = insp.buildNodeInspectorData(activeDisplaySnapshot(), nodeId);
+    announce(data
+      ? `Inspecting ${data.label} node, status ${data.statusLabel}, visit ${data.visits} of ${data.maxVisits != null ? data.maxVisits : 'unlimited'}`
+      : `Inspecting node ${nodeId}`);
+  }
+
+  function selectEdge(edgeId) {
+    selection = { type: 'edge', id: edgeId };
+    applySelectionHighlight();
+    renderInspector();
+    highlightTimelineMatches();
+    const data = insp.buildEdgeInspectorData(activeDisplaySnapshot(), edgeId);
+    announce(data
+      ? `Inspecting edge ${data.fromLabel} to ${data.to ? data.toLabel : data.terminalLabel} on ${data.outcomeLabel}, status ${data.statusLabel}`
+      : `Inspecting edge ${edgeId}`);
+  }
+
+  function selectRun() {
+    selection = { type: 'run', id: null };
+    applySelectionHighlight();
+    renderInspector();
+    highlightTimelineMatches();
+    announce('Inspecting run overview');
+  }
+
+  function selectHandoff() {
+    selection = { type: 'handoff', id: null };
+    applySelectionHighlight();
+    renderInspector();
+    highlightTimelineMatches();
+    announce('Inspecting latest handoff');
+  }
+
+  function nodeIdFromTarget(target) {
+    const el = target && target.closest ? target.closest('.ma-node') : null;
+    return el ? el.id : null;
+  }
+  function edgeIdFromTarget(target) {
+    const el = target && target.closest ? target.closest('.ma-edge-path') : null;
+    return el ? el.id : null;
+  }
+
+  function handleGraphClick(e) {
+    const nodeId = nodeIdFromTarget(e.target);
+    if (nodeId) { selectNode(nodeId); return; }
+    const edgeId = edgeIdFromTarget(e.target);
+    if (edgeId) { selectEdge(edgeId); }
+  }
+  function handleGraphKeydown(e) {
+    if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+    const nodeId = nodeIdFromTarget(e.target);
+    if (nodeId) { e.preventDefault(); selectNode(nodeId); return; }
+    const edgeId = edgeIdFromTarget(e.target);
+    if (edgeId) { e.preventDefault(); selectEdge(edgeId); }
+  }
+  $('#graphCanvas').addEventListener('click', handleGraphClick);
+  $('#graphCanvas').addEventListener('keydown', handleGraphKeydown);
+
+  // ---- Inspector panel rendering ---------------------------------------
+
+  function inspectorRow(label, value) {
+    if (value == null || value === '') return '';
+    return `<div class="ma-inspector-row"><dt>${ui.escape(label)}</dt><dd>${value}</dd></div>`;
+  }
+
+  function artifactListHTML(refs) {
+    if (!refs || !refs.length) return '—';
+    return `<ul>${refs.map(a => `<li>${ui.escape(a.kind)}: ${ui.escape(a.uri)}</li>`).join('')}</ul>`;
+  }
+
+  function renderRunInspectorHTML(data) {
+    if (!data) return `<p class="card-hint">No run data available yet.</p>`;
+    const rows = [
+      inspectorRow('Run ID', ui.escape(data.runId)),
+      inspectorRow('Workflow', ui.escape(data.workflowId)),
+      inspectorRow('Status', ui.badge(data.status)),
+      inspectorRow('Current role', data.currentRoleLabel ? ui.escape(data.currentRoleLabel) : ''),
+      inspectorRow('Elapsed', data.elapsedMs != null ? ui.escape(formatDuration(data.elapsedMs)) : ''),
+      inspectorRow('Transition budget', data.transitionsBudget ? ui.escape(budgetText(data.transitionsBudget)) : ''),
+      inspectorRow('Token usage', data.tokensBudget ? ui.escape(budgetText(data.tokensBudget)) : ''),
+      inspectorRow('Waiting on', data.waiting
+        ? ui.escape(`${op.waitingKindLabel(data.waiting.kind)}${data.waiting.reason ? ' — ' + data.waiting.reason : ''}${data.waiting.safe_to_retry ? ' (safe to retry)' : ''}`)
+        : ''),
+      inspectorRow('Cancellation reason', data.cancellationReason ? ui.escape(data.cancellationReason) : '')
+    ].join('');
+
+    const warningsHtml = data.warnings.length
+      ? `<div class="ma-inspector-warnings" role="list" aria-label="Budget warnings">${data.warnings.map(w =>
+          `<div class="ma-inspector-warning level-${ui.escape(w.level)}" role="listitem">⚠ ${ui.escape(w.label)}: ${w.used}${w.limit != null ? ' / ' + w.limit : ''} (${ui.escape(w.level)})</div>`
+        ).join('')}</div>`
+      : '';
+
+    const terminalHtml = data.terminalOutcome
+      ? `<div class="ma-terminal-outcome" style="margin-top:12px;">${ui.badge(data.terminalOutcome.condition)}<span class="meta">${ui.escape(data.terminalOutcome.reason || '')}</span></div>`
+      : '';
+
+    const activeSnap = activeDisplaySnapshot();
+    const handoffLink = activeSnap && activeSnap.latest_handoff
+      ? `<div class="actions-row"><button class="btn secondary small" id="inspectLatestHandoff" type="button">Inspect latest handoff</button></div>`
+      : '';
+
+    return `<div class="section-heading"><div><h2 id="inspector-heading" class="section-title">Run inspector</h2><p class="section-copy">Overview of this run's current state.</p></div></div>
+      <div class="card" aria-label="Run inspector details">
+        <dl class="ma-inspector-rows">${rows}</dl>
+        ${warningsHtml}
+        ${terminalHtml}
+        ${handoffLink}
+      </div>`;
+  }
+
+  function renderNodeInspectorHTML(data) {
+    if (!data) return `<div class="section-heading"><div><h2 id="inspector-heading" class="section-title">Node inspector</h2></div></div><div class="card"><p class="card-hint">This node is no longer present in the current graph.</p><div class="actions-row"><button class="btn secondary small" id="inspectorBackToRun" type="button">Back to run overview</button></div></div>`;
+    const rows = [
+      inspectorRow('Node', ui.escape(data.label)),
+      inspectorRow('Role', data.role ? ui.escape(gm.humanize(data.role)) : ''),
+      inspectorRow('Status', ui.badge(data.status)),
+      inspectorRow('Current', data.isCurrent ? 'Yes' : 'No'),
+      inspectorRow('Visits', ui.escape(`${data.visits}${data.maxVisits != null ? ' / ' + data.maxVisits : ''}`)),
+      inspectorRow('Local iterations', data.nodeKind === 'role'
+        ? ui.escape(`${data.localIterations}${data.maxLocalIterations != null ? ' / ' + data.maxLocalIterations : ''}`) : ''),
+      inspectorRow('Duration', data.durationMs != null ? ui.escape(formatDuration(data.durationMs)) : ''),
+      inspectorRow('Latest outcome', data.lastOutcomeLabel ? ui.escape(data.lastOutcomeLabel) : ''),
+      inspectorRow('Validation status', data.validationStatusLabel ? ui.escape(data.validationStatusLabel) : ''),
+      inspectorRow('Approval status', data.approvalStatusLabel ? ui.escape(data.approvalStatusLabel) : ''),
+      inspectorRow('Last error', data.lastError ? ui.escape(data.lastError) : '')
+      // "Tool permissions" is intentionally not a row here: no field on
+      // RoleState/GraphNode/WaitingState carries per-role tool permissions
+      // in the current data model (see multiagent-inspector.js's doc
+      // comment on buildNodeInspectorData).
+    ].join('');
+    return `<div class="section-heading"><div><h2 id="inspector-heading" class="section-title">Node inspector</h2><p class="section-copy">${ui.escape(data.label)}</p></div></div>
+      <div class="card" aria-label="Node inspector: ${ui.escape(data.label)}">
+        <dl class="ma-inspector-rows">${rows}</dl>
+        <div class="actions-row"><button class="btn secondary small" id="inspectorBackToRun" type="button">Back to run overview</button></div>
+      </div>`;
+  }
+
+  function renderEdgeInspectorHTML(data) {
+    if (!data) return `<div class="section-heading"><div><h2 id="inspector-heading" class="section-title">Edge inspector</h2></div></div><div class="card"><p class="card-hint">This edge is no longer present in the current graph.</p><div class="actions-row"><button class="btn secondary small" id="inspectorBackToRun" type="button">Back to run overview</button></div></div>`;
+    const destLabel = data.to ? data.toLabel : data.terminalLabel;
+    const rows = [
+      inspectorRow('Transition outcome', ui.escape(data.outcomeLabel)),
+      inspectorRow('Source', ui.escape(data.fromLabel)),
+      inspectorRow('Destination', ui.escape(destLabel)),
+      inspectorRow('Status', ui.badge(data.status)),
+      inspectorRow('Loop', data.isLoopback ? 'Yes' : 'No'),
+      inspectorRow('Traversals', ui.escape(`${data.traversalCount}${data.maxTraversals != null ? ' / ' + data.maxTraversals : ''}`)),
+      inspectorRow('Exhausted', data.isExhausted ? 'Yes' : 'No')
+    ].join('');
+    // Milestone 9b: nearExhaustedEdges is derived from the SAME
+    // budgets.loop_traversals[*].level field the "Traversals" row above
+    // already reflects (traversalCount/maxTraversals) -- this is purely an
+    // explicit callout on data that's already present, not a new field.
+    const nearRemaining = nearExhaustedEdges[data.edgeId];
+    const nearHtml = nearRemaining != null
+      ? `<div class="ma-inspector-warning level-approaching" role="status">⚠ This correction loop is nearing exhaustion: ${ui.escape(op.remainingAttemptsText(nearRemaining))}.</div>`
+      : '';
+    return `<div class="section-heading"><div><h2 id="inspector-heading" class="section-title">Edge inspector</h2><p class="section-copy">${ui.escape(data.fromLabel)} → ${ui.escape(destLabel)} on ${ui.escape(data.outcomeLabel)}.</p></div></div>
+      <div class="card" aria-label="Edge inspector">
+        <dl class="ma-inspector-rows">${rows}</dl>
+        ${nearHtml}
+        <p class="ma-fallback-note">This run's transition rule reasoning is not exposed to the dashboard read model — only the graph's already-computed outcome/status (shown above) is available client-side. This panel never invents a rationale that wasn't actually recorded.</p>
+        <div class="actions-row"><button class="btn secondary small" id="inspectorBackToRun" type="button">Back to run overview</button></div>
+      </div>`;
+  }
+
+  function renderHandoffInspectorHTML(data) {
+    if (!data) return `<div class="section-heading"><div><h2 id="inspector-heading" class="section-title">Handoff inspector</h2></div></div><div class="card"><p class="card-hint">No handoff has been recorded for this run yet.</p><div class="actions-row"><button class="btn secondary small" id="inspectorBackToRun" type="button">Back to run overview</button></div></div>`;
+    const rows = [
+      inspectorRow('Source role', ui.escape(data.sourceRoleLabel)),
+      inspectorRow('Destination role', ui.escape(data.destinationRoleLabel)),
+      inspectorRow('Objective', ui.escape(data.objective)),
+      inspectorRow('Artifacts', artifactListHTML(data.artifacts)),
+      inspectorRow('Evidence', artifactListHTML(data.evidence)),
+      inspectorRow('Decision', ui.escape(data.decisionLabel)),
+      inspectorRow('Reason', data.reason ? ui.escape(data.reason) : ''),
+      inspectorRow('Unresolved issues', data.unresolvedIssues.length
+        ? `<ul>${data.unresolvedIssues.map(i => `<li>${ui.escape(i.summary)}${i.blocking ? ' (blocking)' : ''}</li>`).join('')}</ul>` : '—'),
+      inspectorRow('Timestamp', ui.escape(ui.formatTime(data.timestamp)))
+    ].join('');
+    return `<div class="section-heading"><div><h2 id="inspector-heading" class="section-title">Handoff inspector</h2><p class="section-copy">Latest structured handoff recorded for this run.</p></div></div>
+      <div class="card" aria-label="Handoff inspector">
+        <dl class="ma-inspector-rows">${rows}</dl>
+        <div class="actions-row"><button class="btn secondary small" id="inspectorBackToRun" type="button">Back to run overview</button></div>
+      </div>`;
+  }
+
+  function wireInspectorButtons() {
+    const back = document.getElementById('inspectorBackToRun');
+    if (back) back.addEventListener('click', selectRun);
+    const handoffBtn = document.getElementById('inspectLatestHandoff');
+    if (handoffBtn) handoffBtn.addEventListener('click', selectHandoff);
+  }
+
+  function renderInspector() {
+    const panel = $('#inspector-panel');
+    if (!panel || !insp) return;
+    panel.classList.remove('ma-placeholder');
+    panel.removeAttribute('aria-hidden');
+    const snap = activeDisplaySnapshot();
+    let html;
+    if (selection.type === 'node') {
+      html = renderNodeInspectorHTML(insp.buildNodeInspectorData(snap, selection.id));
+    } else if (selection.type === 'edge') {
+      html = renderEdgeInspectorHTML(insp.buildEdgeInspectorData(snap, selection.id));
+    } else if (selection.type === 'handoff') {
+      html = renderHandoffInspectorHTML(insp.buildHandoffInspectorData(snap && snap.latest_handoff));
+    } else {
+      // Milestone 8: while in replay mode, `nowMs` is deliberately omitted
+      // rather than passed as the real Date.now() -- runElapsedMs only
+      // falls back to nowMs when no terminal_outcome is present yet, and
+      // using the real wall-clock "now" here would show a nonsensical
+      // multi-{hours,days} "elapsed" figure for a run replayed long after
+      // it actually happened. Omitting it makes runElapsedMs use the latest
+      // *replayed* event's own timestamp instead, i.e. "elapsed so far, as
+      // of the current replay step" -- the correct replay semantics.
+      html = renderRunInspectorHTML(insp.buildRunInspectorData(snap || {}, replayActive ? undefined : Date.now()));
+    }
+    panel.innerHTML = html;
+    wireInspectorButtons();
+  }
+
+  // ---- Event timeline rendering -----------------------------------------
+
+  function timelineRowHTML(row) {
+    const metaParts = [row.roleLabel, row.transitionLabel, row.countLabel, row.statusLabel].filter(Boolean);
+    const metaLine = metaParts.join(' · ');
+    const ariaLabel = `${row.typeLabel} at ${ui.formatTime(row.timestamp)}${metaLine ? ', ' + metaLine : ''}${row.reason ? ', ' + row.reason : ''}`;
+    return `<li class="ma-timeline-row" tabindex="0" role="button"
+        data-node-id="${row.nodeId ? ui.escape(row.nodeId) : ''}"
+        data-edge-id="${row.edgeId ? ui.escape(row.edgeId) : ''}"
+        data-handoff="${row.isHandoff ? '1' : ''}"
+        aria-label="${ui.escape(ariaLabel)}">
+      <span class="ma-timeline-time mono">${ui.escape(ui.formatTime(row.timestamp))}</span>
+      <span class="ma-timeline-type">${ui.escape(row.typeLabel)}</span>
+      ${metaLine ? `<span class="ma-timeline-meta">${ui.escape(metaLine)}</span>` : ''}
+      ${row.reason ? `<span class="ma-timeline-reason">${ui.escape(row.reason)}</span>` : ''}
+    </li>`;
+  }
+
+  function handleTimelineRowSelect(rowEl) {
+    const nodeId = rowEl.getAttribute('data-node-id');
+    const edgeId = rowEl.getAttribute('data-edge-id');
+    const isHandoff = rowEl.getAttribute('data-handoff') === '1';
+    if (edgeId) { selectEdge(edgeId); return; }
+    if (nodeId) { selectNode(nodeId); return; }
+    if (isHandoff) { selectHandoff(); }
+  }
+
+  function renderTimeline() {
+    const container = $('#event-timeline');
+    if (!container || !insp) return;
+    container.classList.remove('ma-placeholder');
+    container.removeAttribute('aria-hidden');
+    if (!revealedCount) revealedCount = Math.min(insp.DEFAULT_WINDOW_SIZE, allEvents.length);
+    const win = insp.buildTimelineWindow(allEvents, revealedCount);
+    revealedCount = win.revealed;
+    const rowsHtml = win.rows.map(timelineRowHTML).join('');
+    container.innerHTML = `
+      <div class="section-heading"><div><h2 id="timeline-heading" class="section-title">Event timeline</h2><p class="section-copy">Showing ${win.revealed} of ${win.total} events, most recent first. This run's complete event history is already loaded; older rows are revealed from memory, not re-fetched.</p></div></div>
+      <div class="card">
+        <ul class="ma-timeline-list" id="timelineList" role="list" aria-label="Run event timeline">${rowsHtml || '<li class="card-hint">No events recorded yet.</li>'}</ul>
+        ${win.remaining > 0 ? `<div class="actions-row"><button class="btn secondary small" id="timelineLoadOlder" type="button">Load older (${win.remaining} more)</button></div>` : ''}
+      </div>`;
+    const loadOlder = document.getElementById('timelineLoadOlder');
+    if (loadOlder) loadOlder.addEventListener('click', () => {
+      revealedCount = insp.nextRevealCount(revealedCount, allEvents.length);
+      renderTimeline();
+    });
+    document.querySelectorAll('#timelineList .ma-timeline-row').forEach(row => {
+      row.addEventListener('click', () => handleTimelineRowSelect(row));
+      row.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleTimelineRowSelect(row); }
+      });
+    });
+    highlightTimelineMatches();
+  }
+
+  // appendLiveEventToTimeline optimistically grows the in-memory timeline as
+  // SSE events arrive, ahead of the next debounced reconciliation (which
+  // will replace allEvents wholesale from a fresh, authoritative snapshot —
+  // see applySnapshot above). Dedup by id: a reconciliation landing between
+  // two live events, or an event replayed by EventSource after a reconnect,
+  // must never produce a duplicate row.
+  function appendLiveEventToTimeline(evtSummary) {
+    if (!evtSummary || !evtSummary.id) return;
+    if (allEvents.some(e => e.id === evtSummary.id)) return;
+    allEvents.push(evtSummary);
+    renderTimeline();
+  }
+
+  // ---- Live SSE reducer (Milestone 4) --------------------------------
+  //
+  // Startup sequence: load() fetches the snapshot once and renders it, THEN
+  // connect() opens the EventSource with ?after=<snapshot.event_cursor> —
+  // the snapshot's own cursor — so there is no gap between "what the
+  // snapshot reflects" and "where the stream picks up," and no re-delivery
+  // of events already reflected in the snapshot (see Milestone 2's backfill
+  // + Last-Event-ID/`?after=` cursor semantics).
+  //
+  // Per event: dedup + cursor bookkeeping (live.shouldApply/markApplied,
+  // ULID string comparison), then a narrow DOM patch derived by
+  // live.derivePatches (pure, tested separately), then a ~250ms debounced
+  // full-snapshot reconciliation as the safety net so the UI never
+  // permanently drifts from backend-derived truth. Reconnects rely entirely
+  // on EventSource's native auto-reconnect + Last-Event-ID; the only extra
+  // behavior here is triggering reconciliation on every onopen after the
+  // first (a reconnect could follow a backend restart with partially
+  // durable in-flight events).
+  //
+  // Auth: workflow-editor.html's own EventSource (the only other SSE client
+  // in this dashboard) does not append a `?token=` query param, and app.js
+  // has no stored-token helper for either fetch or EventSource use. This
+  // page follows that same no-token convention for consistency; if
+  // dashboard-wide auth is enabled this would need a shared fix across both
+  // pages, not a one-off here.
+
+  const live = window.PrizmMultiAgentLive;
+  let es = null;
+  let streamState = null;
+  let reconcileTimer = null;
+  let hasOpenedOnce = false;
+  // Milestone 7: "deleted/unavailable run" resilience. notFoundStreak
+  // counts consecutive reconcile() 404s (see live.nextNotFoundStreak);
+  // runUnavailable latches true the first time that streak crosses
+  // live.NOT_FOUND_UNAVAILABLE_THRESHOLD and never resets itself -- only a
+  // fresh load() (manual retry / page reload) clears it.
+  let notFoundStreak = 0;
+  let runUnavailable = false;
+
+  const NODE_STATUS_CLASS_PREFIX = 'ma-node--';
+  const EDGE_STATUS_CLASS_PREFIX = 'ma-edge--';
+
+  function scheduleReconcile() {
+    if (reconcileTimer) clearTimeout(reconcileTimer);
+    reconcileTimer = setTimeout(reconcile, 250);
+  }
+
+  // markRunUnavailable is the Milestone 7 terminal-unavailable path: the
+  // run was reachable at some point in this page load (initial load()
+  // already succeeded, or this wouldn't be running at all) but reconcile()
+  // has now seen live.NOT_FOUND_UNAVAILABLE_THRESHOLD consecutive 404s.
+  // Distinct from load()'s own classifyError/showLoadError path, which only
+  // covers the *initial* fetch -- this is specifically the "was working,
+  // now genuinely gone" case the initial-load error page cannot see.
+  // Latches (never un-sets itself): once true, disconnect() tears down the
+  // SSE connection and reconcile timer so the page stops polling/
+  // reconnecting indefinitely, exactly as the spec requires.
+  function markRunUnavailable() {
+    if (runUnavailable) return;
+    runUnavailable = true;
+    disconnect();
+    banner('This run is no longer available. It may have been removed or relocated. Live updates have stopped — reload the page if the run comes back.', 'err');
+    // No further renderStateToUI call is coming (reconcile() short-circuits
+    // once runUnavailable is true), so operator controls must be disabled
+    // here explicitly rather than waiting on the next render.
+    refreshOperatorControls();
+  }
+
+  async function reconcile() {
+    reconcileTimer = null;
+    if (!runId || runUnavailable) return;
+    try {
+      const snapshot = await ui.request(`/multiagent/runs/${encodeURIComponent(runId)}/snapshot`);
+      notFoundStreak = 0;
+      applySnapshot(snapshot);
+      if (streamState && snapshot.event_cursor && (!streamState.cursor || snapshot.event_cursor > streamState.cursor)) {
+        streamState.cursor = snapshot.event_cursor;
+      }
+    } catch (err) {
+      notFoundStreak = live.nextNotFoundStreak(notFoundStreak, err && err.message);
+      if (live.shouldTreatAsUnavailable(notFoundStreak)) {
+        markRunUnavailable();
+        return;
+      }
+      // Otherwise: a single (or first) failed fetch, not conclusively a
+      // deletion -- could be a network blip, a 500, or a 503. The next
+      // debounced burst, onopen reconnect, or manual page reload will
+      // retry. The page keeps showing its last good state.
+    }
+  }
+
+  // ---- Patch application (DOM-coupled; the derivation logic this applies
+  // lives in multiagent-live.js's derivePatches and is unit-tested there) --
+
+  function setCurrentNode(nodeId) {
+    document.querySelectorAll('.ma-node--current').forEach(el => {
+      if (el.id === nodeId) return;
+      el.classList.remove('ma-node--current');
+      const flag = el.querySelector('.ma-node-current-flag');
+      if (flag) flag.remove();
+      // Local-iterations is a current-only line in M3's renderer (only the
+      // active node shows it); strip it from a node that just lost
+      // "current" so a stale number doesn't linger between now and the
+      // next reconciliation.
+      el.querySelectorAll('.ma-node-metric').forEach(m => {
+        if (m.textContent.indexOf('Local iterations') === 0) m.remove();
+      });
+    });
+    const target = document.getElementById(nodeId);
+    if (!target) return;
+    target.classList.add('ma-node--current');
+    if (!target.querySelector('.ma-node-current-flag')) {
+      const flagEl = document.createElement('span');
+      flagEl.className = 'ma-node-current-flag';
+      flagEl.textContent = 'Current';
+      const statusEl = target.querySelector('.ma-node-status');
+      if (statusEl) statusEl.insertAdjacentElement('afterend', flagEl);
+      else target.appendChild(flagEl);
+    }
+  }
+
+  function applyGraphNode(patch) {
+    const el = document.getElementById(patch.nodeId);
+    if (!el) return; // unknown node id (e.g. a future non-reference workflow): nothing to patch; reconciliation is a no-op too
+    if (patch.status) {
+      Array.from(el.classList).forEach(c => {
+        if (c.indexOf(NODE_STATUS_CLASS_PREFIX) === 0 && c !== 'ma-node--current') el.classList.remove(c);
+      });
+      el.classList.add(NODE_STATUS_CLASS_PREFIX + patch.status);
+      const statusEl = el.querySelector('.ma-node-status');
+      if (statusEl) statusEl.textContent = gm.humanize(patch.status);
+      const glyphEl = el.querySelector('.ma-node-glyph');
+      if (glyphEl) glyphEl.textContent = NODE_GLYPHS[patch.status] || '●';
+    }
+    if (typeof patch.visits === 'number') {
+      el.querySelectorAll('.ma-node-metric').forEach(m => {
+        if (m.textContent.indexOf('Visits') === 0) {
+          m.textContent = m.textContent.replace(/^Visits \d+/, 'Visits ' + patch.visits);
+        }
+      });
+    }
+    if (patch.isCurrent) setCurrentNode(patch.nodeId);
+  }
+
+  function applyRoleLocalIterations(patch) {
+    const el = document.getElementById(patch.nodeId);
+    if (!el) return;
+    el.querySelectorAll('.ma-node-metric').forEach(m => {
+      if (m.textContent.indexOf('Local iterations') === 0) {
+        m.textContent = m.textContent.replace(/^Local iterations \d+/, 'Local iterations ' + patch.iteration);
+      }
+    });
+  }
+
+  function applyEdgeActive(patch) {
+    const pathEl = document.getElementById(patch.edgeId);
+    if (!pathEl) return; // reconciliation will supersede shortly regardless
+    Array.from(pathEl.classList).forEach(c => {
+      if (c.indexOf(EDGE_STATUS_CLASS_PREFIX) === 0) pathEl.classList.remove(c);
+    });
+    pathEl.classList.add('ma-edge--active');
+    // The previously-active edge (if any) is intentionally left as-is: its
+    // correct next status (previously_traversed vs. exhausted) depends on
+    // that edge's own traversal_count/max_traversals, which this event's
+    // payload does not carry — re-deriving it here would be exactly the
+    // GraphEdge.Status computation this module must not duplicate. It
+    // reverts via the next debounced reconciliation instead.
+    const labelEl = pathEl.nextElementSibling;
+    if (labelEl && labelEl.classList) labelEl.classList.add('is-active');
+  }
+
+  function applyRunStatus(patch) {
+    $('#statusBadge').innerHTML = ui.badge(patch.status);
+  }
+
+  // applyEdgeNearExhausted is the Milestone 9b fast path: an immediate,
+  // ahead-of-reconciliation visual signal (animation suppression +
+  // distinct styling) the moment a budget.warning event for a known
+  // tester/reviewer loop arrives, mirroring applyEdgeActive's own
+  // "reconciliation supersedes shortly regardless" discipline. It does NOT
+  // attempt to update the edge label's text badge immediately (that would
+  // require rebuilding the label from the same edge view-model renderGraph
+  // uses) -- the next ~250ms debounced reconciliation's renderGraph call
+  // picks that up via nearExhaustedEdges + edgeLabelMarkup, same as every
+  // other narrow-patch-then-reconcile field in this reducer.
+  function applyEdgeNearExhausted(patch) {
+    const pathEl = document.getElementById(patch.edgeId);
+    if (pathEl) pathEl.classList.add('ma-edge-near-exhausted');
+    nearExhaustedEdges[patch.edgeId] = patch.remaining;
+  }
+
+  function applyOverlay(patch) {
+    const container = $('#runOverlays');
+    const cls = 'ma-overlay--' + patch.overlay;
+    const existing = container.querySelector('.' + cls);
+    if (patch.active && !existing) {
+      const span = document.createElement('span');
+      span.className = 'ma-overlay ' + cls;
+      span.textContent = patch.overlay === 'paused' ? '⏸ Run paused' : '⛔ Budget exhausted';
+      container.appendChild(span);
+    } else if (!patch.active && existing) {
+      existing.remove();
+    }
+  }
+
+  function applyPatches(patches) {
+    patches.forEach(patch => {
+      switch (patch.kind) {
+        case 'runStatus': applyRunStatus(patch); break;
+        case 'overlay': applyOverlay(patch); break;
+        case 'terminalOutcome': renderTerminalOutcome(patch); break;
+        case 'graphNode': applyGraphNode(patch); break;
+        case 'roleLocalIterations': applyRoleLocalIterations(patch); break;
+        case 'edgeActive': applyEdgeActive(patch); break;
+        case 'edgeNearExhausted': applyEdgeNearExhausted(patch); break;
+        case 'nodeCurrentFlag': setCurrentNode(patch.nodeId); break;
+        default: break;
+      }
+    });
+  }
+
+  function handleLiveEvent(type, evt) {
+    const id = evt.lastEventId;
+    if (!live.shouldApply(streamState, id)) return;
+    live.markApplied(streamState, id);
+    let envelope = {};
+    try { envelope = JSON.parse(evt.data) || {}; } catch (_) { /* malformed frame: bookkeeping only, no patch */ }
+    const patches = live.derivePatches(type, envelope.payload || {}, { timestamp: envelope.timestamp || '' });
+    applyPatches(patches);
+    // Milestone 6: optimistically grow the timeline immediately (ahead of
+    // the ~250ms debounced reconciliation below) so a fast-arriving event
+    // shows up in the timeline without waiting on a full snapshot refetch.
+    appendLiveEventToTimeline({ id, type, timestamp: envelope.timestamp || '', payload: envelope.payload || {} });
+    scheduleReconcile();
+  }
+
+  function disconnect() {
+    if (es) { es.close(); es = null; }
+    if (reconcileTimer) { clearTimeout(reconcileTimer); reconcileTimer = null; }
+  }
+
+  function connect(startCursor) {
+    disconnect();
+    streamState = live.createStreamState();
+    streamState.cursor = startCursor || '';
+    hasOpenedOnce = false;
+    const url = `${ui.API}/multiagent/runs/${encodeURIComponent(runId)}/events/stream?after=${encodeURIComponent(startCursor || '')}`;
+    es = new EventSource(url);
+    es.addEventListener('connected', () => {});
+    es.addEventListener('heartbeat', () => {});
+    live.ALL_EVENT_TYPES.forEach(type => {
+      es.addEventListener(type, ev => handleLiveEvent(type, ev));
+    });
+    es.onopen = () => {
+      // See live.shouldReconcileOnOpen's doc comment (multiagent-live.js):
+      // fires identically on the very first connect and on every later
+      // reconnect, so the "skip the first, reconcile every one after"
+      // decision is delegated to that pure, unit-tested function rather
+      // than re-derived inline here.
+      if (live.shouldReconcileOnOpen(hasOpenedOnce)) scheduleReconcile();
+      hasOpenedOnce = true;
+    };
+    es.onerror = () => {
+      // Milestone 7: per the EventSource spec, a network-level error (the
+      // common case) leaves readyState CONNECTING and the browser retries
+      // on its own -- our cursor/dedup state is untouched, nothing to do.
+      // An HTTP-level failure response (e.g. this run's files were deleted
+      // and the endpoint now 404s) instead "fails the connection": readyState
+      // becomes CLOSED and EventSource does NOT retry by itself. Without
+      // this branch that would leave the page silently stuck showing stale
+      // data forever, since no future live event or onopen will ever fire
+      // to trigger reconcile() again. Firing an immediate reconcile() here
+      // detects that case promptly (via the same 404-streak logic every
+      // other reconcile() failure path uses) instead of waiting on an event
+      // that will never arrive.
+      if (!runUnavailable && es && es.readyState === EventSource.CLOSED) reconcile();
+    };
+  }
+
+  // ---- Milestone 8: execution replay --------------------------------
+  //
+  // Replay is offered only for a run that has reached a terminal status
+  // (updateReplayEntryVisibility). Entering replay explicitly disconnects
+  // the live EventSource + reconciliation timer (a terminal run will not
+  // produce new live events anyway, but this is done explicitly and
+  // correctly regardless of that), builds an isolated replay state seeded
+  // from lastSnapshot.graph's topology (multiagent-replay.js's
+  // buildInitialReplayState), then steps through lastSnapshot.recent_events
+  // -- already fully in memory, zero new network calls -- in chronological
+  // order by re-applying multiagent-live.js's derivePatches to that
+  // isolated state (buildReplayStateAtStep) and re-rendering through the
+  // exact same renderStateToUI/renderGraph/renderInspector/renderTimeline
+  // path the live view uses, just pointed at replay data via
+  // activeDisplaySnapshot(). Exiting discards the replay state entirely and
+  // re-renders from the real lastSnapshot via applySnapshot, guaranteeing
+  // the live view is exactly correct rather than "whatever replay happened
+  // to leave on screen".
+  let replaySortedEvents = [];
+  let replayInitialState = null;
+  let replayStep = 0;
+  let replayPlaying = false;
+  let replayTimer = null;
+
+  function replaySpeedValue() {
+    const select = $('#replaySpeed');
+    const value = select ? parseFloat(select.value) : 1;
+    return Number.isFinite(value) && value > 0 ? value : 1;
+  }
+
+  // updateReplayEntryVisibility shows/hides the "Enter Replay Mode" button
+  // based on the run's current status. Called from applySnapshot on every
+  // live render (so a run that transitions into a terminal status mid-
+  // session offers replay as soon as it's eligible) and once after load().
+  // A no-op while replay is already active, so it can never fight the
+  // enter/exit button swap that showReplayUI/hideReplayUI own.
+  function updateReplayEntryVisibility(snapshot) {
+    if (replayActive) return;
+    const btn = $('#enterReplayBtn');
+    if (!btn) return;
+    btn.hidden = !(snapshot && replay.isTerminalRunStatus(snapshot.status));
+  }
+
+  function describeReplayStep(step) {
+    if (!replaySortedEvents.length) return 'no recorded events for this run';
+    if (step <= 0) return 'the beginning of the run — nothing has happened yet';
+    if (step >= replaySortedEvents.length) return "the end of the run's recorded history";
+    const row = insp.buildEventRow(replaySortedEvents[step - 1]);
+    const bits = [row.typeLabel, row.roleLabel, row.transitionLabel].filter(Boolean);
+    return 'step ' + step + ' of ' + replaySortedEvents.length + ': ' + bits.join(', ');
+  }
+
+  function announceReplay(text) {
+    const el = $('#replayAnnounce');
+    if (el) el.textContent = text;
+  }
+
+  function updateReplayControlsUI() {
+    const total = replaySortedEvents.length;
+    const progress = $('#replayProgress');
+    if (progress) {
+      progress.textContent = `Step ${replayStep} of ${total} recorded events.` +
+        (replayStep >= total ? ' Showing the real final snapshot.' : replayStep <= 0 ? ' Showing the starting state.' : '');
+    }
+    const back = $('#replayStepBack'), start = $('#replayJumpStart');
+    const fwd = $('#replayStepForward'), end = $('#replayJumpEnd');
+    if (back) back.disabled = replayStep <= 0;
+    if (start) start.disabled = replayStep <= 0;
+    if (fwd) fwd.disabled = replayStep >= total;
+    if (end) end.disabled = replayStep >= total;
+    const playBtn = $('#replayPlayPause');
+    if (playBtn) {
+      playBtn.setAttribute('aria-pressed', replayPlaying ? 'true' : 'false');
+      playBtn.textContent = replayPlaying ? '⏸ Pause' : '▶ Play';
+      playBtn.setAttribute('aria-label', replayPlaying ? 'Pause replay' : 'Play replay');
+    }
+  }
+
+  // renderReplayAtStep is the DOM-coupled wrapper around
+  // multiagent-replay.js's pure buildReplayStateAtStep: recomputes the
+  // replay state from scratch (initial baseline -> stepIndex events
+  // applied) and renders it through the same renderStateToUI path live
+  // mode uses. Cheap: these are small in-memory arrays, not I/O, so
+  // recomputing on every step (including stepping backward) is simple and
+  // correct rather than maintaining reverse-patches or cached
+  // intermediates.
+  function renderReplayAtStep(step) {
+    replayStep = Math.max(0, Math.min(step, replaySortedEvents.length));
+    replayState = replay.buildReplayStateAtStep(replayInitialState, replaySortedEvents, replayStep, live.derivePatches);
+    renderStateToUI(replayState);
+    updateReplayControlsUI();
+  }
+
+  function clearReplayTimer() {
+    if (replayTimer) { clearTimeout(replayTimer); replayTimer = null; }
+  }
+
+  function stopReplayPlaying(announce) {
+    const wasPlaying = replayPlaying;
+    replayPlaying = false;
+    clearReplayTimer();
+    updateReplayControlsUI();
+    if (wasPlaying && announce !== false) announceReplay('Replay paused at ' + describeReplayStep(replayStep) + '.');
+  }
+
+  // scheduleReplayTick drives auto-play with a plain setTimeout chain (not
+  // requestAnimationFrame -- this is discrete event-by-event stepping, not a
+  // continuous animation, so rAF has nothing to offer here and this reuses
+  // exactly the same node/edge status CSS classes -- and therefore the same
+  // prefers-reduced-motion treatment -- that a manual step does).
+  function scheduleReplayTick() {
+    clearReplayTimer();
+    const interval = replay.intervalForSpeed(replaySpeedValue());
+    replayTimer = setTimeout(() => {
+      if (!replayPlaying) return;
+      if (replayStep >= replaySortedEvents.length) { stopReplayPlaying(false); return; }
+      renderReplayAtStep(replayStep + 1);
+      if (replayStep >= replaySortedEvents.length) {
+        stopReplayPlaying(false);
+        announceReplay('Replay reached the end of recorded history.');
+        return;
+      }
+      scheduleReplayTick();
+    }, interval);
+  }
+
+  function startReplayPlaying() {
+    if (replayPlaying || !replaySortedEvents.length) return;
+    if (replayStep >= replaySortedEvents.length) renderReplayAtStep(0);
+    replayPlaying = true;
+    updateReplayControlsUI();
+    announceReplay('Replay playing from ' + describeReplayStep(replayStep) + '.');
+    scheduleReplayTick();
+  }
+
+  function toggleReplayPlaying() {
+    if (replayPlaying) stopReplayPlaying();
+    else startReplayPlaying();
+  }
+
+  function replayStepForwardOnce() {
+    stopReplayPlaying(false);
+    if (replayStep >= replaySortedEvents.length) return;
+    renderReplayAtStep(replayStep + 1);
+    announceReplay(describeReplayStep(replayStep));
+  }
+
+  function replayStepBackwardOnce() {
+    stopReplayPlaying(false);
+    if (replayStep <= 0) return;
+    renderReplayAtStep(replayStep - 1);
+    announceReplay(describeReplayStep(replayStep));
+  }
+
+  function replayJumpToStart() {
+    stopReplayPlaying(false);
+    renderReplayAtStep(0);
+    announceReplay('Jumped to ' + describeReplayStep(0) + '.');
+  }
+
+  // replayJumpToEnd deliberately renders the REAL, authoritative final
+  // snapshot (lastSnapshot) rather than the patch-accumulated replay state
+  // at stepIndex == total: a few event types (handoff.created,
+  // budget.warning, loop.traversal.recorded -- see multiagent-live.js's
+  // derivePatches comments) only do dedup/bookkeeping and rely on a
+  // full-snapshot reconciliation to reflect their true effect. Live mode
+  // gets that reconciliation within ~250ms; replay has no per-step "ask the
+  // backend for ground truth at this point in history" endpoint (out of
+  // scope for this milestone), so the patch-accumulated end state COULD
+  // differ slightly from the real one for those fields. Using the real
+  // final snapshot here is both simpler and strictly more accurate than
+  // reconstructing it from patches.
+  function replayJumpToEnd() {
+    stopReplayPlaying(false);
+    replayStep = replaySortedEvents.length;
+    replayState = lastSnapshot;
+    renderStateToUI(replayState);
+    updateReplayControlsUI();
+    announceReplay("Jumped to the end of replay: showing the run's real final recorded state.");
+  }
+
+  function showReplayUI() {
+    const enterBtn = $('#enterReplayBtn'), exitBtn = $('#exitReplayBtn');
+    const banner = $('#replayBanner'), controls = $('#replayControls');
+    if (enterBtn) enterBtn.hidden = true;
+    if (exitBtn) exitBtn.hidden = false;
+    if (banner) {
+      banner.hidden = false;
+      banner.textContent = 'Replay mode — no agents are executing. You are viewing this run’s recorded history, not live activity.';
+    }
+    if (controls) controls.hidden = false;
+    document.body.classList.add('ma-replay-active');
+  }
+
+  // hideReplayUI removes every replay-mode CSS class/UI element so nothing
+  // leaks into the live view afterward: the exit/banner/controls elements
+  // are re-hidden, the enter button's visibility is recomputed from the
+  // real lastSnapshot (not left in whatever state it was before entering),
+  // and the ma-replay-active body class (the graph's replay-mode outline
+  // hook) is removed.
+  function hideReplayUI() {
+    const exitBtn = $('#exitReplayBtn'), banner = $('#replayBanner'), controls = $('#replayControls');
+    if (exitBtn) exitBtn.hidden = true;
+    if (banner) { banner.hidden = true; banner.textContent = ''; }
+    if (controls) controls.hidden = true;
+    document.body.classList.remove('ma-replay-active');
+    updateReplayEntryVisibility(lastSnapshot);
+  }
+
+  function enterReplayMode() {
+    if (replayActive || !lastSnapshot || !replay.isTerminalRunStatus(lastSnapshot.status)) return;
+    disconnect();
+    replayActive = true;
+    replaySortedEvents = replay.sortEventsChronological(lastSnapshot.recent_events || []);
+    replayInitialState = replay.buildInitialReplayState(lastSnapshot);
+    selection = { type: 'run', id: null };
+    revealedCount = 0;
+    showReplayUI();
+    renderReplayAtStep(0);
+    announceReplay('Replay mode entered. No agents are executing. Showing ' + describeReplayStep(0) + '.');
+  }
+
+  function exitReplayMode() {
+    if (!replayActive) return;
+    stopReplayPlaying(false);
+    replayActive = false;
+    replayState = null;
+    replaySortedEvents = [];
+    replayInitialState = null;
+    replayStep = 0;
+    selection = { type: 'run', id: null };
+    revealedCount = 0;
+    hideReplayUI();
+    // Re-render from the real, already-loaded lastSnapshot -- guarantees the
+    // live view is exactly correct, not "whatever replay happened to leave
+    // on screen".
+    if (lastSnapshot) applySnapshot(lastSnapshot);
+    // Defensive: replay is only ever offered for a terminal run, so this
+    // run should already be terminal and this should never fire in
+    // practice -- but exiting must not assume anything was left in a
+    // correct/working state either way, so reconnect if it somehow isn't.
+    if (lastSnapshot && !replay.isTerminalRunStatus(lastSnapshot.status) && !runUnavailable) {
+      connect(lastSnapshot.event_cursor || '');
+    }
+    announceReplay('Exited replay mode. Showing the live run view.');
+  }
+
+  $('#enterReplayBtn').addEventListener('click', enterReplayMode);
+  $('#exitReplayBtn').addEventListener('click', exitReplayMode);
+  $('#replayJumpStart').addEventListener('click', replayJumpToStart);
+  $('#replayStepBack').addEventListener('click', replayStepBackwardOnce);
+  $('#replayPlayPause').addEventListener('click', toggleReplayPlaying);
+  $('#replayStepForward').addEventListener('click', replayStepForwardOnce);
+  $('#replayJumpEnd').addEventListener('click', replayJumpToEnd);
+  $('#replaySpeed').addEventListener('change', () => {
+    if (replayPlaying) { clearReplayTimer(); scheduleReplayTick(); }
+  });
+
+  window.addEventListener('beforeunload', disconnect);
+
+  // ---- Milestone 9b: operator controls (pause/resume/cancel) --------------
+  //
+  // Fire-and-forget by design: a 200 response from any of these three POSTs
+  // means only "the request was accepted", never "the run is now
+  // paused/resumed/cancelled". These handlers therefore do exactly three
+  // things -- (a) call the endpoint, (b) show a request-accepted or
+  // specific-error message, (c) disable the clicked button briefly to
+  // prevent a double-submit -- and NOTHING else. They never touch
+  // lastSnapshot, never call applySnapshot/renderStateToUI with fabricated
+  // data, and never flip a status badge/node/edge class directly. The only
+  // path that ever mutates run-status/waiting/overlay state is the existing
+  // SSE reducer above (applyRunStatus/applyOverlay/applyPatches, driven by
+  // the real run.paused/run.resumed/run.cancelled events) plus the
+  // debounced reconciliation snapshot fetch that already follows it.
+
+  function showOperatorMessage(text, kind) {
+    const el = $('#opStatusMsg');
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'hint' + (kind ? ' ' + kind : '');
+  }
+
+  // classifyOperatorError turns one ui.request() failure into a specific,
+  // actionable message -- 404/409/503/malformed-run-id/timeout each read
+  // differently to an operator, so this deliberately does not collapse them
+  // into one generic "request failed" string.
+  function classifyOperatorError(err) {
+    const message = (err && err.message) || 'Request failed';
+    if (/\(404\)/.test(message)) return 'This run was not found. It may have been removed.';
+    if (/\(409\)/.test(message)) return 'This action could not be applied: another control action may already be in flight for this run, or it has already reached a terminal state. Reload to see the latest status.';
+    if (/\(503\)/.test(message)) return 'Operator controls are not enabled on this server (no run controller configured).';
+    if (/\(400\)/.test(message)) return 'This run ID is not valid.';
+    if (/did not respond in time/.test(message)) return 'The request timed out. It may or may not have been applied — check the run status before retrying.';
+    return `Request failed: ${message}`;
+  }
+
+  // runOperatorAction is the single place all three buttons funnel through:
+  // disable-in-flight, POST, message, re-enable. `body` is a plain object
+  // (JSON-serialized here) or undefined for a bodyless request (Resume).
+  async function runOperatorAction(button, path, body, pendingLabel, successMessage) {
+    if (!button || button.disabled) return;
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = pendingLabel;
+    showOperatorMessage('Sending request…');
+    try {
+      await ui.request(path, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: body !== undefined ? JSON.stringify(body) : undefined
+      });
+      showOperatorMessage(successMessage, 'ok');
+    } catch (err) {
+      showOperatorMessage(classifyOperatorError(err), 'err');
+    } finally {
+      button.textContent = originalText;
+      // refreshOperatorControls (not a bare `button.disabled = false`) so a
+      // button whose eligibility already changed underneath it (e.g. a
+      // run.cancelled event landed while this request was in flight) comes
+      // back in the CORRECT state, not just "whatever it was before the
+      // click".
+      refreshOperatorControls();
+    }
+  }
+
+  function handlePauseClick() {
+    const reason = window.prompt('Optional reason for pausing this run (leave blank to skip):', '');
+    if (reason === null) return; // user dismissed the prompt: no request sent
+    runOperatorAction($('#opPauseBtn'), `/multiagent/runs/${encodeURIComponent(runId)}/pause`,
+      { reason: reason || '' }, 'Pausing…', 'Pause requested.');
+  }
+
+  function handleResumeClick() {
+    // No body, per the confirmed API shape -- resume clears whichever wait
+    // kind (operator_pause/approval/execution_reconciliation) is current.
+    runOperatorAction($('#opResumeBtn'), `/multiagent/runs/${encodeURIComponent(runId)}/resume`,
+      undefined, 'Resuming…', 'Resume requested.');
+  }
+
+  function handleCancelClick() {
+    // Cancel is irreversible: a lightweight confirm() gate before the
+    // reason prompt, proportionate to the spec's "simple confirm()-
+    // equivalent... not a heavy modal" guidance.
+    if (!window.confirm('Cancel this run? This cannot be undone.')) return;
+    const reason = window.prompt('Optional reason for cancelling this run (leave blank to skip):', '');
+    if (reason === null) return;
+    runOperatorAction($('#opCancelBtn'), `/multiagent/runs/${encodeURIComponent(runId)}/cancel`,
+      { reason: reason || '' }, 'Cancelling…', 'Cancel requested.');
+  }
+
+  function applyControlButtonState(button, entry) {
+    if (!button) return;
+    button.hidden = !entry.visible;
+    button.disabled = !entry.enabled;
+    if (entry.disabledReason) button.title = entry.disabledReason;
+    else button.removeAttribute('title');
+  }
+
+  // renderApprovalNote: WaitingState (durable_types.go) carries only
+  // kind/reason/safe_to_retry/since -- no approval id anywhere in the
+  // current data model (verified: ApprovalRequiredError/ApprovalCheck in
+  // agent_adapter_types.go carry no id either, and this multiagent
+  // ApprovalChecker abstraction is entirely separate from the unrelated
+  // legacy /api/v1/approvals/{task_id}/grant|deny endpoint v2.html uses).
+  // Building an Approve/Reject button here would have to either fabricate
+  // an id or guess a URL -- both explicitly disallowed -- so this renders a
+  // clear, honest note instead of a non-functional control.
+  function renderApprovalNote(snapshot) {
+    const el = $('#opApprovalNote');
+    if (!el) return;
+    const waiting = snapshot && snapshot.waiting;
+    if (waiting && waiting.kind === 'approval') {
+      el.hidden = false;
+      el.textContent = 'This run is waiting on an approval decision. The dashboard’s data model does not carry an approval ID for this wait, so Approve/Reject cannot be offered here — resolve it through whatever approval mechanism this deployment has configured, then use Resume above once it has been decided.';
+    } else {
+      el.hidden = true;
+      el.textContent = '';
+    }
+  }
+
+  function renderBlockedNote(state) {
+    const el = $('#opBlockedNote');
+    if (!el) return;
+    const anyVisible = state.pause.visible || state.resume.visible || state.cancel.visible;
+    if (state.blockedReason && anyVisible) {
+      el.hidden = false;
+      el.textContent = state.blockedReason;
+    } else {
+      el.hidden = true;
+      el.textContent = '';
+    }
+  }
+
+  // refreshOperatorControls always gates off the real, LIVE lastSnapshot --
+  // never activeDisplaySnapshot() -- because operator actions apply only to
+  // the live run and must stay correctly gated by the live run's actual
+  // status even while the page is currently displaying replay data.
+  function refreshOperatorControls() {
+    if (!op) return;
+    const state = op.computeOperatorControlsState(lastSnapshot, replayActive, runUnavailable);
+    applyControlButtonState($('#opPauseBtn'), state.pause);
+    applyControlButtonState($('#opResumeBtn'), state.resume);
+    applyControlButtonState($('#opCancelBtn'), state.cancel);
+    renderBlockedNote(state);
+    renderApprovalNote(lastSnapshot);
+    const panel = $('#operator-controls');
+    if (panel) {
+      panel.classList.remove('ma-placeholder');
+      panel.removeAttribute('aria-hidden');
+    }
+  }
+
+  $('#opPauseBtn').addEventListener('click', handlePauseClick);
+  $('#opResumeBtn').addEventListener('click', handleResumeClick);
+  $('#opCancelBtn').addEventListener('click', handleCancelClick);
+
+  // ---- Load ---------------------------------------------------------------
+
+  const runId = new URLSearchParams(window.location.search).get('run');
+
+  async function load() {
+    if (!runId) {
+      showLoadError('No run specified. Open this page from the multi-agent runs list, or add ?run=<id> to the URL.');
+      return;
+    }
+    disconnect();
+    runUnavailable = false;
+    notFoundStreak = 0;
+    $('#loadState').className = 'loading-state';
+    $('#loadState').setAttribute('aria-busy', 'true');
+    $('#loadState').textContent = 'Loading run…';
+    $('#runContent').hidden = true;
+    banner('');
+    try {
+      const snapshot = await ui.request(`/multiagent/runs/${encodeURIComponent(runId)}/snapshot`);
+      $('#loadState').hidden = true;
+      $('#runContent').hidden = false;
+      applySnapshot(snapshot);
+      connect(snapshot.event_cursor || '');
+    } catch (err) {
+      showLoadError(classifyError(err, runId));
+    }
+  }
+
+  load();
+})();
+</script>
+</body>
+</html>

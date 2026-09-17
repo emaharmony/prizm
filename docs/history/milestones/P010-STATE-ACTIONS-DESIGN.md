@@ -1,7 +1,7 @@
 # P-010: Per-Channel State Actions
 
 ## Problem
-Prism has no way to configure different behaviors per channel or state. Right now:
+Prizm has no way to configure different behaviors per channel or state. Right now:
 - Channel routing (fun vs dev) lives only in workspace AGENTS.md as personality instructions
 - `conversation_postfix` is a single string on the agent config — applies everywhere
 - The pipeline has no concept of "state actions" — instructions that apply when in a specific context
@@ -9,7 +9,7 @@ Prism has no way to configure different behaviors per channel or state. Right no
 ## Design
 
 ### State Actions in Config
-Add a `state_actions` map to `AgentConfig` in prism.yaml:
+Add a `state_actions` map to `AgentConfig` in prizm.yaml:
 
 ```yaml
 agents:
@@ -79,18 +79,18 @@ type StateAction struct {
 
 ### Implementation Plan
 1. Add `StateActions` to `AgentConfig` and `Role` to `ChannelConfig`
-2. Add `state_actions` to `prism.yaml`
+2. Add `state_actions` to `prizm.yaml`
 3. In `handleDiscordMessage`, resolve state action from channel role
 4. In `handleAgentMessage`, resolve state action as "agent"
 5. Inject state action text into prompt after conversation_postfix
-6. Same for `prism chat` CLI — use default state action or none
+6. Same for `prizm chat` CLI — use default state action or none
 7. Tests for state resolution and prompt injection
 
 ### Why Not Just Workspace Files?
 - Workspace files (AGENTS.md) are static — they can't change per-channel
 - The `conversation_postfix` applies everywhere — can't specialize per context
 - State actions are config-driven: changing a channel's behavior is a YAML edit, not a workspace file edit
-- This makes the system portable: different Prism instances can have different state actions without changing workspace files
+- This makes the system portable: different Prizm instances can have different state actions without changing workspace files
 
 ### Why Inject Into Prompt (Not Code Logic)?
 - LLMs respond well to clear behavioral instructions in the system prompt

@@ -5,10 +5,10 @@ package policy
 // Policy events are emitted during evaluation and persist to events.jsonl.
 
 const (
-	EventTypePolicyRequested        = "prism.policy.requested"
-	EventTypePolicyEvaluated        = "prism.policy.evaluated"
-	EventTypePolicyAllowed          = "prism.policy.allowed"
-	EventTypePolicyDenied           = "prism.policy.denied"
-	EventTypePolicyApprovalRequired = "prism.policy.approval_required"
-	EventTypePolicyFailed           = "prism.policy.failed"
+	EventTypePolicyRequested        = "prizm.policy.requested"
+	EventTypePolicyEvaluated        = "prizm.policy.evaluated"
+	EventTypePolicyAllowed          = "prizm.policy.allowed"
+	EventTypePolicyDenied           = "prizm.policy.denied"
+	EventTypePolicyApprovalRequired = "prizm.policy.approval_required"
+	EventTypePolicyFailed           = "prizm.policy.failed"
 )

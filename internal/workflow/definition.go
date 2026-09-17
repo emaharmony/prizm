@@ -1,11 +1,11 @@
-// Package workflow implements the V7 Workflow Runtime for Prism.
+// Package workflow implements the V7 Workflow Runtime for Prizm.
 //
-// A workflow is a named sequence of Prism capabilities (tools, gates, etc.)
+// A workflow is a named sequence of Prizm capabilities (tools, gates, etc.)
 // that automatically emits lifecycle events at every step. Workflows compose
 // existing V1–V6 primitives without rewriting them.
 //
-// Before V7, Prism had independent capabilities that you called one at a time.
-// After V7, you define a workflow and Prism runs the full sequence, emitting
+// Before V7, Prizm had independent capabilities that you called one at a time.
+// After V7, you define a workflow and Prizm runs the full sequence, emitting
 // events automatically.
 package workflow
 
@@ -22,7 +22,7 @@ const (
 	StepTypeWorkflowStop = "workflow.stop"
 )
 
-// Workflow is a named sequence of steps that composes Prism capabilities.
+// Workflow is a named sequence of steps that composes Prizm capabilities.
 type Workflow struct {
 	Name        string `yaml:"name" json:"name"`
 	Description string `yaml:"description" json:"description"`

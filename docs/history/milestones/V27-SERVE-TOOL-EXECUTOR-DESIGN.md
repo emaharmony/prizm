@@ -2,13 +2,13 @@
 
 ## Mission
 
-Wire the full tool executor into `prism serve` so live Discord and chat-style interactions can inspect the workspace and execute policy-gated operations through the same runtime controls used by one-shot runs.
+Wire the full tool executor into `prizm serve` so live Discord and chat-style interactions can inspect the workspace and execute policy-gated operations through the same runtime controls used by one-shot runs.
 
 ## What Changed
 
 ### Serve Tool Registry
 
-`cmd/prism-cli/cmd_serve.go` initializes a tool registry for the live conversation context. The registry includes:
+`cmd/prizm-cli/cmd_serve.go` initializes a tool registry for the live conversation context. The registry includes:
 
 - Basic read tools.
 - Project comprehension tools.
@@ -20,9 +20,9 @@ The serve context holds both the executor and `tool.PolicyConfig` so tool calls 
 
 ### Workspace and Allowed Paths
 
-Tool policy is rooted at `prism.workspace`. If that field is empty, serve mode falls back to the current directory for the live tool registry.
+Tool policy is rooted at `prizm.workspace`. If that field is empty, serve mode falls back to the current directory for the live tool registry.
 
-`prism.allowed_paths` adds extra roots. The workspace root is always implicitly allowed. Path validation resolves symlinks to prevent escape from allowed roots.
+`prizm.allowed_paths` adds extra roots. The workspace root is always implicitly allowed. Path validation resolves symlinks to prevent escape from allowed roots.
 
 ### Mutation Control
 
@@ -43,13 +43,13 @@ Both paths execute through the same `tool.Executor`.
 
 ## Public Interfaces
 
-No new CLI command was added. The user-facing change is that `prism serve` can safely expose tools to configured agents.
+No new CLI command was added. The user-facing change is that `prizm serve` can safely expose tools to configured agents.
 
 Relevant config:
 
 ```yaml
-prism:
-  workspace: "D:/_projects_/prism"
+prizm:
+  workspace: "D:/_projects_/prizm"
   allowed_paths: []
 
 channel_roles:

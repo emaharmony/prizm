@@ -1,10 +1,10 @@
-// Package agentns provides dynamic agent namespace support for Prism V20.
+// Package agentns provides dynamic agent namespace support for Prizm V20.
 //
 // Instead of hardcoded "lumi.*" or "mango.*" event types, agent namespaces
 // are determined by the agent's ID in the configuration. If no ID is provided,
-// the system auto-generates: prism1, prism2, prism3, etc.
+// the system auto-generates: prizm1, prizm2, prizm3, etc.
 //
-// The only hardcoded namespace is "prism.*" for system-level events.
+// The only hardcoded namespace is "prizm.*" for system-level events.
 //
 // Usage:
 //
@@ -12,8 +12,8 @@
 //	ns.EventType("agent.started")  // → "lumi.agent.started"
 //	ns.EventType("tool.completed") // → "lumi.tool.completed"
 //
-//	ns = agentns.New("prism1")     // auto-generated
-//	ns.EventType("agent.started")  // → "prism1.agent.started"
+//	ns = agentns.New("prizm1")     // auto-generated
+//	ns.EventType("agent.started")  // → "prizm1.agent.started"
 package agentns
 
 import (
@@ -96,15 +96,15 @@ func IsAgentEvent(eventType, agentID string) bool {
 
 // ExtractAgentID extracts the agent ID from an event type.
 // Example: ExtractAgentID("lumi.agent.started") → "lumi"
-// Returns "" for system events (prism.*) or malformed events.
+// Returns "" for system events (prizm.*) or malformed events.
 func ExtractAgentID(eventType string) string {
 	parts := strings.SplitN(eventType, ".", 2)
 	if len(parts) < 2 {
 		return ""
 	}
 	agentID := parts[0]
-	// System events use "prism" — not an agent
-	if agentID == "prism" {
+	// System events use "prizm" — not an agent
+	if agentID == "prizm" {
 		return ""
 	}
 	return agentID
@@ -121,9 +121,9 @@ func ExtractEventSuffix(eventType string) string {
 }
 
 // AutoGenerateID generates an auto-incrementing agent ID.
-// First call: prism1, second call: prism2, etc.
+// First call: prizm1, second call: prizm2, etc.
 func AutoGenerateID(counter int) string {
-	return fmt.Sprintf("prism%d", counter)
+	return fmt.Sprintf("prizm%d", counter)
 }
 
 // AllAgentEventTypes returns the complete list of event suffixes

@@ -1,9 +1,9 @@
-// Package bridge provides inter-Prism communication via NATS gateway.
+// Package bridge provides inter-Prizm communication via NATS gateway.
 //
-// V23 M4.3: Multi-Prism Communication
+// V23 M4.3: Multi-Prizm Communication
 //
-// Two Prism environments can discover each other and exchange events/tasks.
-// Bridge connects to a remote Prism's NATS server and forwards events
+// Two Prizm environments can discover each other and exchange events/tasks.
+// Bridge connects to a remote Prizm's NATS server and forwards events
 // between the local and remote bus, with origin tagging to prevent loops.
 package bridge
 
@@ -17,7 +17,7 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// Bridge manages connections to remote Prism instances.
+// Bridge manages connections to remote Prizm instances.
 type Bridge struct {
 	localNC *nats.Conn
 	remotes map[string]*remoteConn
@@ -25,9 +25,9 @@ type Bridge struct {
 	eventCh chan BridgedEvent
 }
 
-// BridgedEvent is an event that crossed a bridge from a remote Prism.
+// BridgedEvent is an event that crossed a bridge from a remote Prizm.
 type BridgedEvent struct {
-	// Origin is the remote Prism's ID.
+	// Origin is the remote Prizm's ID.
 	Origin string `json:"origin"`
 
 	// Subject is the NATS subject the event was published on.
@@ -40,15 +40,15 @@ type BridgedEvent struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// RemoteConfig configures a connection to a remote Prism.
+// RemoteConfig configures a connection to a remote Prizm.
 type RemoteConfig struct {
 	// ID is a unique identifier for this remote connection.
 	ID string `yaml:"id"`
 
-	// Name is a human-readable name for the remote Prism.
+	// Name is a human-readable name for the remote Prizm.
 	Name string `yaml:"name"`
 
-	// NATSURL is the NATS server URL of the remote Prism.
+	// NATSURL is the NATS server URL of the remote Prizm.
 	NATSURL string `yaml:"nats_url"`
 
 	// Subjects is a list of NATS subject patterns to subscribe to on the remote.
@@ -63,7 +63,7 @@ type RemoteConfig struct {
 	Enabled bool `yaml:"enabled"`
 }
 
-// remoteConn represents a connection to a remote Prism's NATS server.
+// remoteConn represents a connection to a remote Prizm's NATS server.
 type remoteConn struct {
 	config  RemoteConfig
 	conn    *nats.Conn
@@ -72,7 +72,7 @@ type remoteConn struct {
 	eventCh chan BridgedEvent
 }
 
-// NewBridge creates a new bridge for inter-Prism communication.
+// NewBridge creates a new bridge for inter-Prizm communication.
 func NewBridge(localNC *nats.Conn) *Bridge {
 	return &Bridge{
 		localNC: localNC,
@@ -81,7 +81,7 @@ func NewBridge(localNC *nats.Conn) *Bridge {
 	}
 }
 
-// Connect establishes a connection to a remote Prism.
+// Connect establishes a connection to a remote Prizm.
 func (b *Bridge) Connect(config RemoteConfig) error {
 	if config.ID == "" {
 		return fmt.Errorf("bridge: remote ID is required")
@@ -103,7 +103,7 @@ func (b *Bridge) Connect(config RemoteConfig) error {
 
 	// Connect to remote NATS
 	nc, err := nats.Connect(config.NATSURL,
-		nats.Name(fmt.Sprintf("prism-bridge-%s", config.ID)),
+		nats.Name(fmt.Sprintf("prizm-bridge-%s", config.ID)),
 		nats.ReconnectWait(5*time.Second),
 		nats.MaxReconnects(0), // Unlimited reconnects
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
@@ -147,7 +147,7 @@ func (b *Bridge) Connect(config RemoteConfig) error {
 	return nil
 }
 
-// Disconnect closes the connection to a remote Prism.
+// Disconnect closes the connection to a remote Prizm.
 func (b *Bridge) Disconnect(remoteID string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -181,7 +181,7 @@ func (b *Bridge) Close() {
 	log.Printf("[BRIDGE] all connections closed")
 }
 
-// Remotes returns the list of connected remote Prism IDs.
+// Remotes returns the list of connected remote Prizm IDs.
 func (b *Bridge) Remotes() []string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -193,7 +193,7 @@ func (b *Bridge) Remotes() []string {
 	return ids
 }
 
-// Events returns a channel of bridged events from remote Prisms.
+// Events returns a channel of bridged events from remote Prizms.
 func (b *Bridge) Events() <-chan BridgedEvent {
 	return b.eventCh
 }
@@ -220,7 +220,7 @@ func (b *Bridge) PublishLocal(subject string, data map[string]any) error {
 	return b.localNC.Publish(subject, payload)
 }
 
-// handleRemoteMessage processes an event from a remote Prism.
+// handleRemoteMessage processes an event from a remote Prizm.
 func (rc *remoteConn) handleRemoteMessage(msg *nats.Msg, origin string) {
 	var data map[string]any
 	if err := json.Unmarshal(msg.Data, &data); err != nil {

@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/delegation"
-	"github.com/emaharmony/prism/internal/task"
+	"github.com/emaharmony/prizm/internal/delegation"
+	"github.com/emaharmony/prizm/internal/task"
 )
 
 // TestDelegationStage_NoEngine verifies that a nil engine is a no-op.

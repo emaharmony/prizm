@@ -1,6 +1,6 @@
-# Prism Windows Setup
+# Prizm Windows Setup
 
-These steps are for running Prism from this repo on Windows with PowerShell.
+These steps are for running Prizm from this repo on Windows with PowerShell.
 
 ## 1. Install Prerequisites
 
@@ -31,22 +31,22 @@ $env:GOTELEMETRY = "off"
 ## 2. Clone and Build
 
 ```powershell
-git clone https://github.com/emaharmony/prism.git
-cd prism
+git clone https://github.com/emaharmony/prizm.git
+cd prizm
 $env:GOTELEMETRY = "off"
-go build -o .\prism-current.exe .\cmd\prism-cli
-go build -o .\prism-bus-current.exe .\cmd\prism-bus
+go build -o .\prizm-current.exe .\cmd\prizm-cli
+go build -o .\prizm-bus-current.exe .\cmd\prizm-bus
 ```
 
 Nothing is checked into the repository as a prebuilt binary — `*.exe` and the
-root `prism`/`prism-bus`/`prism-agent` binaries are gitignored. Always build
+root `prizm`/`prizm-bus`/`prizm-agent` binaries are gitignored. Always build
 from source for a fresh setup.
 
 Verify the CLI:
 
 ```powershell
-.\prism-current.exe version
-.\prism-current.exe --help
+.\prizm-current.exe version
+.\prizm-current.exe --help
 ```
 
 ## 3. Run Tests
@@ -55,7 +55,7 @@ Fast verification:
 
 ```powershell
 $env:GOTELEMETRY = "off"
-go test .\internal\orchestrator .\internal\provider\ollama .\cmd\prism-cli -run Test -count=1
+go test .\internal\orchestrator .\internal\provider\ollama .\cmd\prizm-cli -run Test -count=1
 ```
 
 Full test suite:
@@ -72,19 +72,19 @@ $env:GOTELEMETRY = "off"
 go test .\... -count=1 -race
 ```
 
-## 4. Configure Prism
+## 4. Configure Prizm
 
 Copy the example config:
 
 ```powershell
-Copy-Item .\prism.yaml.example .\prism.yaml
+Copy-Item .\prizm.yaml.example .\prizm.yaml
 ```
 
-Edit `prism.yaml` before running `serve`.
+Edit `prizm.yaml` before running `serve`.
 
 Important Windows notes:
 
-- `data_dir: "~/.prism/data"` is not expanded by the current Go config loader.
+- `data_dir: "~/.prizm/data"` is not expanded by the current Go config loader.
   Use a repo-relative or absolute Windows path instead.
 - `workspace` should be explicit on Windows. The fallback uses `$HOME`, which is
   not always set in Windows shells.
@@ -94,10 +94,10 @@ Important Windows notes:
 Minimal local config without Discord:
 
 ```yaml
-prism:
+prizm:
   nats_url: ""
-  data_dir: ".\\.prism\\data"
-  workspace: "D:\\_projects_\\prism"
+  data_dir: ".\\.prizm\\data"
+  workspace: "D:\\_projects_\\prizm"
   ollama_url: "http://localhost:11434"
   log_level: "info"
 
@@ -132,12 +132,12 @@ $env:ANTHROPIC_API_KEY = "..."
 $env:GEMINI_API_KEY = "..."
 ```
 
-## 5. Run Prism Serve Mode
+## 5. Run Prizm Serve Mode
 
-`serve` starts its own embedded NATS bus when `prism.nats_url` is empty.
+`serve` starts its own embedded NATS bus when `prizm.nats_url` is empty.
 
 ```powershell
-.\prism-current.exe serve --config .\prism.yaml
+.\prizm-current.exe serve --config .\prizm.yaml
 ```
 
 Default URLs:
@@ -149,19 +149,19 @@ Stop it with `Ctrl+C`.
 
 ## 6. Run One-Shot CLI Mode
 
-`prism run` is different from `serve`: it expects a NATS bus at
+`prizm run` is different from `serve`: it expects a NATS bus at
 `nats://localhost:4222`.
 
 Start the bus in one PowerShell window:
 
 ```powershell
-.\prism-bus-current.exe
+.\prizm-bus-current.exe
 ```
 
 Then run a dry-run in another PowerShell window:
 
 ```powershell
-.\prism-current.exe run --task "Windows setup smoke test" --dry-run-prompt
+.\prizm-current.exe run --task "Windows setup smoke test" --dry-run-prompt
 ```
 
 Run with Ollama:
@@ -169,7 +169,7 @@ Run with Ollama:
 ```powershell
 ollama serve
 ollama pull llama3.2
-.\prism-current.exe run --task "Explain Prism in one paragraph" --provider ollama --model llama3.2
+.\prizm-current.exe run --task "Explain Prizm in one paragraph" --provider ollama --model llama3.2
 ```
 
 ## 7. Optional: Remembrance Memory Service
@@ -193,7 +193,7 @@ Start the API server:
 uvicorn remembrance.app:app --host 127.0.0.1 --port 18790
 ```
 
-Then enable it in the repo root `prism.yaml`:
+Then enable it in the repo root `prizm.yaml`:
 
 ```yaml
 remembrance:
@@ -206,7 +206,7 @@ remembrance:
 The standalone dashboard command reads run artifacts and policies:
 
 ```powershell
-.\prism-current.exe dashboard --port 8080 --run-dir .\runs --policy-dir .\policies
+.\prizm-current.exe dashboard --port 8080 --run-dir .\runs --policy-dir .\policies
 ```
 
 Open `http://localhost:8080`.
@@ -217,7 +217,7 @@ In `serve` mode, the live API is on port `8322` by default.
 
 `failed to connect to NATS`
 
-Start `.\prism-bus-current.exe` before using `prism run`, or use `prism serve`
+Start `.\prizm-bus-current.exe` before using `prizm run`, or use `prizm serve`
 for embedded NATS.
 
 `OPENAI_API_KEY environment variable not set`
@@ -232,7 +232,7 @@ or remove the Discord channel for local testing.
 
 Data created under a folder named `~`
 
-The config loader does not expand `~`. Change `data_dir` to `.\\.prism\\data`
+The config loader does not expand `~`. Change `data_dir` to `.\\.prizm\\data`
 or an absolute path.
 
 ## See Also

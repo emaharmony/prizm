@@ -1,15 +1,15 @@
-// Package stage provides Prism's pipeline execution engine (V14a).
+// Package stage provides Prizm's pipeline execution engine (V14a).
 //
 // ApprovalStage creates approval requests for file mutations.
 // It implements the V4 approval-gated mutation pattern: model proposes,
-// Prism validates, human approves.
+// Prizm validates, human approves.
 package stage
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // ApprovalStage creates approval requests for pending mutations.
@@ -45,7 +45,7 @@ func (s *ApprovalStage) Validate(rc *RunContext) error {
 func (s *ApprovalStage) Execute(ctx context.Context, rc *RunContext) (*RunContext, *StageResult, error) {
 	// Emit approval event using a proper event type string
 	// (This will be migrated to event package constants in V4 integration)
-	evt := event.NewEvent("prism.approval.requested", "approval-stage", map[string]any{
+	evt := event.NewEvent("prizm.approval.requested", "approval-stage", map[string]any{
 		"run_id": rc.RunID,
 		"note":   "approval processing considered",
 	})

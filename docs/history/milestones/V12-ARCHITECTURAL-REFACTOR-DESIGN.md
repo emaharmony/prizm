@@ -7,10 +7,10 @@ extensible codebase, not a 1500-line CLI monolith and a 1200-line god object.
 
 ## Problem
 
-Prism works. V1-V11 all pass. But the codebase has structural problems that will
+Prizm works. V1-V11 all pass. But the codebase has structural problems that will
 block real extensibility:
 
-1. **CLI monolith** — `cmd/prism-cli/main.go` is 1581 lines with 32 functions.
+1. **CLI monolith** — `cmd/prizm-cli/main.go` is 1581 lines with 32 functions.
    Every new version adds more functions to this single file. It's not sustainable.
 
 2. **Runner god object** — `internal/run/runner.go` is 1199 lines. It handles
@@ -39,18 +39,18 @@ This is NOT a feature version. V12 is a structural refactor that:
 Instead of one 1581-line `main.go`, split each command group into its own file:
 
 ```
-cmd/prism-cli/
+cmd/prizm-cli/
 ├── main.go              # Entry point, subcommand dispatch (~100 lines)
-├── cmd_run.go           # prism run
-├── cmd_tool.go          # prism tool list/run
-├── cmd_approval.go      # prism approval list/show/approve/deny
-├── cmd_validation.go    # prism validation list/run
-├── cmd_policy.go        # prism policy list/evaluate
-├── cmd_workflow.go      # prism workflow list/show/run/status
-├── cmd_adapter.go       # prism adapter list/show/health
-├── cmd_projection.go    # prism projection list/rebuild/query
-├── cmd_dashboard.go     # prism dashboard
-└── cmd_health.go        # prism health
+├── cmd_run.go           # prizm run
+├── cmd_tool.go          # prizm tool list/run
+├── cmd_approval.go      # prizm approval list/show/approve/deny
+├── cmd_validation.go    # prizm validation list/run
+├── cmd_policy.go        # prizm policy list/evaluate
+├── cmd_workflow.go      # prizm workflow list/show/run/status
+├── cmd_adapter.go       # prizm adapter list/show/health
+├── cmd_projection.go    # prizm projection list/rebuild/query
+├── cmd_dashboard.go     # prizm dashboard
+└── cmd_health.go        # prizm health
 ```
 
 Each file is in package `main`. They share no state — each creates its own

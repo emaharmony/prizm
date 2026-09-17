@@ -1,4 +1,4 @@
-// Package stage provides Prism's pipeline execution engine (V14a+).
+// Package stage provides Prizm's pipeline execution engine (V14a+).
 //
 // V14b adds WAL crash recovery and idempotency. The retry logic has been
 // moved to the shared internal/retry package so it can be used by both
@@ -12,7 +12,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/emaharmony/prism/internal/retry"
+	"github.com/emaharmony/prizm/internal/retry"
 )
 
 // RetryConfig controls exponential backoff retry behavior.

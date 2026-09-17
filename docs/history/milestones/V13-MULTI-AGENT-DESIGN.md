@@ -2,7 +2,7 @@
 
 ## Mission
 
-Give Prism the ability to coordinate multiple AI agents through the event
+Give Prizm the ability to coordinate multiple AI agents through the event
 stream — not through direct messaging, not through shared filesystem state,
 but through the same canonical event log that already powers everything else.
 
@@ -11,7 +11,7 @@ same event stream, with policy controlling who can do what?*
 
 ## Why This Matters for the Thesis
 
-Prism's thesis: "What happens to an intelligence system when context does not
+Prizm's thesis: "What happens to an intelligence system when context does not
 get wiped?" V1-V12 answered this for a single agent. V13 extends the answer
 to multiple agents sharing the same context.
 
@@ -172,8 +172,8 @@ Each delegation event carries:
 ## New CLI Commands
 
 ```
-prism agent list              — List registered agents
-prism agent show <name>       — Show agent details and capabilities
+prizm agent list              — List registered agents
+prizm agent show <name>       — Show agent details and capabilities
 ```
 
 No new workflow commands — delegation is a step type within existing workflows.
@@ -253,11 +253,11 @@ So the capability is there. The default is policy-gated, not approval-gated.
 3. Agent delegation emits canonical events (delegated → completed/failed)
 4. Inter-agent policy gates delegation with `agent.delegate` action
 5. `agent_activity` projection tracks per-agent activity counts
-6. CLI: `prism agent list`, `prism agent show <name>`
+6. CLI: `prizm agent list`, `prizm agent show <name>`
 7. Demo workflow: `examples/workflows/demo-agents.yaml`
 8. All 334+ existing tests pass unchanged
 9. Design doc: `docs/V13-MULTI-AGENT-DESIGN.md`
-10. Version: `prism v0.13.0`
+10. Version: `prizm v0.13.0`
 
 ## Version History Context
 
@@ -267,7 +267,7 @@ So the capability is there. The default is policy-gated, not approval-gated.
 | V6 | Gate systems | Domain-specific decision gates |
 | V7 | Workflows | Named sequences of steps |
 | V8 | Policy | Declarative rules for what's allowed |
-| V9 | Adapters | How Prism talks to the outside world |
+| V9 | Adapters | How Prizm talks to the outside world |
 | V10 | Projections | Derived state from events |
 | V11 | Dashboard | Visual interface for runs |
 | V12 | Refactor | Clean foundation for what comes next |

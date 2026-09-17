@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/sse"
+	"github.com/emaharmony/prizm/internal/sse"
 )
 
 func TestDecoder_SimpleEvent(t *testing.T) {

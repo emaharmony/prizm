@@ -62,7 +62,7 @@ func TestFetchImage_MissingURL(t *testing.T) {
 
 func TestGenerateImage_NotConfigured(t *testing.T) {
 	// No endpoint set and no env → graceful "not configured".
-	t.Setenv("PRISM_IMAGEGEN_URL", "")
+	t.Setenv("PRIZM_IMAGEGEN_URL", "")
 	tool := &GenerateImageTool{Config: ImageToolsConfig{ReferencesDir: t.TempDir()}}
 	res, _ := tool.Execute(context.Background(), map[string]any{"prompt": "a goblin"})
 	if res.Success {
@@ -182,9 +182,9 @@ func TestRegisterImageTools(t *testing.T) {
 }
 
 func TestImageToolsConfig_Defaults(t *testing.T) {
-	t.Setenv("PRISM_IMAGE_DIR", "")
-	t.Setenv("PRISM_VISION_MODEL", "")
-	t.Setenv("PRISM_VISION_URL", "")
+	t.Setenv("PRIZM_IMAGE_DIR", "")
+	t.Setenv("PRIZM_VISION_MODEL", "")
+	t.Setenv("PRIZM_VISION_URL", "")
 	t.Setenv("OLLAMA_BASE_URL", "")
 	c := ImageToolsConfig{}
 	if c.referencesDir() != defaultReferencesDir {
@@ -360,8 +360,8 @@ func TestCollectReferenceImages_CodexUnavailableFallsBackToSearch(t *testing.T) 
 	dir := t.TempDir()
 	srv := imageSearchTestServer(t)
 	defer srv.Close()
-	t.Setenv("PRISM_IMAGE_SEARCH_URL", srv.URL+"/search")
-	t.Setenv("PRISM_WEBSEARCH_URL", "")
+	t.Setenv("PRIZM_IMAGE_SEARCH_URL", srv.URL+"/search")
+	t.Setenv("PRIZM_WEBSEARCH_URL", "")
 
 	tool := &CollectReferenceImagesTool{Config: ImageToolsConfig{
 		ReferencesDir: dir,
@@ -387,8 +387,8 @@ func TestCollectReferenceImages_CodexNoImagesFallsBackToSearch(t *testing.T) {
 	dir := t.TempDir()
 	srv := imageSearchTestServer(t)
 	defer srv.Close()
-	t.Setenv("PRISM_IMAGE_SEARCH_URL", srv.URL+"/search")
-	t.Setenv("PRISM_WEBSEARCH_URL", "")
+	t.Setenv("PRIZM_IMAGE_SEARCH_URL", srv.URL+"/search")
+	t.Setenv("PRIZM_WEBSEARCH_URL", "")
 
 	runner := &fakeImageRunner{results: []ImageCommandResult{
 		{},
@@ -435,8 +435,8 @@ func TestCollectReferenceImages_ConfiguredSearchDownload(t *testing.T) {
 }
 
 func TestCollectReferenceImages_SearchNotConfigured(t *testing.T) {
-	t.Setenv("PRISM_IMAGE_SEARCH_URL", "")
-	t.Setenv("PRISM_WEBSEARCH_URL", "")
+	t.Setenv("PRIZM_IMAGE_SEARCH_URL", "")
+	t.Setenv("PRIZM_WEBSEARCH_URL", "")
 	dir := t.TempDir()
 	tool := &CollectReferenceImagesTool{Config: ImageToolsConfig{ReferencesDir: dir, WorkspaceRoot: dir}}
 	res, _ := tool.Execute(context.Background(), map[string]any{"prompt": "lamp", "prefer_codex": false})

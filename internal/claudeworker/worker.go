@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/claudecli"
+	"github.com/emaharmony/prizm/internal/claudecli"
 )
 
 const (

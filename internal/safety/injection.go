@@ -1,4 +1,4 @@
-// Package safety provides Prism's security infrastructure.
+// Package safety provides Prizm's security infrastructure.
 //
 // Security layers:
 //  1. Path containment (path.go) — file operations stay within workspace root

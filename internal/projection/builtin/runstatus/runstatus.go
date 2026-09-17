@@ -1,6 +1,6 @@
 // Package runstatus provides a projection that tracks run lifecycle state.
 //
-// It subscribes to prism.task.* events and produces a snapshot showing
+// It subscribes to prizm.task.* events and produces a snapshot showing
 // the current status of the run, along with metadata like task description,
 // project, agent, timing, and error information.
 //
@@ -9,7 +9,7 @@
 //	{
 //	  "status": "completed",
 //	  "task": "Test README accuracy",
-//	  "project": "prism",
+//	  "project": "prizm",
 //	  "agent": "lumi",
 //	  "started_at": "2026-05-12T23:26:25.027941Z",
 //	  "completed_at": "2026-05-12T23:26:25.123456Z",
@@ -21,8 +21,8 @@ package runstatus
 import (
 	"fmt"
 
-	"github.com/emaharmony/prism/internal/event"
-	"github.com/emaharmony/prism/internal/projection"
+	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/projection"
 )
 
 // RunStatusProjection tracks the lifecycle state of a run.

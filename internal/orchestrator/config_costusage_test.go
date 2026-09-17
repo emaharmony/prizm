@@ -8,8 +8,8 @@ func TestValidateDefaultsCostUsageKnobs(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("default config should validate: %v", err)
 	}
-	if cfg.Prism.RunsDir != "runs" {
-		t.Errorf("runs_dir default = %q, want runs", cfg.Prism.RunsDir)
+	if cfg.Prizm.RunsDir != "runs" {
+		t.Errorf("runs_dir default = %q, want runs", cfg.Prizm.RunsDir)
 	}
 	if cfg.API.MaxRequestBytes != 1<<20 {
 		t.Errorf("max_request_bytes default = %d, want %d", cfg.API.MaxRequestBytes, 1<<20)
@@ -22,14 +22,14 @@ func TestValidateDefaultsCostUsageKnobs(t *testing.T) {
 // A blank runs_dir / zero body cap is backfilled rather than rejected.
 func TestValidateBackfillsEmptyKnobs(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Prism.RunsDir = ""
+	cfg.Prizm.RunsDir = ""
 	cfg.API.MaxRequestBytes = 0
 	cfg.API.MaxWorkspaceFileBytes = 0
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("empty knobs should backfill: %v", err)
 	}
-	if cfg.Prism.RunsDir != "runs" || cfg.API.MaxRequestBytes != 1<<20 || cfg.API.MaxWorkspaceFileBytes != 4<<20 {
-		t.Errorf("knobs not backfilled: %+v / %d / %d", cfg.Prism.RunsDir, cfg.API.MaxRequestBytes, cfg.API.MaxWorkspaceFileBytes)
+	if cfg.Prizm.RunsDir != "runs" || cfg.API.MaxRequestBytes != 1<<20 || cfg.API.MaxWorkspaceFileBytes != 4<<20 {
+		t.Errorf("knobs not backfilled: %+v / %d / %d", cfg.Prizm.RunsDir, cfg.API.MaxRequestBytes, cfg.API.MaxWorkspaceFileBytes)
 	}
 }
 

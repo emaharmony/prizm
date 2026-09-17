@@ -1,4 +1,4 @@
-# Prism Event Lifecycle
+# Prizm Event Lifecycle
 
 1. **Task Created** — A new task enters the system
 2. **Task Started** — Processing begins

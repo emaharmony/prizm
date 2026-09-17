@@ -8,7 +8,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/emaharmony/prism/internal/task"
+	"github.com/emaharmony/prizm/internal/task"
 )
 
 // ApprovalType defines the kind of approval being requested.

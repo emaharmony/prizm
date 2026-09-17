@@ -2,22 +2,22 @@
 
 ## Mission
 
-Give Prism a visual interface for exploring runs, events, approvals, policies, projections, and artifacts — served locally from the CLI, not hosted in the cloud.
+Give Prizm a visual interface for exploring runs, events, approvals, policies, projections, and artifacts — served locally from the CLI, not hosted in the cloud.
 
 ## Problem
 
-Right now, understanding what happened in a Prism run means reading JSON files.
+Right now, understanding what happened in a Prizm run means reading JSON files.
 `summary.json` gives you the overview. `events.jsonl` gives you the full stream.
 `projections/` gives you derived state. But there's no way to *see* it — you have
 to parse files yourself.
 
-V11 adds `prism dashboard` — a local HTTP server that serves a single-page HTML
+V11 adds `prizm dashboard` — a local HTTP server that serves a single-page HTML
 dashboard. Open it in your browser, see your runs, drill into events, inspect
 approvals, check projections, all without leaving your machine.
 
 ## Core Constraint
 
-**V11 is CLI-served.** `prism dashboard` starts a local HTTP server (default
+**V11 is CLI-served.** `prizm dashboard` starts a local HTTP server (default
 `localhost:8080`) and serves a self-contained HTML page. No cloud hosting, no
 external dependencies, no build step. The dashboard is a single HTML file with
 embedded CSS and JavaScript. No React, no Webpack, no npm.
@@ -25,7 +25,7 @@ embedded CSS and JavaScript. No React, no Webpack, no npm.
 ## Architecture
 
 ```
-prism dashboard [--port 8080] [--run-dir ./runs]
+prizm dashboard [--port 8080] [--run-dir ./runs]
     ↓
 Local HTTP Server (net/http)
     ↓
@@ -50,9 +50,9 @@ The dashboard has two layers:
 ### 1. Dashboard Server (`internal/dashboard/server.go`)
 
 ```go
-// Package dashboard provides a local web dashboard for Prism.
+// Package dashboard provides a local web dashboard for Prizm.
 //
-// Start with: prism dashboard
+// Start with: prizm dashboard
 // Opens at: http://localhost:8080
 //
 // The dashboard reads local run data (events, summaries, projections,
@@ -61,7 +61,7 @@ The dashboard has two layers:
 // No external dependencies, no build step, no cloud hosting.
 package dashboard
 
-// Server serves the Prism dashboard over HTTP.
+// Server serves the Prizm dashboard over HTTP.
 type Server struct {
     addr    string     // listen address (e.g., ":8080")
     runDir  string     // path to runs/ directory
@@ -107,9 +107,9 @@ Contains all CSS and JavaScript inline. No external assets.
 ### 4. CLI Command
 
 ```bash
-./prism dashboard                    # Start on :8080
-./prism dashboard --port 3000        # Custom port
-./prism dashboard --run-dir ./runs   # Custom run directory
+./prizm dashboard                    # Start on :8080
+./prizm dashboard --port 3000        # Custom port
+./prizm dashboard --run-dir ./runs   # Custom run directory
 ```
 
 ## UI Design Principles
@@ -136,7 +136,7 @@ Contains all CSS and JavaScript inline. No external assets.
 - **User authentication** — localhost only, no auth needed
 - **Real-time WebSocket** — polling is sufficient for a local tool
 - **Multi-user** — single developer, single browser tab
-- **Cloud hosting** — `prism dashboard` serves locally, period
+- **Cloud hosting** — `prizm dashboard` serves locally, period
 - **Build pipeline** — no npm, no Webpack, no TypeScript
 - **Mobile-responsive** — desktop-first, not mobile-first
 - **Embeddable** — not designed to be embedded in other apps
@@ -152,7 +152,7 @@ internal/dashboard/
 │   └── index.html     # Dashboard HTML (embedded at compile time)
 └── dashboard_test.go  # API handler tests
 
-cmd/prism-cli/main.go  # Updated with "dashboard" subcommand
+cmd/prizm-cli/main.go  # Updated with "dashboard" subcommand
 ```
 
 ## Tests Required
@@ -165,7 +165,7 @@ cmd/prism-cli/main.go  # Updated with "dashboard" subcommand
 
 ## Acceptance Criteria
 
-1. `prism dashboard` starts a local HTTP server
+1. `prizm dashboard` starts a local HTTP server
 2. Dashboard shows runs list at http://localhost:8080
 3. Clicking a run shows events timeline and projections
 4. API endpoints return JSON for runs, events, projections, policies, adapters

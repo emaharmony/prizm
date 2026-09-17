@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/safety"
+	"github.com/emaharmony/prizm/internal/safety"
 )
 
 func TestPolicyEchoApproved(t *testing.T) {
@@ -183,6 +183,44 @@ func TestPolicyV4_ShellDenied(t *testing.T) {
 	// V60: Shell tool is now a valid tool that requires approval in gated mode.
 	if result.Decision != PolicyRequiresApproval {
 		t.Errorf("shell should require approval, got %s", result.Decision)
+	}
+}
+
+func TestPolicyShellSafeCommandAutoApproved(t *testing.T) {
+	cfg := DefaultPolicyConfig()
+	cfg.SafeShellPolicy = BuildShellPolicyFromConfig("tier_1", map[string][]string{
+		"tier_1": {"git status*", "git log*", "ls*"},
+	}, nil)
+
+	result := EvaluatePolicy(cfg, "shell", map[string]any{"command": "git status"})
+	if result.Decision != PolicyApproved {
+		t.Errorf("safe shell command matching tier_1 allowlist should auto-approve, got %s: %s", result.Decision, result.Reason)
+	}
+}
+
+func TestPolicyShellUnlistedCommandStillRequiresApproval(t *testing.T) {
+	cfg := DefaultPolicyConfig()
+	cfg.SafeShellPolicy = BuildShellPolicyFromConfig("tier_1", map[string][]string{
+		"tier_1": {"git status*", "git log*"},
+	}, nil)
+
+	// "rm somefile" is not in the tier_1 allowlist — SafeShellPolicy fix
+	// must not widen approval beyond the configured safe tier.
+	result := EvaluatePolicy(cfg, "shell", map[string]any{"command": "rm somefile"})
+	if result.Decision != PolicyRequiresApproval {
+		t.Errorf("unlisted shell command should still require approval, got %s", result.Decision)
+	}
+}
+
+func TestPolicyShellHardBlocklistSurvivesSafeShellPolicy(t *testing.T) {
+	cfg := DefaultPolicyConfig()
+	// Even a permissive tier_3 SafeShellPolicy must not auto-approve a
+	// hard-blocklisted command — the hard blocklist is the safety floor.
+	cfg.SafeShellPolicy = BuildShellPolicyFromConfig("tier_3", nil, nil)
+
+	result := EvaluatePolicy(cfg, "shell", map[string]any{"command": "rm -rf /*"})
+	if result.Decision == PolicyApproved {
+		t.Errorf("hard-blocklisted command must never auto-approve, got %s: %s", result.Decision, result.Reason)
 	}
 }
 

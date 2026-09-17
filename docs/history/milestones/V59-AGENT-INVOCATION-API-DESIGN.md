@@ -5,7 +5,7 @@
 
 ## Goal
 
-Give external processes — addons that run outside the Prism binary and don't import
+Give external processes — addons that run outside the Prizm binary and don't import
 its internal Go packages — a minimal, public way to ask one configured agent one
 question and get a structured result back over plain HTTP. This is the "general
 addon mechanism": any future addon (not just the first consumer, an OBS stream-clip
@@ -13,15 +13,15 @@ detector called Clippy) reuses this with zero further core changes.
 
 ## Why it was needed
 
-Prism had no production-ready contract for "submit a prompt to a named agent, get a
+Prizm had no production-ready contract for "submit a prompt to a named agent, get a
 result" that's both intentionally public and on by default:
 
 - `POST /api/v1/workflows/start` has no agent-targeting field and routes through the
   heavyweight gated-loop engine — built for dev-workflow prompts, not single
   judgment calls.
-- The NATS `TaskPacket`/`TaskCompletion` pair on `prism.agent.openclaw` /
-  `prism.workflow.task.complete` (`cmd/prism-cli/subagent_worker.go`) is the closest
-  existing shape, but is feature-flagged off by default (`PRISM_SUBAGENT_WORKER`),
+- The NATS `TaskPacket`/`TaskCompletion` pair on `prizm.agent.openclaw` /
+  `prizm.workflow.task.complete` (`cmd/prizm-cli/subagent_worker.go`) is the closest
+  existing shape, but is feature-flagged off by default (`PRIZM_SUBAGENT_WORKER`),
   requires an externally-reachable NATS broker (the default embedded bus is
   loopback-only), and its own handler comment notes task processing isn't fully
   wired.
@@ -33,8 +33,8 @@ result" that's both intentionally public and on by default:
 ## Design
 
 `POST /api/v1/agents/{id}/invoke` + `GET /api/v1/agents/{id}/invocations/{invocation_id}`,
-added to the existing `internal/api` server (`cmd/prism-cli/cmd_serve.go`'s
-`prism serve`), reusing everything that already exists rather than inventing new
+added to the existing `internal/api` server (`cmd/prizm-cli/cmd_serve.go`'s
+`prizm serve`), reusing everything that already exists rather than inventing new
 infrastructure:
 
 - **Auth**: the same `authMiddleware`/Bearer-token check every other state-changing
@@ -61,7 +61,7 @@ infrastructure:
   streaming code needed.
 - **State**: `internal/invocation.Store` is an in-memory map, not SQLite. Invocations
   are short-lived (seconds) — callers are expected to retrieve a result within the
-  invocation's lifetime, so durability across a `prism serve` restart isn't a
+  invocation's lifetime, so durability across a `prizm serve` restart isn't a
   requirement here, unlike session state.
 - **Result parsing**: agents invoked this way are expected to respond with strict
   JSON per their `conversation_postfix` instructions. `invocation.ParseResult`
@@ -114,4 +114,4 @@ Clippy — a separate, independently distributed addon (its own git repo, own `g
 own binary) that watches OBS + Twitch chat for clip-worthy stream moments and calls
 `POST /api/v1/agents/clippy/invoke` for the final cloud judgment call, after two
 cheaper local tiers (signal detection, local vision confirmation) have already
-filtered out noise. See the `clippy` agent example in `prism.yaml.example`.
+filtered out noise. See the `clippy` agent example in `prizm.yaml.example`.

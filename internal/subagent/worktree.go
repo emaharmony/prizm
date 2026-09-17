@@ -4,7 +4,7 @@ import (
 	"context"
 	"path/filepath"
 
-	"github.com/emaharmony/prism/internal/gitx"
+	"github.com/emaharmony/prizm/internal/gitx"
 )
 
 // worktree.go gives file-mutating sub-agents their own git worktree so parallel
@@ -28,14 +28,14 @@ func (n NoopWorktreeProvider) Acquire(_ context.Context, _ string) (string, func
 }
 
 // GitWorktreeProvider creates a per-task git worktree under
-// <Root>/.prism/worktrees/subagent-<task> on branch subagent/<task>.
+// <Root>/.prizm/worktrees/subagent-<task> on branch subagent/<task>.
 type GitWorktreeProvider struct{ Root string }
 
 func (g GitWorktreeProvider) Acquire(ctx context.Context, taskID string) (string, func(), error) {
 	// Keep the worktree dir out of the parent repo's dirty status.
-	_ = gitx.EnsureExcluded(ctx, g.Root, ".prism/")
+	_ = gitx.EnsureExcluded(ctx, g.Root, ".prizm/")
 	id := gitx.SafeID(taskID, "task")
-	path := filepath.Join(g.Root, ".prism", "worktrees", "subagent-"+id)
+	path := filepath.Join(g.Root, ".prizm", "worktrees", "subagent-"+id)
 	branch := "subagent/" + id
 	if err := gitx.CreateBranchWorktree(ctx, g.Root, path, branch, ""); err != nil {
 		return "", nil, err

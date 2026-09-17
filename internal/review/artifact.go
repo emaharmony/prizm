@@ -14,7 +14,7 @@ func WriteReviewArtifact(artifactDir string, r *Review) (string, error) {
 
 	var b strings.Builder
 
-	b.WriteString("# Prism Review\n\n")
+	b.WriteString("# Prizm Review\n\n")
 	b.WriteString("## Run Info\n\n")
 	b.WriteString(fmt.Sprintf("- **Run ID:** `%s`\n", r.RunID))
 	b.WriteString(fmt.Sprintf("- **Correlation ID:** `%s`\n", r.CorrelationID))

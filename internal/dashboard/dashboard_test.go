@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/safety"
+	"github.com/emaharmony/prizm/internal/safety"
 )
 
 func TestNewServer(t *testing.T) {
@@ -112,9 +112,9 @@ func TestHandleIndexHTML(t *testing.T) {
 	if body == "" {
 		t.Error("index.html response is empty")
 	}
-	// Check that it contains "Prism overview"
-	if !contains(body, "Prism overview") {
-		t.Error("index.html does not contain 'Prism Dashboard'")
+	// Check that it contains "Prizm overview"
+	if !contains(body, "Prizm overview") {
+		t.Error("index.html does not contain 'Prizm Dashboard'")
 	}
 }
 
@@ -129,7 +129,7 @@ func TestOverviewUsesLiveAPIAndSharedDashboardShell(t *testing.T) {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 	body := w.Body.String()
-	for _, want := range []string{"Prism overview", "/app.js", "/app.css", "Operational summary", "Immediate attention"} {
+	for _, want := range []string{"Prizm overview", "/app.js", "/app.css", "Operational summary", "Immediate attention"} {
 		if !contains(body, want) {
 			t.Errorf("index.html missing %q", want)
 		}

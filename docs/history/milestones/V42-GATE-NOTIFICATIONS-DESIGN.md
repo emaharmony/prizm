@@ -40,7 +40,7 @@ alias).
 
 ## Tests
 
-`cmd/prism-cli/workflow_feedback_notifier_test.go`: `TestExtractNamesDedupes`,
+`cmd/prizm-cli/workflow_feedback_notifier_test.go`: `TestExtractNamesDedupes`,
 `TestGateAlertMentionsAndFallback`, `TestDiscordIDResolver` (alongside the V41 diff
 tests).
 

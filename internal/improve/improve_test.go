@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/plan"
+	"github.com/emaharmony/prizm/internal/plan"
 )
 
 func TestRecordError_ThreeOccurrences(t *testing.T) {

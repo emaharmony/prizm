@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/policy"
+	"github.com/emaharmony/prizm/internal/policy"
 )
 
 // ─── V8 Policy Integration Tests ───────────────────────────────────────────────
@@ -39,7 +39,7 @@ func TestPolicyIntegrationAllowsReadFile(t *testing.T) {
 		})
 	})
 
-	result, err := toolExec.ExecuteWithPolicy(context.Background(), "read_file", "test-agent", "prism", "test-run", map[string]any{
+	result, err := toolExec.ExecuteWithPolicy(context.Background(), "read_file", "test-agent", "prizm", "test-run", map[string]any{
 		"path": "go.mod",
 	})
 	if err != nil {
@@ -73,7 +73,7 @@ func TestPolicyIntegrationDeniesRunCommand(t *testing.T) {
 		})
 	})
 
-	result, err := toolExec.ExecuteWithPolicy(context.Background(), "run_command", "test-agent", "prism", "test-run", map[string]any{
+	result, err := toolExec.ExecuteWithPolicy(context.Background(), "run_command", "test-agent", "prizm", "test-run", map[string]any{
 		"command": "ls",
 	})
 	if err != nil {
@@ -107,7 +107,7 @@ func TestPolicyIntegrationAllowsButLocalValidatorBlocks(t *testing.T) {
 	})
 
 	// Policy allows read_file, but path traversal should still be blocked
-	result, err := toolExec.ExecuteWithPolicy(context.Background(), "read_file", "test-agent", "prism", "test-run", map[string]any{
+	result, err := toolExec.ExecuteWithPolicy(context.Background(), "read_file", "test-agent", "prizm", "test-run", map[string]any{
 		"path": "../../etc/passwd",
 	})
 	if err != nil {
@@ -124,7 +124,7 @@ func TestPolicyIntegrationNoEvaluatorBackwardCompatible(t *testing.T) {
 	RegisterBuiltinsV4(toolReg, ".", 1024*1024, "")
 	toolExec := NewExecutor(toolReg, &PolicyConfig{WorkspaceRoot: ".", MaxFileSize: 1024 * 1024})
 
-	result, err := toolExec.ExecuteWithPolicy(context.Background(), "echo", "test-agent", "prism", "test-run", map[string]any{
+	result, err := toolExec.ExecuteWithPolicy(context.Background(), "echo", "test-agent", "prizm", "test-run", map[string]any{
 		"text": "hello",
 	})
 	if err != nil {
@@ -157,7 +157,7 @@ func TestPolicyIntegrationDenyOverridesLocalAllow(t *testing.T) {
 		})
 	})
 
-	result, err := toolExec.ExecuteWithPolicy(context.Background(), "echo", "test-agent", "prism", "test-run", map[string]any{
+	result, err := toolExec.ExecuteWithPolicy(context.Background(), "echo", "test-agent", "prizm", "test-run", map[string]any{
 		"text": "hello",
 	})
 	if err != nil {

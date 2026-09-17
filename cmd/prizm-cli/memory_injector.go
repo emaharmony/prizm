@@ -1,0 +1,509 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/emaharmony/prizm/internal/memory"
+)
+
+// MemoryInjector decides how to inject memories into the prompt based on
+// conversation context. It uses the QueryPlanner to analyze the user's
+// message and generate structured search keywords, then searches using
+// those keywords instead of the raw user message.
+//
+// If the QueryPlanner is unavailable or times out, it falls back to
+// heuristic keyword extraction.
+type MemoryInjector struct {
+	store        *memory.MarkdownStore
+	planner      *memory.QueryPlanner
+	cache        *memorySearchCache
+	plannerCache *plannerResultCache
+	lastMemories []memory.Memory // V23: cached for citation verification
+	lastMu       sync.RWMutex    // protects lastMemories
+}
+
+// memorySearchCache caches recent search results keyed by query hash.
+type memorySearchCache struct {
+	mu       sync.RWMutex
+	entries  map[string]*memCacheEntry
+	ttl      time.Duration
+	maxSlots int
+}
+
+type memCacheEntry struct {
+	results []memory.Memory
+	query   string
+	expires time.Time
+}
+
+// plannerResultCache caches query planner results to avoid redundant LLM calls.
+type plannerResultCache struct {
+	mu      sync.RWMutex
+	entries map[string]*memory.QueryPlanResult
+	ttl     time.Duration
+}
+
+func newPlannerResultCache() *plannerResultCache {
+	return &plannerResultCache{
+		entries: make(map[string]*memory.QueryPlanResult),
+		ttl:     5 * time.Minute,
+	}
+}
+
+// InjectMemoriesInt is the int-parameter version of InjectMemories,
+// satisfying the api.MemoryInjectorInterface (which uses int for mode
+// since it can't reference the main package's InjectMode type).
+func (mi *MemoryInjector) InjectMemoriesInt(ctx context.Context, mode int, userMessage string, sessionMsgCount int, maxTokens int) string {
+	return mi.InjectMemories(ctx, InjectMode(mode), userMessage, sessionMsgCount, maxTokens)
+}
+
+func (c *plannerResultCache) get(key string) *memory.QueryPlanResult {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.entries[key]
+}
+
+func (c *plannerResultCache) set(key string, result *memory.QueryPlanResult) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries[key] = result
+}
+
+// NewMemoryInjector creates a memory injector backed by the given store and
+// optional query planner. If planner is nil, heuristic keyword extraction is used.
+func NewMemoryInjector(store *memory.MarkdownStore, planner *memory.QueryPlanner) *MemoryInjector {
+	return &MemoryInjector{
+		store:        store,
+		planner:      planner,
+		cache:        &memorySearchCache{entries: make(map[string]*memCacheEntry), ttl: 5 * time.Minute, maxSlots: 50},
+		plannerCache: newPlannerResultCache(),
+	}
+}
+
+// GetLastMemories returns the memories from the most recent InjectMemories call.
+// Used for post-hoc citation verification (V23).
+func (mi *MemoryInjector) GetLastMemories() []memory.Memory {
+	mi.lastMu.RLock()
+	defer mi.lastMu.RUnlock()
+	return mi.lastMemories
+}
+
+// InjectMode determines how memories should be injected.
+type InjectMode int
+
+const (
+	// ModeSearch injects memories relevant to the user's message.
+	// Used for fresh questions and topic shifts.
+	ModeSearch InjectMode = iota
+
+	// ModeContinuation injects recent memories for conversation continuity.
+	// Used when the conversation is clearly continuing the same topic.
+	ModeContinuation
+)
+
+// InjectMemories returns a formatted memory block for injection into the prompt.
+// It uses the QueryPlanner (if available) to generate search keywords from the
+// user's message, then searches using those keywords instead of the raw text.
+//
+// Parameters:
+//   - ctx: context for cancellation
+//   - mode: search (fresh question) or continuation (ongoing conversation)
+//   - userMessage: the user's message text (used for search queries)
+//   - sessionMsgCount: number of messages in the current session
+//   - maxTokens: approximate token budget for memories (rough: 1 token ≈ 4 chars)
+func (mi *MemoryInjector) InjectMemories(ctx context.Context, mode InjectMode, userMessage string, sessionMsgCount int, maxTokens int) string {
+	switch mode {
+	case ModeContinuation:
+		return mi.injectRecent(ctx, maxTokens)
+	default:
+		return mi.injectPlannedSearch(ctx, userMessage, sessionMsgCount, maxTokens)
+	}
+}
+
+// cacheAndFormat caches the memory list for citation verification and formats them.
+func (mi *MemoryInjector) cacheAndFormat(memories []memory.Memory, title string, maxTokens int) string {
+	mi.lastMu.Lock()
+	// Convert to toolloop.MemoryEntry for verification
+	mi.lastMemories = memories
+	mi.lastMu.Unlock()
+	return formatMemories(memories, title, maxTokens)
+}
+
+// injectPlannedSearch uses the QueryPlanner to generate keywords from the
+// user's message, then searches using those keywords.
+func (mi *MemoryInjector) injectPlannedSearch(ctx context.Context, userMessage string, sessionMsgCount int, maxTokens int) string {
+	if mi.store == nil || userMessage == "" {
+		log.Printf("[MEMORY-INJECTOR] injectPlannedSearch skipped: store_nil=%v, msg_empty=%v", mi.store == nil, userMessage == "")
+		return ""
+	}
+
+	// Step 1: Get search plan from QueryPlanner
+	var plan *memory.QueryPlanResult
+	if mi.planner != nil {
+		plan = mi.planner.Plan(ctx, userMessage, sessionMsgCount, 0)
+	}
+
+	// Build the search query from planner keywords or raw message
+	var searchQuery string
+	if plan != nil && len(plan.Keywords) > 0 {
+		searchQuery = strings.Join(plan.Keywords, " ")
+		log.Printf("[MEMORY-INJECTOR] query planner: intent=%q keywords=%v search_type=%s query=%q",
+			plan.Intent, plan.Keywords, plan.SearchType, searchQuery)
+	} else {
+		// Fallback: heuristic keyword extraction
+		keywords := memory.ExtractKeywords(userMessage)
+		if len(keywords) > 0 {
+			searchQuery = strings.Join(keywords, " ")
+			log.Printf("[MEMORY-INJECTOR] heuristic fallback: keywords=%v query=%q", keywords, searchQuery)
+		} else {
+			searchQuery = userMessage
+			log.Printf("[MEMORY-INJECTOR] no keywords extracted, using raw message")
+		}
+	}
+
+	// Step 2: Keyword search using the planned query
+	cacheKey := queryKey(searchQuery)
+	if cached := mi.cache.get(cacheKey); cached != nil {
+		log.Printf("[MEMORY-INJECTOR] cache hit for key=%s", cacheKey)
+		return mi.cacheAndFormat(cached, "Relevant Memories", maxTokens)
+	}
+
+	results, err := mi.store.Search(ctx, searchQuery, 20)
+	log.Printf("[MEMORY-INJECTOR] hybrid BM25+RRF search results: count=%d, err=%v, query=%q", len(results), err, searchQuery)
+
+	// V86: Multi-query search — when the planner returns alternative queries for
+	// semantic/hybrid searches, search those too and deduplicate results.
+	if plan != nil && len(plan.AlternativeQueries) > 0 && (plan.SearchType == "semantic" || plan.SearchType == "hybrid") {
+		seen := make(map[string]bool)
+		for _, m := range results {
+			seen[m.ID] = true
+		}
+		for _, altQuery := range plan.AlternativeQueries {
+			if len(results) >= 20 {
+				break
+			}
+			altResults, altErr := mi.store.Search(ctx, altQuery, 10)
+			if altErr != nil {
+				log.Printf("[MEMORY-INJECTOR] alternative query search failed: query=%q err=%v", altQuery, altErr)
+				continue
+			}
+			log.Printf("[MEMORY-INJECTOR] alternative query results: query=%q count=%d", altQuery, len(altResults))
+			for _, m := range altResults {
+				if !seen[m.ID] {
+					seen[m.ID] = true
+					results = append(results, m)
+				}
+			}
+		}
+	}
+
+	// V85: Search now does BM25 + embedding RRF fusion internally.
+	// No separate EmbeddingSearch fallback needed.
+
+	if err != nil && len(results) == 0 {
+		log.Printf("[MEMORY-SEARCH] search failed: %v", err)
+		return mi.injectRecent(ctx, maxTokens)
+	}
+
+	if len(results) == 0 {
+		// V24: Empty-result boundary signal (DTA-inspired). When memory search returns
+		// nothing relevant, explicitly tell the model it has NO records — not just silence.
+		// Silence is an invitation for the model to fill gaps from parametric knowledge.
+		// A clear "NO RECORDS FOUND" signal creates an honest boundary.
+		log.Printf("[MEMORY-INJECTOR] no search results from any query, injecting empty-result grounding")
+		return "\n## OFFICIAL RECORD: NO RELEVANT RECORDS FOUND\n" +
+			"Your memory system found NO records matching this query. \n" +
+			"You MUST respond: 'I don't have specific memories/records about this.' \n" +
+			"Do NOT construct an answer from general knowledge, common sense, or what you think might be true. \n" +
+			"Do NOT fabricate specific details, numbers, dates, or narratives. \n" +
+			"It is ALWAYS better to honestly say 'I don't have that in my records' than to guess.\n"
+	}
+
+	mi.cache.set(cacheKey, results)
+
+	// V80: Track recall count for injected memories
+	go mi.trackRecalls(results)
+
+	log.Printf("[MEMORY-INJECTOR] search results detail: query=%q, count=%d", searchQuery, len(results))
+	for i, m := range results {
+		if i < 5 {
+			log.Printf("[MEMORY-INJECTOR]   result[%d]: id=%s category=%s summary=%q", i, m.ID, m.Category, memory.TruncateStr(m.Summary, 80))
+		}
+	}
+
+	return mi.cacheAndFormat(results, "Relevant Memories", maxTokens)
+}
+
+// injectSearch is the legacy search path (kept for backward compatibility).
+// It searches using the raw user message without query planning.
+func (mi *MemoryInjector) injectSearch(ctx context.Context, query string, maxTokens int) string {
+	return mi.injectPlannedSearch(ctx, query, 0, maxTokens)
+}
+
+// injectRecent returns the most recent memories for conversation continuity.
+func (mi *MemoryInjector) injectRecent(ctx context.Context, maxTokens int) string {
+	if mi.store == nil {
+		return ""
+	}
+
+	recent, err := mi.store.ListRecent(ctx, 5)
+	if err != nil {
+		log.Printf("[MEMORY-RECENT] list recent failed: %v", err)
+		return ""
+	}
+
+	if len(recent) == 0 {
+		return ""
+	}
+
+	return mi.cacheAndFormat(recent, "Recent Context", maxTokens)
+}
+
+// ChooseMode decides the injection mode based on session context.
+// NOTE: With QueryPlanner, this is less important since the planner decides
+// the search strategy. It's kept for the continuation path.
+func ChooseMode(sessionMsgCount int, sessionAge time.Duration) InjectMode {
+	if sessionMsgCount > 2 && sessionAge < 30*time.Minute {
+		return ModeContinuation
+	}
+	return ModeSearch
+}
+
+// formatMemories formats a slice of memories into a grounding-aware prompt block,
+// respecting the token budget. V83: Each memory includes date stamps, confidence
+// labels, source attribution, and supersession status. V21: Each memory is tagged
+// with an ID ([M1], [M2], etc.) and the grounding instructions require the model
+// to cite these IDs when making claims. This is the "grounded generation" pattern
+// from production RAG systems — citation forcing reduces fabrication by 50-80%.
+func formatMemories(memories []memory.Memory, title string, maxTokens int) string {
+	if len(memories) == 0 {
+		return ""
+	}
+
+	maxChars := maxTokens * 4
+	if maxChars <= 0 {
+		maxChars = 1200 // default ~300 tokens
+	}
+
+	var sb strings.Builder
+
+	// V24: Authoritative memory framing — research shows that positive-constraint framing
+	// ("these records are authoritative") significantly reduces knowledge contamination vs.
+	// negative framing ("don't use training data"). See docs/v24-knowledge-contamination-research.md.
+	sb.WriteString("## OFFICIAL RECORD (Authoritative)\n")
+	sb.WriteString("The following records were recalled from your verified local memory system. ")
+	sb.WriteString("These are AUTHORITATIVE — they override what you think you know from training data about your own identity, projects, and history. ")
+	sb.WriteString("Each record has an ID like [M1], [M2], etc. ")
+	sb.WriteString("When stating a specific fact, date, number, or project detail from these records, cite the source FIRST then the claim: '[M3] shows the score was 78/100' — NOT 'the score was 91.4 [M3]'. ")
+	sb.WriteString("For casual conversation, personality, opinions, and emotional responses, do NOT use citation tags — just be your natural self. ")
+	sb.WriteString("If you cannot find a record that directly contains the specific number, date, or detail you want to state, do NOT infer or fill in from your training data — say 'I do not have that in my records' instead. ")
+	sb.WriteString("If no records address the question, say 'I do not have that in my records.' ")
+	sb.WriteString("Synthesize these records into a natural answer — don't just list or quote them.\n\n")
+
+	charsUsed := 0
+	for i, m := range memories {
+		if i >= 20 {
+			break
+		}
+
+		alloc := maxChars / minInt(len(memories), 10)
+		if i < 3 {
+			alloc = alloc * 2
+		}
+
+		var entry strings.Builder
+
+		// V21: Memory ID tag for citation forcing
+		memID := fmt.Sprintf("M%d", i+1)
+
+		// V83: Date stamp + confidence label + source + supersession status
+		dateStr := m.CreatedAt.Format("2006-01-02")
+		confidenceLabel := confidenceLabel(m)
+		sourceLabel := sourceLabel(m)
+		supersededLabel := supersededLabel(m)
+
+		// V21: Format: [M1] [date | confidence | source] Summary
+		entry.WriteString(fmt.Sprintf("[%s] [%s | %s | %s] ", memID, dateStr, confidenceLabel, sourceLabel))
+		if m.Category != "" {
+			entry.WriteString(fmt.Sprintf("**%s** (%s)", m.Summary, m.Category))
+		} else {
+			entry.WriteString(fmt.Sprintf("**%s**", m.Summary))
+		}
+
+		// Mark superseded memories explicitly
+		if supersededLabel != "" {
+			entry.WriteString(fmt.Sprintf(" ⚠️ %s", supersededLabel))
+		}
+
+		content := m.Content
+		if len(content) > alloc {
+			content = content[:alloc] + "..."
+		}
+		if content != "" && content != m.Summary {
+			entry.WriteString("\n  " + content)
+		}
+		entry.WriteString("\n")
+
+		entryStr := entry.String()
+		if charsUsed+len(entryStr) > maxChars {
+			sb.WriteString("- *(...additional memories omitted for context budget)*\n")
+			break
+		}
+
+		sb.WriteString(entryStr)
+		charsUsed += len(entryStr)
+	}
+
+	// V24: Authoritative framing for footer
+	sb.WriteString("\n---\n")
+	sb.WriteString("AUTHORITY: These records are verified facts about your history. When they conflict with what you believe from training, THE RECORDS ARE CORRECT. ")
+	sb.WriteString("When stating a specific fact, date, number, or project detail from these records, cite the source FIRST then the claim: '[M3] shows X, so Y' — not 'Y [M3]'. Derive the claim FROM the record's actual text, not from your training data. ")
+	sb.WriteString("For casual conversation, greetings, opinions, and emotional responses, do NOT use citation tags — just be your natural self. ")
+	sb.WriteString("If no record supports a specific factual claim, say 'I do not have that in my records' — do NOT fabricate specifics. ")
+	sb.WriteString("Honesty over completeness.\n")
+
+	return sb.String()
+}
+
+// confidenceLabel maps memory metadata to a human-readable confidence label.
+// V83: Models respond better to natural language qualifiers than raw numbers.
+func confidenceLabel(m memory.Memory) string {
+	// Check explicit confidence first
+	if m.Metadata != nil {
+		if conf, ok := m.Metadata["confidence"]; ok {
+			val, err := strconv.ParseFloat(strings.TrimSpace(conf), 64)
+			if err == nil {
+				switch {
+				case val >= 8.0:
+					return "high"
+				case val >= 4.0:
+					return "medium"
+				default:
+					return "low"
+				}
+			}
+		}
+	}
+	// Default confidence based on source
+	if m.Source == "user_stated" || m.Source == "lumi" {
+		return "high"
+	}
+	return "medium"
+}
+
+// sourceLabel returns a human-readable source attribution.
+func sourceLabel(m memory.Memory) string {
+	if m.Source != "" {
+		return m.Source
+	}
+	if m.AgentID != "" {
+		return m.AgentID
+	}
+	return "memory"
+}
+
+// supersededLabel returns a warning string if the memory is superseded.
+func supersededLabel(m memory.Memory) string {
+	if m.Metadata == nil {
+		return ""
+	}
+	if sup, ok := m.Metadata["superseded_by"]; ok && sup != "" {
+		return fmt.Sprintf("SUPERSEDED (replaced by %s — no longer current)", sup)
+	}
+	return ""
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// --- Cache methods ---
+
+func (c *memorySearchCache) get(key string) []memory.Memory {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	entry, ok := c.entries[key]
+	if !ok || time.Now().After(entry.expires) {
+		return nil
+	}
+	return entry.results
+}
+
+func (c *memorySearchCache) set(key string, results []memory.Memory) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := time.Now()
+	for k, v := range c.entries {
+		if now.After(v.expires) {
+			delete(c.entries, k)
+		}
+	}
+
+	if len(c.entries) >= c.maxSlots {
+		oldest := ""
+		oldestTime := time.Now()
+		for k, v := range c.entries {
+			if v.expires.Before(oldestTime) {
+				oldestTime = v.expires
+				oldest = k
+			}
+		}
+		if oldest != "" {
+			delete(c.entries, oldest)
+		}
+	}
+
+	c.entries[key] = &memCacheEntry{
+		results: results,
+		query:   key,
+		expires: now.Add(c.ttl),
+	}
+}
+
+// queryKey normalizes a search query for cache keying.
+func queryKey(query string) string {
+	q := strings.ToLower(strings.TrimSpace(query))
+	words := strings.Fields(q)
+	if len(words) > 5 {
+		words = words[:5]
+	}
+	return strings.Join(words, "_")
+}
+
+// trackRecalls updates recall_count and last_recalled metadata for injected memories.
+// This runs in a goroutine so it doesn't block the response.
+func (mi *MemoryInjector) trackRecalls(memories []memory.Memory) {
+	if mi.store == nil {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, m := range memories {
+		if m.Metadata == nil {
+			m.Metadata = make(map[string]string)
+		}
+		// Increment recall count
+		count := 0
+		if v, ok := m.Metadata["recall_count"]; ok {
+			if n, err := strconv.Atoi(v); err == nil {
+				count = n
+			}
+		}
+		m.Metadata["recall_count"] = strconv.Itoa(count + 1)
+		m.Metadata["last_recalled"] = now
+
+		// Save the updated memory back to the store
+		if _, err := mi.store.Store(context.Background(), m); err != nil {
+			log.Printf("[MEMORY-INJECTOR] failed to track recall for %s: %v", m.ID, err)
+		}
+	}
+}

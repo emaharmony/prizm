@@ -7,8 +7,8 @@
 
 ## Problem
 
-Prism agents call tools inappropriately — e.g., reading files when asked "say hello." Current mitigation is prompt text ("don't use tools for conversation"), which is:
-- Model-dependent (glm-5.1:cloud ignores it under context pressure)
+Prizm agents call tools inappropriately — e.g., reading files when asked "say hello." Current mitigation is prompt text ("don't use tools for conversation"), which is:
+- Model-dependent (glm-5.3-flash:cloud ignores it under context pressure)
 - Fragile (topic bleed from conversation history overrides guidance)
 - Not enforceable (no code-level guard)
 
@@ -82,7 +82,7 @@ func (g *ToolRelevanceGate) Evaluate(message string, availableTools []string) Ga
 3. **Conservative default** — when uncertain, include tools (false negatives are worse than false positives here; missing a tool the user needs > unnecessary tool call)
 4. **Logging** — every gate decision is logged with reason for observability
 5. **Bypass for agent messages** — agent-to-agent messages always include tools (they're task-oriented by nature)
-6. **Configurable** — `tool_gate: enabled: true/false` in prism.yaml
+6. **Configurable** — `tool_gate: enabled: true/false` in prizm.yaml
 
 ### Test Cases
 
@@ -91,7 +91,7 @@ func (g *ToolRelevanceGate) Evaluate(message string, availableTools []string) Ga
 | "Hey Lumi!" | Exclude | Short greeting, no tool keywords |
 | "Say hello" | Exclude | Conversational, no tool keywords |
 | "What do you think about Rust?" | Exclude | Opinion question, no file/code reference |
-| "Read /Users/ema/projects/repos/prism/main.go" | Include | Contains "Read" + file path |
+| "Read /Users/ema/projects/repos/prizm/main.go" | Include | Contains "Read" + file path |
 | "What's the project structure?" | Include | Contains "project" + structure question |
 | "git status" | Subset | Git keyword → only git tools |
 | "Search for TODO in the codebase" | Include | Contains "Search" + code reference |

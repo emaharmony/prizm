@@ -1,5 +1,5 @@
-// Package orchestrator provides the persistent daemon that runs Prism as a
-// live service. Config holds the prism.yaml configuration.
+// Package orchestrator provides the persistent daemon that runs Prizm as a
+// live service. Config holds the prizm.yaml configuration.
 package orchestrator
 
 import (
@@ -12,22 +12,22 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/agent"
-	"github.com/emaharmony/prism/internal/cost"
+	"github.com/emaharmony/prizm/internal/agent"
+	"github.com/emaharmony/prizm/internal/cost"
 	"gopkg.in/yaml.v3"
 )
 
-// Config represents the full Prism configuration loaded from prism.yaml.
+// Config represents the full Prizm configuration loaded from prizm.yaml.
 //
 // The config defines agents, channels (Discord, Telegram, etc.),
 // registered actions, and service settings. It is the single source of
-// truth for how Prism runs — no OpenClaw dependency.
+// truth for how Prizm runs — no OpenClaw dependency.
 //
 // Agent IDs become event namespace prefixes. If no ID is provided,
-// the system auto-generates: prism1, prism2, prism3, etc.
+// the system auto-generates: prizm1, prizm2, prizm3, etc.
 type Config struct {
-	// Prism holds top-level service settings.
-	Prism PrismConfig `yaml:"prism"`
+	// Prizm holds top-level service settings.
+	Prizm PrizmConfig `yaml:"prizm"`
 
 	// API configures HTTP API authentication and CORS.
 	API APIServerConfig `yaml:"api"`
@@ -38,7 +38,7 @@ type Config struct {
 	// Usage configures the dashboard token-usage tracker's time windows.
 	Usage UsageConfig `yaml:"usage"`
 
-	// Bridge configures signed cross-Prism protocol subjects.
+	// Bridge configures signed cross-Prizm protocol subjects.
 	Bridge BridgeConfig `yaml:"bridge"`
 
 	// Codex configures subscription-backed Codex CLI task delegation.
@@ -57,7 +57,7 @@ type Config struct {
 	// Shell configures the shell tool access control for free mode.
 	Shell ShellConfig `yaml:"shell"`
 
-	// Agents defines the agents Prism should register.
+	// Agents defines the agents Prizm should register.
 	// Each agent gets its own event namespace based on its ID.
 	Agents []AgentConfig `yaml:"agents"`
 
@@ -79,6 +79,9 @@ type Config struct {
 
 	// Remembrance configures the memory service.
 	Remembrance RemembranceConfig `yaml:"remembrance"`
+
+	// Memory configures the local memory store.
+	Memory MemoryConfig `yaml:"memory"`
 
 	// ChannelRoles maps Discord channel IDs to role names that determine
 	// which state action applies. Role names must match state_actions keys.
@@ -106,9 +109,9 @@ type MCPServerConfig struct {
 	Enabled bool     `yaml:"enabled"` // skip when false
 }
 
-// PrismConfig holds top-level service settings.
-type PrismConfig struct {
-	// InstanceID identifies this Prism process in cross-Prism messages.
+// PrizmConfig holds top-level service settings.
+type PrizmConfig struct {
+	// InstanceID identifies this Prizm process in cross-Prizm messages.
 	InstanceID string `yaml:"instance_id"`
 
 	// NATSURL is the NATS server URL. Empty means embedded.
@@ -119,7 +122,7 @@ type PrismConfig struct {
 
 	// RunsDir is the directory where per-run artifacts and approval records are
 	// written. Relative to the working directory unless absolute. Default "runs".
-	// Kept separate from DataDir because the `prism approval`/`prism runs` CLIs
+	// Kept separate from DataDir because the `prizm approval`/`prizm runs` CLIs
 	// read this tree (default ./runs); change it here to relocate both writers.
 	RunsDir string `yaml:"runs_dir"`
 
@@ -132,6 +135,9 @@ type PrismConfig struct {
 	OllamaURL string `yaml:"ollama_url"`
 
 	// ContextTokenBudget is the max tokens for workspace context injection.
+	// TTS holds text-to-speech (Voicebox) configuration.
+	// When enabled, Prizm generates voice messages alongside text responses.
+	TTS TTSConfig `yaml:"tts"`
 	// Default: 4000. Higher = more context but less room for conversation.
 	ContextTokenBudget int `yaml:"context_token_budget"`
 
@@ -144,7 +150,7 @@ type PrismConfig struct {
 
 	// BindHost is the network interface the HTTP API, health, and dashboard
 	// servers bind to. Default "127.0.0.1" (loopback only). Setting a
-	// non-loopback host (e.g. "0.0.0.0") exposes Prism on the network and
+	// non-loopback host (e.g. "0.0.0.0") exposes Prizm on the network and
 	// requires api.auth_token (or api.auth_token_env) to be set — Validate
 	// rejects a non-loopback bind without a token.
 	BindHost string `yaml:"bind_host"`
@@ -152,10 +158,18 @@ type PrismConfig struct {
 	// LogLevel sets verbosity: debug, info, warn, error.
 	LogLevel string `yaml:"log_level"`
 
+	// Memory holds local memory store configuration (MarkdownStore).
+	Memory MemoryConfig `yaml:"memory"`
+
+	// ContextCompression configures identity context compression.
+	// When enabled, the context agent compresses SOUL.md/AGENTS.md/etc. into
+	// a ~300-token task-relevant block instead of dumping ~15KB raw.
+	ContextCompression *agent.CompressionConfig `yaml:"context_compression"`
+
 	// AllowedPaths is a list of additional directory roots the agent can access
 	// beyond the workspace root. Paths are absolute or relative to CWD.
 	// The workspace root is always implicitly allowed.
-	// Example: ["/Users/ema/projects/repos", "/tmp/prism-data"]
+	// Example: ["/Users/ema/projects/repos", "/tmp/prizm-data"]
 	AllowedPaths []string `yaml:"allowed_paths"`
 
 	// ReadRoots grants recursive read/search/list access beyond the workspace root.
@@ -174,6 +188,15 @@ type PrismConfig struct {
 	// When set and loadable, it overrides the built-in 7-phase DefaultConfig.
 	// See examples/workflows/gated-loop.yaml.
 	WorkflowConfig string `yaml:"workflow_config"`
+
+	// AgentLoop controls which tool loop strategy agents use.
+	// "classic" = capped iteration loop (default), "agentic" = while-true with doom detection.
+	AgentLoop string `yaml:"agent_loop"`
+
+	// ContextMode controls how workspace context is injected into prompts.
+	// "full" (default) = all context files loaded into system prompt.
+	// "open_book" = only file summaries/index loaded; model uses read_file on demand.
+	ContextMode string `yaml:"context_mode"`
 }
 
 // APIServerConfig configures HTTP API authentication and CORS.
@@ -272,21 +295,21 @@ func IsLoopbackHost(host string) bool {
 }
 
 // BindAddr returns the host:port listen address for a server, defaulting the
-// host to loopback when prism.bind_host is unset.
+// host to loopback when prizm.bind_host is unset.
 func (c *Config) BindAddr(port int) string {
-	host := c.Prism.BindHost
+	host := c.Prizm.BindHost
 	if strings.TrimSpace(host) == "" {
 		host = "127.0.0.1"
 	}
 	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
-// BridgeConfig configures signed cross-Prism NATS subjects.
+// BridgeConfig configures signed cross-Prizm NATS subjects.
 type BridgeConfig struct {
-	// Enabled controls whether the cross-Prism protocol listener starts.
+	// Enabled controls whether the cross-Prizm protocol listener starts.
 	Enabled bool `yaml:"enabled"`
 
-	// Mode documents the topology. "shared_nats" means both Prisms use the same broker.
+	// Mode documents the topology. "shared_nats" means both Prizms use the same broker.
 	Mode string `yaml:"mode"`
 
 	// AllowedSubjects is the explicit protocol subject allowlist.
@@ -299,8 +322,8 @@ type BridgeConfig struct {
 	// shared or production environments so the secret stays out of tracked config.
 	Secret string `yaml:"secret"`
 
-	// LeaderInstance is the Prism instance currently allowed to coordinate a
-	// cross-Prism thread. It is configurable so leadership can move between
+	// LeaderInstance is the Prizm instance currently allowed to coordinate a
+	// cross-Prizm thread. It is configurable so leadership can move between
 	// environments without changing code.
 	LeaderInstance string `yaml:"leader_instance"`
 
@@ -312,14 +335,14 @@ type BridgeConfig struct {
 	// task needs human input.
 	MaxClarificationRounds int `yaml:"max_clarification_rounds"`
 
-	// TargetProfiles define addressable cross-Prism destinations for commands.
+	// TargetProfiles define addressable cross-Prizm destinations for commands.
 	TargetProfiles []BridgeTargetProfile `yaml:"target_profiles"`
 
 	// Factory configures optional Roblox Factory task handoff for task_request messages.
 	Factory FactoryBridgeConfig `yaml:"factory"`
 }
 
-// BridgeTargetProfile maps a human command target to a Prism instance and adapter.
+// BridgeTargetProfile maps a human command target to a Prizm instance and adapter.
 type BridgeTargetProfile struct {
 	Name         string   `yaml:"name"`
 	InstanceID   string   `yaml:"instance_id"`
@@ -420,13 +443,13 @@ type FactoryBridgeConfig struct {
 	UIGenerationDryRun bool   `yaml:"ui_generation_dry_run"`
 }
 
-// AgentConfig defines a single agent in prism.yaml.
+// AgentConfig defines a single agent in prizm.yaml.
 //
 // ID becomes the event namespace prefix. If omitted, auto-generated
-// as prism1, prism2, etc. No hardcoded names except "prism" for system.
+// as prizm1, prizm2, etc. No hardcoded names except "prizm" for system.
 type AgentConfig struct {
 	// ID is the agent's unique identifier and event namespace prefix.
-	// If omitted, auto-generated as prism1, prism2, etc.
+	// If omitted, auto-generated as prizm1, prizm2, etc.
 	ID string `yaml:"id"`
 
 	// Role describes what this agent does: lead, coder, researcher, etc.
@@ -435,7 +458,7 @@ type AgentConfig struct {
 	// Provider is the LLM provider: ollama, openai, anthropic, gemini.
 	Provider string `yaml:"provider"`
 
-	// Model is the model identifier: glm-5.1:cloud, gpt-4o, etc.
+	// Model is the model identifier: glm-5.3-flash:cloud, gpt-4o, etc.
 	Model string `yaml:"model"`
 
 	// Fallbacks are attempted in order after the primary model fails. Each
@@ -456,14 +479,22 @@ type AgentConfig struct {
 	// Capabilities lists what this agent can do.
 	Capabilities []string `yaml:"capabilities"`
 
+	// AgentLoop overrides the global agent_loop setting for this agent.
+	// Values: "classic" (default), "agentic". Empty means use global setting.
+	AgentLoop string `yaml:"agent_loop"`
+
+	// ContextMode overrides the global context_mode setting for this agent.
+	// Values: "full" (default), "open_book". Empty means use global setting.
+	ContextMode string `yaml:"context_mode"`
+
 	// Subscriptions lists NATS subjects this agent subscribes to
 	// for receiving delegated tasks and results.
 	// e.g., "mango.task.created" — Mango receives tasks from Lumi.
 	Subscriptions []string `yaml:"subscriptions"`
 
 	// ListenToAgents lists bot user IDs that this agent should respond to.
-	// By default, Prism ignores messages from other bots. Adding a bot ID here
-	// tells Prism to treat messages from that bot as agent-to-agent communication.
+	// By default, Prizm ignores messages from other bots. Adding a bot ID here
+	// tells Prizm to treat messages from that bot as agent-to-agent communication.
 	// The message is processed with a modified prompt that frames it as peer input.
 	ListenToAgents []string `yaml:"listen_to_agents"`
 
@@ -479,6 +510,18 @@ type AgentConfig struct {
 	// must opt in explicitly, since this is a new network-reachable surface
 	// that lets any caller with API access trigger a real (billed) LLM call.
 	InvocableViaAPI bool `yaml:"invocable_via_api"`
+
+	// FirstClassTools gives the agent direct tool access without per-call
+	// policy evaluation. When true, the agent's system prompt includes tool
+	// descriptions as first-class capabilities (like OpenClaw) and tool calls
+	// execute directly without going through the policy gate loop.
+	// This is intended for trusted agents in free mode — the policy engine
+	// still applies in gated mode. Use this for agents that need fluid, low-latency
+	// tool access (reading files, running commands, searching memory) without
+	// the overhead of the tool-loop + policy evaluation cycle.
+	// Requires: the agent must be in a channel with mode: free or be triggered
+	// by an autonomous action (auto_patch, project_work, etc.).
+	FirstClassTools bool `yaml:"first_class_tools"`
 }
 
 // ModelFallback describes one ordered provider/model fallback for an agent.
@@ -532,7 +575,7 @@ type ProjectConfig struct {
 	Orchestrator string `yaml:"orchestrator"`
 
 	// WorktreeIsolation runs each gated loop in its own git worktree under
-	// <repo>/.prism/worktrees/<run-id> on a fresh prism/<run-id> branch (V56).
+	// <repo>/.prizm/worktrees/<run-id> on a fresh prizm/<run-id> branch (V56).
 	// Parallel runs on the same repo cannot collide, and the main worktree is
 	// never touched. Default false (runs share the main worktree, isolated by
 	// feature branch only).
@@ -607,7 +650,7 @@ type SchedulerJobConfig struct {
 	Schedule string `yaml:"schedule"`
 
 	// Event is the NATS subject to publish when the job fires.
-	// Example: "prism.task.scheduled"
+	// Example: "prizm.task.scheduled"
 	Event string `yaml:"event"`
 
 	// Payload is the JSON payload for the event.
@@ -652,6 +695,9 @@ type ChannelRole struct {
 	// "social" = warm, conversational, present
 	// When empty, uses the agent's conversation_postfix.
 	Personality string `yaml:"personality,omitempty"`
+	// TTS enables voice messages in this channel. Overrides global TTS setting.
+	// When true and global TTS is enabled, responses are also sent as voice messages.
+	TTS bool `yaml:"tts,omitempty"`
 
 	// Context is structured channel context that replaces state_actions.inject.
 	// It provides rich context about where the agent is, who it's talking to,
@@ -677,7 +723,7 @@ var personalityDirectives = map[string]string{
 // PersonalityDirective returns the prompt instruction for a ChannelRole's
 // Personality value, or "" if personality is empty or not recognized. An
 // unrecognized value is treated as no directive rather than an error, so a
-// typo in prism.yaml degrades to today's silent-no-op behavior instead of
+// typo in prizm.yaml degrades to today's silent-no-op behavior instead of
 // failing config load.
 func PersonalityDirective(personality string) string {
 	return personalityDirectives[personality]
@@ -695,7 +741,7 @@ type ChannelConfig struct {
 	Channels []string `yaml:"channels"`
 }
 
-// UserConfig maps channel-specific user IDs to one durable Prism owner ID.
+// UserConfig maps channel-specific user IDs to one durable Prizm owner ID.
 type UserConfig struct {
 	ID          string              `yaml:"id"`
 	DisplayName string              `yaml:"display_name"`
@@ -705,7 +751,7 @@ type UserConfig struct {
 
 // ResolveOwnerID maps an external channel user ID to a stable owner ID.
 // If no alias matches, the configured default owner is used. If no default is
-// configured, Prism falls back to the external ID to avoid cross-user leakage.
+// configured, Prizm falls back to the external ID to avoid cross-user leakage.
 func (c *Config) ResolveOwnerID(channelType, externalID string) string {
 	if c == nil {
 		return externalID
@@ -877,15 +923,61 @@ type RemembranceConfig struct {
 	TimeoutSeconds int `yaml:"timeout_seconds"`
 }
 
+// MemoryConfig configures the local memory store (Phase 1: MarkdownStore).
+type MemoryConfig struct {
+	// StoreType is "markdown" (Phase 1) or "sqlite" (Phase 2, future).
+	StoreType string `yaml:"store_type"`
+
+	// StorePath is the path to the memory directory, relative to workspace root.
+	StorePath string `yaml:"store_path"`
+
+	// GateModel is the primary Ollama model for gate decisions.
+	GateModel string `yaml:"gate_model"`
+
+	// ExtractModel is the primary Ollama model for memory extraction.
+	ExtractModel string `yaml:"extract_model"`
+
+	// ModelFallbackChain is the ordered list of models to try for gate/extract.
+	ModelFallbackChain []string `yaml:"model_fallback_chain"`
+
+	// OllamaURL is the Ollama API endpoint.
+	OllamaURL string `yaml:"ollama_url"`
+
+	// AutoCapture controls whether conversation turns are automatically gated.
+	AutoCapture bool `yaml:"auto_capture"`
+
+	// MinImportance is the gate threshold (0.0-1.0).
+	MinImportance float64 `yaml:"min_importance"`
+
+	// MaxMemoriesPerTurn limits extraction from a single turn.
+	MaxMemoriesPerTurn int `yaml:"max_memories_per_turn"`
+
+	// Embedding config for semantic search.
+	EmbeddingEnabled          bool   `yaml:"embedding_enabled"`
+	EmbeddingModel            string `yaml:"embedding_model"`
+	EmbeddingURL              string `yaml:"embedding_url"`
+	EmbeddingDimensions       int    `yaml:"embedding_dimensions"`
+	EmbeddingIndexPath        string `yaml:"embedding_index_path"`
+	EmbeddingReindexOnStartup bool   `yaml:"embedding_reindex_on_startup"`
+
+	// RecallSync controls whether to push memories to Recall after local storage.
+	RecallSync string `yaml:"recall_sync"` // "async" or "off"
+
+	// QueryPlanner controls the model-driven keyword extraction for memory search.
+	QueryPlannerEnabled  bool          `yaml:"query_planner_enabled"`
+	QueryPlannerModel    string        `yaml:"query_planner_model"`
+	QueryPlannerTimeoutS int           `yaml:"query_planner_timeout_s"`
+}
+
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		Prism: PrismConfig{
-			InstanceID:         "prism",
+		Prizm: PrizmConfig{
+			InstanceID:         "prizm",
 			NATSURL:            "",
 			Port:               8321,
 			BindHost:           "127.0.0.1",
-			DataDir:            filepath.Join(os.Getenv("HOME"), ".prism", "data"),
+			DataDir:            filepath.Join(os.Getenv("HOME"), ".prizm", "data"),
 			RunsDir:            "runs",
 			OllamaURL:          "http://localhost:11434",
 			LogLevel:           "info",
@@ -916,21 +1008,33 @@ func DefaultConfig() *Config {
 			URL:            "http://localhost:18790",
 			TimeoutSeconds: 60,
 		},
+		Memory: MemoryConfig{
+			StoreType:          "markdown",
+			StorePath:          "memory",
+			GateModel:          "nemotron-3-nano:4b",
+			ExtractModel:       "nemotron-3-nano:4b",
+			ModelFallbackChain: []string{"nemotron-3-nano:4b", "qwen3.5:4b"},
+			OllamaURL:          "http://localhost:11434",
+			AutoCapture:        true,
+			MinImportance:      0.5,
+			MaxMemoriesPerTurn: 3,
+			RecallSync:         "async",
+		},
 		Bridge: BridgeConfig{
 			Enabled: false,
 			Mode:    "shared_nats",
 			AllowedSubjects: []string{
-				"prism.cross.context_sync",
-				"prism.cross.task_request",
-				"prism.cross.status_request",
-				"prism.cross.validation_request",
-				"prism.cross.task_response",
-				"prism.cross.task_accept",
-				"prism.cross.task_reject",
-				"prism.cross.clarification",
-				"prism.cross.task_progress",
-				"prism.cross.task_result",
-				"prism.cross.task_cancel",
+				"prizm.cross.context_sync",
+				"prizm.cross.task_request",
+				"prizm.cross.status_request",
+				"prizm.cross.validation_request",
+				"prizm.cross.task_response",
+				"prizm.cross.task_accept",
+				"prizm.cross.task_reject",
+				"prizm.cross.clarification",
+				"prizm.cross.task_progress",
+				"prizm.cross.task_result",
+				"prizm.cross.task_cancel",
 			},
 			LeaderInstance:         "lumi-ceo",
 			ConfidenceThreshold:    0.75,
@@ -968,7 +1072,7 @@ func DefaultConfig() *Config {
 					},
 				},
 			},
-			SecretEnv: "PRISM_BRIDGE_SECRET",
+			SecretEnv: "PRIZM_BRIDGE_SECRET",
 			Factory: FactoryBridgeConfig{
 				Enabled:            false,
 				Root:               `D:\_projects_\roblox-factory`,
@@ -1001,7 +1105,7 @@ func DefaultConfig() *Config {
 			ValidationProfiles:   []string{"go_test_all"},
 			WorkerOrder:          []string{"codex", "local_agent"},
 			LocalAgent:           "forge",
-			WorktreeRoot:         filepath.Join(".prism", "worktrees"),
+			WorktreeRoot:         filepath.Join(".prizm", "worktrees"),
 		},
 		FactoryMonitor: FactoryMonitorConfig{
 			Enabled:           false,
@@ -1033,11 +1137,28 @@ func (c *Config) Validate() error {
 	seenIDs := make(map[string]bool)
 	autoGenCounter := 0
 
+	// Validate global context_mode and agent_loop
+	validContextModes := map[string]bool{"full": true, "open_book": true}
+	if c.Prizm.ContextMode != "" && !validContextModes[c.Prizm.ContextMode] {
+		return fmt.Errorf("config: prizm.context_mode must be \"full\" or \"open_book\", got %q", c.Prizm.ContextMode)
+	}
+	validAgentLoops := map[string]bool{"classic": true, "agentic": true}
+	if c.Prizm.AgentLoop != "" && !validAgentLoops[c.Prizm.AgentLoop] {
+		return fmt.Errorf("config: prizm.agent_loop must be \"classic\" or \"agentic\", got %q", c.Prizm.AgentLoop)
+	}
+
 	for i, a := range c.Agents {
 		id := a.ID
 		if id == "" {
 			autoGenCounter++
-			id = fmt.Sprintf("prism%d", autoGenCounter)
+			id = fmt.Sprintf("prizm%d", autoGenCounter)
+		}
+
+		if a.ContextMode != "" && !validContextModes[a.ContextMode] {
+			return fmt.Errorf("config: agent[%d] %q context_mode must be \"full\" or \"open_book\", got %q", i, id, a.ContextMode)
+		}
+		if a.AgentLoop != "" && !validAgentLoops[a.AgentLoop] {
+			return fmt.Errorf("config: agent[%d] %q agent_loop must be \"classic\" or \"agentic\", got %q", i, id, a.AgentLoop)
 		}
 
 		// Agent ID must be alphanumeric + hyphens (same rule as agent.Agent.Validate)
@@ -1123,14 +1244,14 @@ func (c *Config) Validate() error {
 	if c.Sessions.VerbatimRecentMessages < 0 {
 		return fmt.Errorf("config: verbatim_recent_messages must be >= 0")
 	}
-	if c.Prism.LLMTimeoutSeconds < 0 {
+	if c.Prizm.LLMTimeoutSeconds < 0 {
 		return fmt.Errorf("config: llm_timeout_seconds must be >= 0")
 	}
 	if c.Remembrance.TimeoutSeconds < 0 {
 		return fmt.Errorf("config: remembrance.timeout_seconds must be >= 0")
 	}
-	if c.Prism.RunsDir == "" {
-		c.Prism.RunsDir = "runs"
+	if c.Prizm.RunsDir == "" {
+		c.Prizm.RunsDir = "runs"
 	}
 	// API request-body caps: default when unset, reject negatives.
 	if c.API.MaxRequestBytes == 0 {
@@ -1177,7 +1298,7 @@ func (c *Config) Validate() error {
 	}
 	if c.Codex.Enabled {
 		if c.Codex.Workspace == "" {
-			c.Codex.Workspace = c.Prism.Workspace
+			c.Codex.Workspace = c.Prizm.Workspace
 		}
 		if c.Codex.Workspace == "" {
 			c.Codex.Workspace = "."
@@ -1223,7 +1344,7 @@ func (c *Config) Validate() error {
 		c.Autopatch.WorkerOrder = []string{"codex", "local_agent"}
 	}
 	if c.Autopatch.WorktreeRoot == "" {
-		c.Autopatch.WorktreeRoot = filepath.Join(".prism", "worktrees")
+		c.Autopatch.WorktreeRoot = filepath.Join(".prizm", "worktrees")
 	}
 	if c.Autopatch.Enabled {
 		if c.Autopatch.Mode != "propose" && c.Autopatch.Mode != "pr" {
@@ -1258,12 +1379,12 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: factory_monitor.stuck_after_minutes must be >= 1")
 		}
 	}
-	if c.Prism.InstanceID != "" && !isValidAgentID(c.Prism.InstanceID) {
-		return fmt.Errorf("config: prism.instance_id %q must be alphanumeric + hyphens only", c.Prism.InstanceID)
+	if c.Prizm.InstanceID != "" && !isValidAgentID(c.Prizm.InstanceID) {
+		return fmt.Errorf("config: prizm.instance_id %q must be alphanumeric + hyphens only", c.Prizm.InstanceID)
 	}
 	if c.Bridge.Enabled {
-		if c.Prism.InstanceID == "" {
-			return fmt.Errorf("config: prism.instance_id is required when bridge is enabled")
+		if c.Prizm.InstanceID == "" {
+			return fmt.Errorf("config: prizm.instance_id is required when bridge is enabled")
 		}
 		if c.Bridge.SecretEnv == "" && c.Bridge.Secret == "" {
 			return fmt.Errorf("config: bridge.secret_env or bridge.secret is required when bridge is enabled")
@@ -1313,8 +1434,8 @@ func (c *Config) Validate() error {
 	// Network exposure: binding to a non-loopback interface without a bearer
 	// token would expose unauthenticated state-changing endpoints (approvals,
 	// editor save) to the network. Fail closed.
-	if !IsLoopbackHost(c.Prism.BindHost) && c.API.ResolveAuthToken() == "" {
-		return fmt.Errorf("config: prism.bind_host %q is not loopback; set api.auth_token or api.auth_token_env to expose the API on the network", c.Prism.BindHost)
+	if !IsLoopbackHost(c.Prizm.BindHost) && c.API.ResolveAuthToken() == "" {
+		return fmt.Errorf("config: prizm.bind_host %q is not loopback; set api.auth_token or api.auth_token_env to expose the API on the network", c.Prizm.BindHost)
 	}
 
 	return nil
@@ -1329,7 +1450,7 @@ func (c *Config) ResolveAndValidate() error {
 	for i := range c.Agents {
 		if c.Agents[i].ID == "" {
 			autoGenCounter++
-			c.Agents[i].ID = fmt.Sprintf("prism%d", autoGenCounter)
+			c.Agents[i].ID = fmt.Sprintf("prizm%d", autoGenCounter)
 		}
 	}
 
@@ -1352,7 +1473,7 @@ func (c *Config) PrimaryAgent() *AgentConfig {
 	return nil
 }
 
-// LoadConfig reads a prism.yaml file and returns the parsed Config.
+// LoadConfig reads a prizm.yaml file and returns the parsed Config.
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1388,9 +1509,9 @@ func (c *Config) ResolveEnv() {
 	c.Codex.Workspace = os.ExpandEnv(c.Codex.Workspace)
 	c.ClaudeCode.Executable = os.ExpandEnv(c.ClaudeCode.Executable)
 	c.FactoryMonitor.Root = os.ExpandEnv(c.FactoryMonitor.Root)
-	expandList(c.Prism.AllowedPaths)
-	expandList(c.Prism.ReadRoots)
-	expandList(c.Prism.WriteRoots)
+	expandList(c.Prizm.AllowedPaths)
+	expandList(c.Prizm.ReadRoots)
+	expandList(c.Prizm.WriteRoots)
 }
 
 // EffectiveReadRoots returns configured recursive read roots. New read_roots
@@ -1399,10 +1520,10 @@ func (c *Config) EffectiveReadRoots() []string {
 	if c == nil {
 		return nil
 	}
-	if len(c.Prism.ReadRoots) > 0 {
-		return append([]string(nil), c.Prism.ReadRoots...)
+	if len(c.Prizm.ReadRoots) > 0 {
+		return append([]string(nil), c.Prizm.ReadRoots...)
 	}
-	return append([]string(nil), c.Prism.AllowedPaths...)
+	return append([]string(nil), c.Prizm.AllowedPaths...)
 }
 
 // EffectiveWriteRoots returns configured recursive approval-gated write roots.
@@ -1411,10 +1532,10 @@ func (c *Config) EffectiveWriteRoots() []string {
 	if c == nil {
 		return nil
 	}
-	if len(c.Prism.WriteRoots) > 0 {
-		return append([]string(nil), c.Prism.WriteRoots...)
+	if len(c.Prizm.WriteRoots) > 0 {
+		return append([]string(nil), c.Prizm.WriteRoots...)
 	}
-	return append([]string(nil), c.Prism.AllowedPaths...)
+	return append([]string(nil), c.Prizm.AllowedPaths...)
 }
 
 func expandList(values []string) {
@@ -1436,7 +1557,7 @@ func boolPtr(v bool) *bool {
 }
 
 // RegisterAgents adds all configured agents to the given registry.
-// Auto-generated IDs (prism1, prism2, etc.) are already resolved.
+// Auto-generated IDs (prizm1, prizm2, etc.) are already resolved.
 func (c *Config) RegisterAgents(registry *agent.Registry) error {
 	for _, agentCfg := range c.Agents {
 		a := &agent.Agent{
@@ -1464,4 +1585,13 @@ func (c *Config) RegisterAgents(registry *agent.Registry) error {
 		}
 	}
 	return nil
+}
+
+// TTSConfig holds Voicebox text-to-speech settings.
+type TTSConfig struct {
+	Enabled     bool   `yaml:"enabled"`
+	ProfileID   string `yaml:"profile_id"`
+	Engine      string `yaml:"engine"`
+	VoiceboxURL string `yaml:"voicebox_url"`
+	MaxChars    int    `yaml:"max_chars"`
 }

@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="Prism operational overview">
-<title>Overview · Prism</title>
+<meta name="description" content="Prizm operational overview">
+<title>Overview · Prizm</title>
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -13,7 +13,7 @@
   <header class="page-header">
     <div>
       <p class="eyebrow">Operational control plane</p>
-      <h1 class="page-title">Prism overview</h1>
+      <h1 class="page-title">Prizm overview</h1>
       <p class="page-sub">Monitor what is running, identify blocked work, and move safely into the relevant operational view.</p>
     </div>
     <button class="btn secondary" id="refresh" type="button">Refresh data</button>
@@ -21,7 +21,7 @@
 
   <div id="connection" class="banner" role="alert"></div>
   <section aria-labelledby="summary-heading">
-    <div class="section-heading"><div><h2 id="summary-heading" class="section-title">Operational summary</h2><p class="section-copy">Current state from Prism’s live service.</p></div><span id="last-updated" class="meta" aria-live="polite"></span></div>
+    <div class="section-heading"><div><h2 id="summary-heading" class="section-title">Operational summary</h2><p class="section-copy">Current state from Prizm’s live service.</p></div><span id="last-updated" class="meta" aria-live="polite"></span></div>
     <div class="metric-grid" id="metrics" aria-busy="true">
       <div class="metric"><span class="metric-label">Service</span><div class="skeleton"></div></div>
       <div class="metric"><span class="metric-label">Active work</span><div class="skeleton"></div></div>
@@ -34,12 +34,12 @@
     <div class="section-heading"><div><h2 id="attention-heading" class="section-title">Immediate attention</h2><p class="section-copy">Items that may need a human decision or follow-up.</p></div></div>
     <div class="attention-grid">
       <div class="card"><div id="attention" class="attention-list" aria-live="polite"></div></div>
-      <aside class="card" aria-labelledby="model-heading"><h2 id="model-heading">How Prism progresses work</h2><p class="card-hint">Every task moves through the same governed lifecycle.</p><ol class="lifecycle"><li>Route</li><li>Policy check</li><li>Approval when required</li><li>Agent or tool execution</li><li>Validation and persistence</li></ol><a class="btn secondary small" href="/workflow-editor.html">Inspect workflow</a></aside>
+      <aside class="card" aria-labelledby="model-heading"><h2 id="model-heading">How Prizm progresses work</h2><p class="card-hint">Every task moves through the same governed lifecycle.</p><ol class="lifecycle"><li>Route</li><li>Policy check</li><li>Approval when required</li><li>Agent or tool execution</li><li>Validation and persistence</li></ol><a class="btn secondary small" href="/workflow-editor.html">Inspect workflow</a></aside>
     </div>
   </section>
 
   <section class="section" aria-labelledby="tasks-heading">
-    <div class="section-heading"><div><h2 id="tasks-heading" class="section-title">Work queue</h2><p class="section-copy">Tasks are the live operational record available from Prism’s task store.</p></div><span id="task-count" class="meta"></span></div>
+    <div class="section-heading"><div><h2 id="tasks-heading" class="section-title">Work queue</h2><p class="section-copy">Tasks are the live operational record available from Prizm’s task store.</p></div><span id="task-count" class="meta"></span></div>
     <div class="toolbar" aria-label="Task filters">
       <div class="field"><label for="task-search">Search tasks</label><input id="task-search" type="search" placeholder="Task, agent, or ID"></div>
       <div class="field"><label for="status-filter">Status</label><select id="status-filter"><option value="">All statuses</option><option value="created">Created</option><option value="assigned">Assigned</option><option value="in_progress">In progress</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option></select></div>
@@ -55,7 +55,7 @@
 <script src="/app.js"></script>
 <script>
 (() => {
-  const ui = window.PrismUI;
+  const ui = window.PrizmUI;
   const state = { tasks: [], agents: [], approvals: [], status: null };
   const $ = selector => document.querySelector(selector);
   const activeStatuses = new Set(['created', 'assigned', 'in_progress']);
@@ -101,7 +101,7 @@
     const target = $('#tasks');
     const tasks = filteredTasks().sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0));
     $('#task-count').textContent = `${tasks.length} shown`;
-    if (!tasks.length) { target.innerHTML = `<div class="empty-state"><strong>No matching tasks</strong>Try changing the filters, or wait for Prism to receive work.</div>`; return; }
+    if (!tasks.length) { target.innerHTML = `<div class="empty-state"><strong>No matching tasks</strong>Try changing the filters, or wait for Prizm to receive work.</div>`; return; }
     target.innerHTML = `<div class="table-wrap"><table class="data-table"><thead><tr><th>Task</th><th>Status</th><th>Assigned agent</th><th>Priority</th><th>Updated</th></tr></thead><tbody>${tasks.map(t => `<tr><td data-label="Task"><div class="task-title">${ui.escape(t.description || t.id)}</div><div class="meta mono">${ui.escape(t.id || '—')} · ${ui.escape(t.type || 'task')}</div></td><td data-label="Status">${ui.badge(t.status)}</td><td data-label="Assigned agent">${ui.escape(t.delegated_to || 'Unassigned')}</td><td data-label="Priority">${ui.escape(t.priority || 'normal')}</td><td data-label="Updated"><span title="${ui.escape(ui.formatTime(t.updated_at || t.created_at))}">${ui.escape(ui.relativeTime(t.updated_at || t.created_at))}</span></td></tr>`).join('')}</tbody></table></div>`;
   }
   function renderActivity() {

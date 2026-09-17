@@ -3,7 +3,7 @@ package action
 import (
 	"testing"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 func TestMatchTriggerExact(t *testing.T) {
@@ -14,8 +14,8 @@ func TestMatchTriggerExact(t *testing.T) {
 	}{
 		{"lumi.agent.output", "lumi.agent.output", true},
 		{"lumi.agent.output", "mango.agent.output", false},
-		{"prism.cost.tracked", "prism.cost.tracked", true},
-		{"prism.cost.tracked", "prism.cost.reported", false},
+		{"prizm.cost.tracked", "prizm.cost.tracked", true},
+		{"prizm.cost.tracked", "prizm.cost.reported", false},
 	}
 
 	for _, tt := range tests {
@@ -34,8 +34,8 @@ func TestMatchTriggerSingleWildcard(t *testing.T) {
 	}{
 		{"*.tool.completed", "lumi.tool.completed", true},
 		{"*.tool.completed", "mango.tool.completed", true},
-		{"*.tool.completed", "prism1.tool.completed", true},
-		{"*.tool.completed", "prism.tool.completed", true},
+		{"*.tool.completed", "prizm1.tool.completed", true},
+		{"*.tool.completed", "prizm.tool.completed", true},
 		{"*.tool.completed", "lumi.agent.completed", false},
 		{"*.agent.output", "lumi.agent.output", true},
 		{"*.agent.output", "support-bot.agent.output", true},
@@ -57,11 +57,11 @@ func TestMatchTriggerDoubleWildcard(t *testing.T) {
 	}{
 		{"**.failed", "lumi.agent.failed", true},
 		{"**.failed", "mango.tool.failed", true},
-		{"**.failed", "prism.cost.failed", true},
+		{"**.failed", "prizm.cost.failed", true},
 		{"**.failed", "lumi.agent.completed", false},
 		{"**.output", "lumi.agent.output", true},
 		{"**.output", "mango.agent.output", true},
-		{"**.completed", "prism.task.completed", true},
+		{"**.completed", "prizm.task.completed", true},
 	}
 
 	for _, tt := range tests {
@@ -81,8 +81,8 @@ func TestMatchTriggerMixedWildcard(t *testing.T) {
 		{"lumi.*.completed", "lumi.agent.completed", true},
 		{"lumi.*.completed", "lumi.tool.completed", true},
 		{"lumi.*.completed", "mango.agent.completed", false},
-		{"prism.**.tracked", "prism.cost.tracked", true},
-		{"prism.**.tracked", "prism.agent.cost.tracked", true},
+		{"prizm.**.tracked", "prizm.cost.tracked", true},
+		{"prizm.**.tracked", "prizm.agent.cost.tracked", true},
 	}
 
 	for _, tt := range tests {
@@ -99,7 +99,7 @@ func TestRegistryProcessEvent(t *testing.T) {
 	// Register a handler
 	var capturedEvent event.Event
 	handlerCalled := 0
-	reg.RegisterHandler("prism.cost.track", func(evt event.Event, action Action) error {
+	reg.RegisterHandler("prizm.cost.track", func(evt event.Event, action Action) error {
 		capturedEvent = evt
 		handlerCalled++
 		return nil
@@ -108,7 +108,7 @@ func TestRegistryProcessEvent(t *testing.T) {
 	// Register an action
 	reg.RegisterAction(Action{
 		Trigger: "*.tool.completed",
-		Action:  "prism.cost.track",
+		Action:  "prizm.cost.track",
 		Enabled: true,
 	})
 
@@ -182,7 +182,7 @@ func TestRegistryNoHandler(t *testing.T) {
 func TestRegistryList(t *testing.T) {
 	reg := NewRegistry()
 
-	reg.RegisterAction(Action{Trigger: "*.tool.completed", Action: "prism.cost.track", Enabled: true})
+	reg.RegisterAction(Action{Trigger: "*.tool.completed", Action: "prizm.cost.track", Enabled: true})
 	reg.RegisterAction(Action{Trigger: "lumi.agent.output", Action: "remembrance.gate.extract", Enabled: true})
 
 	actions := reg.List()

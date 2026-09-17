@@ -52,7 +52,7 @@ A rolled-back run finalizes with the new status **`rolled_back`** (never
 completed). A rollback that itself fails records the error and does NOT report
 `rolled_back` — the branch may still hold bad commits.
 
-### Rollback runner (`cmd/prism-cli/wake_handler.go`)
+### Rollback runner (`cmd/prizm-cli/wake_handler.go`)
 
 Wired in `RunGatedLoop` when the workflow config enables it:
 
@@ -62,7 +62,7 @@ Wired in `RunGatedLoop` when the workflow config enables it:
 - Rollback = `gitx.ResetHard(workRoot, startSHA)`, then checkout the original
   branch if the model wandered off it (non-isolated mode).
 - Under V56 worktree isolation: the reset happens inside the worktree, and the
-  run branch `prism/<runID>` is deleted after worktree cleanup (defer ordering:
+  run branch `prizm/<runID>` is deleted after worktree cleanup (defer ordering:
   branch deletion registered before the worktree-removal defer, so it runs
   after — a checked-out branch can't be deleted).
 - **Pushed commits are never force-removed.** The remote run branch remains
@@ -70,7 +70,7 @@ Wired in `RunGatedLoop` when the workflow config enables it:
 
 ### Surfacing
 
-- `prism runs <id> --json` gains `"rollback": {reason, error?, at}` and shows
+- `prizm runs <id> --json` gains `"rollback": {reason, error?, at}` and shows
   `"status": "rolled_back"`.
 - Config knobs documented in `examples/workflows/gated-loop.yaml`.
 

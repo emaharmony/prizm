@@ -3,7 +3,7 @@ package guard
 import (
 	"testing"
 
-	"github.com/emaharmony/prism/internal/plan"
+	"github.com/emaharmony/prizm/internal/plan"
 )
 
 func TestCheckToolExecution_ReadTools(t *testing.T) {

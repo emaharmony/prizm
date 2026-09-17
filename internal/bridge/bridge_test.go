@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/bus"
+	"github.com/emaharmony/prizm/internal/bus"
 	"github.com/nats-io/nats.go"
 )
 
@@ -146,7 +146,7 @@ func TestBridge_FullRoundTrip(t *testing.T) {
 
 	// Connect to remote
 	err := bridge.Connect(RemoteConfig{
-		ID:       "remote-prism",
+		ID:       "remote-prizm",
 		NATSURL:  remoteNC.ConnectedUrl(),
 		Subjects: []string{">"},
 		Enabled:  true,
@@ -191,8 +191,8 @@ func TestBridge_FullRoundTrip(t *testing.T) {
 	// Wait for the bridge to forward the event
 	select {
 	case data := <-received:
-		if data["_origin"] != "remote-prism" {
-			t.Errorf("expected origin remote-prism, got %v", data["_origin"])
+		if data["_origin"] != "remote-prizm" {
+			t.Errorf("expected origin remote-prizm, got %v", data["_origin"])
 		}
 		if data["_bridged"] != true {
 			t.Error("expected _bridged=true")

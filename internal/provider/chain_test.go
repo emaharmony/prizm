@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/emaharmony/prism/internal/provider"
-	"github.com/emaharmony/prism/internal/provider/mock"
-	"github.com/emaharmony/prism/internal/provider/ollama"
-	"github.com/emaharmony/prism/internal/provider/openai"
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/provider/mock"
+	"github.com/emaharmony/prizm/internal/provider/ollama"
+	"github.com/emaharmony/prizm/internal/provider/openai"
 )
 
 // mockProvider implements provider.Provider for chain tests.

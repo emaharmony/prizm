@@ -1,4 +1,4 @@
-# V38 — `prism watch`: Live Run Visibility
+# V38 — `prizm watch`: Live Run Visibility
 
 **Status:** Source-current
 **Last Updated:** 2026-06-29
@@ -13,17 +13,17 @@ a lot of objective work and none of it was visible as it happened.
 
 ## Design
 
-`prism watch` is a **pure consumer** of events the engine already emits, so it can
+`prizm watch` is a **pure consumer** of events the engine already emits, so it can
 never affect a run — it only observes. It connects to the running daemon's SSE
 endpoint and renders a continuously-updated terminal view.
 
 ```
-prism watch [--config prism.yaml] [--subject prism.workflow.>] [--url <base>]
+prizm watch [--config prizm.yaml] [--subject prizm.workflow.>] [--url <base>]
 ```
 
-- **Transport:** `GET /api/v1/events/stream?subject=prism.workflow.>` (the existing
+- **Transport:** `GET /api/v1/events/stream?subject=prizm.workflow.>` (the existing
   SSE endpoint), parsed with the shared `internal/sse` decoder. Base URL and bearer
-  token are derived from `prism.yaml` (API on health `port + 1`), or overridden
+  token are derived from `prizm.yaml` (API on health `port + 1`), or overridden
   with `--url`.
 - **Model/render split:** `watchModel.apply(evType, payload)` folds each event into
   in-memory state; `watchModel.render()` produces the screen. Both are I/O-free and
@@ -53,7 +53,7 @@ visible.
 
 ## Tests
 
-`cmd/prism-cli/cmd_watch_test.go`: phase lifecycle (entered → tokens → gate →
+`cmd/prizm-cli/cmd_watch_test.go`: phase lifecycle (entered → tokens → gate →
 verification) folds into the model and renders; delegation sent→retry→timeout;
 paused/completed transitions; and `tokenMeter` (full / half / uncapped /
 over-budget-clamp).
@@ -61,6 +61,6 @@ over-budget-clamp).
 ## Follow-ups (UX roadmap)
 
 Next brainstormed UX items, in rough priority: rich Discord approval cards
-(buttons), diff preview at feedback gates, `prism doctor` preflight, dry-run/plan
+(buttons), diff preview at feedback gates, `prizm doctor` preflight, dry-run/plan
 preview, a durable `runs/<id>/REPORT.md` artifact, and gate-needs-you
 notifications.

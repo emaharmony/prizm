@@ -21,8 +21,8 @@ func initRepo(t *testing.T) string {
 		}
 	}
 	mustRun("init", "-b", "main")
-	mustRun("config", "user.email", "test@prism.local")
-	mustRun("config", "user.name", "Prism Test")
+	mustRun("config", "user.email", "test@prizm.local")
+	mustRun("config", "user.name", "Prizm Test")
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("hello\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -34,14 +34,14 @@ func initRepo(t *testing.T) string {
 func TestCreateBranchWorktree(t *testing.T) {
 	root := initRepo(t)
 	ctx := context.Background()
-	wt := filepath.Join(root, ".prism", "worktrees", "gl-1")
+	wt := filepath.Join(root, ".prizm", "worktrees", "gl-1")
 
 	// Repo-local exclude keeps the parent repo clean even though the
-	// worktree lives under <repo>/.prism/.
-	if err := EnsureExcluded(ctx, root, ".prism/"); err != nil {
+	// worktree lives under <repo>/.prizm/.
+	if err := EnsureExcluded(ctx, root, ".prizm/"); err != nil {
 		t.Fatalf("EnsureExcluded: %v", err)
 	}
-	if err := CreateBranchWorktree(ctx, root, wt, "prism/gl-1", ""); err != nil {
+	if err := CreateBranchWorktree(ctx, root, wt, "prizm/gl-1", ""); err != nil {
 		t.Fatalf("CreateBranchWorktree: %v", err)
 	}
 	// The worktree exists and is on the new branch.
@@ -49,8 +49,8 @@ func TestCreateBranchWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentBranch: %v", err)
 	}
-	if branch != "prism/gl-1" {
-		t.Fatalf("worktree branch = %q, want prism/gl-1", branch)
+	if branch != "prizm/gl-1" {
+		t.Fatalf("worktree branch = %q, want prizm/gl-1", branch)
 	}
 	// The main worktree is untouched.
 	mainBranch, _ := CurrentBranch(ctx, root)
@@ -71,8 +71,8 @@ func TestCreateBranchWorktree(t *testing.T) {
 		t.Fatalf("worktree dir should be removed, stat err = %v", err)
 	}
 	// The branch survives worktree removal (it may have been pushed).
-	out, err := RunCommand(ctx, root, "", "git", "branch", "--list", "prism/gl-1")
-	if err != nil || !strings.Contains(out, "prism/gl-1") {
+	out, err := RunCommand(ctx, root, "", "git", "branch", "--list", "prizm/gl-1")
+	if err != nil || !strings.Contains(out, "prizm/gl-1") {
 		t.Fatalf("branch should survive worktree removal: out=%q err=%v", out, err)
 	}
 }
@@ -80,7 +80,7 @@ func TestCreateBranchWorktree(t *testing.T) {
 func TestCreateDetachedWorktree(t *testing.T) {
 	root := initRepo(t)
 	ctx := context.Background()
-	wt := filepath.Join(root, ".prism", "worktrees", "ap-1")
+	wt := filepath.Join(root, ".prizm", "worktrees", "ap-1")
 
 	if err := CreateDetachedWorktree(ctx, root, wt); err != nil {
 		t.Fatalf("CreateDetachedWorktree: %v", err)

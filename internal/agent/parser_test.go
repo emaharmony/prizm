@@ -3,7 +3,7 @@ package agent
 import (
 	"testing"
 
-	"github.com/emaharmony/prism/internal/tool"
+	"github.com/emaharmony/prizm/internal/tool"
 )
 
 func TestParseFinalResponse(t *testing.T) {
@@ -151,7 +151,7 @@ func containsStr(s, sub string) bool {
 	return false
 }
 func TestParseAgentOutputWithFallbackEmbeddedToolRequest(t *testing.T) {
-	// This is the exact pattern Prism produces: natural language + embedded JSON
+	// This is the exact pattern Prizm produces: natural language + embedded JSON
 	input := `Let me start by staging the files. I'll also add the backward-compatible aliases. {"type":"tool_request","tool":"git_add","input":{"path":"/Users/ema/projects/repos/BassBook/apps/web/src/app/globals.css"}}`
 	resp := ParseAgentOutputWithFallback(input)
 

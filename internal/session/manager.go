@@ -1,4 +1,4 @@
-// Package session provides the session manager for Prism V20.
+// Package session provides the session manager for Prizm V20.
 //
 // A session tracks a conversation between a user and an agent on a channel.
 // Sessions persist across messages, compact when they grow too large, and
@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -48,7 +49,7 @@ type Message struct {
 	Archived  bool      `json:"archived,omitempty"`
 }
 
-// LocalSummary is Prism's deterministic short-term summary for older recent
+// LocalSummary is Prizm's deterministic short-term summary for older recent
 // local conversation. It is separate from Remembrance semantic memory.
 type LocalSummary struct {
 	OwnerID          string    `json:"owner_id"`
@@ -183,6 +184,22 @@ func (m *Manager) migrate(_ context.Context) error {
 	}
 	if _, err := m.db.Exec("CREATE INDEX IF NOT EXISTS idx_messages_session_archived ON messages(session_id, archived, timestamp)"); err != nil {
 		return err
+	}
+	// V76: FTS5 full-text search on message content for session search.
+	// Using a contentless FTS5 table (no external-content pattern) to avoid
+	// the need for sync triggers. Content is duplicated in the FTS index
+	// but auto-maintained by SQLite. Falls back gracefully if FTS5 unavailable.
+	if _, err := m.db.Exec(`
+		CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+			session_id UNINDEXED,
+			message_id UNINDEXED,
+			role UNINDEXED,
+			content,
+			timestamp UNINDEXED
+		);
+	`); err != nil {
+		log.Printf("[SESSION] FTS5 not available, session search disabled: %v", err)
+		// Non-fatal — FTS5 may not be compiled into all SQLite builds
 	}
 	return nil
 }
@@ -531,6 +548,11 @@ func (m *Manager) AddMessage(sessionID, role, content, agentID string) (*Message
 		return nil, fmt.Errorf("session: insert message: %w", err)
 	}
 
+	// V76: Also insert into FTS5 index for session search
+	m.db.Exec("INSERT INTO messages_fts (session_id, message_id, role, content, timestamp) VALUES (?, ?, ?, ?, ?)",
+		sessionID, msg.ID, msg.Role, msg.Content, msg.Timestamp) // non-fatal if FTS unavailable
+
+
 	// Update last_active
 	_, err = m.db.Exec(
 		"UPDATE sessions SET last_active = ? WHERE id = ?",
@@ -586,12 +608,42 @@ func (m *Manager) compact(s *Session) error {
 	for _, msg := range removed {
 		removeIDs[msg.ID] = true
 	}
+
+	// V76: For "summarize" strategy, build a SessionMemory from the removed messages
+	// and inject it as the first message in the kept set. This gives the agent a
+	// structured continuity anchor after compaction.
+	var continuityMsg *Message
+	if m.compactionStrategy == "summarize" && len(removed) > 0 {
+		mem := BuildSessionMemoryFromMessages(removed)
+		// Use the oldest removed message's timestamp so the continuity message
+		// stays first when messages are ordered by timestamp ASC on reload.
+		oldestTs := removed[0].Timestamp
+		for _, r := range removed[1:] {
+			if r.Timestamp.Before(oldestTs) {
+				oldestTs = r.Timestamp
+			}
+		}
+		continuityMsg = &Message{
+			ID:        "continuity-" + s.ID + "-" + oldestTs.Format("20060102-150405") + "-" + fmt.Sprintf("%d", time.Now().UnixNano()%1000000),
+			SessionID: s.ID,
+			Role:      "system",
+			Content:   mem.Format(),
+			Timestamp: oldestTs,
+		}
+	}
+
 	kept := s.Messages[:0]
 	for _, msg := range s.Messages {
 		if !removeIDs[msg.ID] {
 			kept = append(kept, msg)
 		}
 	}
+
+	// Prepend the continuity summary if we built one
+	if continuityMsg != nil {
+		kept = append([]Message{*continuityMsg}, kept...)
+	}
+
 	s.Messages = kept
 	s.CompactedAt = time.Now().UTC()
 
@@ -604,6 +656,16 @@ func (m *Manager) compact(s *Session) error {
 			if _, err := m.db.Exec("DELETE FROM messages WHERE id = ?", msg.ID); err != nil {
 				return fmt.Errorf("session: delete message %s: %w", msg.ID, err)
 			}
+		}
+	}
+
+	// Store the continuity message in the DB if we built one
+	if continuityMsg != nil {
+		if _, err := m.db.Exec(
+			"INSERT INTO messages (id, session_id, role, content, agent_id, timestamp, archived) VALUES (?, ?, ?, ?, ?, ?, 0)",
+			continuityMsg.ID, s.ID, continuityMsg.Role, continuityMsg.Content, "", continuityMsg.Timestamp,
+		); err != nil {
+			log.Printf("[SESSION] failed to store continuity message: %v (non-fatal)", err)
 		}
 	}
 
@@ -988,4 +1050,53 @@ func generateSessionID() string {
 // generateMessageID creates a unique message ID.
 func generateMessageID() string {
 	return fmt.Sprintf("msg_%d_%d", time.Now().UnixNano(), idCounter.Add(1))
+}
+
+// SearchResult is a single message match from SearchSessions.
+type SearchResult struct {
+	SessionID  string    `json:"session_id"`
+	MessageID  string    `json:"message_id"`
+	Role       string    `json:"role"`
+	Content    string    `json:"content"`
+	Timestamp  time.Time `json:"timestamp"`
+	Rank       float64   `json:"rank"`
+}
+
+// SearchSessions performs full-text search across all session messages using FTS5.
+// Returns matching messages ranked by relevance. Returns an error if FTS5 is
+// not available.
+func (m *Manager) SearchSessions(query string, limit int) ([]SearchResult, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := m.db.Query(`
+		SELECT session_id, message_id, role, content, timestamp, rank
+		FROM messages_fts
+		WHERE messages_fts MATCH ?
+		ORDER BY rank
+		LIMIT ?
+	`, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("session: FTS5 search failed: %w", err)
+	}
+	defer rows.Close()
+
+	var results []SearchResult
+	for rows.Next() {
+		var r SearchResult
+		var tsStr string
+		if err := rows.Scan(&r.SessionID, &r.MessageID, &r.Role, &r.Content, &tsStr, &r.Rank); err != nil {
+			return nil, fmt.Errorf("session: scan search result: %w", err)
+		}
+		// FTS5 columns are untyped TEXT — parse timestamp string into time.Time
+		if t, err := time.Parse(time.RFC3339Nano, tsStr); err == nil {
+			r.Timestamp = t
+		} else if t, err := time.Parse(time.RFC3339, tsStr); err == nil {
+			r.Timestamp = t
+		} else if t, err := time.Parse("2006-01-02 15:04:05", tsStr); err == nil {
+			r.Timestamp = t
+		}
+		results = append(results, r)
+	}
+	return results, nil
 }

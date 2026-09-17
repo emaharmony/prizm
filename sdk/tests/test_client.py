@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from prism.client import PrismClient
-from prism.event import Event
+from prizm.client import PrizmClient
+from prizm.event import Event
 
 
 class FakeSubscription:
@@ -35,27 +35,27 @@ class FakeJetStream:
 
 @pytest.mark.asyncio
 async def test_emit_requires_connection():
-    client = PrismClient()
+    client = PrizmClient()
     with pytest.raises(RuntimeError, match="Not connected"):
-        await client.emit("prism.test", {})
+        await client.emit("prizm.test", {})
 
 
 @pytest.mark.asyncio
 async def test_emit_publishes_serialized_event():
-    client = PrismClient(name="pytest")
+    client = PrizmClient(name="pytest")
     js = FakeJetStream()
     client._js = js
 
-    event = await client.emit("prism.test", {"value": 42})
+    event = await client.emit("prizm.test", {"value": 42})
 
     assert event.source == "pytest"
-    assert js.published[0][0] == "prism.test"
+    assert js.published[0][0] == "prizm.test"
     assert Event.model_validate_json(js.published[0][1]).payload == {"value": 42}
 
 
 @pytest.mark.asyncio
 async def test_subscribe_decodes_and_delivers_event():
-    client = PrismClient()
+    client = PrizmClient()
     js = FakeJetStream()
     client._js = js
     received = []
@@ -63,9 +63,9 @@ async def test_subscribe_decodes_and_delivers_event():
     async def handler(event):
         received.append(event)
 
-    await client.subscribe("prism.test", handler, durable="pytest-durable")
+    await client.subscribe("prizm.test", handler, durable="pytest-durable")
     callback = js.callbacks[0]
-    message = SimpleNamespace(data=Event(type="prism.test", payload={"ok": True}).model_dump_json().encode())
+    message = SimpleNamespace(data=Event(type="prizm.test", payload={"ok": True}).model_dump_json().encode())
     await callback(message)
 
     assert received[0].payload == {"ok": True}
@@ -73,7 +73,7 @@ async def test_subscribe_decodes_and_delivers_event():
 
 @pytest.mark.asyncio
 async def test_call_tool_ignores_other_correlations():
-    client = PrismClient()
+    client = PrizmClient()
     js = FakeJetStream()
     client._js = js
 
@@ -81,13 +81,13 @@ async def test_call_tool_ignores_other_correlations():
     await asyncio.sleep(0)
     callback = js.callbacks[0]
 
-    await callback(Event(type="prism.tool.result", correlation_id="other", payload={"result": {"bad": True}}))
+    await callback(Event(type="prizm.tool.result", correlation_id="other", payload={"result": {"bad": True}}))
     assert not task.done()
 
     published = Event.model_validate_json(js.published[0][1])
     await callback(
         Event(
-            type="prism.tool.result",
+            type="prizm.tool.result",
             correlation_id=published.correlation_id,
             payload={"result": {"ok": True}},
         )
@@ -100,4 +100,4 @@ async def test_call_tool_ignores_other_correlations():
 @pytest.mark.asyncio
 async def test_call_tool_requires_connection():
     with pytest.raises(RuntimeError, match="Not connected"):
-        await PrismClient().call_tool("echo", {})
+        await PrizmClient().call_tool("echo", {})

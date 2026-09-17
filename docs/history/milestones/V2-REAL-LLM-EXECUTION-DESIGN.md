@@ -7,7 +7,7 @@ provider interface, a prompt builder, a mock provider for testing, and an Ollama
 provider for production. Wire the full LLM lifecycle into the runner with
 comprehensive event types and CLI flags.
 
-**Prism owns the lifecycle. The model only generates text.**
+**Prizm owns the lifecycle. The model only generates text.**
 
 ## What Changed
 
@@ -18,7 +18,7 @@ comprehensive event types and CLI flags.
 - `MockProvider` — returns deterministic output for testing
 - `FailingMockProvider` — returns errors for failure path testing
 - `OllamaProvider` — POST `/api/generate` with configurable base URL, context timeout support
-- Providers are stateless — Prism handles lifecycle, events, and retries
+- Providers are stateless — Prizm handles lifecycle, events, and retries
 
 ### Prompt Builder (`internal/prompt`)
 - `BuildPrompt(task, project, context)` — assembles the prompt with template + injected context
@@ -27,14 +27,14 @@ comprehensive event types and CLI flags.
 - Memory context is injected into the prompt (optional, from Remembrance)
 
 ### V2 Event Types
-- `prism.llm.requested` — prompt is assembled, about to call provider
-- `prism.llm.completed` — text generated successfully
-- `prism.llm.failed` — provider returned error or timed out
-- `prism.agent.failed` — added for provider failure flow (parent: `llm.failed`)
-- `prism.context.injected` — memory context was successfully merged into prompt
-- `prism.context.requested` — memory context was requested
-- `prism.context.failed` — memory context request failed
-- `prism.output.written` — output artifact persisted
+- `prizm.llm.requested` — prompt is assembled, about to call provider
+- `prizm.llm.completed` — text generated successfully
+- `prizm.llm.failed` — provider returned error or timed out
+- `prizm.agent.failed` — added for provider failure flow (parent: `llm.failed`)
+- `prizm.context.injected` — memory context was successfully merged into prompt
+- `prizm.context.requested` — memory context was requested
+- `prizm.context.failed` — memory context request failed
+- `prizm.output.written` — output artifact persisted
 
 ### Runner Rewrite (`internal/run`)
 - `Runner.Run()` rewritten to use `Provider` interface instead of placeholder agent
@@ -43,7 +43,7 @@ comprehensive event types and CLI flags.
 - V2 `Summary` fields: Provider, Model, OutputPath, PromptPath, MemoryStatus, LLMLatencyMs, LLMError
 - `ProviderName` fallback: defaults to `"mock"` when `Provider` is nil
 
-### CLI Flags (`cmd/prism-cli`)
+### CLI Flags (`cmd/prizm-cli`)
 - `--provider` (mock | ollama)
 - `--model` (LLM model name, e.g., `llama3.2`)
 - `--temperature` (float, default 0.7)
@@ -75,17 +75,17 @@ task.created → task.started → agent.started → llm.requested →
 | `internal/prompt/builder.go` | Prompt assembly + artifact persistence |
 | `internal/event/event.go` | Extended with V2 event types |
 | `internal/run/runner.go` | Rewritten with full LLM lifecycle |
-| `cmd/prism-cli/main.go` | New CLI flags for provider, model, etc. |
+| `cmd/prizm-cli/main.go` | New CLI flags for provider, model, etc. |
 
 ## Design Decisions
 
-1. **Provider is an interface, not a framework** — Prism doesn't dictate provider
+1. **Provider is an interface, not a framework** — Prizm doesn't dictate provider
    implementation. Any backend that implements `Generate()` works. This keeps the
    core runner provider-agnostic.
 
-2. **Prism owns the lifecycle, the model only generates** — The provider interface
+2. **Prizm owns the lifecycle, the model only generates** — The provider interface
    is narrow by design. Providers don't manage events, approvals, tool calls, or
-   memory. Prism handles everything around the `Generate()` call.
+   memory. Prizm handles everything around the `Generate()` call.
 
 3. **Mock provider for deterministic testing** — Real LLM calls are non-deterministic
    and slow. The mock provider returns guaranteed output, making tests fast and
@@ -130,12 +130,12 @@ runs/<run_id>/
 ```
 Runner.Run()
   → prompt.BuildPrompt(task, project, context)
-  → emit(prism.llm.requested)
-  → emit(prism.context.requested)       [optional]
+  → emit(prizm.llm.requested)
+  → emit(prizm.context.requested)       [optional]
   → RemembranceClient.GetContext()      [optional]
-  → emit(prism.context.injected/failed) [optional]
+  → emit(prizm.context.injected/failed) [optional]
   → provider.Generate(ctx, request)
-  → emit(prism.llm.completed | prism.llm.failed)
+  → emit(prizm.llm.completed | prizm.llm.failed)
   → prompt.WriteOutput(runDir, output)
-  → emit(prism.output.written)
+  → emit(prizm.output.written)
 ```

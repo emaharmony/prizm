@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Settings · Prism</title>
+<title>Settings · Prizm</title>
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
 <nav class="nav">
-  <span class="brand">◆ Prism</span>
+  <span class="brand">◆ Prizm</span>
   <a href="/index.html">Runs</a>
   <a href="/v2.html">Status</a>
   <a href="/scheduler.html">Cron Jobs</a>
@@ -19,7 +19,7 @@
 
 <div class="container">
   <h1 class="page-title">Settings</h1>
-  <p class="page-sub">Edit the common <span class="mono">prism.yaml</span> fields. Saves are surgical — comments and sections you don't touch are preserved. Changes apply after a <span class="mono">prism serve</span> restart.</p>
+  <p class="page-sub">Edit the common <span class="mono">prizm.yaml</span> fields. Saves are surgical — comments and sections you don't touch are preserved. Changes apply after a <span class="mono">prizm serve</span> restart.</p>
 
   <div id="banner" class="banner"></div>
 
@@ -69,7 +69,7 @@
 
   <div class="card" id="wfCard">
     <h2>Workflow run behavior</h2>
-    <p class="card-hint" id="wfHint">Global gated-loop settings. Written to the workflow file (<span class="mono" id="wfPath"></span>), not prism.yaml.</p>
+    <p class="card-hint" id="wfHint">Global gated-loop settings. Written to the workflow file (<span class="mono" id="wfPath"></span>), not prizm.yaml.</p>
     <div id="wfPanel" class="grid-2">
       <div class="field inline"><label class="toggle"><input type="checkbox" id="wf_auto_rollback"><span class="slider"></span></label><label style="margin:0;color:var(--text);font-size:14px;">Auto-rollback failed runs</label></div>
       <div class="field inline"><label class="toggle"><input type="checkbox" id="wf_auto_approve"><span class="slider"></span></label><label style="margin:0;color:var(--text);font-size:14px;">Auto-approve gates</label></div>
@@ -158,7 +158,7 @@ async function saveSettings() {
     const r = await fetch("/api/v1/config/settings", {
       method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify(patch)});
     const res = await r.json();
-    if (r.ok) { banner("✓ Saved settings to prism.yaml. ⟳ Restart `prism serve` to apply.", "ok");
+    if (r.ok) { banner("✓ Saved settings to prizm.yaml. ⟳ Restart `prizm serve` to apply.", "ok");
       SETTING_IDS.forEach(id => initial[id] = getField(id)); }
     else banner("✗ " + (res.error || ("HTTP "+r.status)), "err");
   } catch (e) { banner("Save failed: " + e, "err"); }
@@ -178,7 +178,7 @@ async function saveWorkflow() {
     const r = await fetch("/api/v1/workflow-config", {
       method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify(wfConfig)});
     const res = await r.json();
-    if (r.ok) banner("✓ Saved workflow run behavior. ⟳ Restart `prism serve` to apply.", "ok");
+    if (r.ok) banner("✓ Saved workflow run behavior. ⟳ Restart `prizm serve` to apply.", "ok");
     else banner("✗ " + (res.error || ("HTTP "+r.status)), "err");
   } catch (e) { banner("Save failed: " + e, "err"); }
   finally { btn.disabled = false; }

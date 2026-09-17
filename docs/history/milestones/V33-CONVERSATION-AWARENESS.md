@@ -8,7 +8,7 @@
 
 ## Problem Statement
 
-When Ema asks Prism "what's the state of the project?", Prism sometimes answers about the wrong project — telling him about BassBook when he asked about Prism. When someone says "hey" in the fun channel, Prism responds with a full dev-mode analysis. When someone shares a meme in manager-room, Prism tries to be helpful about it.
+When Ema asks Prizm "what's the state of the project?", Prizm sometimes answers about the wrong project — telling him about BassBook when he asked about Prizm. When someone says "hey" in the fun channel, Prizm responds with a full dev-mode analysis. When someone shares a meme in manager-room, Prizm tries to be helpful about it.
 
 These are all the same disease: **the agent has no situational awareness.** It doesn't know:
 
@@ -22,9 +22,9 @@ The agent receives a flat dump of all context files (SOUL.md, AGENTS.md, USER.md
 
 ### Concrete Failure Modes
 
-| What Ema says | What Prism does | What it should do |
+| What Ema says | What Prizm does | What it should do |
 |---------------|----------------|-------------------|
-| "What's the state of Prism?" | Tells him about BassBook | Use project_overview on the Prism repo |
+| "What's the state of Prizm?" | Tells him about BassBook | Use project_overview on the Prizm repo |
 | "Hey" in fun channel | Responds with dev analysis | Casual greeting, no tools |
 | Asks a question in manager-room | Gives a 3-paragraph answer with menus of options | Makes a decision, states it directly |
 | Someone shares a meme | Tries to be helpful about it | Acknowledges and moves on, or doesn't respond |
@@ -76,9 +76,9 @@ The other participant is Ema (Emmanuel), your collaborator.
 
 ### 4. No Project Scoping
 
-MEMORY.md contains memories from ALL projects mixed together. When the agent reads it, it gets Prism, BassBook, Eggventura, Pudgy Power — everything. There's no signal about which project is relevant to this conversation.
+MEMORY.md contains memories from ALL projects mixed together. When the agent reads it, it gets Prizm, BassBook, Eggventura, Pudgy Power — everything. There's no signal about which project is relevant to this conversation.
 
-**Fix:** Add `project` to channel config. When the agent is in manager-room, it knows "this channel is about Prism." Project-overview and search_files calls are scoped to that project.
+**Fix:** Add `project` to channel config. When the agent is in manager-room, it knows "this channel is about Prizm." Project-overview and search_files calls are scoped to that project.
 
 ### 5. Flat Context Weighting
 
@@ -182,12 +182,12 @@ Tool availability varies by channel role:
 channel_roles:
   - id: "1491622581348864162"
     role: manager-room
-    project: "prism"
+    project: "prizm"
     tools: all
     personality: direct
   - id: "1491622824991920231"
     role: build-room
-    project: "prism"
+    project: "prizm"
     tools: all
     personality: terse
   - id: "1493297644821283067"
@@ -203,7 +203,7 @@ When `tools: none`, the tool gate excludes ALL tools. When `tools: all`, the too
 
 When a channel has a `project` mapping:
 
-1. The system prompt explicitly says: "You are discussing the Prism project."
+1. The system prompt explicitly says: "You are discussing the Prizm project."
 2. MEMORY.md injection filters for project-relevant content
 3. `project_overview` is called automatically for grounding
 4. File tools default to the project's repo path
@@ -222,12 +222,12 @@ We inject structured channel context:
 ```
 ## Channel: #manager-room
 Purpose: Private strategic channel with Ema for architecture, code, and decisions.
-Project: Prism (event-native agentic environment)
+Project: Prizm (event-native agentic environment)
 Participants: You and Ema (Emmanuel, senior dev → AI engineering, ADHD-aware collaboration)
 Expected behavior: Full development mode. All tools available. Be direct and technical.
   Make decisions — don't present menus of options. Push back when something is wrong.
   If you see a better path, take it. If something needs fixing, fix it.
-  When Ema asks about "the project", they mean Prism.
+  When Ema asks about "the project", they mean Prizm.
 ```
 
 This is richer than the current state actions because it explains *why* and gives the agent enough context to make good decisions.
@@ -263,7 +263,7 @@ This is richer than the current state actions because it explains *why* and give
 - Filter MEMORY.md content by project relevance before injection
 - When channel has a `project`, auto-call `project_overview` for grounding
 - Set default `workspace_root` for file tools to the project repo path
-- **Result:** "What's the state of Prism?" returns Prism info, not BassBook
+- **Result:** "What's the state of Prizm?" returns Prizm info, not BassBook
 
 ### Phase 5: Channel-Filtered Tools
 - Add `tools` field to channel role config (`all`, `read-only`, `none`)
@@ -300,7 +300,7 @@ agents:
   - id: lumi
     role: lead                          # Fallback role when no identity files
     provider: ollama
-    model: glm-5.1:cloud
+    model: glm-5.3-flash:cloud
     primary: true
     context:                             # Ordered by priority (highest first)
       - soul                             # Layer 1: Identity
@@ -313,18 +313,18 @@ agents:
 channel_roles:
   - id: "1491622581348864162"
     role: manager-room
-    project: "prism"                    # Which project this channel discusses
+    project: "prizm"                    # Which project this channel discusses
     tools: all                          # all | read-only | none
     personality: direct                 # direct | terse | bubbly | social
     context: |                          # Structured channel context (replaces state_actions.inject)
       You are in #manager-room, a private strategic channel with Ema.
       Purpose: Full development mode — architecture, code, decisions, pushback.
-      When Ema asks about "the project", they mean Prism.
+      When Ema asks about "the project", they mean Prizm.
       Make decisions, don't present menus. Push back when something is wrong.
 
   - id: "1491622824991920231"
     role: build-room
-    project: "prism"
+    project: "prizm"
     tools: all
     personality: terse
     context: |
@@ -377,7 +377,7 @@ channel_roles:
 - `formatChannelContext()` — verify structured context output
 
 ### Integration Tests
-- Send "What's the state of Prism?" to manager-room → should get Prism info, not BassBook
+- Send "What's the state of Prizm?" to manager-room → should get Prizm info, not BassBook
 - Send "hey" to fun channel → should get casual response, not dev analysis
 - Send "+1" to manager-room → should get a lightweight acknowledgment, not a full LLM call
 - Send "fix the bug" to build-room → should get terse structured response
@@ -385,7 +385,7 @@ channel_roles:
 - Send a question in fun channel with tools=none → should not call any tools
 
 ### Manual Testing
-- Watch Prism respond in each Discord channel
+- Watch Prizm respond in each Discord channel
 - Verify project scoping (ask about "the project" in different channels)
 - Verify personality shifts between channels
 - Verify low-signal messages don't trigger full LLM calls

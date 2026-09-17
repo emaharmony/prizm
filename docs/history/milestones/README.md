@@ -1,4 +1,4 @@
-# Prism Design Archive
+# Prizm Design Archive
 
 Historical design notes kept for context. Each `V<n>-…-DESIGN.md` documents the
 design of one development increment; the `P0<n>-…` docs are planning/architecture
@@ -31,9 +31,9 @@ which links each one with a one-line summary.
 | [Loop Readiness State](LOOP-READINESS-STATE.md) | Autonomy-loop readiness tracking / cycle log. |
 | [Token Limit Work Notes](TOKEN-LIMIT-HANDOFF.md) | Token-budget work handoff notes. |
 | [Task Tracker](TASKS.md) | Historical task/backlog tracker. |
-| [Cross-Prism Factory Setup](CROSS-PRISM-FACTORY-SETUP.md) | Cross-Prism bridge / Factory handoff setup. |
+| [Cross-Prizm Factory Setup](CROSS-PRIZM-FACTORY-SETUP.md) | Cross-Prizm bridge / Factory handoff setup. |
 | [Roblox Team](ROBLOX-TEAM.md) | Roblox game-dev multi-agent roster design. |
-| `prism-autonomy-design.json` | Machine-readable autonomy design sketch. |
+| `prizm-autonomy-design.json` | Machine-readable autonomy design sketch. |
 
 ## See Also
 
