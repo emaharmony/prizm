@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/workflow/multiagent"
+	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
 
 // collectFilesByExt resolves a list of positional CLI arguments (each a

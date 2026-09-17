@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/retry"
+	"github.com/emaharmony/prizm/internal/retry"
 )
 
 // Definition is the stable, serializable contract consumed by a future

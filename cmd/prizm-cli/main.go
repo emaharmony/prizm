@@ -610,6 +610,30 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: unknown workflow subcommand '%s'\n", os.Args[2])
 			os.Exit(1)
 		}
+	case "graph":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "Error: graph subcommand required (validate, compile, inspect, run, or test)")
+			os.Exit(1)
+		}
+		var err error
+		switch os.Args[2] {
+		case "validate":
+			err = executeGraphValidate(os.Args[3:])
+		case "compile":
+			err = executeGraphCompile(os.Args[3:])
+		case "inspect":
+			err = executeGraphInspect(os.Args[3:])
+		case "run":
+			err = executeGraphRun(os.Args[3:])
+		case "test":
+			err = executeGraphTest(os.Args[3:])
+		default:
+			err = fmt.Errorf("unknown graph subcommand %q", os.Args[2])
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
 	case "context":
 		if len(os.Args) < 3 {
 			fmt.Fprintln(os.Stderr, "Error: context subcommand required (show)")
@@ -713,6 +737,7 @@ func commandUsage() string {
 			"prizm workflow status <run_id>                Inspect workflow state",
 			"prizm workflow cancel | resume <run_id>         Control a durable multi-agent run",
 			"prizm workflow report <run_id> [--json]         Show its terminal report",
+			"prizm graph validate|compile|inspect|run|test    Work with authored workflow graphs",
 		}},
 		{"Observe runs", []string{
 			"prizm watch [--config prizm.yaml]             Live view of a running gated-loop workflow",

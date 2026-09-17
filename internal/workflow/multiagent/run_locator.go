@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // Run directory layout constants. RunLocator follows the same on-disk

@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/emaharmony/prism/internal/event"
-	prismsqlite "github.com/emaharmony/prism/internal/sqlite"
+	"github.com/emaharmony/prizm/internal/event"
+	prismsqlite "github.com/emaharmony/prizm/internal/sqlite"
 )
 
 // SQLiteDurableRunStore persists multi-agent checkpoints in Prism's existing

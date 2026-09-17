@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/validation"
+	"github.com/emaharmony/prizm/internal/validation"
 )
 
 // ArtifactKind identifies a structured artifact reference carried by a

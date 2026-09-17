@@ -24,8 +24,8 @@ import (
 
 // GovernanceDoc represents a parsed governance document.
 type GovernanceDoc struct {
-	Path        string               // Full path to the .md file
-	Name        string               // Filename (e.g., "BASSBOOK-SCHEMA-FREEZE.md")
+	Path        string                // Full path to the .md file
+	Name        string                // Filename (e.g., "BASSBOOK-SCHEMA-FREEZE.md")
 	Frontmatter GovernanceFrontmatter // Parsed YAML frontmatter
 }
 

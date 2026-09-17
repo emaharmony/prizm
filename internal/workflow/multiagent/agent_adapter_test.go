@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/agent"
-	"github.com/emaharmony/prism/internal/cost"
-	"github.com/emaharmony/prism/internal/event"
-	"github.com/emaharmony/prism/internal/validation"
+	"github.com/emaharmony/prizm/internal/agent"
+	"github.com/emaharmony/prizm/internal/cost"
+	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/validation"
 )
 
 type profileResolverFunc func(string) (AgentProfile, error)

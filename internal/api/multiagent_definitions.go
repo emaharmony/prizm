@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/workflow/multiagent"
+	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
 
 // WorkflowRunStarter is the narrow, transport-facing seam POST

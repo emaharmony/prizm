@@ -35,8 +35,8 @@ type LocalMemoryStore interface {
 // MemorySearchTool queries Prizm's long-term memory mid-loop.
 // It tries Recall (Remembrance) first, then falls back to local MarkdownStore.
 type MemorySearchTool struct {
-	Searcher    MemorySearcher   // Recall client (nil = disabled)
-	LocalStore  LocalMemoryStore  // Local fallback (nil = no fallback)
+	Searcher   MemorySearcher   // Recall client (nil = disabled)
+	LocalStore LocalMemoryStore // Local fallback (nil = no fallback)
 }
 
 func (t *MemorySearchTool) Name() string { return "memory_search" }
@@ -90,9 +90,9 @@ func (t *MemorySearchTool) Execute(ctx context.Context, input map[string]any) (T
 			// Empty search grounding: when search returns no results, tell the agent
 			// to admit ignorance rather than fabricating details.
 			output := map[string]any{
-				"source":  "local",
-				"results": []any{},
-				"count":   0,
+				"source":   "local",
+				"results":  []any{},
+				"count":    0,
 				"guidance": "No memories found for this query. If you don't have relevant memories about this topic, say 'I don't have that in my records' — do NOT fabricate or guess specific details about your own identity, project history, or relationships.",
 			}
 			return ToolResult{Success: true, Output: output}, nil

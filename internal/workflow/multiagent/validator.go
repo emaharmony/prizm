@@ -29,6 +29,7 @@ package multiagent
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ValidateDefinition runs all five validation passes (structural, routing,
@@ -822,6 +823,7 @@ func validateSchemaBudgets(def WorkflowDefinition, idx *PositionIndex) Diagnosti
 		validateSchemaLimit(fieldPrefix+".maxVisits", fieldPrefix+".maxVisits", n.MaxVisits, n.ID, &diags)
 		validateSchemaLimit(fieldPrefix+".localIterations", fieldPrefix+".localIterations", n.LocalIterations, n.ID, &diags)
 		validateSchemaLimit(fieldPrefix+".tokenBudget", fieldPrefix+".tokenBudget", n.TokenBudget, n.ID, &diags)
+		validateExecutionPolicy(fieldPrefix+".execution", n.Execution, n.ID, &diags)
 
 		checkContradictoryLimit(n.ID, "maxVisits (compared against the global maxTransitions ceiling)", n.MaxVisits, b.MaxTransitions, &diags)
 		checkContradictoryLimit(n.ID, "localIterations", n.LocalIterations, b.MaxLocalIterations, &diags)
@@ -843,6 +845,55 @@ func validateSchemaBudgets(def WorkflowDefinition, idx *PositionIndex) Diagnosti
 	}
 
 	return diags
+}
+
+func validateExecutionPolicy(fieldPath string, p *SchemaExecutionPolicy, nodeID string, diags *Diagnostics) {
+	if p == nil {
+		return
+	}
+	if p.Lane != "" && p.Lane != "strategic" && p.Lane != "tactical" && p.Lane != "reflex" {
+		*diags = append(*diags, Diagnostic{
+			Severity:  SeverityError,
+			Rule:      "execution.invalid-lane",
+			Message:   fmt.Sprintf("%s.lane %q is invalid: want strategic, tactical, or reflex", fieldPath, p.Lane),
+			NodeID:    nodeID,
+			FieldPath: fieldPath + ".lane",
+		})
+	}
+	if p.Cadence != "" && p.Cadence != "event" && p.Cadence != "frame" && p.Cadence != "on_change" {
+		if d, err := time.ParseDuration(p.Cadence); err != nil || d <= 0 {
+			*diags = append(*diags, Diagnostic{
+				Severity:  SeverityError,
+				Rule:      "execution.invalid-cadence",
+				Message:   fmt.Sprintf("%s.cadence %q is invalid: use event, frame, on_change, or a positive Go duration", fieldPath, p.Cadence),
+				NodeID:    nodeID,
+				FieldPath: fieldPath + ".cadence",
+			})
+		}
+	}
+	validateSchemaLimit(fieldPath+".maxActions", fieldPath+".maxActions", p.MaxActions, nodeID, diags)
+	for i, interrupt := range p.Interrupts {
+		if strings.TrimSpace(interrupt) == "" {
+			*diags = append(*diags, Diagnostic{
+				Severity:  SeverityError,
+				Rule:      "execution.empty-interrupt",
+				Message:   fmt.Sprintf("%s.interrupts[%d] must not be empty", fieldPath, i),
+				NodeID:    nodeID,
+				FieldPath: fieldPath + ".interrupts",
+			})
+		}
+	}
+	for i, profile := range p.Verification {
+		if strings.TrimSpace(profile) == "" {
+			*diags = append(*diags, Diagnostic{
+				Severity:  SeverityError,
+				Rule:      "execution.empty-verification",
+				Message:   fmt.Sprintf("%s.verification[%d] must not be empty", fieldPath, i),
+				NodeID:    nodeID,
+				FieldPath: fieldPath + ".verification",
+			})
+		}
+	}
 }
 
 // validateSchemaLimit reports budget.invalid-limit when l is non-nil and

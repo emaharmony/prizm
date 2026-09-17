@@ -83,7 +83,7 @@ type messagesRequest struct {
 // an array of blocks with cache_control markers so the static prefix (identity,
 // context, directives) is cached and only dynamic content is re-sent.
 type systemBlock struct {
-	Type         string        `json:"type"`          // "text"
+	Type         string        `json:"type"` // "text"
 	Text         string        `json:"text"`
 	CacheControl *cacheControl `json:"cache_control,omitempty"`
 }

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/cost"
+	"github.com/emaharmony/prizm/internal/cost"
 )
 
 // RunStateSchemaVersion is the current serialized multi-agent state version.

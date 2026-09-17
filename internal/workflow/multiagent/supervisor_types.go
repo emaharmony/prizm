@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/emaharmony/prism/internal/cost"
-	"github.com/emaharmony/prism/internal/event"
-	"github.com/emaharmony/prism/internal/validation"
+	"github.com/emaharmony/prizm/internal/cost"
+	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/validation"
 )
 
 // LoopKind identifies a bounded correction edge. For a compiled graph
@@ -82,11 +82,28 @@ func loopBudgetName(kind LoopKind) string {
 // is correct.
 type LoopTraversalCounts struct {
 	Counts map[LoopKind]int `json:"counts"`
+	// Deprecated compatibility fields. They remain available to callers that
+	// construct legacy state values directly; persisted JSON continues to use
+	// the map representation above.
+	TesterToDeveloper   int `json:"-"`
+	ReviewerToDeveloper int `json:"-"`
 }
 
 // Get returns the recorded traversals for kind. A nil/absent entry is 0.
 func (c LoopTraversalCounts) Get(kind LoopKind) int {
-	return c.Counts[kind]
+	if c.Counts != nil {
+		if count, ok := c.Counts[kind]; ok {
+			return count
+		}
+	}
+	switch kind {
+	case LoopTesterToDeveloper:
+		return c.TesterToDeveloper
+	case LoopReviewerToDeveloper:
+		return c.ReviewerToDeveloper
+	default:
+		return 0
+	}
 }
 
 func (c *LoopTraversalCounts) increment(kind LoopKind) {
@@ -94,6 +111,12 @@ func (c *LoopTraversalCounts) increment(kind LoopKind) {
 		c.Counts = make(map[LoopKind]int)
 	}
 	c.Counts[kind]++
+	switch kind {
+	case LoopTesterToDeveloper:
+		c.TesterToDeveloper = c.Counts[kind]
+	case LoopReviewerToDeveloper:
+		c.ReviewerToDeveloper = c.Counts[kind]
+	}
 }
 
 // legacyLoopTraversalCounts is the exact pre-Phase-3 wire shape. The field
@@ -129,6 +152,8 @@ func (c *LoopTraversalCounts) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		c.Counts = counts
+		c.TesterToDeveloper = counts[LoopTesterToDeveloper]
+		c.ReviewerToDeveloper = counts[LoopReviewerToDeveloper]
 		return nil
 	}
 
@@ -144,6 +169,8 @@ func (c *LoopTraversalCounts) UnmarshalJSON(data []byte) error {
 		counts[LoopReviewerToDeveloper] = legacy.ReviewerToDeveloper
 	}
 	c.Counts = counts
+	c.TesterToDeveloper = legacy.TesterToDeveloper
+	c.ReviewerToDeveloper = legacy.ReviewerToDeveloper
 	return nil
 }
 

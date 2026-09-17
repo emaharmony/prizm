@@ -23,8 +23,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/checksum"
-	"github.com/emaharmony/prism/internal/retry"
+	"github.com/emaharmony/prizm/internal/checksum"
+	"github.com/emaharmony/prizm/internal/retry"
 )
 
 // Default CompileOptions size caps, used whenever the corresponding
@@ -105,13 +105,14 @@ type CompiledGraph struct {
 // CompiledNode is one stable-ID vertex of a CompiledGraph: either a
 // configured role step or a terminal condition.
 type CompiledNode struct {
-	ID                string              `json:"id"`
-	Role              Role                `json:"role,omitempty"`
-	Kind              string              `json:"kind"` // "role" | "terminal"
-	DisplayName       string              `json:"display_name,omitempty"`
-	RoleConfig        RoleConfig          `json:"role_config"`
-	AllowedOutcomes   []TransitionOutcome `json:"allowed_outcomes,omitempty"`
-	TerminalCondition TerminalCondition   `json:"terminal_condition,omitempty"`
+	ID                string                 `json:"id"`
+	Role              Role                   `json:"role,omitempty"`
+	Kind              string                 `json:"kind"` // "role" | "terminal"
+	DisplayName       string                 `json:"display_name,omitempty"`
+	RoleConfig        RoleConfig             `json:"role_config"`
+	AllowedOutcomes   []TransitionOutcome    `json:"allowed_outcomes,omitempty"`
+	TerminalCondition TerminalCondition      `json:"terminal_condition,omitempty"`
+	Execution         *SchemaExecutionPolicy `json:"execution,omitempty"`
 }
 
 // CompiledEdge is one stable-ID transition rule of a CompiledGraph.
@@ -263,6 +264,7 @@ func buildCompiledGraph(def WorkflowDefinition) *CompiledGraph {
 			RoleConfig:        roleConfig,
 			AllowedOutcomes:   allowedOutcomes,
 			TerminalCondition: terminalCond,
+			Execution:         cloneExecutionPolicy(n.Execution),
 		}
 	}
 
@@ -526,6 +528,20 @@ func cloneStrings(s []string) []string {
 	return out
 }
 
+func cloneExecutionPolicy(p *SchemaExecutionPolicy) *SchemaExecutionPolicy {
+	if p == nil {
+		return nil
+	}
+	clone := *p
+	clone.Interrupts = cloneStrings(p.Interrupts)
+	clone.Verification = cloneStrings(p.Verification)
+	if p.MaxActions != nil {
+		limit := *p.MaxActions
+		clone.MaxActions = &limit
+	}
+	return &clone
+}
+
 func cloneOutcomes(s []TransitionOutcome) []TransitionOutcome {
 	if s == nil {
 		return nil
@@ -544,6 +560,7 @@ func cloneOutcomes(s []TransitionOutcome) []TransitionOutcome {
 func cloneCompiledNode(n CompiledNode) CompiledNode {
 	n.AllowedOutcomes = cloneOutcomes(n.AllowedOutcomes)
 	n.RoleConfig = cloneRoleConfig(n.RoleConfig)
+	n.Execution = cloneExecutionPolicy(n.Execution)
 	return n
 }
 

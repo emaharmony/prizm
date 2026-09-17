@@ -51,7 +51,7 @@ import (
 	"strings"
 	"time"
 
-	prismsqlite "github.com/emaharmony/prism/internal/sqlite"
+	prismsqlite "github.com/emaharmony/prizm/internal/sqlite"
 )
 
 // ErrDefinitionUnchanged is returned by Register (alongside the existing

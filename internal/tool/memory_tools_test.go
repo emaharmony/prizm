@@ -9,7 +9,7 @@ import (
 
 // mockStore implements LocalMemoryStore for testing.
 type mockStore struct {
-	memories []memory.Memory
+	memories  []memory.Memory
 	searchErr error
 }
 
@@ -90,7 +90,7 @@ func TestMemoryWriteTool_StoreDirectly(t *testing.T) {
 	tool := &MemoryWriteTool{Store: store}
 
 	result, err := tool.Execute(context.Background(), map[string]any{
-		"content": "Decided to use local models for memory",
+		"content":  "Decided to use local models for memory",
 		"category": "decision",
 		"tier":     "active",
 	})

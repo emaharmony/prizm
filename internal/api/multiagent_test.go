@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/cost"
-	"github.com/emaharmony/prism/internal/event"
-	"github.com/emaharmony/prism/internal/workflow/multiagent"
+	"github.com/emaharmony/prizm/internal/cost"
+	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
 
 // fixedOutcomeRunner is a minimal RoleRunner that always returns the

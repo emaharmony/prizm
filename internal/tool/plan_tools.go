@@ -120,13 +120,13 @@ func (t *PlanCreateTool) Execute(ctx context.Context, input map[string]any) (Too
 	return ToolResult{
 		Success: true,
 		Output: map[string]any{
-			"plan_id":        p.ID,
-			"title":          p.Title,
-			"status":         status,
-			"approval_level": string(approvalLevel),
+			"plan_id":         p.ID,
+			"title":           p.Title,
+			"status":          status,
+			"approval_level":  string(approvalLevel),
 			"steps":           total,
-			"steps_completed":  completed,
-			"message":        msg,
+			"steps_completed": completed,
+			"message":         msg,
 		},
 	}, nil
 }
@@ -320,17 +320,17 @@ func (t *PlanUpdateTool) Description() string {
 func (t *PlanUpdateTool) Schema() ToolSchema {
 	return ToolSchema{
 		Input: map[string]ParamSpec{
-			"id":           {Type: "string", Description: "Plan ID (e.g., P-001)", Required: true},
-			"title":        {Type: "string", Description: "Updated title"},
-			"description":  {Type: "string", Description: "Updated description"},
-			"reasoning":    {Type: "string", Description: "Updated reasoning"},
-			"scope":        {Type: "string", Description: "Updated scope"},
-			"branch":       {Type: "string", Description: "Git branch name"},
-			"pr":           {Type: "string", Description: "PR number"},
-			"step_id":      {Type: "string", Description: "Step ID to update (e.g., S1)"},
-			"step_status":  {Type: "string", Description: "New status for the step: pending, in_progress, completed, blocked, skipped"},
-			"step_notes":   {Type: "string", Description: "Notes for the step"},
-			"add_step":     {Type: "string", Description: "Title of a new step to add"},
+			"id":          {Type: "string", Description: "Plan ID (e.g., P-001)", Required: true},
+			"title":       {Type: "string", Description: "Updated title"},
+			"description": {Type: "string", Description: "Updated description"},
+			"reasoning":   {Type: "string", Description: "Updated reasoning"},
+			"scope":       {Type: "string", Description: "Updated scope"},
+			"branch":      {Type: "string", Description: "Git branch name"},
+			"pr":          {Type: "string", Description: "PR number"},
+			"step_id":     {Type: "string", Description: "Step ID to update (e.g., S1)"},
+			"step_status": {Type: "string", Description: "New status for the step: pending, in_progress, completed, blocked, skipped"},
+			"step_notes":  {Type: "string", Description: "Notes for the step"},
+			"add_step":    {Type: "string", Description: "Title of a new step to add"},
 		},
 		Output: ParamSpec{Type: "string", Description: "Updated plan summary"},
 	}
@@ -354,10 +354,10 @@ func (t *PlanUpdateTool) Execute(ctx context.Context, input map[string]any) (Too
 		return ToolResult{
 			Success: true,
 			Output: map[string]any{
-				"plan_id":  id,
-				"step_id":  stepID,
-				"status":   stepStatus,
-				"message":  fmt.Sprintf("Step %s of plan %s updated to %s", stepID, id, stepStatus),
+				"plan_id": id,
+				"step_id": stepID,
+				"status":  stepStatus,
+				"message": fmt.Sprintf("Step %s of plan %s updated to %s", stepID, id, stepStatus),
 			},
 		}, nil
 	}
@@ -371,7 +371,7 @@ func (t *PlanUpdateTool) Execute(ctx context.Context, input map[string]any) (Too
 			Success: true,
 			Output: map[string]any{
 				"plan_id": id,
-				"message":  fmt.Sprintf("Added step to plan %s: %s", id, addStep),
+				"message": fmt.Sprintf("Added step to plan %s: %s", id, addStep),
 			},
 		}, nil
 	}
@@ -409,8 +409,8 @@ func (t *PlanUpdateTool) Execute(ctx context.Context, input map[string]any) (Too
 		Success: true,
 		Output: map[string]any{
 			"plan_id": id,
-			"updated":  updates,
-			"message":  fmt.Sprintf("Plan %s updated: %v", id, updates),
+			"updated": updates,
+			"message": fmt.Sprintf("Plan %s updated: %v", id, updates),
 		},
 	}, nil
 }
@@ -447,7 +447,7 @@ func (t *PlanReopenTool) Execute(ctx context.Context, input map[string]any) (Too
 		Success: true,
 		Output: map[string]any{
 			"plan_id": id,
-			"message":  fmt.Sprintf("Plan %s reopened — work can resume", id),
+			"message": fmt.Sprintf("Plan %s reopened — work can resume", id),
 		},
 	}, nil
 }
@@ -469,12 +469,16 @@ type planManagerAdapter struct {
 	Mgr *plan.Manager
 }
 
-func (a *planManagerAdapter) CreatePlan(p plan.Plan) error                { return a.Mgr.CreatePlan(p) }
-func (a *planManagerAdapter) LoadPlans() ([]plan.Plan, error)             { return a.Mgr.LoadPlans() }
-func (a *planManagerAdapter) ApprovePlan(id, by string) error              { return a.Mgr.ApprovePlan(id, by) }
-func (a *planManagerAdapter) CompletePlan(id string) error                { return a.Mgr.CompletePlan(id) }
-func (a *planManagerAdapter) AbandonPlan(id string) error                 { return a.Mgr.AbandonPlan(id) }
-func (a *planManagerAdapter) UpdatePlan(id string, updates map[string]any) error { return a.Mgr.UpdatePlan(id, updates) }
-func (a *planManagerAdapter) UpdateStepStatus(planID, stepID string, status plan.StepStatus, notes string) error { return a.Mgr.UpdateStepStatus(planID, stepID, status, notes) }
-func (a *planManagerAdapter) AddStep(planID, title string) error         { return a.Mgr.AddStep(planID, title) }
-func (a *planManagerAdapter) ReopenPlan(id string) error                  { return a.Mgr.ReopenPlan(id) }
+func (a *planManagerAdapter) CreatePlan(p plan.Plan) error    { return a.Mgr.CreatePlan(p) }
+func (a *planManagerAdapter) LoadPlans() ([]plan.Plan, error) { return a.Mgr.LoadPlans() }
+func (a *planManagerAdapter) ApprovePlan(id, by string) error { return a.Mgr.ApprovePlan(id, by) }
+func (a *planManagerAdapter) CompletePlan(id string) error    { return a.Mgr.CompletePlan(id) }
+func (a *planManagerAdapter) AbandonPlan(id string) error     { return a.Mgr.AbandonPlan(id) }
+func (a *planManagerAdapter) UpdatePlan(id string, updates map[string]any) error {
+	return a.Mgr.UpdatePlan(id, updates)
+}
+func (a *planManagerAdapter) UpdateStepStatus(planID, stepID string, status plan.StepStatus, notes string) error {
+	return a.Mgr.UpdateStepStatus(planID, stepID, status, notes)
+}
+func (a *planManagerAdapter) AddStep(planID, title string) error { return a.Mgr.AddStep(planID, title) }
+func (a *planManagerAdapter) ReopenPlan(id string) error         { return a.Mgr.ReopenPlan(id) }

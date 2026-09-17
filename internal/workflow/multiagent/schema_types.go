@@ -131,12 +131,25 @@ type SchemaNode struct {
 	Retry      *SchemaRetryPolicy      `json:"retry,omitempty"`
 	Approval   *SchemaApprovalPolicy   `json:"approval,omitempty"`
 	Validation *SchemaValidationPolicy `json:"validation,omitempty"`
+	Execution  *SchemaExecutionPolicy  `json:"execution,omitempty"`
 
 	// TerminalCondition is only meaningful when Type == "terminal".
 	TerminalCondition string `json:"terminalCondition,omitempty"`
 
 	InputContract  *SchemaIOContract `json:"inputContract,omitempty"`
 	OutputContract *SchemaIOContract `json:"outputContract,omitempty"`
+}
+
+// SchemaExecutionPolicy describes how a node participates in a cascaded
+// runtime. Lane and cadence are advisory scheduling metadata; the supervisor
+// still owns transitions and budgets. Interrupts identify observation events
+// that should request a higher-level replanning pass.
+type SchemaExecutionPolicy struct {
+	Lane         string       `json:"lane,omitempty"`
+	Cadence      string       `json:"cadence,omitempty"`
+	Interrupts   []string     `json:"interrupts,omitempty"`
+	MaxActions   *SchemaLimit `json:"maxActions,omitempty"`
+	Verification []string     `json:"verification,omitempty"`
 }
 
 // SchemaIOContract documents (but, in this pass, does not enforce) the

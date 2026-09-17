@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/cost"
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/cost"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 type scriptedStep struct {

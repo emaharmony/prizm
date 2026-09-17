@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/validation"
+	"github.com/emaharmony/prizm/internal/validation"
 )
 
 // AgentRoleRunner adapts Prism's bounded agent execution seam to RoleRunner.

@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/emaharmony/prism/internal/workflow/multiagent"
+	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
 
-// executeGraphValidate implements `prism graph validate <file|dir>...`.
+// executeGraphValidate implements `prizm graph validate <file|dir>...`.
 //
 // Each positional argument may be a single workflow definition file
 // (.yaml/.yml/.json) or a directory, walked recursively for files with
@@ -37,7 +37,7 @@ func executeGraphValidate(args []string) error {
 		return err
 	}
 	if fs.NArg() == 0 {
-		return errors.New("prism graph validate requires at least one workflow definition file or directory argument")
+		return errors.New("prizm graph validate requires at least one workflow definition file or directory argument")
 	}
 
 	files, err := collectFilesByExt(fs.Args(), ".yaml", ".yml", ".json")
@@ -45,7 +45,7 @@ func executeGraphValidate(args []string) error {
 		return err
 	}
 	if len(files) == 0 {
-		return errors.New("prism graph validate: no .yaml/.yml/.json files found under the given path(s)")
+		return errors.New("prizm graph validate: no .yaml/.yml/.json files found under the given path(s)")
 	}
 
 	results := make(map[string]multiagent.Diagnostics, len(files))

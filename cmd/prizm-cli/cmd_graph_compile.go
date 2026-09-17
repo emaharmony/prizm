@@ -5,10 +5,10 @@ import (
 	"flag"
 	"os"
 
-	"github.com/emaharmony/prism/internal/workflow/multiagent"
+	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
 
-// executeGraphCompile implements `prism graph compile <file> [--out <file>]`.
+// executeGraphCompile implements `prizm graph compile <file> [--out <file>]`.
 //
 // Loads and compiles exactly one workflow definition file, printing
 // BuildCompiledGraphView(graph) as indented JSON — top-level fields include
@@ -28,7 +28,7 @@ func executeGraphCompile(args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("prism graph compile requires exactly one workflow definition file")
+		return errors.New("prizm graph compile requires exactly one workflow definition file")
 	}
 	path := fs.Arg(0)
 

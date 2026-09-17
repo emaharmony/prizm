@@ -80,9 +80,9 @@ func (t *MemoryWriteTool) Execute(ctx context.Context, input map[string]any) (To
 
 	// Build the memory struct
 	mem := memory.Memory{
-		Content: content,
-		Source:   strVal(input, "source"),
-		AgentID:  strVal(input, "agent_id"),
+		Content:   content,
+		Source:    strVal(input, "source"),
+		AgentID:   strVal(input, "agent_id"),
 		SessionID: strVal(input, "session_id"),
 		ProjectID: strVal(input, "project_id"),
 	}

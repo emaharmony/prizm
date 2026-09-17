@@ -124,7 +124,7 @@ func NewAgentFailedEvent(agentName, subtask, agentErr string, durationMs int64) 
 func NewContextRequestedEvent(taskDescription, agentID string) event.Event {
 	return event.NewEvent(EventContextRequested, "agent-"+agentID, map[string]any{
 		"task_description": taskDescription,
-		"agent_id":        agentID,
+		"agent_id":         agentID,
 	})
 }
 
@@ -132,7 +132,7 @@ func NewContextRequestedEvent(taskDescription, agentID string) event.Event {
 func NewContextBuiltEvent(compressedText, agentID string, tokensUsed int) event.Event {
 	return event.NewEvent(EventContextBuilt, "context-agent", map[string]any{
 		"compressed_text": compressedText,
-		"agent_id":       agentID,
+		"agent_id":        agentID,
 		"tokens_used":     tokensUsed,
 	})
 }
@@ -142,25 +142,25 @@ func NewMemoryExtractRequestedEvent(sessionID, agentID, userMessage, agentRespon
 	return event.NewEvent(EventMemoryExtractRequested, "agent-"+agentID, map[string]any{
 		"session_id":     sessionID,
 		"agent_id":       agentID,
-		"user_message":    userMessage,
-		"agent_response":  agentResponse,
+		"user_message":   userMessage,
+		"agent_response": agentResponse,
 	})
 }
 
 // NewMemoryExtractCompletedEvent creates an event signaling extraction completion.
 func NewMemoryExtractCompletedEvent(sessionID string, categories []string, filesWritten int) event.Event {
 	return event.NewEvent(EventMemoryExtractCompleted, "memory-extractor", map[string]any{
-		"session_id":     sessionID,
+		"session_id":           sessionID,
 		"categories_extracted": categories,
-		"files_written":  filesWritten,
+		"files_written":        filesWritten,
 	})
 }
 
 // NewReviewRequestedEvent creates an event requesting automatic code review.
 func NewReviewRequestedEvent(agentID string, filesChanged []string, taskDescription string) event.Event {
 	return event.NewEvent(EventReviewRequested, "agent-"+agentID, map[string]any{
-		"agent_id":        agentID,
-		"files_changed":   filesChanged,
+		"agent_id":         agentID,
+		"files_changed":    filesChanged,
 		"task_description": taskDescription,
 	})
 }
@@ -168,18 +168,18 @@ func NewReviewRequestedEvent(agentID string, filesChanged []string, taskDescript
 // NewReviewCompletedEvent creates an event with review results.
 func NewReviewCompletedEvent(reviewerID, decision string, issues, suggestions []string) event.Event {
 	return event.NewEvent(EventReviewCompleted, "agent-"+reviewerID, map[string]any{
-		"reviewer_id":  reviewerID,
-		"decision":     decision,
-		"issues":       issues,
-		"suggestions":  suggestions,
+		"reviewer_id": reviewerID,
+		"decision":    decision,
+		"issues":      issues,
+		"suggestions": suggestions,
 	})
 }
 
 // NewArchitectureCheckRequestedEvent creates an event for pre-dev architecture validation.
 func NewArchitectureCheckRequestedEvent(agentID, taskDescription, proposedApproach string) event.Event {
 	return event.NewEvent(EventArchitectureCheckRequested, "agent-"+agentID, map[string]any{
-		"agent_id":         agentID,
-		"task_description": taskDescription,
+		"agent_id":          agentID,
+		"task_description":  taskDescription,
 		"proposed_approach": proposedApproach,
 	})
 }
@@ -187,17 +187,17 @@ func NewArchitectureCheckRequestedEvent(agentID, taskDescription, proposedApproa
 // NewArchitectureCheckCompletedEvent creates an event with architecture check results.
 func NewArchitectureCheckCompletedEvent(decision string, concerns []string, approved bool) event.Event {
 	return event.NewEvent(EventArchitectureCheckCompleted, "architecture-checker", map[string]any{
-		"decision":  decision,
-		"concerns":  concerns,
-		"approved":  approved,
+		"decision": decision,
+		"concerns": concerns,
+		"approved": approved,
 	})
 }
 
 // NewVulnerabilityCheckRequestedEvent creates an event for post-dev vulnerability analysis.
 func NewVulnerabilityCheckRequestedEvent(agentID string, filesChanged []string, taskDescription string) event.Event {
 	return event.NewEvent(EventVulnerabilityCheckRequested, "agent-"+agentID, map[string]any{
-		"agent_id":        agentID,
-		"files_changed":   filesChanged,
+		"agent_id":         agentID,
+		"files_changed":    filesChanged,
 		"task_description": taskDescription,
 	})
 }

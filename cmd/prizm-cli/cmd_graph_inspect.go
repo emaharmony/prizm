@@ -8,11 +8,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/emaharmony/prism/internal/workflow/multiagent"
+	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
 
 // executeGraphInspect implements
-// `prism graph inspect --file <path> [--format text|mermaid|json]`.
+// `prizm graph inspect --file <path> [--format text|mermaid|json]`.
 //
 // For PR5, --file is the ONLY supported mode: the plan also describes a
 // registry-backed --workflow/--version mode, but that requires PR6's
@@ -28,7 +28,7 @@ func executeGraphInspect(args []string) error {
 	}
 	if strings.TrimSpace(*file) == "" {
 		return errors.New(
-			"prism graph inspect requires --file <path> in this release; " +
+			"prizm graph inspect requires --file <path> in this release; " +
 				"registry-backed --workflow/--version inspection is not available " +
 				"until the definition registry ships in a later release",
 		)

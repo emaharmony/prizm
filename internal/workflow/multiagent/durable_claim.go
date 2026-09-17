@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	prismrun "github.com/emaharmony/prism/internal/run"
+	prismrun "github.com/emaharmony/prizm/internal/run"
 )
 
 // FileRunClaimer reuses Prism's process-safe run lock for Phase 1 ownership.

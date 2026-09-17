@@ -77,7 +77,7 @@ func (cc *conversationContext) runToolLoopAgentic(
 	var lastContent string
 	var modelInfo chatModelInfo
 	doom := doomDetector{limit: 3} // 3 identical calls = doom loop
-	hardLimit := 200                // absolute safety valve
+	hardLimit := 200               // absolute safety valve
 	iterationCount := 0
 
 	// V73: Context budget management
@@ -87,7 +87,7 @@ func (cc *conversationContext) runToolLoopAgentic(
 	}
 	ctxBudget := defaultContextBudget(contextTokens)
 	ctxBudget.compressThreshold = 0.50 // Compress at 50% to leave room for LLM response + tool results
-	ctxBudget.warnThreshold = 0.40      // Warn at 40%
+	ctxBudget.warnThreshold = 0.40     // Warn at 40%
 
 	// V73: Plan step nudge tracking
 	lastPlanUpdateIteration := 0
@@ -321,7 +321,7 @@ func isWriteTool(name string) bool {
 		"write_file":                true,
 		"write_file_proposal":       true,
 		"write_file_dry_run":        true,
-		"create_directory":         true,
+		"create_directory":          true,
 		"create_directory_proposal": true,
 		"plan_create":               true,
 		"plan_update":               true,

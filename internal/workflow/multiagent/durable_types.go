@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // DurableRunSchemaVersion is the serialized recovery-envelope version.

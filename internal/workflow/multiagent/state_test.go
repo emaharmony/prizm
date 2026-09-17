@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emaharmony/prism/internal/cost"
+	"github.com/emaharmony/prizm/internal/cost"
 )
 
 func TestRunStateValidateAndJSONRoundTrip(t *testing.T) {

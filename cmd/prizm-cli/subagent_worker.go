@@ -8,12 +8,12 @@ import (
 	"os"
 	"strings"
 
-	"github.com/emaharmony/prism/internal/agent"
-	"github.com/emaharmony/prism/internal/orchestrator"
-	"github.com/emaharmony/prism/internal/provider"
-	"github.com/emaharmony/prism/internal/subagent"
-	"github.com/emaharmony/prism/internal/tool"
-	v2 "github.com/emaharmony/prism/internal/workflow/v2"
+	"github.com/emaharmony/prizm/internal/agent"
+	"github.com/emaharmony/prizm/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/subagent"
+	"github.com/emaharmony/prizm/internal/tool"
+	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 	"github.com/nats-io/nats.go"
 )
 
@@ -21,12 +21,12 @@ import (
 // serve: it subscribes to the delegation subject, runs each TaskPacket through a
 // bounded tool-loop backed by the real provider registry + tool executor, and
 // publishes the TaskCompletion back. This is what makes delegated sub-agents
-// genuinely autonomous (V58). Feature-flagged via PRISM_SUBAGENT_WORKER so it is
+// genuinely autonomous (V58). Feature-flagged via PRIZM_SUBAGENT_WORKER so it is
 // inert — zero behavior change — until explicitly enabled.
 
 const (
-	subAgentDelegationSubject = "prism.agent.openclaw"
-	subAgentCompletionSubject = "prism.workflow.task.complete"
+	subAgentDelegationSubject = "prizm.agent.openclaw"
+	subAgentCompletionSubject = "prizm.workflow.task.complete"
 	// subAgentMaxConcurrency bounds simultaneous sub-agent task runs.
 	subAgentMaxConcurrency = 4
 )
@@ -60,7 +60,7 @@ func subAgentRepoRoot(cfg *orchestrator.Config) string {
 	if p := cfg.DefaultProject(); p != nil && p.RepoPath != "" {
 		return p.RepoPath
 	}
-	return cfg.Prism.Workspace
+	return cfg.Prizm.Workspace
 }
 
 // subAgentBackend binds an agent runtime to live provider + tool execution
@@ -197,10 +197,10 @@ func (p *subAgentPublisher) PublishCompletion(c v2.TaskCompletion) error {
 }
 
 // startSubAgentWorker subscribes the generic sub-agent worker to the delegation
-// subject. Feature-flagged via PRISM_SUBAGENT_WORKER (empty = off) so it is a
+// subject. Feature-flagged via PRIZM_SUBAGENT_WORKER (empty = off) so it is a
 // no-op until explicitly enabled — no behavior change to existing deployments.
 func startSubAgentWorker(nc *nats.Conn, providers *provider.ProviderRegistry, exec *tool.Executor, toolReg *tool.Registry, cfg *orchestrator.Config) {
-	if os.Getenv("PRISM_SUBAGENT_WORKER") == "" {
+	if os.Getenv("PRIZM_SUBAGENT_WORKER") == "" {
 		return
 	}
 	if nc == nil || exec == nil || cfg == nil {
@@ -224,7 +224,7 @@ func startSubAgentWorker(nc *nats.Conn, providers *provider.ProviderRegistry, ex
 			// Charter + the tool JSON contract so the model emits the
 			// {"type":"tool_request"|"final"} format the parser expects.
 			charter := fmt.Sprintf("You are agent %q running a single delegated task autonomously. Complete the task with your tools, then return a final answer.", rt.AgentID)
-			workspace := cfg.Prism.Workspace
+			workspace := cfg.Prizm.Workspace
 			if workspace == "" {
 				workspace = "."
 			}

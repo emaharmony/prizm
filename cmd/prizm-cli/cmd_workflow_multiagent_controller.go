@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/emaharmony/prism/internal/workflow/multiagent"
+	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
 
 // referenceMultiAgentController implements api.MultiAgentController by

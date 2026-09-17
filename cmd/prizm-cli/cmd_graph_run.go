@@ -11,11 +11,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/emaharmony/prism/internal/event"
-	"github.com/emaharmony/prism/internal/workflow/multiagent"
+	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
 
-// executeGraphRun is PR6's `prism graph run` command: it resolves a target
+// executeGraphRun is PR6's `prizm graph run` command: it resolves a target
 // WorkflowDefinition — either registry-backed (--workflow[/--version]) or a
 // local file that gets validated+compiled+registered first as a local-dev
 // convenience (--file) — then starts a real, durably-persisted run against
@@ -38,7 +38,7 @@ func executeGraphRun(args []string) error {
 	workspace := fs.String("workspace", ".", "Workspace directory the run's tools operate within")
 	runDir := fs.String("run-dir", "./runs", "Directory for run outputs")
 	dbPath := fs.String("db", "./runs/multiagent_definitions.db", "Path to the definition registry SQLite database")
-	configPath := fs.String("config", "prism.yaml", "Path to prism.yaml configuration file")
+	configPath := fs.String("config", "prizm.yaml", "Path to prizm.yaml configuration file")
 	fs.Parse(args)
 
 	if strings.TrimSpace(*file) == "" && strings.TrimSpace(*workflowID) == "" {

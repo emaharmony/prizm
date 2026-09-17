@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	v2 "github.com/emaharmony/prism/internal/workflow/v2"
+	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 )
 
 // AgentRuntime is the resolved execution surface for one agent: enough for a

@@ -13,8 +13,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/emaharmony/prism/internal/cost"
-	"github.com/emaharmony/prism/internal/event"
+	"github.com/emaharmony/prizm/internal/cost"
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // ScriptedRoleRunner implements RoleRunner by consuming a Scenario's Script

@@ -61,8 +61,8 @@ import (
 
 	"github.com/emaharmony/prizm/internal/agentns"
 	"github.com/emaharmony/prizm/internal/autopatch"
-	costpkg "github.com/emaharmony/prizm/internal/cost"
 	"github.com/emaharmony/prizm/internal/context"
+	costpkg "github.com/emaharmony/prizm/internal/cost"
 	"github.com/emaharmony/prizm/internal/delegation"
 	"github.com/emaharmony/prizm/internal/editor"
 	"github.com/emaharmony/prizm/internal/invocation"
@@ -73,11 +73,12 @@ import (
 	"github.com/emaharmony/prizm/internal/session"
 	"github.com/emaharmony/prizm/internal/sessionreset"
 	"github.com/emaharmony/prizm/internal/task"
+	"github.com/emaharmony/prizm/internal/tool"
+	"github.com/emaharmony/prizm/internal/toolloop"
 	"github.com/emaharmony/prizm/internal/usage"
 	"github.com/emaharmony/prizm/internal/workflow"
+	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
-	"github.com/emaharmony/prizm/internal/toolloop"
-	"github.com/emaharmony/prizm/internal/tool"
 	"github.com/emaharmony/prizm/internal/workstart"
 	"github.com/nats-io/nats.go"
 )
@@ -171,6 +172,11 @@ type Server struct {
 	maxRequestBytes int64
 	// maxWorkspaceFileBytes caps a single workspace file write. 0 → 4 MiB.
 	maxWorkspaceFileBytes int64
+
+	multiAgentRuns       multiagent.RunLocator
+	multiAgentController MultiAgentController
+	definitionStore      *multiagent.DefinitionStore
+	workflowRunStarter   WorkflowRunStarter
 }
 
 // SchedulerAction describes a wake action a cron job can trigger. Presented in
@@ -251,6 +257,11 @@ type Config struct {
 
 	// RemClient is the Remembrance client for the memories API. Nil → Remembrance source disabled.
 	RemClient *remembrance.Client
+
+	MultiAgentRuns       multiagent.RunLocator
+	MultiAgentController MultiAgentController
+	DefinitionStore      *multiagent.DefinitionStore
+	WorkflowRunStarter   WorkflowRunStarter
 }
 
 // AutoPatchStarter is the API surface needed from the autopatch service.
@@ -288,14 +299,18 @@ func NewServer(cfg Config) *Server {
 
 		maxRequestBytes:       cfg.MaxRequestBytes,
 		maxWorkspaceFileBytes: cfg.MaxWorkspaceFileBytes,
-		memStore:             cfg.MemStore,
-		remClient:            cfg.RemClient,
-		ctxBuilder:              cfg.CtxBuilder,
-		memStoreForInvoke:        cfg.MemStoreForInvoke,
-		memInjectorForInvoke:    cfg.MemInjectorForInvoke,
-		coreIdentityForInject:   cfg.CoreIdentityForInvoke,
-		toolRegForInvoke:        cfg.ToolRegForInvoke,
-		toolExecForInvoke:       cfg.ToolExecForInvoke,
+		memStore:              cfg.MemStore,
+		remClient:             cfg.RemClient,
+		ctxBuilder:            cfg.CtxBuilder,
+		memStoreForInvoke:     cfg.MemStoreForInvoke,
+		memInjectorForInvoke:  cfg.MemInjectorForInvoke,
+		coreIdentityForInject: cfg.CoreIdentityForInvoke,
+		toolRegForInvoke:      cfg.ToolRegForInvoke,
+		toolExecForInvoke:     cfg.ToolExecForInvoke,
+		multiAgentRuns:        cfg.MultiAgentRuns,
+		multiAgentController:  cfg.MultiAgentController,
+		definitionStore:       cfg.DefinitionStore,
+		workflowRunStarter:    cfg.WorkflowRunStarter,
 	}
 	if s.maxRequestBytes <= 0 {
 		s.maxRequestBytes = 1 << 20 // 1 MiB
@@ -338,6 +353,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/v1/editor/save", s.handleEditorSave)
 	s.mux.HandleFunc("/api/v1/costs", s.handleCosts)
 	s.mux.HandleFunc("/api/v1/usage", s.handleUsage)
+	s.mux.HandleFunc("/api/v1/multiagent/runs", s.handleMultiAgentRuns)
+	s.mux.HandleFunc("/api/v1/multiagent/runs/", s.handleMultiAgentRunSub)
+	s.mux.HandleFunc("/api/v1/multiagent/definitions", s.handleMultiAgentDefinitions)
+	s.mux.HandleFunc("/api/v1/multiagent/definitions/", s.handleMultiAgentDefinitionSub)
 
 	// Config + scheduler editors (write prizm.yaml surgically).
 	s.mux.HandleFunc("/api/v1/config", s.handleConfig)
@@ -454,7 +473,9 @@ func requiresAuth(r *http.Request) bool {
 	case http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch:
 		return true
 	}
-	return r.URL.Path == "/api/v1/events/stream"
+	return r.URL.Path == "/api/v1/events/stream" ||
+		(strings.HasPrefix(r.URL.Path, "/api/v1/multiagent/runs/") &&
+			strings.HasSuffix(r.URL.Path, "/events/stream"))
 }
 
 // authorized validates the bearer token in constant time. Browsers using
@@ -789,7 +810,7 @@ func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig, sear
 		if len(otherContexts) > 0 {
 			ctxBuilder := context.NewBuilder(s.ctxBuilder.WorkspaceRoot).
 				WithNamedContexts(otherContexts).
-			WithTokenBudget(budget)
+				WithTokenBudget(budget)
 			if injected, err := ctxBuilder.BuildCached(); err == nil && injected.FormattedString != "" {
 				sb.WriteString("## Context\n")
 				sb.WriteString(injected.FormattedString + "\n")
@@ -886,7 +907,7 @@ func (s *invokeSink) OnProgress(content string) {
 	s.mu.Unlock()
 }
 func (s *invokeSink) OnToolResult(name string, result string, summary toolloop.CallSummary) {}
-func (s *invokeSink) OnError(err error)                    {}
+func (s *invokeSink) OnError(err error)                                                     {}
 func (s *invokeSink) OnComplete(content string, modelInfo toolloop.ModelInfo) {
 	s.mu.Lock()
 	s.content = content

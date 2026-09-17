@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/emaharmony/prism/internal/workflow/multiagent"
+	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
 
 // graphTestOutcome is one scenario's result, in a shape suitable for both
@@ -21,7 +21,7 @@ type graphTestOutcome struct {
 	Error    string   `json:"error,omitempty"`
 }
 
-// executeGraphTest implements `prism graph test <file|dir>...`.
+// executeGraphTest implements `prizm graph test <file|dir>...`.
 //
 // Each positional argument may be a single scenario fixture file
 // (.yaml/.yml/.json) or a directory, walked recursively (same convention as
@@ -38,7 +38,7 @@ func executeGraphTest(args []string) error {
 		return err
 	}
 	if fs.NArg() == 0 {
-		return errors.New("prism graph test requires at least one scenario file or directory argument")
+		return errors.New("prizm graph test requires at least one scenario file or directory argument")
 	}
 
 	files, err := collectFilesByExt(fs.Args(), ".yaml", ".yml", ".json")
@@ -46,7 +46,7 @@ func executeGraphTest(args []string) error {
 		return err
 	}
 	if len(files) == 0 {
-		return errors.New("prism graph test: no .yaml/.yml/.json files found under the given path(s)")
+		return errors.New("prizm graph test: no .yaml/.yml/.json files found under the given path(s)")
 	}
 
 	var outcomes []graphTestOutcome

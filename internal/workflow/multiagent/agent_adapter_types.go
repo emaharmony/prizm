@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/emaharmony/prism/internal/agent"
-	"github.com/emaharmony/prism/internal/cost"
-	"github.com/emaharmony/prism/internal/validation"
+	"github.com/emaharmony/prizm/internal/agent"
+	"github.com/emaharmony/prizm/internal/cost"
+	"github.com/emaharmony/prizm/internal/validation"
 )
 
 // AgentProfile is the execution identity resolved from an existing Prism agent
