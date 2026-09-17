@@ -81,7 +81,7 @@ func (cc *conversationContext) runToolLoopAgentic(
 	iterationCount := 0
 
 	// V73: Context budget management
-	contextTokens := 202752 // glm-5.1:cloud default
+	contextTokens := 262144 // glm-5.3-flash:cloud default
 	if agentCtxTokens, ok := getModelContextTokens(agentCfg.Model); ok {
 		contextTokens = agentCtxTokens
 	}

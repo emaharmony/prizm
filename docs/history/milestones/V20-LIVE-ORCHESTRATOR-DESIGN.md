@@ -92,7 +92,7 @@ agents:
   - id: lumi
     role: "lead"
     provider: "ollama"
-    model: "glm-5.1:cloud"
+    model: "glm-5.3-flash:cloud"
     primary: true
     context: [soul, agents, user]
 

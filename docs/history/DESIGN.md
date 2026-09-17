@@ -101,7 +101,7 @@ Agent definitions are in the config:
 agents:
   - id: lumi                # Custom ID → lumi.* namespace
     role: lead
-    model: glm-5.1:cloud
+    model: glm-5.3-flash:cloud
     context: soul,agents
 
   - id: mango

@@ -8,7 +8,7 @@
 ## Problem
 
 Prizm agents call tools inappropriately — e.g., reading files when asked "say hello." Current mitigation is prompt text ("don't use tools for conversation"), which is:
-- Model-dependent (glm-5.1:cloud ignores it under context pressure)
+- Model-dependent (glm-5.3-flash:cloud ignores it under context pressure)
 - Fragile (topic bleed from conversation history overrides guidance)
 - Not enforceable (no code-level guard)
 

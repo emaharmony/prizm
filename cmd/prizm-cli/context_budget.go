@@ -228,15 +228,14 @@ func (cb *contextBudget) checkAndCompress(messages []provider.ChatMessage, itera
 // modelContextTokens maps known model names to their maximum context window size.
 func getModelContextTokens(model string) (int, bool) {
 	known := map[string]int{
-		"glm-5.1:cloud":         202752,
-		"glm-5.2:cloud":        202752,
+		"glm-5.3-flash:cloud":  262144, // current primary
+		"glm-5.1:cloud":         202752, // legacy alias
+		"glm-5.2:cloud":        202752, // legacy alias
 		"glm-4:cloud":           131072,
 		"deepseek-v4-pro:cloud": 131072,
 		"deepseek-v4-flash:cloud": 131072,
 		"qwen3.5:4b":            32768,
 		"qwen3.5:9b":            65536,
-		"qwen3.5:cloud":         131072,
-		"qwen3-coder:480b-cloud": 131072,
 	}
 	tokens, ok := known[model]
 	return tokens, ok

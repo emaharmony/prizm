@@ -119,7 +119,7 @@
 cd /Users/ema/projects/repos/prizm && ./prizm-bus
 
 # Start an agent
-./prizm-agent -name lumi -subs "prizm.agent.*,prizm.channel.received" -model glm-5.1:cloud
+./prizm-agent -name lumi -subs "prizm.agent.*,prizm.channel.received" -model glm-5.3-flash:cloud
 
 # Start Remembrance
 cd remembrance && uvicorn remembrance.app:app --reload --port 8900

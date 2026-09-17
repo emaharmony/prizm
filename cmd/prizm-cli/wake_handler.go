@@ -374,7 +374,7 @@ func (wh *WakeHandler) handleWorkflowStart(req workstart.Request) {
 	}
 	model := agentCfg.Model
 	if model == "" {
-		model = "glm-5.1:cloud"
+		model = "glm-5.3-flash:cloud"
 	}
 
 	// Resolve the result channel from the request or project config.
@@ -739,7 +739,7 @@ You can create branches, commit changes, push to remote, and open PRs. You are n
 
 	model := agentCfg.Model
 	if model == "" {
-		model = "glm-5.1:cloud"
+		model = "glm-5.3-flash:cloud"
 	}
 
 	// Create or reuse a session for this action

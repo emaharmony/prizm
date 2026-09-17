@@ -458,7 +458,7 @@ type AgentConfig struct {
 	// Provider is the LLM provider: ollama, openai, anthropic, gemini.
 	Provider string `yaml:"provider"`
 
-	// Model is the model identifier: glm-5.1:cloud, gpt-4o, etc.
+	// Model is the model identifier: glm-5.3-flash:cloud, gpt-4o, etc.
 	Model string `yaml:"model"`
 
 	// Fallbacks are attempted in order after the primary model fails. Each

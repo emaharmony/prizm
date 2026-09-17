@@ -51,7 +51,7 @@ New `prizm run` flags:
 When `--from-config` is set:
 1. Load `openclaw.json`
 2. Build `ProviderRegistry` from all configured providers
-3. `--model` selects from the registry (e.g., `glm-5.1:cloud`, `gpt-4o`)
+3. `--model` selects from the registry (e.g., `glm-5.3-flash:cloud`, `gpt-4o`)
 4. `--provider` is optional — inferred from config if `--model` is unique
 5. If `--provider` is specified, it filters to that provider's models
 

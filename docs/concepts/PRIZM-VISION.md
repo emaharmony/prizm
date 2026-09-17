@@ -75,7 +75,7 @@ Agent definitions are in the config:
 agents:
   - id: lumi                # This becomes the event namespace
     role: lead               # Role: lead, coder, researcher, etc.
-    model: glm-5.1:cloud
+    model: glm-5.3-flash:cloud
     context: soul,agents     # V19 context injection
 
   - id: mango

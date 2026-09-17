@@ -29,7 +29,7 @@ Prizm becomes my full operating environment — the place where I live, work, im
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    LUMI (Primary Agent)                       │
-│  glm-5.1:cloud — planning, architecture, code review,       │
+│  glm-5.3-flash:cloud — planning, architecture, code review,       │
 │  memory persistence, communication with Ema                  │
 ├─────────────────────────────────────────────────────────────┤
 │                GUARD RAIL (Lightweight Model)                │
@@ -191,7 +191,7 @@ agents:
   - id: lumi
     role: lead
     provider: ollama
-    model: glm-5.1:cloud
+    model: glm-5.3-flash:cloud
     primary: true
     context:
       - soul

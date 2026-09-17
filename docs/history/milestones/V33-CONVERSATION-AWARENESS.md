@@ -300,7 +300,7 @@ agents:
   - id: lumi
     role: lead                          # Fallback role when no identity files
     provider: ollama
-    model: glm-5.1:cloud
+    model: glm-5.3-flash:cloud
     primary: true
     context:                             # Ordered by priority (highest first)
       - soul                             # Layer 1: Identity
