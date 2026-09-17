@@ -34,6 +34,7 @@ func TestMolStatusReport_BasicOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
+	t.Cleanup(func() { _ = sessMgr.Close() })
 
 	planDir := t.TempDir()
 	planMgr := plan.NewManager(planDir)

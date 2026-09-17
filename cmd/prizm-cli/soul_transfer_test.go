@@ -893,6 +893,9 @@ func (s *MockTranscriptSender) Send(ctx context.Context, input string) (*Transcr
 // ---------------------------------------------------------------------------
 
 func TestSoulTransferSuite(t *testing.T) {
+	if os.Getenv("SOUL_TRANSFER_LIVE") != "1" {
+		t.Skip("Skipping live Soul Transfer suite (set SOUL_TRANSFER_LIVE=1 to enable)")
+	}
 	tests := defineSoulTransferTests()
 
 	// Check if we have a live Prizm instance to test against

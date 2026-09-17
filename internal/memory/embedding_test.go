@@ -103,7 +103,9 @@ func TestEmbeddingIndexSearch(t *testing.T) {
 	idx := NewEmbeddingIndex(cfg)
 	idx.dims = 4 // override for test with short vectors
 
-	mock := &mockEmbeddingClient{dims: 4}
+	mock := &mockEmbeddingClient{dims: 4, embeddings: map[string][]float64{
+		"identity origin": {0.9, 0.1, 0.0, 0.0},
+	}}
 	idx.httpClient = mock
 
 	// Manually add entries with 4-dim vectors
@@ -184,8 +186,8 @@ func TestCosineSimilarity(t *testing.T) {
 
 func TestSummaryHash(t *testing.T) {
 	tests := []struct {
-		name string
-		input string
+		name    string
+		input   string
 		wantLen int
 	}{
 		{"short", "hello", 0}, // just checking it doesn't crash

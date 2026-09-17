@@ -26,6 +26,18 @@ type Observation struct {
 	Metadata   map[string]any `json:"metadata,omitempty"`
 }
 
+// Action is the structured form of an adapter action. The legacy Adapter
+// contract still receives the name and input separately; this value lets
+// runtimes, selectors, and audit records carry them together without exposing
+// a domain-specific schema to core.
+type Action struct {
+	Name  string         `json:"name"`
+	Input map[string]any `json:"input,omitempty"`
+}
+
+// ActionResult is an additive name for the existing Result contract.
+type ActionResult = Result
+
 // ObservationProvider is an optional extension for adapters that expose
 // environment state to a state-machine run.
 type ObservationProvider interface {
@@ -48,6 +60,18 @@ type ActionValidator interface {
 // environment to a neutral state after timeout, cancellation, or error.
 type Neutralizer interface {
 	Neutralize(context.Context, string) error
+}
+
+// StructuredInteractionAdapter is an optional richer seam. Adapters may
+// implement it when they prefer a single typed action value; the legacy
+// ActionValidator and Adapter.Execute methods remain the compatibility path.
+type StructuredInteractionAdapter interface {
+	Adapter
+	ObservationProvider
+	LegalActionProvider
+	ValidateActionRequest(context.Context, Action) error
+	ExecuteAction(context.Context, Action) (ActionResult, error)
+	Neutralizer
 }
 
 // InteractionAdapter is the complete environment seam used by adaptive

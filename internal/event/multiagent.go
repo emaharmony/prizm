@@ -22,6 +22,16 @@ const (
 	EventMultiAgentRecoveryStarted    = "prism.workflow.multi_agent.recovery.started"
 	EventMultiAgentRecoveryCompleted  = "prism.workflow.multi_agent.recovery.completed"
 	EventMultiAgentRecoveryFailed     = "prism.workflow.multi_agent.recovery.failed"
+	EventInteractionObserved          = "prizm.interaction.observation.recorded"
+	EventInteractionDecisionSelected  = "prizm.interaction.decision.selected"
+	EventInteractionActionValidated   = "prizm.interaction.action.validated"
+	EventInteractionActionRejected    = "prizm.interaction.action.rejected"
+	EventInteractionActionExecuted    = "prizm.interaction.action.executed"
+	EventInteractionActionFailed      = "prizm.interaction.action.failed"
+	EventInteractionVerification      = "prizm.interaction.verification.completed"
+	EventInteractionNeutralized       = "prizm.interaction.neutralized"
+	EventInteractionApprovalPaused    = "prizm.interaction.approval.paused"
+	EventInteractionResumed           = "prizm.interaction.resumed"
 )
 
 // MultiAgentRunEventPayload is shared by run lifecycle events.
