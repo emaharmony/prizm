@@ -893,13 +893,14 @@ func (s *MockTranscriptSender) Send(ctx context.Context, input string) (*Transcr
 // ---------------------------------------------------------------------------
 
 func TestSoulTransferSuite(t *testing.T) {
-	tests := defineSoulTransferTests()
-
-	// Check if we have a live Prizm instance to test against
+	// This is an integration test that requires a running Prizm instance.
+	// Skip if PRIZM_URL is not set and no local instance is detected.
 	prizmURL := os.Getenv("PRIZM_URL")
 	if prizmURL == "" {
-		prizmURL = "http://localhost:8100"
+		t.Skip("SoulTransfer suite requires PRIZM_URL to be set — skipping integration test")
 	}
+
+	tests := defineSoulTransferTests()
 
 	// Group tests by category
 	categoryMap := map[string][]SoulTransferTest{}
@@ -934,9 +935,19 @@ func TestSoulTransferSuite(t *testing.T) {
 			})
 		}
 
-		// We'll compute the category score once all results are in
-		// For now, just collect the test definitions
-		_ = results
+		// Compute category score from collected results
+		catScore := computeCategoryScore(results)
+		// Derive category weight from test definitions (sum of per-test weights)
+		var catWeight float64
+		for _, test := range catTests {
+			catWeight += test.Weight
+		}
+		categories = append(categories, CategoryScore{
+			Category: catName,
+			Weight:   catWeight,
+			Score:    catScore,
+			Results:  results,
+		})
 	}
 
 	// Generate and print report

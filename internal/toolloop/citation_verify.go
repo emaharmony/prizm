@@ -29,6 +29,21 @@ const (
 	TierFlagOnly                                // Borderline → flag for logging only
 )
 
+func (t CorrectionTier) String() string {
+	switch t {
+	case TierNone:
+		return "none"
+	case TierContradictionPatch:
+		return "contradiction-patch"
+	case TierLowOverlapRewrite:
+		return "low-overlap-rewrite"
+	case TierFlagOnly:
+		return "flag-only"
+	default:
+		return fmt.Sprintf("unknown(%d)", t)
+	}
+}
+
 // CitationVerification holds the result of verifying citations in a response.
 type CitationVerification struct {
 	Original       string // Original response

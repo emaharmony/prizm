@@ -1024,7 +1024,7 @@ func (s *Server) runInvocationWithToolLoop(ctx contextctx.Context, agentCfg orch
 				log.Printf("[API] V23 citation verification: %d/%d citations flagged (%d patches, %d rewrites)",
 					verification.FlaggedCount, verification.TotalCitations, verification.PatchCount, verification.RewriteCount)
 				for _, flag := range verification.Flags {
-					log.Printf("[API] V23 %s: %s — %s", flag.Tier, flag.CitationID, flag.Issue)
+					log.Printf("[API] V23 %s: %s — %s", flag.Tier.String(), flag.CitationID, flag.Issue)
 				}
 				// Apply corrections — replace the response with the verified version
 				if verification.PatchCount > 0 || verification.RewriteCount > 0 {
@@ -1053,7 +1053,7 @@ func (s *Server) runInvocationWithToolLoop(ctx contextctx.Context, agentCfg orch
 					log.Printf("[API] V24d tagless verification: %d claims flagged (%d patches, %d rewrites, %d flags)",
 						len(taglessVerification.Flags), taglessVerification.PatchCount, taglessVerification.RewriteCount, taglessVerification.FlagCount)
 					for _, flag := range taglessVerification.Flags {
-						log.Printf("[API] V24d %s: %s", flag.Tier, flag.Issue)
+						log.Printf("[API] V24d %s: %s", flag.Tier.String(), flag.Issue)
 					}
 					// V24d: Tagless verification is LOGGING ONLY. Auto-correction of
 					// uncited claims has too many false positives (flagging casual
