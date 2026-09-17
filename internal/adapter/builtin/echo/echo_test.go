@@ -86,6 +86,27 @@ func TestEchoAdapter_Health(t *testing.T) {
 	}
 }
 
+func TestEchoAdapter_InteractionContract(t *testing.T) {
+	e := &EchoAdapter{}
+	var _ adapter.Adapter = e
+	var _ adapter.ObservationProvider = e
+	var _ adapter.LegalActionProvider = e
+	var _ adapter.ActionValidator = e
+	var _ adapter.Neutralizer = e
+
+	obs, err := e.Observe(context.Background(), adapter.ObservationRequest{})
+	if err != nil || obs == nil || obs.ID == "" {
+		t.Fatalf("Observe() = %#v, %v; want non-empty observation", obs, err)
+	}
+	legal, err := e.LegalActions(context.Background(), obs)
+	if err != nil || len(legal) != 1 || legal[0].Action != "echo" {
+		t.Fatalf("LegalActions() = %#v, %v; want echo", legal, err)
+	}
+	if err := e.ValidateAction(context.Background(), "unknown", nil); err == nil {
+		t.Fatal("ValidateAction() accepted unknown action")
+	}
+}
+
 func TestEchoAdapter_RegistryIntegration(t *testing.T) {
 	r := adapter.NewRegistry()
 	e := &EchoAdapter{}

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	prizmAdapter "github.com/emaharmony/prizm/internal/adapter"
 	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/validation"
 )
@@ -21,16 +22,21 @@ type DurableRuntimeOptions struct {
 	Clock        func() time.Time
 	NewHandoffID func() string
 	Logger       *slog.Logger
+	// Interaction optionally runs the adapter cascade for graph nodes that
+	// advertise execution metadata. Its audit events are connected to the
+	// same durable outbox as supervisor events.
+	Interaction *InteractionScheduler
 }
 
 // DurableRuntime advances a run only through atomically persisted checkpoints.
 type DurableRuntime struct {
-	supervisor *Supervisor
-	buffer     *durableEventBuffer
-	store      DurableRunStore
-	claimer    RunClaimer
-	publisher  EventPublisher
-	now        func() time.Time
+	supervisor  *Supervisor
+	buffer      *durableEventBuffer
+	store       DurableRunStore
+	claimer     RunClaimer
+	publisher   EventPublisher
+	now         func() time.Time
+	interaction *InteractionScheduler
 }
 
 // NewDurableRuntime creates the Phase 1 persistence and recovery boundary
@@ -58,18 +64,26 @@ func NewDurableRuntime(
 		graph,
 		runner,
 		buffer,
-		SupervisorOptions(options),
+		SupervisorOptions{
+			Clock:        options.Clock,
+			NewHandoffID: options.NewHandoffID,
+			Logger:       options.Logger,
+		},
 	)
 	if err != nil {
 		return nil, err
 	}
+	if options.Interaction != nil {
+		options.Interaction.SetEventSink(buffer)
+	}
 	return &DurableRuntime{
-		supervisor: supervisor,
-		buffer:     buffer,
-		store:      store,
-		claimer:    claimer,
-		publisher:  publisher,
-		now:        supervisor.now,
+		supervisor:  supervisor,
+		buffer:      buffer,
+		store:       store,
+		claimer:     claimer,
+		publisher:   publisher,
+		now:         supervisor.now,
+		interaction: options.Interaction,
 	}, nil
 }
 
@@ -462,6 +476,31 @@ func (r *DurableRuntime) executePreparedRole(
 	role := record.State.CurrentRole
 	roleConfig, _ := r.supervisor.graph.RoleConfig(role)
 	startedAt := r.now().UTC()
+	if r.interaction != nil {
+		if node, ok := r.supervisor.graph.Node(nodeID(role)); ok && node.Execution != nil {
+			roleState := record.State.RoleStates[role]
+			interactionID := fmt.Sprintf("%s-%s-%d", record.State.RunID, role, roleState.Visits)
+			interactionRecord, interactionErr := r.interaction.Run(ctx, InteractionRunRequest{
+				RunID:       interactionID,
+				EventRunID:  record.State.RunID,
+				Goal:        record.State.CurrentTask.Description,
+				Observation: prizmAdapter.ObservationRequest{},
+				Plan:        interactionPlanForNode(node),
+			})
+			if interactionErr != nil {
+				if interactionRecord.Status == InteractionPaused {
+					return r.pauseForInteractionApproval(ctx, record, interactionRecord)
+				}
+				return r.persistRoleFailure(ctx, record, role, &RoleExecutionError{Role: role, Cause: interactionErr})
+			}
+			if interactionRecord.Status == InteractionPaused {
+				return r.pauseForInteractionApproval(ctx, record, interactionRecord)
+			}
+			if interactionRecord.Status == InteractionFailed {
+				return r.persistRoleFailure(ctx, record, role, &RoleExecutionError{Role: role, Cause: errors.New(interactionRecord.LastError)})
+			}
+		}
+	}
 	result, runErr := r.supervisor.runner.RunRole(ctx, RoleRunRequest{
 		Run:        r.supervisor.runView(record.State),
 		RoleConfig: cloneRoleConfig(roleConfig),
@@ -661,6 +700,36 @@ func (r *DurableRuntime) pauseForApproval(
 	record.Waiting = &WaitingState{
 		Kind:        "approval",
 		Reason:      boundedDiagnostic(approvalErr),
+		SafeToRetry: true,
+		Since:       now,
+	}
+	r.supervisor.emitRun(event.EventMultiAgentRunPaused, record.State, record.Waiting.Reason)
+	record, err := r.checkpoint(ctx, record)
+	if err != nil {
+		return record, err
+	}
+	return record, waitingError(record)
+}
+
+func (r *DurableRuntime) pauseForInteractionApproval(
+	ctx context.Context,
+	record DurableRun,
+	interaction InteractionRunRecord,
+) (DurableRun, error) {
+	now := r.now().UTC()
+	role := record.State.CurrentRole
+	roleState := record.State.RoleStates[role]
+	roleState.Status = RoleStatusWaiting
+	roleState.ApprovalStatus = string(InteractionApprovalPending)
+	roleState.LastError = boundedDiagnostic(errors.New(interaction.LastError))
+	roleState.UpdatedAt = now
+	record.State.RoleStates[role] = roleState
+	record.State.Status = RunStatusPaused
+	record.State.UpdatedAt = now
+	record.Phase = CheckpointWaiting
+	record.Waiting = &WaitingState{
+		Kind:        "interaction_approval",
+		Reason:      boundedDiagnostic(errors.New(interaction.LastError)),
 		SafeToRetry: true,
 		Since:       now,
 	}

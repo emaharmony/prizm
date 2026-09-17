@@ -23,8 +23,15 @@ The scheduler records observations, decisions, validation, execution, outcome,
 verification, neutralization, and recovery events in `InteractionRunRecord`.
 `MemoryInteractionRunStore` is useful for embedding and deterministic tests;
 `JSONInteractionRunStore` supplies a small durable checkpoint for restart and
-pause/resume tests. Production composition should connect the store and event
-sink to Prizm's existing durable run and event infrastructure.
+pause/resume tests. The canonical graph runtime accepts an optional scheduler
+through `DurableRuntimeOptions.Interaction`. For authored graph nodes that
+include an `execution` policy, the runtime derives the lane, cadence,
+interruption triggers, verification checks, action budget, retry budget, and
+role deadline from that node before invoking the role runner. Scheduler events
+are attached to the graph runtime's durable event outbox, so observations and
+outcomes are inspectable with the rest of the run history. The CLI composition
+root enables this path by setting `PRIZM_INTERACTION_ADAPTER` to a registered
+adapter name; inspection and legacy runs remain unchanged when it is unset.
 
 Adapters remain compatible with the original five-method `Adapter` interface.
 They opt into interaction behavior incrementally through `ObservationProvider`,

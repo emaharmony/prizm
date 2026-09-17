@@ -65,7 +65,11 @@ func (p InteractionPlan) normalized() InteractionPlan {
 
 // InteractionRunRequest starts or resumes an adapter run.
 type InteractionRunRequest struct {
-	RunID       string
+	RunID string
+	// EventRunID optionally associates scheduler audit events with the parent
+	// durable graph run while keeping the scheduler checkpoint independently
+	// resumable.
+	EventRunID  string
 	Goal        string
 	Observation prizmAdapter.ObservationRequest
 	Plan        InteractionPlan
@@ -81,6 +85,18 @@ type InteractionDecisionSelectorFunc func(context.Context, prizmAdapter.Observat
 
 func (f InteractionDecisionSelectorFunc) Select(ctx context.Context, obs prizmAdapter.Observation, legal []prizmAdapter.Capability, phase InteractionPhase) (prizmAdapter.Action, error) {
 	return f(ctx, obs, legal, phase)
+}
+
+// FirstLegalInteractionSelector is the deterministic fallback used by the
+// graph composition when no model-backed selector is configured. A production
+// selector can replace it without changing adapter or scheduler contracts.
+type FirstLegalInteractionSelector struct{}
+
+func (FirstLegalInteractionSelector) Select(_ context.Context, _ prizmAdapter.Observation, legal []prizmAdapter.Capability, _ InteractionPhase) (prizmAdapter.Action, error) {
+	if len(legal) == 0 {
+		return prizmAdapter.Action{}, errors.New("multiagent: adapter exposes no legal actions")
+	}
+	return prizmAdapter.Action{Name: legal[0].Action}, nil
 }
 
 // InteractionAuthorization is the policy result for one proposed action.
@@ -138,6 +154,7 @@ const (
 // InteractionRunRecord is the inspectable recovery record for one adapter run.
 type InteractionRunRecord struct {
 	RunID           string                     `json:"run_id"`
+	EventRunID      string                     `json:"event_run_id,omitempty"`
 	Goal            string                     `json:"goal,omitempty"`
 	Adapter         string                     `json:"adapter"`
 	Status          InteractionRunStatus       `json:"status"`
@@ -265,7 +282,7 @@ func NewInteractionScheduler(a prizmAdapter.Adapter, selector InteractionDecisio
 		return nil, errors.New("multiagent: interaction adapter is required")
 	}
 	if selector == nil {
-		return nil, errors.New("multiagent: interaction decision selector is required")
+		selector = FirstLegalInteractionSelector{}
 	}
 	if options.Policy == nil {
 		options.Policy = AllowInteractionPolicy{}
@@ -277,6 +294,15 @@ func NewInteractionScheduler(a prizmAdapter.Adapter, selector InteractionDecisio
 		options.Clock = time.Now
 	}
 	return &InteractionScheduler{adapter: a, selector: selector, policy: options.Policy, verifier: options.Verifier, store: options.Store, events: options.Events, now: options.Clock}, nil
+}
+
+// SetEventSink connects scheduler audit events to the durable graph event
+// buffer. It is intended for composition roots that construct the scheduler
+// before the DurableRuntime owns its canonical event sink.
+func (s *InteractionScheduler) SetEventSink(sink EventSink) {
+	if s != nil {
+		s.events = sink
+	}
 }
 
 // Run advances a new or paused interaction run until an action budget, pause,
@@ -298,12 +324,15 @@ func (s *InteractionScheduler) Run(ctx context.Context, request InteractionRunRe
 	}
 	record, err := s.store.Load(ctx, request.RunID)
 	if errors.Is(err, ErrInteractionRunNotFound) {
-		record = InteractionRunRecord{RunID: request.RunID, Goal: request.Goal, Adapter: s.adapter.Name(), Status: InteractionRunning, PhaseActions: map[InteractionLane]int{}}
+		record = InteractionRunRecord{RunID: request.RunID, EventRunID: request.EventRunID, Goal: request.Goal, Adapter: s.adapter.Name(), Status: InteractionRunning, PhaseActions: map[InteractionLane]int{}}
 	} else if err != nil {
 		return InteractionRunRecord{}, err
 	} else if record.Status == InteractionCompleted || record.Status == InteractionFailed {
 		return record, nil
 	} else {
+		if record.EventRunID == "" {
+			record.EventRunID = request.EventRunID
+		}
 		record.Status = InteractionRunning
 		s.emit(&record, event.EventInteractionResumed, map[string]any{"reason": "resume from checkpoint"})
 	}
@@ -370,6 +399,7 @@ func (s *InteractionScheduler) Run(ctx context.Context, request InteractionRunRe
 		s.emit(&record, event.EventInteractionDecisionSelected, map[string]any{"action": action.Name, "lane": phase.Lane})
 		auth, reason, err := s.policy.Authorize(ctx, request.RunID, action, obs)
 		if err != nil {
+			s.neutralize(ctx, &record, "policy authorization failed")
 			return s.fail(ctx, record, err)
 		}
 		if auth == InteractionApprovalPending {
@@ -504,6 +534,10 @@ func (s *InteractionScheduler) emit(record *InteractionRunRecord, typ string, pa
 	payload["run_id"], payload["adapter"], payload["step"] = record.RunID, record.Adapter, record.Step
 	evt := event.NewEvent(typ, "prizm-interaction-scheduler", payload)
 	evt.Metadata.RunID = record.RunID
+	if record.EventRunID != "" {
+		evt.Metadata.RunID = record.EventRunID
+		payload["parent_run_id"] = record.EventRunID
+	}
 	record.Events = append(record.Events, evt)
 	if s.events != nil {
 		s.events.Emit(evt)
@@ -512,7 +546,7 @@ func (s *InteractionScheduler) emit(record *InteractionRunRecord, typ string, pa
 
 func (s *InteractionScheduler) fail(ctx context.Context, record InteractionRunRecord, err error) (InteractionRunRecord, error) {
 	record.Status, record.LastError = InteractionFailed, err.Error()
-	_ = s.store.Save(ctx, record)
+	_, _ = s.save(ctx, record)
 	return record, err
 }
 

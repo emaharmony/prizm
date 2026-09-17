@@ -298,14 +298,38 @@ func openLiveReferenceRuntime(runDir, configPath string, manifest referenceWorkf
 	if err != nil {
 		return nil, err
 	}
-	return openReferenceRuntime(runDir, manifest, roleRunner)
+	var interaction *multiagent.InteractionScheduler
+	if adapterName := strings.TrimSpace(os.Getenv("PRIZM_INTERACTION_ADAPTER")); adapterName != "" {
+		adapterRegistry := newAdapterRegistry()
+		interactionAdapter, resolveErr := adapterRegistry.Resolve(adapterName)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("resolve interaction adapter %q: %w", adapterName, resolveErr)
+		}
+		interaction, err = multiagent.NewInteractionScheduler(
+			interactionAdapter,
+			multiagent.FirstLegalInteractionSelector{},
+			multiagent.InteractionSchedulerOptions{
+				Store: multiagent.JSONInteractionRunStore{
+					Directory: filepath.Join(runDir, manifest.RunID, "interaction"),
+				},
+			},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("configure interaction adapter %q: %w", adapterName, err)
+		}
+	}
+	return openReferenceRuntimeWithInteraction(runDir, manifest, roleRunner, interaction)
 }
 
 func openInspectionReferenceRuntime(runDir string, manifest referenceWorkflowManifest) (*referenceRuntime, error) {
-	return openReferenceRuntime(runDir, manifest, unavailableRoleRunner{})
+	return openReferenceRuntimeWithInteraction(runDir, manifest, unavailableRoleRunner{}, nil)
 }
 
 func openReferenceRuntime(runDir string, manifest referenceWorkflowManifest, runner multiagent.RoleRunner) (*referenceRuntime, error) {
+	return openReferenceRuntimeWithInteraction(runDir, manifest, runner, nil)
+}
+
+func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkflowManifest, runner multiagent.RoleRunner, interaction *multiagent.InteractionScheduler) (*referenceRuntime, error) {
 	dbPath := filepath.Join(runDir, manifest.RunID, "multiagent.db")
 	store, err := multiagent.NewSQLiteDurableRunStore(dbPath)
 	if err != nil {
@@ -362,7 +386,7 @@ func openReferenceRuntime(runDir string, manifest referenceWorkflowManifest, run
 	runtime, err := multiagent.NewDurableRuntime(
 		graph, runner, store,
 		multiagent.FileRunClaimer{Root: runDir}, eventStore,
-		multiagent.DurableRuntimeOptions{},
+		multiagent.DurableRuntimeOptions{Interaction: interaction},
 	)
 	if err != nil {
 		store.Close()
