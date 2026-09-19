@@ -166,6 +166,8 @@ type InteractionRunRecord struct {
 	LastResult      *prizmAdapter.ActionResult `json:"last_result,omitempty"`
 	LastError       string                     `json:"last_error,omitempty"`
 	LastActionAt    *time.Time                 `json:"last_action_at,omitempty"`
+	Interrupted     bool                       `json:"interrupted,omitempty"`
+	InterruptReason string                     `json:"interrupt_reason,omitempty"`
 	Events          []event.Event              `json:"events,omitempty"`
 	UpdatedAt       time.Time                  `json:"updated_at"`
 }
@@ -444,6 +446,8 @@ func (s *InteractionScheduler) Run(ctx context.Context, request InteractionRunRe
 		}
 		s.emit(&record, event.EventInteractionVerification, map[string]any{"action": action.Name, "success": true})
 		if interrupted(obs, phase.Interrupts) {
+			record.Interrupted = true
+			record.InterruptReason = interruptionValue(obs)
 			record.PhaseIndex = 0
 		} else {
 			record.PhaseIndex = (record.PhaseIndex + 1) % len(plan.Phases)
@@ -578,6 +582,14 @@ func interrupted(obs prizmAdapter.Observation, triggers []string) bool {
 		}
 	}
 	return false
+}
+
+func interruptionValue(obs prizmAdapter.Observation) string {
+	if obs.Metadata == nil {
+		return ""
+	}
+	value, _ := obs.Metadata["interrupt"].(string)
+	return value
 }
 
 func errorString(err error, fallback string) string {

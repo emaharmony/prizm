@@ -59,7 +59,52 @@ func ValidateDefinitionWithProfiles(def WorkflowDefinition, idx *PositionIndex, 
 	diags = append(diags, validateCycles(def, idx)...)
 	diags = append(diags, validateGovernanceWithProfiles(def, idx, knownProfiles)...)
 	diags = append(diags, validateSchemaBudgets(def, idx)...)
+	diags = append(diags, validateReflectionPolicy(def, idx)...)
 	return attachPositions(diags, idx)
+}
+
+func validateReflectionPolicy(def WorkflowDefinition, _ *PositionIndex) Diagnostics {
+	policy := def.Spec.Reflection
+	if policy == nil || !policy.Enabled {
+		return nil
+	}
+	var diags Diagnostics
+	role := policy.Role
+	if role == "" {
+		role = string(RoleReflector)
+	}
+	replanRole := policy.ReplanRole
+	if replanRole == "" {
+		replanRole = string(RolePlanner)
+	}
+	nodes := make(map[string]SchemaNode, len(def.Spec.Nodes))
+	for _, node := range def.Spec.Nodes {
+		nodes[node.ID] = node
+	}
+	reflector, ok := nodes[role]
+	if !ok || normalizedNodeType(reflector) != "role" {
+		diags = append(diags, Diagnostic{Severity: SeverityError, Rule: "reflection.missing-reflector", Message: fmt.Sprintf("reflection role %q must reference a role node", role), NodeID: role})
+	} else if roleForNode(reflector) != RoleReflector {
+		diags = append(diags, Diagnostic{Severity: SeverityError, Rule: "reflection.invalid-reflector-role", Message: fmt.Sprintf("reflection role node %q must declare role %q", role, RoleReflector), NodeID: role})
+	}
+	if target, ok := nodes[replanRole]; !ok || normalizedNodeType(target) != "role" {
+		diags = append(diags, Diagnostic{Severity: SeverityError, Rule: "reflection.missing-replan-role", Message: fmt.Sprintf("reflection replan role %q must reference a role node", replanRole), NodeID: replanRole})
+	}
+	if policy.MaxReplans < 0 || policy.MaxReplans > 2 {
+		diags = append(diags, Diagnostic{Severity: SeverityError, Rule: "reflection.invalid-replan-budget", Message: "reflection maxReplans must be between 0 and 2", FieldPath: "spec.reflection.maxReplans"})
+	}
+	if policy.MemoryScope != "" && policy.MemoryScope != "project" {
+		diags = append(diags, Diagnostic{Severity: SeverityError, Rule: "reflection.invalid-memory-scope", Message: "reflection memoryScope must be project", FieldPath: "spec.reflection.memoryScope"})
+	}
+	allowed := map[string]bool{"terminal": true, "failure": true, "verification_failure": true, "interruption": true, "recovery": true, "approval_resume": true}
+	seen := make(map[string]bool, len(policy.Triggers))
+	for _, trigger := range policy.Triggers {
+		if seen[trigger] || !allowed[trigger] {
+			diags = append(diags, Diagnostic{Severity: SeverityError, Rule: "reflection.invalid-trigger", Message: fmt.Sprintf("reflection trigger %q is unknown or duplicated", trigger), FieldPath: "spec.reflection.triggers"})
+		}
+		seen[trigger] = true
+	}
+	return diags
 }
 
 // attachPositions fills in Line/Column for every diagnostic that doesn't

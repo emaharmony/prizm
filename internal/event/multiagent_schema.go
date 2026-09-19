@@ -123,4 +123,17 @@ func init() {
 			Optional: []string{"action", "lane", "reason", "success", "error", "observation_id"},
 		}
 	}
+	for _, eventType := range []string{
+		EventReflectionRequested,
+		EventReflectionCompleted,
+		EventReflectionReplanRequested,
+		EventReflectionMemoryAccepted,
+		EventReflectionMemoryRejected,
+		EventReflectionFailed,
+	} {
+		Schemas[eventType] = Schema{
+			Required: []string{"run_id", "trigger"},
+			Optional: []string{"role", "verdict", "confidence", "reason", "status"},
+		}
+	}
 }

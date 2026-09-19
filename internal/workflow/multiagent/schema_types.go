@@ -46,11 +46,23 @@ type WorkflowMetadata struct {
 // WorkflowSpec is the executable body of a workflow definition: its entry
 // point, budgets, cascading defaults, and the node/edge graph itself.
 type WorkflowSpec struct {
-	EntryNode string           `json:"entryNode"`
-	Budgets   SchemaBudgets    `json:"budgets"`
-	Defaults  WorkflowDefaults `json:"defaults,omitempty"`
-	Nodes     []SchemaNode     `json:"nodes"`
-	Edges     []SchemaEdge     `json:"edges"`
+	EntryNode  string                  `json:"entryNode"`
+	Budgets    SchemaBudgets           `json:"budgets"`
+	Defaults   WorkflowDefaults        `json:"defaults,omitempty"`
+	Reflection *SchemaReflectionPolicy `json:"reflection,omitempty"`
+	Nodes      []SchemaNode            `json:"nodes"`
+	Edges      []SchemaEdge            `json:"edges"`
+}
+
+// SchemaReflectionPolicy enables the explicit reflector graph node without
+// changing the legacy workflow path.
+type SchemaReflectionPolicy struct {
+	Enabled     bool     `json:"enabled"`
+	Role        string   `json:"role,omitempty"`
+	ReplanRole  string   `json:"replanRole,omitempty"`
+	Triggers    []string `json:"triggers,omitempty"`
+	MaxReplans  int      `json:"maxReplans,omitempty"`
+	MemoryScope string   `json:"memoryScope,omitempty"`
 }
 
 // WorkflowDefaults holds workflow-wide fallback policy that individual nodes

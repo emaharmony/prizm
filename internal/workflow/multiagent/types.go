@@ -12,6 +12,7 @@ const (
 	RoleDeveloper Role = "developer"
 	RoleTester    Role = "tester"
 	RoleReviewer  Role = "reviewer"
+	RoleReflector Role = "reflector"
 )
 
 var phase1Roles = [...]Role{
@@ -31,7 +32,7 @@ func Phase1Roles() []Role {
 // Valid reports whether the role is part of the Phase 1 contract.
 func (r Role) Valid() bool {
 	switch r {
-	case RolePlanner, RoleDeveloper, RoleTester, RoleReviewer:
+	case RolePlanner, RoleDeveloper, RoleTester, RoleReviewer, RoleReflector:
 		return true
 	default:
 		return false

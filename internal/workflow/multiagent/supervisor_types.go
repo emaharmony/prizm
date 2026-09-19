@@ -177,17 +177,18 @@ func (c *LoopTraversalCounts) UnmarshalJSON(data []byte) error {
 // RunView is the intentionally limited state visible to a role runner.
 // It contains no mutation methods and no references to supervisor-owned maps.
 type RunView struct {
-	RunID           string
-	WorkflowID      string
-	Task            TaskReference
-	WorkspaceID     string
-	CurrentRole     Role
-	ExecutionKey    string
-	Visit           int
-	TransitionCount int
-	LoopTraversals  LoopTraversalCounts
-	BudgetUsage     BudgetUsage
-	IncomingHandoff *Handoff
+	RunID            string
+	WorkflowID       string
+	Task             TaskReference
+	WorkspaceID      string
+	CurrentRole      Role
+	ExecutionKey     string
+	Visit            int
+	TransitionCount  int
+	LoopTraversals   LoopTraversalCounts
+	BudgetUsage      BudgetUsage
+	IncomingHandoff  *Handoff
+	LatestReflection *ReflectionRecord
 }
 
 // RoleRunRequest is the complete, read-only input for one role visit.

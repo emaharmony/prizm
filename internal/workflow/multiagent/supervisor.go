@@ -620,17 +620,18 @@ func (s *Supervisor) exhaustRun(
 
 func (s *Supervisor) runView(state RunState) RunView {
 	return RunView{
-		RunID:           state.RunID,
-		WorkflowID:      state.WorkflowID,
-		Task:            state.CurrentTask,
-		WorkspaceID:     state.WorkspaceID,
-		CurrentRole:     state.CurrentRole,
-		ExecutionKey:    state.RoleStates[state.CurrentRole].LastExecutionKey,
-		Visit:           state.RoleStates[state.CurrentRole].Visits,
-		TransitionCount: state.TransitionCount,
-		LoopTraversals:  state.LoopTraversals,
-		BudgetUsage:     state.BudgetUsage,
-		IncomingHandoff: cloneHandoff(state.LatestHandoff),
+		RunID:            state.RunID,
+		WorkflowID:       state.WorkflowID,
+		Task:             state.CurrentTask,
+		WorkspaceID:      state.WorkspaceID,
+		CurrentRole:      state.CurrentRole,
+		ExecutionKey:     state.RoleStates[state.CurrentRole].LastExecutionKey,
+		Visit:            state.RoleStates[state.CurrentRole].Visits,
+		TransitionCount:  state.TransitionCount,
+		LoopTraversals:   state.LoopTraversals,
+		BudgetUsage:      state.BudgetUsage,
+		IncomingHandoff:  cloneHandoff(state.LatestHandoff),
+		LatestReflection: cloneReflectionRecord(state.LatestReflection),
 	}
 }
 

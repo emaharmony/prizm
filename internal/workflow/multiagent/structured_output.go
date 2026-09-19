@@ -76,6 +76,24 @@ type ReviewerOutput struct {
 	Handoff             *OutputHandoff  `json:"handoff,omitempty"`
 }
 
+type ReflectionOutput struct {
+	SchemaVersion   int                    `json:"schema_version"`
+	Verdict         string                 `json:"verdict"`
+	Confidence      float64                `json:"confidence"`
+	FailureClass    string                 `json:"failure_class"`
+	Evidence        []ArtifactRef          `json:"evidence,omitempty"`
+	LessonCandidate *MemoryCandidateOutput `json:"lesson_candidate,omitempty"`
+	ReplanRequested bool                   `json:"replan_requested"`
+	ReplanReason    string                 `json:"replan_reason,omitempty"`
+}
+
+type MemoryCandidateOutput struct {
+	Summary   string   `json:"summary"`
+	Content   string   `json:"content"`
+	Category  string   `json:"category"`
+	KeyTopics []string `json:"topics,omitempty"`
+}
+
 type decodedRoleOutput struct {
 	Outcome TransitionOutcome
 	Handoff *HandoffDraft
@@ -146,6 +164,39 @@ func decodeRoleOutput(role Role, raw string) (decodedRoleOutput, error) {
 	default:
 		return decodedRoleOutput{}, structuredError(role, errors.New("unsupported role"))
 	}
+}
+
+func decodeReflectionOutput(raw string) (ReflectionResult, error) {
+	var output ReflectionOutput
+	if err := decodeStrictJSON(raw, &output); err != nil {
+		return ReflectionResult{}, err
+	}
+	if output.SchemaVersion != roleOutputSchemaVersion {
+		return ReflectionResult{}, fmt.Errorf("schema_version must be %d", roleOutputSchemaVersion)
+	}
+	validVerdicts := map[string]bool{"success": true, "partial": true, "failure": true, "uncertain": true}
+	if !validVerdicts[output.Verdict] {
+		return ReflectionResult{}, fmt.Errorf("invalid verdict %q", output.Verdict)
+	}
+	if output.Confidence < 0 || output.Confidence > 1 {
+		return ReflectionResult{}, errors.New("confidence must be between 0 and 1")
+	}
+	validFailures := map[string]bool{"none": true, "policy": true, "tool": true, "environment": true, "model": true, "verification": true, "unknown": true}
+	if !validFailures[output.FailureClass] {
+		return ReflectionResult{}, fmt.Errorf("invalid failure_class %q", output.FailureClass)
+	}
+	if output.ReplanRequested && strings.TrimSpace(output.ReplanReason) == "" {
+		return ReflectionResult{}, errors.New("replan_reason is required when replan_requested is true")
+	}
+	result := ReflectionResult{Verdict: output.Verdict, Confidence: output.Confidence, FailureClass: output.FailureClass, Evidence: cloneArtifactRefs(output.Evidence), ReplanRequested: output.ReplanRequested, ReplanReason: output.ReplanReason}
+	if output.LessonCandidate != nil {
+		candidate := output.LessonCandidate
+		if strings.TrimSpace(candidate.Summary) == "" || strings.TrimSpace(candidate.Content) == "" || strings.TrimSpace(candidate.Category) == "" {
+			return ReflectionResult{}, errors.New("lesson_candidate summary, content, and category are required")
+		}
+		result.LessonCandidate = &MemoryCandidate{Summary: candidate.Summary, Content: candidate.Content, Category: candidate.Category, KeyTopics: append([]string(nil), candidate.KeyTopics...)}
+	}
+	return result, nil
 }
 
 func decodeStrictJSON(raw string, target any) error {

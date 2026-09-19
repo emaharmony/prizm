@@ -15,6 +15,7 @@ import (
 	"github.com/emaharmony/prizm/internal/agent"
 	"github.com/emaharmony/prizm/internal/approval"
 	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/memory"
 	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/provider"
 	"github.com/emaharmony/prizm/internal/subagent"
@@ -383,10 +384,21 @@ func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkfl
 			return nil, err
 		}
 	}
+	var reflectionMemory multiagent.ReflectionMemorySink
+	if os.Getenv("PRIZM_REFLECTION_MEMORY") == "1" {
+		reflectionMemory = &memory.ReflectionSink{
+			Gate:  memory.NewGateExtractor([]string{"qwen3.5:9b"}, os.Getenv("OLLAMA_URL"), ""),
+			Store: memory.NewMarkdownStore(filepath.Join(manifest.WorkspacePath, "memory")),
+		}
+	}
+	var reflection multiagent.ReflectionRunner
+	if candidate, ok := runner.(multiagent.ReflectionRunner); ok {
+		reflection = candidate
+	}
 	runtime, err := multiagent.NewDurableRuntime(
 		graph, runner, store,
 		multiagent.FileRunClaimer{Root: runDir}, eventStore,
-		multiagent.DurableRuntimeOptions{Interaction: interaction},
+		multiagent.DurableRuntimeOptions{Interaction: interaction, Reflection: reflection, Memory: reflectionMemory},
 	)
 	if err != nil {
 		store.Close()

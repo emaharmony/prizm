@@ -73,6 +73,75 @@ func TestDurableRuntimeRunsInteractionForAuthoredExecutionNode(t *testing.T) {
 	}
 }
 
+func TestDurableRuntimePersistsTerminalReflection(t *testing.T) {
+	definition := baseDef()
+	definition.Spec.Nodes = append(definition.Spec.Nodes, roleNode("reflector", "done"))
+	definition.Spec.Edges = append(definition.Spec.Edges, edge("reflector-end", "reflector", "end", "done"))
+	definition.Spec.Reflection = &SchemaReflectionPolicy{Enabled: true, Role: "reflector", ReplanRole: "start", MaxReplans: 2, Triggers: []string{string(ReflectionTerminal)}, MemoryScope: "project"}
+	graph, _, err := Compile(definition, nil, CompileOptions{})
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	env := newDurableTestEnvironment(t)
+	reflectionCalls := 0
+	reflection := ReflectionRunnerFunc(func(_ context.Context, request ReflectionRequest) (ReflectionResult, error) {
+		reflectionCalls++
+		if request.Input.Trigger != ReflectionTerminal {
+			t.Fatalf("trigger = %q, want terminal", request.Input.Trigger)
+		}
+		return ReflectionResult{Verdict: "success", Confidence: 1, FailureClass: "none"}, nil
+	})
+	runner := &scriptedRunner{scripts: map[Role][]scriptedStep{
+		Role("start"): {{result: RoleRunResult{Outcome: TransitionOutcome("ok"), LocalIterations: 1}}},
+	}}
+	runtime, err := NewDurableRuntime(graph, runner, env.store, env.claimer, env.events, DurableRuntimeOptions{Reflection: reflection})
+	if err != nil {
+		t.Fatalf("NewDurableRuntime() error = %v", err)
+	}
+	state, err := runtime.Run(context.Background(), RunRequest{RunID: "run-reflection-terminal", Task: TaskReference{ID: "task", Description: "reflect"}})
+	if err != nil || state.Status != RunStatusCompleted || reflectionCalls != 1 {
+		t.Fatalf("Run() state=%#v err=%v reflection_calls=%d", state, err, reflectionCalls)
+	}
+	if len(state.LatestReflection.Result.Evidence) != 0 || state.LatestReflection.Result.Verdict != "success" {
+		t.Fatalf("latest reflection = %#v", state.LatestReflection)
+	}
+	if events := queryEventsForTest(t, env.events, state.RunID, event.EventReflectionCompleted); len(events) != 1 {
+		t.Fatalf("reflection events = %d, want 1", len(events))
+	}
+}
+
+func TestDurableRuntimeBoundsReflectionReplans(t *testing.T) {
+	definition := baseDef()
+	definition.Spec.Nodes = append(definition.Spec.Nodes, roleNode("reflector", "done"))
+	definition.Spec.Edges = append(definition.Spec.Edges, edge("reflector-end", "reflector", "end", "done"))
+	definition.Spec.Reflection = &SchemaReflectionPolicy{Enabled: true, Role: "reflector", ReplanRole: "start", MaxReplans: 1, Triggers: []string{string(ReflectionTerminal)}}
+	graph, _, err := Compile(definition, nil, CompileOptions{})
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	env := newDurableTestEnvironment(t)
+	reflectionCalls := 0
+	reflection := ReflectionRunnerFunc(func(_ context.Context, _ ReflectionRequest) (ReflectionResult, error) {
+		reflectionCalls++
+		return ReflectionResult{Verdict: "partial", Confidence: 0.5, FailureClass: "none", ReplanRequested: reflectionCalls == 1, ReplanReason: "retry strategy"}, nil
+	})
+	runner := &scriptedRunner{scripts: map[Role][]scriptedStep{
+		Role("start"): {
+			{result: RoleRunResult{Outcome: TransitionOutcome("ok"), LocalIterations: 1}},
+			{result: RoleRunResult{Outcome: TransitionOutcome("ok"), LocalIterations: 1}},
+		},
+	}}
+	runtime, err := NewDurableRuntime(graph, runner, env.store, env.claimer, env.events, DurableRuntimeOptions{Reflection: reflection})
+	if err != nil {
+		t.Fatalf("NewDurableRuntime() error = %v", err)
+	}
+	state, err := runtime.Run(context.Background(), RunRequest{RunID: "run-reflection-replan", Task: TaskReference{ID: "task", Description: "bounded replan"}})
+	stored, loadErr := env.store.Load(context.Background(), "run-reflection-replan")
+	if err != nil || loadErr != nil || state.Status != RunStatusCompleted || stored.ReplanCount != 1 || reflectionCalls != 2 {
+		t.Fatalf("Run() state=%#v err=%v reflection_calls=%d", state, err, reflectionCalls)
+	}
+}
+
 func interactionSchemaLimit(value int) *SchemaLimit {
 	limit := SchemaLimit(value)
 	return &limit

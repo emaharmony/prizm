@@ -166,3 +166,23 @@ func TestDecodeRoleOutputRejectsMalformedOrAmbiguousResults(t *testing.T) {
 		})
 	}
 }
+
+func TestDecodeReflectionOutputStrictContract(t *testing.T) {
+	raw := `{"schema_version":1,"verdict":"partial","confidence":0.75,"failure_class":"verification","evidence":[],"lesson_candidate":{"summary":"keep the check","content":"Run verification before routing.","category":"decision","topics":["verification"]},"replan_requested":true,"replan_reason":"verification evidence changed"}`
+	result, err := decodeReflectionOutput(raw)
+	if err != nil {
+		t.Fatalf("decodeReflectionOutput() error = %v", err)
+	}
+	if result.Verdict != "partial" || result.Confidence != 0.75 || !result.ReplanRequested || result.LessonCandidate == nil {
+		t.Fatalf("result = %#v", result)
+	}
+	for _, invalid := range []string{
+		`{"schema_version":1,"verdict":"bad","confidence":0.5,"failure_class":"none"}`,
+		`{"schema_version":1,"verdict":"success","confidence":1.5,"failure_class":"none"}`,
+		`{"schema_version":1,"verdict":"success","confidence":0.5,"failure_class":"none","replan_requested":true}`,
+	} {
+		if _, err := decodeReflectionOutput(invalid); err == nil {
+			t.Errorf("decodeReflectionOutput(%s) accepted invalid input", invalid)
+		}
+	}
+}

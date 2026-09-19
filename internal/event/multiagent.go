@@ -32,6 +32,12 @@ const (
 	EventInteractionNeutralized       = "prizm.interaction.neutralized"
 	EventInteractionApprovalPaused    = "prizm.interaction.approval.paused"
 	EventInteractionResumed           = "prizm.interaction.resumed"
+	EventReflectionRequested          = "prizm.reflection.requested"
+	EventReflectionCompleted          = "prizm.reflection.completed"
+	EventReflectionReplanRequested    = "prizm.reflection.replan_requested"
+	EventReflectionMemoryAccepted     = "prizm.reflection.memory_accepted"
+	EventReflectionMemoryRejected     = "prizm.reflection.memory_rejected"
+	EventReflectionFailed             = "prizm.reflection.failed"
 )
 
 // MultiAgentRunEventPayload is shared by run lifecycle events.

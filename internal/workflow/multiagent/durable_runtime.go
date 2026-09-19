@@ -26,6 +26,8 @@ type DurableRuntimeOptions struct {
 	// advertise execution metadata. Its audit events are connected to the
 	// same durable outbox as supervisor events.
 	Interaction *InteractionScheduler
+	Reflection  ReflectionRunner
+	Memory      ReflectionMemorySink
 }
 
 // DurableRuntime advances a run only through atomically persisted checkpoints.
@@ -37,6 +39,8 @@ type DurableRuntime struct {
 	publisher   EventPublisher
 	now         func() time.Time
 	interaction *InteractionScheduler
+	reflection  ReflectionRunner
+	memory      ReflectionMemorySink
 }
 
 // NewDurableRuntime creates the Phase 1 persistence and recovery boundary
@@ -84,6 +88,8 @@ func NewDurableRuntime(
 		publisher:   publisher,
 		now:         supervisor.now,
 		interaction: options.Interaction,
+		reflection:  options.Reflection,
+		memory:      options.Memory,
 	}, nil
 }
 
@@ -358,6 +364,21 @@ func (r *DurableRuntime) drive(
 			if record.Waiting == nil || !record.Waiting.SafeToRetry {
 				return record.State, waitingError(record)
 			}
+			if r.reflection != nil {
+				trigger := ReflectionRecovery
+				if record.Waiting.Kind == "approval" || record.Waiting.Kind == "interaction_approval" {
+					trigger = ReflectionApprovalResume
+				}
+				input := ReflectionInput{Trigger: trigger, SourceRole: record.State.CurrentRole, Error: record.Waiting.Reason, Goal: record.State.CurrentTask.Description}
+				if r.runReflection(ctx, &record, trigger, input) {
+					var checkpointErr error
+					record, checkpointErr = r.checkpoint(ctx, record)
+					if checkpointErr != nil {
+						return record.State, checkpointErr
+					}
+					continue
+				}
+			}
 			record.State.Status = RunStatusRunning
 			roleState := record.State.RoleStates[record.State.CurrentRole]
 			roleState.Status = RoleStatusRunning
@@ -491,6 +512,9 @@ func (r *DurableRuntime) executePreparedRole(
 				if interactionRecord.Status == InteractionPaused {
 					return r.pauseForInteractionApproval(ctx, record, interactionRecord)
 				}
+				if r.runReflection(ctx, &record, ReflectionFailure, reflectionFailureInput(role, "", interactionErr, record.State)) {
+					return r.checkpoint(ctx, record)
+				}
 				return r.persistRoleFailure(ctx, record, role, &RoleExecutionError{Role: role, Cause: interactionErr})
 			}
 			if interactionRecord.Status == InteractionPaused {
@@ -498,6 +522,12 @@ func (r *DurableRuntime) executePreparedRole(
 			}
 			if interactionRecord.Status == InteractionFailed {
 				return r.persistRoleFailure(ctx, record, role, &RoleExecutionError{Role: role, Cause: errors.New(interactionRecord.LastError)})
+			}
+			if interactionRecord.Interrupted {
+				input := ReflectionInput{Trigger: ReflectionInterruption, SourceRole: role, Error: interactionRecord.InterruptReason, Goal: record.State.CurrentTask.Description, Observation: interactionRecord.LastObservation, Action: interactionRecord.LastAction, ActionResult: interactionRecord.LastResult}
+				if r.runReflection(ctx, &record, ReflectionInterruption, input) {
+					return r.checkpoint(ctx, record)
+				}
 			}
 		}
 	}
@@ -531,6 +561,9 @@ func (r *DurableRuntime) executePreparedRole(
 		return r.pauseForApproval(ctx, record, role, approvalErr)
 	}
 	if runErr != nil {
+		if r.runReflection(ctx, &record, ReflectionFailure, reflectionFailureInput(role, "", runErr, record.State)) {
+			return r.checkpoint(ctx, record)
+		}
 		return r.persistRoleFailure(
 			ctx,
 			record,
@@ -539,6 +572,9 @@ func (r *DurableRuntime) executePreparedRole(
 		)
 	}
 	if err := validateRoleRunResult(r.supervisor.graph, result); err != nil {
+		if r.runReflection(ctx, &record, ReflectionFailure, reflectionFailureInput(role, result.Outcome, err, record.State)) {
+			return r.checkpoint(ctx, record)
+		}
 		return r.persistRoleFailure(
 			ctx,
 			record,
@@ -548,6 +584,9 @@ func (r *DurableRuntime) executePreparedRole(
 	}
 	transition, err := r.supervisor.graph.Resolve(role, result.Outcome)
 	if err != nil {
+		if r.runReflection(ctx, &record, ReflectionFailure, reflectionFailureInput(role, result.Outcome, err, record.State)) {
+			return r.checkpoint(ctx, record)
+		}
 		return r.persistRoleFailure(ctx, record, role, err)
 	}
 
@@ -556,6 +595,16 @@ func (r *DurableRuntime) executePreparedRole(
 	roleState.LastExecutionKey = record.ActiveExecutionKey
 	record.State.RoleStates[role] = roleState
 	record.LastCompletedExecutionKey = record.ActiveExecutionKey
+	if transition.Terminal != "" {
+		input := ReflectionInput{Trigger: ReflectionTerminal, SourceRole: role, Outcome: result.Outcome, Goal: record.State.CurrentTask.Description}
+		if result.OutgoingHandoff != nil {
+			input.Evidence = append(input.Evidence, result.OutgoingHandoff.Evidence...)
+			input.Evidence = append(input.Evidence, result.OutgoingHandoff.Artifacts...)
+		}
+		if r.runReflection(ctx, &record, ReflectionTerminal, input) {
+			return r.checkpoint(ctx, record)
+		}
+	}
 
 	if budgetErr := r.supervisor.checkAfterRole(record.State, role, roleConfig); budgetErr != nil {
 		state, terminalErr := r.supervisor.exhaustRun(record.State, budgetErr)

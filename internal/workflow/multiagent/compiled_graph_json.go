@@ -8,16 +8,17 @@ package multiagent
 
 // CompiledGraphView is the JSON-serializable snapshot of a CompiledGraph.
 type CompiledGraphView struct {
-	WorkflowID      string         `json:"workflow_id"`
-	WorkflowVersion string         `json:"workflow_version"`
-	SchemaVersion   string         `json:"schema_version"`
-	Fingerprint     string         `json:"fingerprint"`
-	EntryNodeID     string         `json:"entry_node_id"`
-	Nodes           []CompiledNode `json:"nodes"`
-	Edges           []CompiledEdge `json:"edges"`
-	TerminalNodeIDs []string       `json:"terminal_node_ids"`
-	Loops           []CompiledLoop `json:"loops"`
-	Budgets         BudgetLimits   `json:"budgets"`
+	WorkflowID      string                  `json:"workflow_id"`
+	WorkflowVersion string                  `json:"workflow_version"`
+	SchemaVersion   string                  `json:"schema_version"`
+	Fingerprint     string                  `json:"fingerprint"`
+	EntryNodeID     string                  `json:"entry_node_id"`
+	Nodes           []CompiledNode          `json:"nodes"`
+	Edges           []CompiledEdge          `json:"edges"`
+	TerminalNodeIDs []string                `json:"terminal_node_ids"`
+	Loops           []CompiledLoop          `json:"loops"`
+	Budgets         BudgetLimits            `json:"budgets"`
+	Reflection      *SchemaReflectionPolicy `json:"reflection,omitempty"`
 }
 
 // BuildCompiledGraphView builds the JSON-serializable snapshot of g. Every
@@ -45,5 +46,6 @@ func BuildCompiledGraphView(g *CompiledGraph) CompiledGraphView {
 		TerminalNodeIDs: g.TerminalNodeIDs(),
 		Loops:           loops,
 		Budgets:         g.Budgets(),
+		Reflection:      g.ReflectionPolicy(),
 	}
 }

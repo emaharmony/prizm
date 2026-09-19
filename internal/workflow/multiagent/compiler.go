@@ -98,8 +98,9 @@ type CompiledGraph struct {
 	// that edge's own stable ID" convention.
 	loops map[LoopKind]CompiledLoop
 
-	budgets BudgetLimits       // reuses the existing BudgetLimits struct from config.go, unmodified
-	source  WorkflowDefinition // retained for later CLI `inspect` use (PR5) — not consulted by the supervisor
+	budgets    BudgetLimits // reuses the existing BudgetLimits struct from config.go, unmodified
+	reflection *SchemaReflectionPolicy
+	source     WorkflowDefinition // retained for later CLI `inspect` use (PR5) — not consulted by the supervisor
 }
 
 // CompiledNode is one stable-ID vertex of a CompiledGraph: either a
@@ -359,10 +360,19 @@ func buildCompiledGraph(def WorkflowDefinition) *CompiledGraph {
 		terminalNodeIDs: terminalNodeIDs,
 		loops:           loops,
 		budgets:         budgets,
+		reflection:      cloneReflectionPolicy(def.Spec.Reflection),
 		source:          def,
 	}
 	graph.fingerprint = computeFingerprint(graph)
 	return graph
+}
+
+// ReflectionPolicy returns the compiled opt-in reflection policy.
+func (g *CompiledGraph) ReflectionPolicy() *SchemaReflectionPolicy {
+	if g == nil {
+		return nil
+	}
+	return cloneReflectionPolicy(g.reflection)
 }
 
 // roleForNode returns the node's declared Role, falling back to its ID when
@@ -539,6 +549,15 @@ func cloneExecutionPolicy(p *SchemaExecutionPolicy) *SchemaExecutionPolicy {
 		limit := *p.MaxActions
 		clone.MaxActions = &limit
 	}
+	return &clone
+}
+
+func cloneReflectionPolicy(p *SchemaReflectionPolicy) *SchemaReflectionPolicy {
+	if p == nil {
+		return nil
+	}
+	clone := *p
+	clone.Triggers = cloneStrings(p.Triggers)
 	return &clone
 }
 

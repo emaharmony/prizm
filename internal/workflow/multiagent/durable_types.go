@@ -73,6 +73,8 @@ type DurableRun struct {
 	LastCompletedExecutionKey string             `json:"last_completed_execution_key,omitempty"`
 	Waiting                   *WaitingState      `json:"waiting,omitempty"`
 	Failure                   *PersistedFailure  `json:"failure,omitempty"`
+	Reflections               []ReflectionRecord `json:"reflections,omitempty"`
+	ReplanCount               int                `json:"replan_count,omitempty"`
 }
 
 // Validate rejects corrupt, internally contradictory, or future state.

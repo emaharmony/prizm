@@ -33,6 +33,22 @@ outcomes are inspectable with the rest of the run history. The CLI composition
 root enables this path by setting `PRIZM_INTERACTION_ADAPTER` to a registered
 adapter name; inspection and legacy runs remain unchanged when it is unset.
 
+## Reflection and project learning
+
+Authored graphs can opt into a typed `reflector` role with a reflection policy.
+The durable runtime invokes it at configured milestones such as terminal
+outcomes, failures, verification failures, interruptions, and recovery. The
+reflector returns strict JSON containing a verdict, confidence, evidence,
+failure class, an optional lesson candidate, and an optional replan request.
+Replanning is advisory and bounded to two passes; it returns through the
+configured strategic role rather than allowing the reflector to select an
+arbitrary graph transition.
+
+Project memory writeback is opt-in with `PRIZM_REFLECTION_MEMORY=1`. Candidates
+are passed through the existing memory gate and a deterministic project-scope
+policy before they reach `MemoryStore`; gate or storage failures reject the
+candidate without failing the main run.
+
 Adapters remain compatible with the original five-method `Adapter` interface.
 They opt into interaction behavior incrementally through `ObservationProvider`,
 `LegalActionProvider`, `ActionValidator`, `Neutralizer`, or the richer

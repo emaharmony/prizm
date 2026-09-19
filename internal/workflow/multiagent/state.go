@@ -95,6 +95,7 @@ type RunState struct {
 	LatestCompletedRole Role                `json:"latest_completed_role,omitempty"`
 	CancellationReason  string              `json:"cancellation_reason,omitempty"`
 	TerminalOutcome     *TerminalOutcome    `json:"terminal_outcome,omitempty"`
+	LatestReflection    *ReflectionRecord   `json:"latest_reflection,omitempty"`
 }
 
 // Validate enforces serialized-state invariants against a compiled graph. It
