@@ -29,10 +29,13 @@ Pick the path that matches what you're doing:
 1. [Contributing](../CONTRIBUTING.md)
 2. [Architecture Overview](./architecture/ARCHITECTURE.md) and
    [System Overview](./architecture/system-overview.md)
-3. [CI](./operations/ci.md)
-4. [Benchmarks](./quality/benchmarks.md)
-5. [Documentation Standard](./DOCUMENTATION_STANDARD.md)
-6. [Release process](./operations/releasing.md)
+3. [Current Roadmap](./architecture/PRIZM_ROADMAP.md),
+   [Plan of Action](./operations/PLAN_OF_ACTION.md), and
+   [Work Log](./operations/WORK_LOG.md)
+4. [CI](./operations/ci.md)
+5. [Benchmarks](./quality/benchmarks.md)
+6. [Documentation Standard](./DOCUMENTATION_STANDARD.md)
+7. [Release process](./operations/releasing.md)
 
 **Integration developer** — connecting Prizm to something else:
 1. [YAML Reference](./reference/YAML_REFERENCE.md) — provider, adapter, MCP config
@@ -80,6 +83,8 @@ Pick the path that matches what you're doing:
 
 ## ⚙️ Operations
 *   [Configuration Guide](./operations/CONFIGURATION.md) - How to configure Prizm.
+*   [Plan of Action](./operations/PLAN_OF_ACTION.md) - Current engineering focus and handoff.
+*   [Work Log](./operations/WORK_LOG.md) - Append-only record of roadmap work sessions.
 *   [Scheduler](./operations/SCHEDULER.md) - Running periodic tasks.
 *   [Troubleshooting](./operations/TROUBLESHOOTING.md) - Common issues and solutions.
 *   [CI](./operations/ci.md) - GitHub Actions workflows and local reproduction.
@@ -100,7 +105,8 @@ Pick the path that matches what you're doing:
 ## 📜 History & Design
 *   [Design Milestones](./history/README.md) - Historical "V-series" design documents.
 *   [Version History](./history/VERSION_HISTORY.md) - Semantic release changelog.
-*   [Roadmap](./history/ROADMAP.md) - Future plans and goals.
+*   [Current Roadmap](./architecture/PRIZM_ROADMAP.md) - Current priorities and measurable delivery gates.
+*   [Historical Roadmap](./history/ROADMAP.md) - Superseded planning snapshot.
 
 ## Contributing to the Docs
 

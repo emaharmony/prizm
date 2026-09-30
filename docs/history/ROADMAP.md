@@ -1,4 +1,10 @@
-# Prizm Roadmap
+# Historical Prizm Roadmap
+
+> This is a historical planning snapshot, last updated 2026-06-09. For current
+> priorities, measurable acceptance gates, and active work, use the
+> [Prizm Roadmap](../architecture/PRIZM_ROADMAP.md),
+> [Plan of Action](../operations/PLAN_OF_ACTION.md), and
+> [Work Log](../operations/WORK_LOG.md).
 
 **Last Updated:** 2026-06-09
 **Status:** Core runtime is beyond V26 in source. Current work is runtime/docs alignment, plan/state/guard hardening, event-driven wake, and cross-Prizm/Factory reliability.
