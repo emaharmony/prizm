@@ -81,3 +81,15 @@ func TestSubAgentBackend_ExecutorRootedAtWorktree(t *testing.T) {
 		t.Error("empty workDir should return the shared executor")
 	}
 }
+
+func TestParseSubAgentActionAcceptsStrictRoleJSON(t *testing.T) {
+	input := `{"schema_version":1,"understanding":"task","implementation_plan":["change"]}`
+	action := parseSubAgentAction(input)
+	if !action.Final || action.Content != input || action.Tool != "" {
+		t.Fatalf("action = %#v", action)
+	}
+	toolAction := parseSubAgentAction(`{"type":"tool_request","tool":"read_file","input":{"path":"README.md"}}`)
+	if toolAction.Final || toolAction.Tool != "read_file" {
+		t.Fatalf("tool action = %#v", toolAction)
+	}
+}

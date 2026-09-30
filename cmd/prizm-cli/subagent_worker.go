@@ -143,13 +143,7 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 	}
 
 	parse := func(text string) subagent.Action {
-		if content, ok := v2.ParseFinalText(text); ok {
-			return subagent.Action{Final: true, Content: content}
-		}
-		if toolName, input, ok := v2.ParseToolRequestText(text); ok {
-			return subagent.Action{Tool: toolName, Input: input}
-		}
-		return subagent.Action{}
+		return parseSubAgentAction(text)
 	}
 
 	execFn := func(ctx stdcontext.Context, toolName string, input map[string]any) (string, error) {
@@ -185,6 +179,23 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 	}
 
 	return llm, parse, execFn, nil
+}
+
+func parseSubAgentAction(text string) subagent.Action {
+	if content, ok := v2.ParseFinalText(text); ok {
+		return subagent.Action{Final: true, Content: content}
+	}
+	if toolName, input, ok := v2.ParseToolRequestText(text); ok {
+		return subagent.Action{Tool: toolName, Input: input}
+	}
+	// Multi-agent role prompts require the role schema itself as the final
+	// JSON object. Accept that strict object directly after ruling out the
+	// tool/final envelopes used by the generic delegated loop.
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "{") && json.Valid([]byte(trimmed)) {
+		return subagent.Action{Final: true, Content: trimmed}
+	}
+	return subagent.Action{}
 }
 
 // subAgentPublisher publishes completions back onto the completion subject.

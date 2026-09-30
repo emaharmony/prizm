@@ -272,6 +272,15 @@ func openLiveReferenceRuntime(runDir, configPath string, manifest referenceWorkf
 	policyConfig.WriteRoots = writeRoots
 	policyConfig.AllowedPaths = []string{manifest.WorkspacePath}
 	policyConfig.OrchestratorAgentID = configuredOrchestratorAgentID(cfg)
+	policyConfig.WriteAgents = make(map[string]bool)
+	for _, configuredAgent := range cfg.Agents {
+		for _, capability := range configuredAgent.Capabilities {
+			if capability == "code" {
+				policyConfig.WriteAgents[configuredAgent.ID] = true
+				break
+			}
+		}
+	}
 	toolExecutor := tool.NewExecutor(toolRegistry, &policyConfig)
 	approvalStore := approval.NewStore(runDir)
 	toolExecutor.SetApprovalStore(approvalStore)

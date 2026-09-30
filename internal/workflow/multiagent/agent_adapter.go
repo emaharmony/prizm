@@ -402,11 +402,11 @@ func deadline(start time.Time, limit time.Duration) time.Time {
 func roleSchemaInstruction(role Role) (string, error) {
 	switch role {
 	case RolePlanner:
-		return `JSON schema: {"schema_version":1,"understanding":"...","implementation_plan":["..."],"task_breakdown":["..."],"acceptance_criteria":["..."],"risks":["..."],"assumptions":["..."],"handoff":{"objective":"...","reason":"...","evidence":[],"unresolved_issues":[],"notes":"..."}}`, nil
+		return `JSON schema: {"schema_version":1,"understanding":"...","implementation_plan":["..."],"task_breakdown":["..."],"acceptance_criteria":["..."],"risks":["..."],"assumptions":["..."],"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"file","uri":"path"}],"unresolved_issues":[{"id":"issue-1","summary":"...","blocking":false}],"notes":"..."}}. Use [] when there is no evidence or unresolved issue.`, nil
 	case RoleDeveloper:
-		return `JSON schema: {"schema_version":1,"summary":"...","changed_artifacts":[{"kind":"file","uri":"..."}],"commands_executed":["..."],"known_limitations":["..."],"handoff":{"objective":"...","reason":"...","evidence":[],"unresolved_issues":[],"notes":"..."}}`, nil
+		return `JSON schema: {"schema_version":1,"summary":"...","changed_artifacts":[{"kind":"file","uri":"..."}],"commands_executed":["..."],"known_limitations":["..."],"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"file","uri":"path"}],"unresolved_issues":[{"id":"issue-1","summary":"...","blocking":false}],"notes":"..."}}. Use [] when there is no evidence or unresolved issue.`, nil
 	case RoleTester:
-		return `JSON schema: {"schema_version":1,"result":"passed|failed","tests_executed":[{"name":"...","status":"passed|failed|timeout|error","evidence":[]}],"failure_evidence":[],"reproduction":["..."],"handoff":{"objective":"...","reason":"...","evidence":[],"unresolved_issues":[],"notes":"..."}}`, nil
+		return `JSON schema: {"schema_version":1,"result":"passed|failed","tests_executed":[{"name":"...","status":"passed|failed|timeout|error","evidence":[{"kind":"validation","uri":"path"}]}],"failure_evidence":[],"reproduction":["..."],"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"validation","uri":"path"}],"unresolved_issues":[{"id":"issue-1","summary":"...","blocking":false}],"notes":"..."}}. Use [] when there is no evidence or unresolved issue.`, nil
 	case RoleReviewer:
 		return `JSON schema: {"schema_version":1,"decision":"approved|changes_requested","findings":[{"severity":"info|low|medium|high|critical","summary":"...","evidence":[]}],"required_corrections":["..."],"evidence":[],"handoff":{"objective":"...","reason":"...","evidence":[],"unresolved_issues":[],"notes":"..."}}. Omit handoff when approved.`, nil
 	case RoleReflector:
