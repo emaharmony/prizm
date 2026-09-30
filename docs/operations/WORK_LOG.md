@@ -69,11 +69,11 @@ plan.
 ## 2026-09-30 — PR Setup Handoff Blocked by GitHub Authorization
 
 **Roadmap IDs:** R1, R4
-**Branch/base commit:** `codex/adapter-driven-runtime` at `059fb4f`; refreshed
-`origin/staging` at `9d0833d`
+**Pre-push review baseline:** `codex/adapter-driven-runtime` at `059fb4f`;
+refreshed `origin/staging` at `9d0833d`
 
-- Confirmed the working tree was clean and the branch was 17 commits ahead of
-  refreshed `origin/staging` and zero commits behind.
+- The pre-push review found a clean working tree and the branch 17 commits
+  ahead of refreshed `origin/staging` and zero commits behind.
 - Confirmed no existing GitHub pull request or remote branch existed for
   `codex/adapter-driven-runtime`.
 - Prepared a ready-for-review PR body in ignored workspace path
