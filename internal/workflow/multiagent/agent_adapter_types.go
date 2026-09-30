@@ -117,6 +117,42 @@ type ValidationRunner interface {
 	RunValidation(context.Context, string, string) (*validation.Result, error)
 }
 
+// WorkspaceValidationRunner is the optional project-aware validation seam.
+// Implementations run the named allowlisted profile inside the already
+// resolved run workspace rather than a process-global project root.
+type WorkspaceValidationRunner interface {
+	RunValidationInWorkspace(context.Context, string, string, Workspace) (*validation.Result, error)
+}
+
+// ProposalReference identifies an exact mutation proposal emitted by one
+// bounded agent execution. ApprovalID is kept distinct so future proposal
+// stores may issue a separate human-authorization identity.
+type ProposalReference struct {
+	ProposalID string `json:"proposal_id"`
+	ApprovalID string `json:"approval_id"`
+}
+
+// ProposalQuery identifies the role execution whose proposals must be
+// attached to the durable graph checkpoint.
+type ProposalQuery struct {
+	RunID        string
+	ExecutionKey string
+	AgentID      string
+}
+
+// ProposalResolver reads proposal records created by an agent execution.
+// It does not grant approval or apply mutations.
+type ProposalResolver interface {
+	ResolveProposals(context.Context, ProposalQuery) ([]ProposalReference, error)
+}
+
+// ProposalResolverFunc adapts a function to ProposalResolver.
+type ProposalResolverFunc func(context.Context, ProposalQuery) ([]ProposalReference, error)
+
+func (f ProposalResolverFunc) ResolveProposals(ctx context.Context, query ProposalQuery) ([]ProposalReference, error) {
+	return f(ctx, query)
+}
+
 // ValidationRunnerFunc adapts validation.Executor.Run to ValidationRunner.
 type ValidationRunnerFunc func(context.Context, string, string) (*validation.Result, error)
 

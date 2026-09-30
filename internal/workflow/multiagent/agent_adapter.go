@@ -18,6 +18,7 @@ type AgentRoleRunner struct {
 	workspaces WorkspaceResolver
 	approvals  ApprovalChecker
 	validation ValidationRunner
+	proposals  ProposalResolver
 	now        func() time.Time
 }
 
@@ -29,6 +30,7 @@ type AgentRoleRunnerOptions struct {
 	Workspaces WorkspaceResolver
 	Approvals  ApprovalChecker
 	Validation ValidationRunner
+	Proposals  ProposalResolver
 	Clock      func() time.Time
 }
 
@@ -53,6 +55,7 @@ func NewAgentRoleRunner(options AgentRoleRunnerOptions) (*AgentRoleRunner, error
 		workspaces: options.Workspaces,
 		approvals:  options.Approvals,
 		validation: options.Validation,
+		proposals:  options.Proposals,
 		now:        now,
 	}, nil
 }
@@ -127,6 +130,15 @@ func (r *AgentRoleRunner) RunRole(
 	if err != nil {
 		return RoleRunResult{}, err
 	}
+	var proposals []ProposalReference
+	if r.proposals != nil {
+		proposals, err = r.proposals.ResolveProposals(ctx, ProposalQuery{
+			RunID: request.Run.RunID, ExecutionKey: request.Run.ExecutionKey, AgentID: profile.ID,
+		})
+		if err != nil {
+			return RoleRunResult{}, fmt.Errorf("resolve execution proposals: %w", err)
+		}
+	}
 
 	decoded, err := decodeRoleOutput(request.Run.CurrentRole, execution.Output)
 	if err != nil {
@@ -176,6 +188,7 @@ func (r *AgentRoleRunner) RunRole(
 			StartedAt:        startedAt,
 			FinishedAt:       finishedAt,
 		},
+		Proposals: proposals,
 	}, nil
 }
 
@@ -330,7 +343,17 @@ func (r *AgentRoleRunner) runValidations(
 	results := make([]validation.Result, 0, len(request.RoleConfig.ValidationProfiles))
 	status := "passed"
 	for _, profile := range request.RoleConfig.ValidationProfiles {
-		result, err := r.validation.RunValidation(ctx, profile, request.Run.RunID)
+		var result *validation.Result
+		var err error
+		if workspaceRunner, ok := r.validation.(WorkspaceValidationRunner); ok {
+			workspace, resolveErr := r.workspaces.ResolveWorkspace(ctx, request.Run.RunID)
+			if resolveErr != nil {
+				return results, "failed", fmt.Errorf("resolve validation workspace: %w", resolveErr)
+			}
+			result, err = workspaceRunner.RunValidationInWorkspace(ctx, profile, request.Run.RunID, workspace)
+		} else {
+			result, err = r.validation.RunValidation(ctx, profile, request.Run.RunID)
+		}
 		if result != nil {
 			results = append(results, *result)
 			if result.Status != "passed" {

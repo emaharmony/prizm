@@ -175,20 +175,21 @@ func prepareGraphRun(
 	reg multiagent.RegisteredDefinition,
 	task multiagent.TaskReference,
 ) (runID string, rt *referenceRuntime, err error) {
-	workspacePath, workspaceID, err := referenceWorkspace(workspace)
+	runID = event.NewRunID()
+	workspacePath, workspaceID, sourceWorkspacePath, err := isolatedReferenceWorkspace(context.Background(), workspace, runID)
 	if err != nil {
 		return "", nil, err
 	}
-	runID = event.NewRunID()
 	manifest := referenceWorkflowManifest{
-		SchemaVersion:    referenceManifestSchemaVersion,
-		RunID:            runID,
-		WorkflowID:       reg.WorkflowID,
-		WorkflowVersion:  reg.Version,
-		DefinitionDBPath: dbPath,
-		Input:            multiagent.ReferenceWorkflowInput{Workspace: workspace},
-		WorkspaceID:      workspaceID,
-		WorkspacePath:    workspacePath,
+		SchemaVersion:       referenceManifestSchemaVersion,
+		RunID:               runID,
+		WorkflowID:          reg.WorkflowID,
+		WorkflowVersion:     reg.Version,
+		DefinitionDBPath:    dbPath,
+		Input:               multiagent.ReferenceWorkflowInput{Workspace: workspace},
+		WorkspaceID:         workspaceID,
+		WorkspacePath:       workspacePath,
+		SourceWorkspacePath: sourceWorkspacePath,
 	}
 	if err := writeReferenceManifest(runDir, manifest); err != nil {
 		return "", nil, err

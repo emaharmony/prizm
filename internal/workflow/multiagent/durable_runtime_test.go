@@ -525,21 +525,25 @@ func newDurableRuntimeForTest(
 	store DurableRunStore,
 	claimer RunClaimer,
 	publisher EventPublisher,
+	options ...DurableRuntimeOptions,
 ) *DurableRuntime {
 	t.Helper()
 	graph := mustAdaptGraph(t, definition)
+	runtimeOptions := DurableRuntimeOptions{}
+	if len(options) > 0 {
+		runtimeOptions = options[0]
+	}
+	runtimeOptions.Clock = func() time.Time {
+		return time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
+	}
+	runtimeOptions.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	runtime, err := NewDurableRuntime(
 		graph,
 		runner,
 		store,
 		claimer,
 		publisher,
-		DurableRuntimeOptions{
-			Clock: func() time.Time {
-				return time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
-			},
-			Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		},
+		runtimeOptions,
 	)
 	if err != nil {
 		t.Fatalf("new durable runtime: %v", err)

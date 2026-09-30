@@ -28,6 +28,7 @@ type DurableRuntimeOptions struct {
 	Interaction *InteractionScheduler
 	Reflection  ReflectionRunner
 	Memory      ReflectionMemorySink
+	Proposals   ProposalLifecycle
 }
 
 // DurableRuntime advances a run only through atomically persisted checkpoints.
@@ -41,6 +42,7 @@ type DurableRuntime struct {
 	interaction *InteractionScheduler
 	reflection  ReflectionRunner
 	memory      ReflectionMemorySink
+	proposals   ProposalLifecycle
 }
 
 // NewDurableRuntime creates the Phase 1 persistence and recovery boundary
@@ -90,6 +92,7 @@ func NewDurableRuntime(
 		interaction: options.Interaction,
 		reflection:  options.Reflection,
 		memory:      options.Memory,
+		proposals:   options.Proposals,
 	}, nil
 }
 
@@ -361,6 +364,17 @@ func (r *DurableRuntime) drive(
 			}
 
 		case CheckpointWaiting:
+			if record.Waiting != nil && record.Waiting.Kind == "proposal_approval" {
+				var err error
+				record, err = r.advanceApprovedTask(ctx, record)
+				if err != nil {
+					return record.State, err
+				}
+				if record.Phase == CheckpointWaiting || record.Phase == CheckpointTerminal {
+					return record.State, waitingError(record)
+				}
+				continue
+			}
 			if record.Waiting == nil || !record.Waiting.SafeToRetry {
 				return record.State, waitingError(record)
 			}
@@ -582,6 +596,21 @@ func (r *DurableRuntime) executePreparedRole(
 			&RoleExecutionError{Role: role, Cause: err},
 		)
 	}
+	if len(result.Proposals) > 0 {
+		return r.pauseForProposals(ctx, record, role, result, startedAt, finishedAt)
+	}
+	return r.finishPreparedRole(ctx, record, role, roleConfig, result, startedAt, finishedAt)
+}
+
+func (r *DurableRuntime) finishPreparedRole(
+	ctx context.Context,
+	record DurableRun,
+	role Role,
+	roleConfig RoleConfig,
+	result RoleRunResult,
+	startedAt time.Time,
+	finishedAt time.Time,
+) (DurableRun, error) {
 	transition, err := r.supervisor.graph.Resolve(role, result.Outcome)
 	if err != nil {
 		if r.runReflection(ctx, &record, ReflectionFailure, reflectionFailureInput(role, result.Outcome, err, record.State)) {
@@ -728,6 +757,209 @@ func (r *DurableRuntime) applyPendingTransition(
 	record.State.UpdatedAt = r.now().UTC()
 	record.Phase = CheckpointPendingRole
 	return r.checkpoint(ctx, record)
+}
+
+func (r *DurableRuntime) pauseForProposals(
+	ctx context.Context,
+	record DurableRun,
+	role Role,
+	result RoleRunResult,
+	startedAt time.Time,
+	finishedAt time.Time,
+) (DurableRun, error) {
+	now := r.now().UTC()
+	seen := make(map[string]struct{}, len(result.Proposals))
+	progress := make([]ProposalProgress, 0, len(result.Proposals))
+	for _, ref := range result.Proposals {
+		proposalID := strings.TrimSpace(ref.ProposalID)
+		approvalID := strings.TrimSpace(ref.ApprovalID)
+		if proposalID == "" || approvalID == "" {
+			return r.persistRoleFailure(ctx, record, role, errors.New("proposal and approval ids are required"))
+		}
+		key := proposalID + "\x00" + approvalID
+		if _, exists := seen[key]; exists {
+			return r.persistRoleFailure(ctx, record, role, fmt.Errorf("duplicate proposal %q", proposalID))
+		}
+		seen[key] = struct{}{}
+		operation := ProposalOperation{
+			RunID: record.State.RunID, ProposalID: proposalID, ApprovalID: approvalID,
+			ApplyKey:    proposalApplyKey(record.State.RunID, proposalID),
+			WorkspaceID: record.State.WorkspaceID, ExecutionKey: record.ActiveExecutionKey,
+		}
+		progress = append(progress, ProposalProgress{ProposalOperation: operation, Phase: "waiting"})
+		r.emitProposal(event.EventProposalRecorded, operation, "")
+	}
+	record.ApprovedTask = &ApprovedTaskState{
+		Role: role, Result: result, StartedAt: startedAt, FinishedAt: finishedAt, Proposals: progress,
+	}
+	record.State.Status = RunStatusPaused
+	roleState := record.State.RoleStates[role]
+	roleState.Status = RoleStatusWaiting
+	roleState.ApprovalStatus = string(ProposalPending)
+	roleState.UpdatedAt = now
+	record.State.RoleStates[role] = roleState
+	record.State.UpdatedAt = now
+	record.Phase = CheckpointWaiting
+	record.Waiting = proposalWaitingState(progress[0], "waiting for exact proposal approval", r.proposals != nil, now)
+	r.emitProposal(event.EventProposalApprovalPending, progress[0].ProposalOperation, record.Waiting.Reason)
+	r.supervisor.emitRun(event.EventMultiAgentRunPaused, record.State, record.Waiting.Reason)
+	record, err := r.checkpoint(ctx, record)
+	if err != nil {
+		return record, err
+	}
+	return record, waitingError(record)
+}
+
+func (r *DurableRuntime) advanceApprovedTask(ctx context.Context, record DurableRun) (DurableRun, error) {
+	if record.ApprovedTask == nil {
+		return record, &RecoveryFailedError{RunID: record.State.RunID, Cause: errors.New("proposal wait has no approved task state")}
+	}
+	if r.proposals == nil {
+		record.Waiting.SafeToRetry = false
+		record.Waiting.Reason = "proposal lifecycle is unavailable"
+		record.Failure = persistedFailure("proposal_lifecycle_unavailable", errors.New(record.Waiting.Reason), r.now())
+		return r.checkpoint(ctx, record)
+	}
+	for index := range record.ApprovedTask.Proposals {
+		progress := &record.ApprovedTask.Proposals[index]
+		if progress.Phase == "applied" {
+			continue
+		}
+		decision, reason, err := r.proposals.Decision(ctx, progress.ProposalOperation)
+		if err != nil {
+			return record, fmt.Errorf("check proposal approval %q: %w", progress.ApprovalID, err)
+		}
+		switch decision {
+		case ProposalPending:
+			record.Waiting = proposalWaitingState(*progress, firstNonEmpty(reason, "waiting for exact proposal approval"), true, record.Waiting.Since)
+			r.emitProposal(event.EventProposalApprovalPending, progress.ProposalOperation, record.Waiting.Reason)
+			record, err = r.checkpoint(ctx, record)
+			return record, err
+		case ProposalDenied, ProposalExpired:
+			r.emitProposal(event.EventProposalApprovalDenied, progress.ProposalOperation, reason)
+			return r.persistRoleFailure(ctx, record, record.ApprovedTask.Role,
+				fmt.Errorf("proposal %s: %s", decision, firstNonEmpty(reason, "authorization refused")))
+		case ProposalGranted:
+			// Continue below.
+		default:
+			return record, &RecoveryFailedError{RunID: record.State.RunID, Cause: fmt.Errorf("unknown proposal decision %q", decision)}
+		}
+
+		// Reconcile before every application. This handles both a process crash
+		// after the side effect and today's CLI path, where granting an approval
+		// may have already applied it.
+		if progress.Phase == "applying" || decision == ProposalGranted {
+			status, result, reconcileErr := r.proposals.Reconcile(ctx, progress.ProposalOperation)
+			if reconcileErr != nil {
+				return record, fmt.Errorf("reconcile proposal %q: %w", progress.ProposalID, reconcileErr)
+			}
+			switch status {
+			case ProposalApplied:
+				progress.Phase, progress.Result = "applied", &result
+				r.emitProposalResult(event.EventProposalReconciled, progress.ProposalOperation, result)
+				var checkpointErr error
+				record, checkpointErr = r.checkpoint(ctx, record)
+				if checkpointErr != nil {
+					return record, checkpointErr
+				}
+				continue
+			case ProposalAmbiguous:
+				record.Waiting = proposalWaitingState(*progress, "proposal application outcome is ambiguous", false, r.now().UTC())
+				record.Failure = persistedFailure("uncertain_proposal_application", errors.New(record.Waiting.Reason), r.now())
+				r.emitProposal(event.EventProposalApplyFailed, progress.ProposalOperation, record.Waiting.Reason)
+				return r.checkpoint(ctx, record)
+			case ProposalNotApplied:
+				// Safe to retry the stable apply key.
+			default:
+				return record, &RecoveryFailedError{RunID: record.State.RunID, Cause: fmt.Errorf("unknown proposal reconciliation %q", status)}
+			}
+		}
+
+		progress.Phase = "applying"
+		progress.Attempts++
+		r.emitProposal(event.EventProposalApprovalGranted, progress.ProposalOperation, reason)
+		r.emitProposal(event.EventProposalApplyStarted, progress.ProposalOperation, "")
+		var checkpointErr error
+		record, checkpointErr = r.checkpoint(ctx, record)
+		if checkpointErr != nil {
+			return record, checkpointErr
+		}
+		progress = &record.ApprovedTask.Proposals[index]
+		result, applyErr := r.proposals.Apply(ctx, progress.ProposalOperation)
+		if applyErr != nil || !result.Success {
+			message := result.Message
+			if applyErr != nil {
+				message = applyErr.Error()
+			}
+			r.emitProposal(event.EventProposalApplyFailed, progress.ProposalOperation, message)
+			if progress.Attempts < 2 {
+				progress.Phase = "waiting"
+				record.Waiting = proposalWaitingState(*progress, "proposal application failed; bounded retry available: "+boundedDiagnostic(errors.New(message)), true, r.now().UTC())
+				return r.checkpoint(ctx, record)
+			}
+			return r.persistRoleFailure(ctx, record, record.ApprovedTask.Role, fmt.Errorf("apply proposal %q: %s", progress.ProposalID, message))
+		}
+		progress.Phase, progress.Result = "applied", &result
+		r.emitProposalResult(event.EventProposalApplied, progress.ProposalOperation, result)
+		record, checkpointErr = r.checkpoint(ctx, record)
+		if checkpointErr != nil {
+			return record, checkpointErr
+		}
+	}
+
+	task := record.ApprovedTask
+	record.ProposalResults = append(record.ProposalResults, task.Proposals...)
+	record.ApprovedTask = nil
+	record.Waiting = nil
+	record.Failure = nil
+	record.State.Status = RunStatusRunning
+	roleState := record.State.RoleStates[task.Role]
+	roleState.Status = RoleStatusRunning
+	roleState.ApprovalStatus = string(ProposalGranted)
+	roleState.LastError = ""
+	roleState.UpdatedAt = r.now().UTC()
+	record.State.RoleStates[task.Role] = roleState
+	record.State.UpdatedAt = roleState.UpdatedAt
+	record.Phase = CheckpointRoleRunning
+	r.supervisor.emitRun(event.EventMultiAgentRunResumed, record.State, "approved proposal applied")
+	var err error
+	record, err = r.checkpoint(ctx, record)
+	if err != nil {
+		return record, err
+	}
+	roleConfig, _ := r.supervisor.graph.RoleConfig(task.Role)
+	return r.finishPreparedRole(ctx, record, task.Role, roleConfig, task.Result, task.StartedAt, task.FinishedAt)
+}
+
+func proposalWaitingState(progress ProposalProgress, reason string, safe bool, since time.Time) *WaitingState {
+	return &WaitingState{Kind: "proposal_approval", Reason: reason, SafeToRetry: safe, Since: since,
+		ProposalID: progress.ProposalID, ApprovalID: progress.ApprovalID}
+}
+
+func proposalApplyKey(runID, proposalID string) string {
+	sum := sha256.Sum256([]byte(runID + "\x00" + proposalID))
+	return fmt.Sprintf("apply_%x", sum[:16])
+}
+
+func (r *DurableRuntime) emitProposal(eventType string, operation ProposalOperation, reason string) {
+	payload := map[string]any{"run_id": operation.RunID, "proposal_id": operation.ProposalID,
+		"approval_id": operation.ApprovalID, "apply_key": operation.ApplyKey,
+		"workspace_id": operation.WorkspaceID, "execution_key": operation.ExecutionKey}
+	if reason != "" {
+		payload["reason"] = reason
+	}
+	r.buffer.Emit(event.NewEvent(eventType, durableEventSource, payload).
+		WithCorrelationID(operation.ApplyKey).WithMetadata(event.EventMetadata{RunID: operation.RunID}))
+}
+
+func (r *DurableRuntime) emitProposalResult(eventType string, operation ProposalOperation, result ProposalApplyResult) {
+	payload := map[string]any{"run_id": operation.RunID, "proposal_id": operation.ProposalID,
+		"approval_id": operation.ApprovalID, "apply_key": operation.ApplyKey,
+		"workspace_id": operation.WorkspaceID, "execution_key": operation.ExecutionKey,
+		"success": result.Success, "target_path": result.TargetPath, "message": result.Message,
+		"diff_path": result.DiffPath, "diff_stat": result.DiffStat}
+	r.buffer.Emit(event.NewEvent(eventType, durableEventSource, payload).
+		WithCorrelationID(operation.ApplyKey).WithMetadata(event.EventMetadata{RunID: operation.RunID}))
 }
 
 func (r *DurableRuntime) pauseForApproval(

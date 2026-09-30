@@ -71,6 +71,7 @@ type subAgentBackend struct {
 	exec            *tool.Executor // shared executor (no worktree isolation)
 	toolReg         *tool.Registry // shared registry, source for non-root tools
 	protectedBranch string         // branch git_commit/git_push in worktree executors must refuse to write to
+	approvalStore   tool.ApprovalStorer
 }
 
 // subAgentWorktreeMaxFileSize matches serve's builtin file-size cap.
@@ -108,7 +109,11 @@ func (b *subAgentBackend) executorFor(workDir string) *tool.Executor {
 			_ = reg.Register(t)
 		}
 	}
-	return tool.NewExecutor(reg, b.exec.Policy) // b.exec.Policy is already *PolicyConfig
+	executor := tool.NewExecutor(reg, b.exec.Policy) // b.exec.Policy is already *PolicyConfig
+	if b.approvalStore != nil {
+		executor.SetApprovalStore(b.approvalStore)
+	}
+	return executor
 }
 
 func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, subagent.Parser, subagent.ToolExec, error) {

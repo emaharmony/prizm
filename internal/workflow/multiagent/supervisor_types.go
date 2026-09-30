@@ -234,6 +234,7 @@ type RoleRunResult struct {
 	LocalIterations int
 	Retries         int
 	Metadata        ExecutionMetadata
+	Proposals       []ProposalReference
 }
 
 // RoleRunner executes bounded local work for one configured role. It cannot

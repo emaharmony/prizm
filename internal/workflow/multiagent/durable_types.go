@@ -52,6 +52,76 @@ type WaitingState struct {
 	Reason      string    `json:"reason"`
 	SafeToRetry bool      `json:"safe_to_retry"`
 	Since       time.Time `json:"since"`
+	ProposalID  string    `json:"proposal_id,omitempty"`
+	ApprovalID  string    `json:"approval_id,omitempty"`
+}
+
+// ProposalDecision is the approval authority's decision for one exact
+// proposal. Unknown values fail closed.
+type ProposalDecision string
+
+const (
+	ProposalPending ProposalDecision = "pending"
+	ProposalGranted ProposalDecision = "granted"
+	ProposalDenied  ProposalDecision = "denied"
+	ProposalExpired ProposalDecision = "expired"
+)
+
+// ProposalReconciliation describes whether a previously-started application
+// can be proven complete after process interruption.
+type ProposalReconciliation string
+
+const (
+	ProposalNotApplied ProposalReconciliation = "not_applied"
+	ProposalApplied    ProposalReconciliation = "applied"
+	ProposalAmbiguous  ProposalReconciliation = "ambiguous"
+)
+
+// ProposalOperation is the stable request passed to approval/application
+// authorities. ApplyKey is deterministic for the run and proposal.
+type ProposalOperation struct {
+	RunID        string `json:"run_id"`
+	ProposalID   string `json:"proposal_id"`
+	ApprovalID   string `json:"approval_id"`
+	ApplyKey     string `json:"apply_key"`
+	WorkspaceID  string `json:"workspace_id"`
+	ExecutionKey string `json:"execution_key"`
+}
+
+// ProposalApplyResult is bounded application evidence retained in the run.
+type ProposalApplyResult struct {
+	Success    bool   `json:"success"`
+	TargetPath string `json:"target_path,omitempty"`
+	Message    string `json:"message,omitempty"`
+	DiffPath   string `json:"diff_path,omitempty"`
+	DiffStat   string `json:"diff_stat,omitempty"`
+}
+
+// ProposalLifecycle composes existing approval and mutation authorities. The
+// workflow owns sequencing; the implementation owns approval and application
+// semantics at their existing boundaries.
+type ProposalLifecycle interface {
+	Decision(context.Context, ProposalOperation) (ProposalDecision, string, error)
+	Apply(context.Context, ProposalOperation) (ProposalApplyResult, error)
+	Reconcile(context.Context, ProposalOperation) (ProposalReconciliation, ProposalApplyResult, error)
+}
+
+// ProposalProgress is the durable per-proposal apply checkpoint.
+type ProposalProgress struct {
+	ProposalOperation
+	Phase    string               `json:"phase"`
+	Attempts int                  `json:"attempts,omitempty"`
+	Result   *ProposalApplyResult `json:"result,omitempty"`
+}
+
+// ApprovedTaskState retains a completed role result while its exact mutation
+// proposals wait for approval and recoverable application.
+type ApprovedTaskState struct {
+	Role       Role               `json:"role"`
+	Result     RoleRunResult      `json:"result"`
+	StartedAt  time.Time          `json:"started_at"`
+	FinishedAt time.Time          `json:"finished_at"`
+	Proposals  []ProposalProgress `json:"proposals"`
 }
 
 // PersistedFailure is bounded diagnostic information. It never contains
@@ -72,6 +142,8 @@ type DurableRun struct {
 	ActiveExecutionKey        string             `json:"active_execution_key,omitempty"`
 	LastCompletedExecutionKey string             `json:"last_completed_execution_key,omitempty"`
 	Waiting                   *WaitingState      `json:"waiting,omitempty"`
+	ApprovedTask              *ApprovedTaskState `json:"approved_task,omitempty"`
+	ProposalResults           []ProposalProgress `json:"proposal_results,omitempty"`
 	Failure                   *PersistedFailure  `json:"failure,omitempty"`
 	Reflections               []ReflectionRecord `json:"reflections,omitempty"`
 	ReplanCount               int                `json:"replan_count,omitempty"`
@@ -99,7 +171,7 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 		if r.State.Status != RunStatusRunning {
 			problems = append(problems, "pending_role checkpoint requires running run state")
 		}
-		if r.PendingTransition != nil || r.Waiting != nil {
+		if r.PendingTransition != nil || r.Waiting != nil || r.ApprovedTask != nil {
 			problems = append(problems, "pending_role checkpoint cannot contain transition or waiting state")
 		}
 	case CheckpointRoleRunning:
@@ -119,6 +191,22 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 	case CheckpointWaiting:
 		if r.State.Status != RunStatusPaused || r.Waiting == nil {
 			problems = append(problems, "waiting checkpoint requires paused run and waiting state")
+		}
+		if r.Waiting != nil && r.Waiting.Kind == "proposal_approval" && r.ApprovedTask == nil {
+			problems = append(problems, "proposal approval wait requires approved_task state")
+		}
+		if r.ApprovedTask != nil {
+			if r.ApprovedTask.Role != r.State.CurrentRole || len(r.ApprovedTask.Proposals) == 0 {
+				problems = append(problems, "approved_task must belong to the current role and contain proposals")
+			}
+			for _, proposal := range r.ApprovedTask.Proposals {
+				if strings.TrimSpace(proposal.ProposalID) == "" || strings.TrimSpace(proposal.ApprovalID) == "" ||
+					proposal.ApplyKey != proposalApplyKey(r.State.RunID, proposal.ProposalID) ||
+					(proposal.Phase != "waiting" && proposal.Phase != "applying" && proposal.Phase != "applied") {
+					problems = append(problems, "approved_task contains an invalid proposal checkpoint")
+					break
+				}
+			}
 		}
 	case CheckpointTerminal:
 		if !r.State.Status.Terminal() {
