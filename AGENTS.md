@@ -75,3 +75,13 @@ Before generating or changing Prizm code, read and follow
 - Every architectural PR that introduces a new package MUST include the
   package-justification template from `PACKAGE_BOUNDARIES.md`.
 - If ownership is ambiguous, resolve the boundary before generating code.
+
+## Roadmap and Work Log Discipline
+
+For every project implementation, debugging, review, or planning session, read
+[Prizm Roadmap](docs/architecture/PRIZM_ROADMAP.md), the current
+[Plan of Action](docs/operations/PLAN_OF_ACTION.md), and the latest
+[Work Log](docs/operations/WORK_LOG.md) entry before deeper work. At session
+end, update the plan handoff and append a work-log entry that references the
+applicable roadmap IDs, evidence, risks, and next action. Do not record secrets
+or user data in the work log.

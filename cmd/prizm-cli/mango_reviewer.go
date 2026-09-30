@@ -32,7 +32,7 @@ type mangoReviewer struct {
 	reviewStore *reviewResultStore // V77: stores review results for prompt injection
 	reviewCh    chan reviewRequest
 	subs        []*nats.Subscription // V78: NATS subscriptions for graceful teardown
-	done        chan struct{}         // V78: signals processReviews to stop
+	done        chan struct{}        // V78: signals processReviews to stop
 	wg          sync.WaitGroup       // V78: tracks in-flight reviews
 }
 
@@ -184,11 +184,11 @@ func (mr *mangoReviewer) handleTaskCompleted(msg *nats.Msg) {
 			// V77: Store review result for prompt injection
 			if mr.reviewStore != nil {
 				mr.reviewStore.Add(channelID, ReviewResult{
-					TaskID:      taskID,
-					Reviewer:    "mango",
-					Decision:    extractDecision(result),
+					TaskID:       taskID,
+					Reviewer:     "mango",
+					Decision:     extractDecision(result),
 					FilesChanged: extractFilesChanged(payload),
-					ChannelID:   channelID,
+					ChannelID:    channelID,
 				})
 				log.Printf("[MANGO-REVIEW] stored review result for prompt injection (channel: %s)", channelID)
 			}

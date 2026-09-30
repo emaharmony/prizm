@@ -48,14 +48,11 @@ import (
 	"github.com/emaharmony/prizm/internal/claudecli"
 	"github.com/emaharmony/prizm/internal/claudeworker"
 	"github.com/emaharmony/prizm/internal/codesummary"
-	"github.com/emaharmony/prizm/internal/memory"
 	"github.com/emaharmony/prizm/internal/codexworker"
 	"github.com/emaharmony/prizm/internal/commitments"
-	"github.com/emaharmony/prizm/internal/tts"
 	"github.com/emaharmony/prizm/internal/context"
 	"github.com/emaharmony/prizm/internal/cost"
 	"github.com/emaharmony/prizm/internal/crossprizm"
-	"github.com/emaharmony/prizm/internal/mutation"
 	"github.com/emaharmony/prizm/internal/dashboard"
 	"github.com/emaharmony/prizm/internal/debounce"
 	"github.com/emaharmony/prizm/internal/delegation"
@@ -64,6 +61,8 @@ import (
 	"github.com/emaharmony/prizm/internal/governance"
 	"github.com/emaharmony/prizm/internal/guard"
 	"github.com/emaharmony/prizm/internal/improve"
+	"github.com/emaharmony/prizm/internal/memory"
+	"github.com/emaharmony/prizm/internal/mutation"
 	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/plan"
 	"github.com/emaharmony/prizm/internal/provider"
@@ -85,7 +84,9 @@ import (
 	"github.com/emaharmony/prizm/internal/task"
 	"github.com/emaharmony/prizm/internal/tool"
 	"github.com/emaharmony/prizm/internal/tool/mcp"
+	"github.com/emaharmony/prizm/internal/tts"
 	"github.com/emaharmony/prizm/internal/usage"
+	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 
 	"github.com/nats-io/nats.go"
 )
@@ -126,49 +127,49 @@ type approvalOutcome struct {
 }
 
 type conversationContext struct {
-	router        *router.Router
-	sessMgr       *session.Manager
-	cfg           *orchestrator.Config
-	providers     *provider.ProviderRegistry
-	bot           discordBotClient
-	sender        ChannelSender             // V78: Channel-agnostic message sender
-	platform     Platform                  // V78: Which channel platform this context serves
-	debounce      *debounce.Tracker
-	eventLog      *runtrack.EventLogger
-	cancelReg     *runtrack.CancelRegistry
-	ctxBuilder    *context.Builder         // V21: workspace context injection
-	natsConn      *nats.Conn               // V21: NATS bus connection for event publishing
-	natsURL       string                   // V21: NATS bus URL
-	actionReg     *action.Registry         // V21: action registry for event-triggered actions
-	remClient     *remembrance.Client      // V21: Remembrance client for memory auto-save
-	remSem        chan struct{}            // V21: Semaphore limiting concurrent Remembrance goroutines (max 4)
-	remCache      *remembranceCache        // V26: TTL cache for BuildContext results
-	summarySem    chan struct{}            // Long-running codebase summary concurrency guard
-	delegEngine   *delegation.Engine       // V22: Delegation engine for agent-to-agent task delegation
-	taskStore     *task.Store              // V22: Task store for delegation tracking
-	crossCoord    *crossprizm.Coordinator  // Cross-Prizm NATS delegation coordinator
-	autopatcher   *autopatch.Service       // Diagnose-and-propose patch tasks
-	toolExec      *tool.Executor           // V27: Tool executor for file system access
-	stateMgr      *state.Manager           // V32: Working state manager for adaptive context
-	planMgr       *plan.Manager            // V32: Plan manager for plan-first pipeline
-	improveMgr    *improve.Manager         // V32: Self-improvement loop
-	guardian      *guard.Guard             // V32: Guard rail for plan enforcement
-	toolPolicy    *tool.PolicyConfig       // V27: Tool policy configuration (pointer so free mode can mutate it live)
-	gateMu        sync.Mutex               // V62: guards the free-mode/first-class-tools mutate-then-reset window on toolPolicy and the shared shell tool's Policy, since Discord dispatches messages (and thus handleDiscordMessage) concurrently per-message
-	rateLimiter   *safety.UserRateLimiter  // V28: Per-user rate limiting
-	toolGate      *stage.ToolRelevanceGate // P-008: Tool relevance gate
-	commitStore   *commitments.Store       // V61: Commitments store for promise tracking
-	ttsClient     *tts.Client               // V61: Voicebox TTS client
-	ttsConfig     tts.Config                // V61: TTS configuration
-	contextAgent     *agent.ContextAgent        // V76: Compress workspace identity into short context block
-	pendingWorkMu   sync.Mutex
-	pendingWork     map[string]pendingWorkStart
-	channelIDMu     sync.RWMutex                // Protects channelID for concurrent access
-	channelID       string                    // Current conversation channel ID for event routing
-	reviewStore     *reviewResultStore         // V77: Pending Mango review results for feedback injection
-	memoryStoreLocal *memory.MarkdownStore      // V77: Local memory store for automatic recall
-	memInjector     *MemoryInjector             // V79: Smart memory injection (search vs recent)
-	coreIdentity    *CoreIdentityBlock          // V83: Permanent identity block — always in system prompt
+	router           *router.Router
+	sessMgr          *session.Manager
+	cfg              *orchestrator.Config
+	providers        *provider.ProviderRegistry
+	bot              discordBotClient
+	sender           ChannelSender // V78: Channel-agnostic message sender
+	platform         Platform      // V78: Which channel platform this context serves
+	debounce         *debounce.Tracker
+	eventLog         *runtrack.EventLogger
+	cancelReg        *runtrack.CancelRegistry
+	ctxBuilder       *context.Builder         // V21: workspace context injection
+	natsConn         *nats.Conn               // V21: NATS bus connection for event publishing
+	natsURL          string                   // V21: NATS bus URL
+	actionReg        *action.Registry         // V21: action registry for event-triggered actions
+	remClient        *remembrance.Client      // V21: Remembrance client for memory auto-save
+	remSem           chan struct{}            // V21: Semaphore limiting concurrent Remembrance goroutines (max 4)
+	remCache         *remembranceCache        // V26: TTL cache for BuildContext results
+	summarySem       chan struct{}            // Long-running codebase summary concurrency guard
+	delegEngine      *delegation.Engine       // V22: Delegation engine for agent-to-agent task delegation
+	taskStore        *task.Store              // V22: Task store for delegation tracking
+	crossCoord       *crossprizm.Coordinator  // Cross-Prizm NATS delegation coordinator
+	autopatcher      *autopatch.Service       // Diagnose-and-propose patch tasks
+	toolExec         *tool.Executor           // V27: Tool executor for file system access
+	stateMgr         *state.Manager           // V32: Working state manager for adaptive context
+	planMgr          *plan.Manager            // V32: Plan manager for plan-first pipeline
+	improveMgr       *improve.Manager         // V32: Self-improvement loop
+	guardian         *guard.Guard             // V32: Guard rail for plan enforcement
+	toolPolicy       *tool.PolicyConfig       // V27: Tool policy configuration (pointer so free mode can mutate it live)
+	gateMu           sync.Mutex               // V62: guards the free-mode/first-class-tools mutate-then-reset window on toolPolicy and the shared shell tool's Policy, since Discord dispatches messages (and thus handleDiscordMessage) concurrently per-message
+	rateLimiter      *safety.UserRateLimiter  // V28: Per-user rate limiting
+	toolGate         *stage.ToolRelevanceGate // P-008: Tool relevance gate
+	commitStore      *commitments.Store       // V61: Commitments store for promise tracking
+	ttsClient        *tts.Client              // V61: Voicebox TTS client
+	ttsConfig        tts.Config               // V61: TTS configuration
+	contextAgent     *agent.ContextAgent      // V76: Compress workspace identity into short context block
+	pendingWorkMu    sync.Mutex
+	pendingWork      map[string]pendingWorkStart
+	channelIDMu      sync.RWMutex          // Protects channelID for concurrent access
+	channelID        string                // Current conversation channel ID for event routing
+	reviewStore      *reviewResultStore    // V77: Pending Mango review results for feedback injection
+	memoryStoreLocal *memory.MarkdownStore // V77: Local memory store for automatic recall
+	memInjector      *MemoryInjector       // V79: Smart memory injection (search vs recent)
+	coreIdentity     *CoreIdentityBlock    // V83: Permanent identity block — always in system prompt
 
 	// V74: Interactive tool approval — blocking wait for Discord button responses
 	approvalWaitMu sync.Mutex
@@ -500,11 +501,9 @@ func executeServe(args []string) {
 	var contextAgent *agent.ContextAgent
 	var infraSubs []*nats.Subscription // V78: Infrastructure NATS subs for graceful teardown
 
-
 	// V79: Initialize shared infrastructure before channel loop.
 	// This ensures all channels have access to tools, memory, governance, etc.
 	// regardless of which channel is listed first in the config.
-
 
 	// V21: Build workspace context injection
 	ctxBuildr = nil
@@ -570,10 +569,10 @@ func executeServe(args []string) {
 
 			embIdx := memory.NewEmbeddingIndex(memory.EmbeddingConfig{
 				Enabled:          true,
-				Model:           embModel,
-				URL:             embURL,
-				Dimensions:      embDims,
-				IndexPath:       embPath,
+				Model:            embModel,
+				URL:              embURL,
+				Dimensions:       embDims,
+				IndexPath:        embPath,
 				ReindexOnStartup: memCfg.EmbeddingReindexOnStartup,
 			})
 
@@ -692,8 +691,8 @@ func executeServe(args []string) {
 				// Publish prizm.context.built event
 				eventPayload, _ := json.Marshal(map[string]any{
 					"compressed_text": compressed,
-					"agent_id":       "context",
-					"v":              1,
+					"agent_id":        "context",
+					"v":               1,
 				})
 				natsConn.Publish("prizm.context.built", eventPayload)
 			})
@@ -895,7 +894,6 @@ func executeServe(args []string) {
 	toolExec.SetApprovalStore(approval.NewStore(cfg.Prizm.RunsDir))
 	// V79: Emitter set in Discord case where bot is available (approval cards are Discord-specific)
 
-
 	for _, ch := range cfg.Channels {
 		switch ch.Type {
 		case "discord":
@@ -931,7 +929,7 @@ func executeServe(args []string) {
 				providers:   provReg,
 				bot:         bot,
 				sender:      &discordSender{bot: bot}, // V78: channel-agnostic sender
-				platform:    PlatformDiscord,            // V78: running on Discord
+				platform:    PlatformDiscord,          // V78: running on Discord
 				debounce:    msgDebounce,
 				eventLog:    eventLog,
 				cancelReg:   cancelReg,
@@ -955,21 +953,21 @@ func executeServe(args []string) {
 					60, // global max 60 concurrent requests
 					10, // global refill 10 tokens/sec
 				),
-				toolGate:    stage.NewToolRelevanceGate(true), // P-008: enabled by default
-				commitStore: commitStore,
-			ttsClient: ttsClient,
-			ttsConfig: ttsConfig,
-			contextAgent:  contextAgent,  // V76: compressed context block
-			reviewStore:       globalReviewStore, // V77: Mango review feedback
-			memoryStoreLocal: memoryStore,       // V77: Local memory recall
-			memInjector:     memInjector,          // V79: Smart memory injection
-			coreIdentity:    coreIdentity,           // V83: Permanent identity block
-				stateMgr:    stateMgr,   // V32: shared state manager (same instance as tools)
-				planMgr:     planMgr,    // V32: plan manager
-				improveMgr:  improveMgr, // V32: improvement manager
-				guardian:    guardian,   // V32: guard rail
-				pendingWork: make(map[string]pendingWorkStart),
-				approvalWait: make(map[string]chan approvalOutcome),
+				toolGate:         stage.NewToolRelevanceGate(true), // P-008: enabled by default
+				commitStore:      commitStore,
+				ttsClient:        ttsClient,
+				ttsConfig:        ttsConfig,
+				contextAgent:     contextAgent,      // V76: compressed context block
+				reviewStore:      globalReviewStore, // V77: Mango review feedback
+				memoryStoreLocal: memoryStore,       // V77: Local memory recall
+				memInjector:      memInjector,       // V79: Smart memory injection
+				coreIdentity:     coreIdentity,      // V83: Permanent identity block
+				stateMgr:         stateMgr,          // V32: shared state manager (same instance as tools)
+				planMgr:          planMgr,           // V32: plan manager
+				improveMgr:       improveMgr,        // V32: improvement manager
+				guardian:         guardian,          // V32: guard rail
+				pendingWork:      make(map[string]pendingWorkStart),
+				approvalWait:     make(map[string]chan approvalOutcome),
 			}
 
 			// Pre-build static system content for all agents
@@ -1018,21 +1016,21 @@ func executeServe(args []string) {
 								return
 							}
 							log.Printf("[BUTTON] file approval: APPROVED and applied to %s by %s: %s", result.TargetPath, approvedBy, result.Message)
-						// V74: Signal the tool loop that this approval was resolved
-						convCtx.signalApproval(runID, approvalID, approvalOutcome{Approved: true, Message: result.Message})
+							// V74: Signal the tool loop that this approval was resolved
+							convCtx.signalApproval(runID, approvalID, approvalOutcome{Approved: true, Message: result.Message})
 						} else if action == "deny" {
 							if err := buttonMutExec.DenyApproval(runID, approvalID, approvedBy, "denied via Discord button"); err != nil {
 								log.Printf("[BUTTON] file approval: deny failed: %v", err)
 								return
 							}
 							log.Printf("[BUTTON] file approval: DENIED by %s", approvedBy)
-						// V74: Signal the tool loop that this approval was denied
-						convCtx.signalApproval(runID, approvalID, approvalOutcome{Approved: false, Message: "tool was denied by user"})
+							// V74: Signal the tool loop that this approval was denied
+							convCtx.signalApproval(runID, approvalID, approvalOutcome{Approved: false, Message: "tool was denied by user"})
 						}
 						return
 					}
 
-				// Plan approval buttons (plan: prefix)
+					// Plan approval buttons (plan: prefix)
 					if planID, action, ok := decodePlanButtonID(customID); ok {
 						log.Printf("[BUTTON] plan approval: planID=%s action=%s user=%s channel=%s", planID, action, userName, channelID)
 						// Authorization: only manager-room can approve/reject plans
@@ -1127,8 +1125,8 @@ func executeServe(args []string) {
 				contextAgent:     contextAgent,
 				reviewStore:      globalReviewStore,
 				memoryStoreLocal: memoryStore,
-			memInjector:     memInjector,
-			coreIdentity:    coreIdentity,
+				memInjector:      memInjector,
+				coreIdentity:     coreIdentity,
 				stateMgr:         stateMgr,
 				planMgr:          planMgr,
 				improveMgr:       improveMgr,
@@ -1195,8 +1193,8 @@ func executeServe(args []string) {
 				contextAgent:     contextAgent,
 				reviewStore:      globalReviewStore,
 				memoryStoreLocal: memoryStore,
-			memInjector:     memInjector,
-			coreIdentity:    coreIdentity,
+				memInjector:      memInjector,
+				coreIdentity:     coreIdentity,
 				stateMgr:         stateMgr,
 				planMgr:          planMgr,
 				improveMgr:       improveMgr,
@@ -1251,6 +1249,27 @@ func executeServe(args []string) {
 	} else {
 		staticUI = h
 	}
+	// Graph workflows share the daemon's run directory and workspace. The
+	// registry is optional so an unavailable SQLite file does not prevent the
+	// legacy service endpoints from starting.
+	runDir := cfg.Prizm.RunsDir
+	if strings.TrimSpace(runDir) == "" {
+		runDir = "runs"
+	}
+	definitionDBPath := filepath.Join(cfg.Prizm.DataDir, "multiagent_definitions.db")
+	if strings.TrimSpace(cfg.Prizm.DataDir) == "" {
+		definitionDBPath = filepath.Join(runDir, "multiagent_definitions.db")
+	}
+	var definitionStore *multiagent.DefinitionStore
+	if store, defErr := multiagent.NewDefinitionStore(definitionDBPath); defErr != nil {
+		log.Printf("[WARN] multi-agent definition registry unavailable: %v", defErr)
+	} else {
+		definitionStore = store
+	}
+	graphWorkspace := cfg.Prizm.Workspace
+	if strings.TrimSpace(graphWorkspace) == "" {
+		graphWorkspace = "."
+	}
 	apiServer := api.NewServer(api.Config{
 		Addr:               cfg.BindAddr(apiPort),
 		Orch:               orch,
@@ -1279,11 +1298,15 @@ func executeServe(args []string) {
 		MemStore:              memoryStore,
 		RemClient:             remClient,
 		CtxBuilder:            ctxBuildr,
-		MemStoreForInvoke:    memoryStore,
+		MemStoreForInvoke:     memoryStore,
 		MemInjectorForInvoke:  memInjector,
 		CoreIdentityForInvoke: coreIdentity,
 		ToolRegForInvoke:      toolReg,
 		ToolExecForInvoke:     toolExec,
+		MultiAgentRuns:        multiagent.RunLocator{Root: runDir, DefinitionStore: definitionStore},
+		MultiAgentController:  newReferenceMultiAgentController(runDir, *configPath),
+		DefinitionStore:       definitionStore,
+		WorkflowRunStarter:    newGraphRunStarter(runDir, definitionDBPath, *configPath, graphWorkspace),
 	})
 	go func() {
 		if err := apiServer.Start(); err != nil {
@@ -2138,8 +2161,8 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 	}
 
 	// V70: Send plan approval buttons for pending_approval plans created in this run
-// V73: Also notify auto_proceed plans so the user can see what was created
-// V79: Route through ChannelSender — buttons only on platforms that support them
+	// V73: Also notify auto_proceed plans so the user can see what was created
+	// V79: Route through ChannelSender — buttons only on platforms that support them
 	if cc.planMgr != nil {
 		if plans, err := cc.planMgr.LoadPlans(); err == nil {
 			for i := range plans {
@@ -2274,8 +2297,8 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 		cc.publishEvent(agent.EventMemoryExtractRequested, map[string]any{
 			"session_id":     sess.ID,
 			"agent_id":       finalRC.Agent,
-			"user_message":    msg.Content,
-			"agent_response":  responseText,
+			"user_message":   msg.Content,
+			"agent_response": responseText,
 		})
 	}
 
@@ -2381,10 +2404,10 @@ func (cc *conversationContext) publishReviewEvent(toolName string, input map[str
 			filePath = "unknown"
 		}
 		cc.publishEvent(agent.EventReviewRequested, map[string]any{
-			"agent_id":        agentID,
-			"files_changed":   []string{filePath},
+			"agent_id":         agentID,
+			"files_changed":    []string{filePath},
 			"task_description": fmt.Sprintf("Auto-review after %s", toolName),
-			"channel_id":      cc.getChannelID(),
+			"channel_id":       cc.getChannelID(),
 		})
 	}
 }
@@ -3056,12 +3079,12 @@ var readOnlyTools = map[string]bool{
 	"plan_create":              true,
 	"plan_update":              true,
 	"plan_approve":             true,
-	"plan_complete":             true,
+	"plan_complete":            true,
 	"plan_abandon":             true,
-	"plan_reopen":               true,
+	"plan_reopen":              true,
 	"state_get":                true,
-	"set_active_task":         true,
-	"clear_active_task":       true,
+	"set_active_task":          true,
+	"clear_active_task":        true,
 }
 
 var mutationProposalTools = map[string]bool{

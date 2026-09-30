@@ -1,0 +1,52 @@
+# documentation-change-happy-path.yaml is a `prism graph test` scenario
+# fixture for templates/documentation-change.yaml: a straight-through
+# publish, plus a run where the technical reviewer sends the draft to the
+# "needs-revision" terminal instead of a loop back to the writer (this
+# workflow is deliberately acyclic — see the template's own header comment).
+workflow: ../../templates/documentation-change.yaml
+scenarios:
+  - name: happy-path
+    input:
+      id: task-happy-path
+      description: draft is technically accurate and ready to publish as-is
+    script:
+      - role: writer
+        outcome: draft_ready
+      - role: technical-reviewer
+        outcome: technically_accurate
+      - role: editor
+        outcome: ready_to_publish
+    expect:
+      finalStatus: completed
+      terminalNode: "node:terminal:published"
+      transitions:
+        - "edge:writer:draft_ready"
+        - "edge:technical-reviewer:technically_accurate"
+        - "edge:editor:ready_to_publish"
+      nodeVisits:
+        writer: 1
+        technical-reviewer: 1
+        editor: 1
+      edgeTraversals:
+        "edge:writer:draft_ready": 1
+        "edge:technical-reviewer:technically_accurate": 1
+        "edge:editor:ready_to_publish": 1
+
+  - name: technical-review-requests-revision
+    input:
+      id: task-needs-revision
+      description: technical reviewer finds a factual problem and stops the pipeline
+    script:
+      - role: writer
+        outcome: draft_ready
+      - role: technical-reviewer
+        outcome: needs_revision
+    expect:
+      finalStatus: completed
+      terminalNode: "node:terminal:needs_revision"
+      transitions:
+        - "edge:writer:draft_ready"
+        - "edge:technical-reviewer:needs_revision"
+      nodeVisits:
+        writer: 1
+        technical-reviewer: 1

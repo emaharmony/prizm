@@ -69,6 +69,30 @@ JSON input and also accepts `--config <prizm.yaml>`. Its status and report
 commands support `--json`. See the
 [Multi-Agent Workflow](../MULTI_AGENT_WORKFLOW.md) for its input and artifacts.
 
+## Developer-Authored Workflow Graphs
+
+Author your own role/outcome workflow graph in YAML/JSON instead of using
+the fixed Phase 1 built-in flow. See the
+[Developer-Authored Workflow Graphs](../workflows/README.md) doc set for the
+full schema reference, loop/cycle rules, testing framework, and CI usage.
+
+| Command | Action | Status | Example |
+|---|---|---|---|
+| `prism graph validate <file\|dir>...` | Validate workflow definition(s), exit non-zero on any error diagnostic | Preview | `prism graph validate ./workflows --json` |
+| `prism graph compile <file>` | Compile a definition and print its `CompiledGraph` JSON (fingerprint, versions) | Preview | `prism graph compile workflow.yaml --out compiled.json` |
+| `prism graph inspect --file <path>` | Inspect a compiled graph as text, Mermaid, or JSON | Preview | `prism graph inspect --file workflow.yaml --format mermaid` |
+| `prism graph test <file\|dir>...` | Run scripted (no-model-call) routing scenarios against a compiled graph | Preview | `prism graph test ./scenarios --json` |
+| `prism graph run` | Validate+compile+register+run a local file (`--file`), or run an already-registered version (`--workflow`/`--version`) | Preview | `prism graph run --file workflow.yaml --input task.json --workspace .` |
+
+`graph inspect` currently only supports `--file` (a local definition);
+registry-backed `--workflow`/`--version` inspection is not wired up yet —
+see [Current limitations](../workflows/limitations.md). `graph run` supports
+both modes. Three shipped example workflows (a software-delivery pipeline
+with correction loops, a security-review pipeline, and a purely linear
+documentation pipeline) live under
+`internal/workflow/multiagent/templates/` — see
+[a complete, runnable example](../workflows/README.md#a-complete-runnable-example).
+
 ## Policy Commands
 
 | Command | Action | Status | Example |

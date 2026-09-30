@@ -72,7 +72,7 @@ const executionDirectives = "\n\nIMPORTANT — Execution Directives:\n" +
 	"14. If you have called 8+ read-only tools without producing output, you likely have enough context — produce the deliverable now. Reading more is not progress.\n" +
 	"15. If a tool call fails, report the failure honestly and try an alternative. Never substitute fabricated output for results you couldn't actually produce.\n" +
 	"16. Mutable facts (file contents, git state, time, versions) — live-check with tools, do not guess from memory.\n" +
-	"17. A final claim needs evidence: cite the tool output or file path that confirms it, or name the blocker that stopped you."
+					"17. A final claim needs evidence: cite the tool output or file path that confirms it, or name the blocker that stopped you."
 const toolLoopTimeout = 2 * time.Minute // separate timeout for the tool loop
 
 // runToolLoop executes a multi-turn tool execution loop.

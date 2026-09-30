@@ -38,6 +38,7 @@ func TestShellTool_Success(t *testing.T) {
 	if !ok {
 		t.Fatal("expected stdout in output")
 	}
+	stdout = strings.ReplaceAll(stdout, "\r\n", "\n")
 	if stdout != "hello world\n" {
 		t.Errorf("expected 'hello world\\n', got %q", stdout)
 	}
@@ -73,8 +74,12 @@ func TestShellTool_Failure(t *testing.T) {
 		MaxStderrBytes: 5120,
 	}
 
+	command := "exit 42"
+	if runtime.GOOS == "windows" {
+		command = "exit /b 42"
+	}
 	result, err := shell.Execute(context.Background(), map[string]any{
-		"command": "exit 42",
+		"command": command,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -113,7 +118,7 @@ func TestShellTool_Timeout(t *testing.T) {
 	// platforms and still exercises the real timeout path.
 	command := "sleep 10"
 	if runtime.GOOS == "windows" {
-		command = "while true; do :; done"
+		command = "for /l %i in (0,0,1) do @rem"
 	}
 
 	start := time.Now()
@@ -219,8 +224,12 @@ func TestShellTool_Stderr(t *testing.T) {
 		MaxStderrBytes: 5120,
 	}
 
+	command := "echo stderr test >&2"
+	if runtime.GOOS == "windows" {
+		command = "echo stderr test 1>&2"
+	}
 	result, err := shell.Execute(context.Background(), map[string]any{
-		"command": "echo stderr test >&2",
+		"command": command,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -233,6 +242,8 @@ func TestShellTool_Stderr(t *testing.T) {
 	if !ok {
 		t.Fatal("expected stderr in output")
 	}
+	stderr = strings.ReplaceAll(stderr, "\r\n", "\n")
+	stderr = strings.TrimRight(stderr, " \n") + "\n"
 	if stderr != "stderr test\n" {
 		t.Errorf("expected 'stderr test\\n', got %q", stderr)
 	}
@@ -265,8 +276,12 @@ func TestShellTool_Cwd(t *testing.T) {
 		t.Fatalf("failed to write marker file: %v", err)
 	}
 
+	command := "ls"
+	if runtime.GOOS == "windows" {
+		command = "dir /b"
+	}
 	result, err := shell.Execute(context.Background(), map[string]any{
-		"command": "ls",
+		"command": command,
 		"cwd":     dir,
 	})
 	if err != nil {

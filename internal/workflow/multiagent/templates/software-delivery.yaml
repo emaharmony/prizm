@@ -1,0 +1,241 @@
+# software-delivery.yaml is Prism's shipped, developer-authored equivalent of
+# the Phase 1 built-in reference workflow (DefaultReferenceDefinition in
+# reference_workflow.go): Planner -> Developer -> Tester -> Reviewer, with two
+# bounded correction loops (tester -> developer on a failed test run,
+# reviewer -> developer on requested changes). It reuses Phase 1's exact role
+# names and outcome vocabulary ("planner"/"developer"/"tester"/"reviewer",
+# "plan_ready"/"implementation_ready"/"tests_passed"/"tests_failed"/
+# "review_approved"/"changes_requested") so the two are easy to compare
+# side by side, even though nothing in this schema requires matching that
+# vocabulary — see docs/workflows/migration-from-phase-1.md.
+#
+# IMPORTANT — read before copying this file as a starting point for your own
+# workflow: every edge inside developer/tester/reviewer's 3-node cycle
+# carries a `loop:` policy, INCLUDING THE TWO "FORWARD" EDGES
+# (dev-to-tester, tester-to-reviewer) THAT ARE NOT CORRECTION LOOPS.
+#
+# Why: `prism graph validate`'s cycle rule finds every strongly-connected
+# component (Tarjan's algorithm) and requires a bounded `loop:` policy on
+# EVERY edge inside a cyclic component — not just the intuitive "this edge
+# goes backwards" edges. Because tester can route back to developer
+# (tests_failed) and reviewer can also route back to developer
+# (changes_requested), all three of {developer, tester, reviewer} end up in
+# one strongly-connected component together. That makes the two
+# forward-progress edges (developer -> tester, tester -> reviewer) members of
+# the SAME cyclic component as the two genuine correction loops, so the
+# validator requires a loop policy on them too, even though a human would
+# never call "developer finishes, so we move on to testing" a "loop." This is
+# a deliberate design choice (Tarjan over enumerating every simple cycle,
+# which is unnecessary and combinatorially worse for larger graphs) — see
+# docs/architecture/decisions/0002-graph-defined-workflows.md and
+# docs/workflows/loops-and-cycles.md for the full rationale.
+#
+# The two forward edges are given a generous maxTraversals (999) with
+# onExhausted: fail: they are not meant to ever actually bind in practice —
+# the real bounds on how many times developer/tester/reviewer can be
+# re-entered come from each node's own maxVisits and from the two genuine
+# correction loops' tight traversal limits below. 999 is simply "large enough
+# that spec.budgets.maxTransitions (40) will always be hit first if something
+# has gone wrong," not a meaningful business rule of its own.
+apiVersion: prism.dev/v1alpha1
+kind: MultiAgentWorkflow
+metadata:
+  name: software-delivery
+  version: "1.0.0"
+  description: >-
+    Plan, implement, test, and review a software change, with bounded
+    correction loops back to the developer when tests fail or review
+    requests changes. The shipped analog of Prism's Phase 1 built-in
+    multi-agent-software-task reference workflow.
+  labels:
+    category: software-delivery
+    phase: "3"
+spec:
+  entryNode: planner
+  budgets:
+    maxTransitions: 40
+    maxTokens: 200000
+    maxLocalIterations: 24
+    maxRetries: 4
+    maxDuration: 30m
+  defaults:
+    failure:
+      defaultOnUnhandledOutcome: fail
+  nodes:
+    - id: planner
+      type: role
+      role: planner
+      displayName: Planner
+      description: Turns the task objective into a concrete implementation plan.
+      agentProfile: planner-default
+      allowedTools:
+        - list_dir
+        - read_file
+        - search_files
+        - project_overview
+      capabilities:
+        - plan
+      allowedOutcomes:
+        - plan_ready
+      maxVisits: 1
+      localIterations: 3
+      tokenBudget: 8000
+      durationBudget: 10m
+
+    - id: developer
+      type: role
+      role: developer
+      displayName: Developer
+      description: >-
+        Implements the plan. May also determine the task cannot proceed
+        (e.g. the objective conflicts with a stated constraint) and route
+        directly to the failed terminal instead of looping forever.
+      agentProfile: developer-default
+      allowedTools:
+        - list_dir
+        - read_file
+        - search_files
+        - project_overview
+        - write_file_dry_run
+        - write_file_proposal
+        - create_directory_proposal
+      capabilities:
+        - code
+      allowedOutcomes:
+        - implementation_ready
+        - blocked
+      maxVisits: 4
+      localIterations: 8
+      tokenBudget: 30000
+      durationBudget: 30m
+      retry:
+        maxRetries: 2
+        baseDelay: 1s
+        maxDelay: 10s
+
+    - id: tester
+      type: role
+      role: tester
+      displayName: Tester
+      description: Runs the test suite against the developer's latest change.
+      agentProfile: tester-default
+      allowedTools:
+        - list_dir
+        - read_file
+        - search_files
+        - project_overview
+      capabilities:
+        - test
+      allowedOutcomes:
+        - tests_passed
+        - tests_failed
+      maxVisits: 3
+      localIterations: 5
+      tokenBudget: 12000
+      durationBudget: 15m
+      validation:
+        profiles:
+          - go_test_all
+
+    - id: reviewer
+      type: role
+      role: reviewer
+      displayName: Reviewer
+      description: Reviews the change once tests pass; approves or requests changes.
+      agentProfile: reviewer-default
+      allowedTools:
+        - list_dir
+        - read_file
+        - search_files
+        - project_overview
+      capabilities:
+        - review
+      allowedOutcomes:
+        - review_approved
+        - changes_requested
+      maxVisits: 2
+      localIterations: 4
+      tokenBudget: 10000
+      durationBudget: 10m
+
+    - id: completed
+      type: terminal
+      displayName: Completed
+      terminalCondition: completed
+
+    - id: failed
+      type: terminal
+      displayName: Failed
+      terminalCondition: failed
+
+  edges:
+    - id: plan-to-dev
+      from: planner
+      to: developer
+      when:
+        outcome: plan_ready
+      label: plan ready
+
+    # Forward edge inside the developer/tester/reviewer cycle — see the
+    # file-level comment above for why this needs a loop policy at all.
+    - id: dev-to-tester
+      from: developer
+      to: tester
+      when:
+        outcome: implementation_ready
+      loop:
+        maxTraversals: 999
+        onExhausted: fail
+      label: implementation ready
+
+    # Real (non-loop-exhaustion) failure exit: not part of the cycle, since
+    # "failed" is outside the SCC, so no loop policy is required here.
+    - id: dev-to-failed
+      from: developer
+      to: failed
+      when:
+        outcome: blocked
+      label: cannot proceed
+
+    # Genuine correction loop: tester sends work back to developer. Bounded
+    # tightly (2) so that, together with the initial visit and the reviewer
+    # correction loop's own limit (1), developer's total possible entries
+    # (1 + 2 + 1 = 4) exactly matches developer's own maxVisits above.
+    - id: tester-to-dev
+      from: tester
+      to: developer
+      when:
+        outcome: tests_failed
+      loop:
+        maxTraversals: 2
+        onExhausted: fail
+      label: tests failed
+
+    # Forward edge inside the cycle — see the file-level comment.
+    - id: tester-to-reviewer
+      from: tester
+      to: reviewer
+      when:
+        outcome: tests_passed
+      loop:
+        maxTraversals: 999
+        onExhausted: fail
+      label: tests passed
+
+    # Genuine correction loop: reviewer sends work back to developer.
+    - id: reviewer-to-dev
+      from: reviewer
+      to: developer
+      when:
+        outcome: changes_requested
+      loop:
+        maxTraversals: 1
+        onExhausted: fail
+      label: changes requested
+
+    - id: reviewer-to-completed
+      from: reviewer
+      to: completed
+      when:
+        outcome: review_approved
+      label: review approved

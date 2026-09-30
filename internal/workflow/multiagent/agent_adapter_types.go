@@ -10,7 +10,7 @@ import (
 	"github.com/emaharmony/prizm/internal/validation"
 )
 
-// AgentProfile is the execution identity resolved from an existing Prizm agent
+// AgentProfile is the execution identity resolved from an existing Prism agent
 // registry or configuration source.
 type AgentProfile struct {
 	ID           string
@@ -30,12 +30,12 @@ type AgentRegistry interface {
 	Resolve(string) (*agent.Agent, error)
 }
 
-// RegistryProfileResolver adapts Prizm's existing agent registry.
+// RegistryProfileResolver adapts Prism's existing agent registry.
 type RegistryProfileResolver struct {
 	Registry AgentRegistry
 }
 
-// ResolveAgent resolves a registered Prizm agent into execution metadata.
+// ResolveAgent resolves a registered Prism agent into execution metadata.
 func (r RegistryProfileResolver) ResolveAgent(ref string) (AgentProfile, error) {
 	if r.Registry == nil {
 		return AgentProfile{}, fmt.Errorf("multiagent: agent registry is required")
@@ -76,7 +76,7 @@ func (f WorkspaceResolverFunc) ResolveWorkspace(ctx context.Context, runID strin
 	return f(ctx, runID)
 }
 
-// ApprovalStatus is the result of consulting Prizm's approval authority.
+// ApprovalStatus is the result of consulting Prism's approval authority.
 type ApprovalStatus string
 
 const (
@@ -129,7 +129,7 @@ func (f ValidationRunnerFunc) RunValidation(
 	return f(ctx, profile, correlationID)
 }
 
-// AgentExecutionRequest is the narrow request sent to Prizm's real bounded
+// AgentExecutionRequest is the narrow request sent to Prism's real bounded
 // agent execution seam.
 type AgentExecutionRequest struct {
 	RunID                string
@@ -158,7 +158,7 @@ type AgentExecutionResult struct {
 	DeniedToolCalls int
 }
 
-// AgentExecutor runs one configured Prizm agent. Production uses the existing
+// AgentExecutor runs one configured Prism agent. Production uses the existing
 // bounded sub-agent TaskRunner; tests use controlled fakes.
 type AgentExecutor interface {
 	ExecuteAgent(context.Context, AgentExecutionRequest) (AgentExecutionResult, error)

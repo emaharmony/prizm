@@ -1,0 +1,106 @@
+# software-delivery.yaml (scenario-fixtures copy) is the same reference
+# planner/developer/tester/reviewer shape as
+# testdata/schema/valid/software-delivery.yaml (PR1's own loader/schema
+# testdata, deliberately left unmodified — see PR2's
+# TestCycleValidationSCCGranularityAffectsPR1ReferenceFixture in
+# validator_test.go), but with an explicit bounded `loop:` policy added to
+# the two "forward progress" edges (dev-to-tester, tester-to-reviewer) that
+# sit inside the same 3-node cyclic SCC {developer, tester, reviewer} as the
+# genuine back-edges (tester-to-dev, reviewer-to-dev).
+#
+# Without those two additions this definition fails to compile at all
+# (cycle.unbounded-loop-edge on both), because ValidateDefinition's
+# cycle rule is SCC-wide, not limited to back-edges — see
+# comprehensiveValidDef in validator_test.go, which this fixture mirrors
+# exactly. It exists as a separate file (not an edit to PR1's fixture) so
+# `prism graph test`'s own scenario fixtures (../*.yaml, this directory's
+# parent) have a workflow definition that actually compiles, without
+# touching testdata any other PR's tests depend on.
+apiVersion: prism.dev/v1alpha1
+kind: MultiAgentWorkflow
+metadata:
+  name: software-delivery-scenario-fixture
+  version: "1.0.0"
+  description: Reference planner/developer/tester/reviewer workflow, with bounded loop policies on every SCC-internal edge so it compiles
+spec:
+  entryNode: planner
+  budgets:
+    maxTransitions: 40
+    maxTokens: 200000
+    maxDuration: 30m
+  nodes:
+    - id: planner
+      type: role
+      role: planner
+      agentProfile: planner-default
+      allowedOutcomes:
+        - plan_ready
+    - id: developer
+      type: role
+      role: developer
+      agentProfile: developer-default
+      allowedOutcomes:
+        - implementation_ready
+    - id: tester
+      type: role
+      role: tester
+      agentProfile: tester-default
+      allowedOutcomes:
+        - tests_passed
+        - tests_failed
+    - id: reviewer
+      type: role
+      role: reviewer
+      agentProfile: reviewer-default
+      allowedOutcomes:
+        - review_approved
+        - changes_requested
+    - id: completed
+      type: terminal
+      terminalCondition: completed
+    - id: failed
+      type: terminal
+      terminalCondition: failed
+  edges:
+    - id: plan-to-dev
+      from: planner
+      to: developer
+      when:
+        outcome: plan_ready
+    - id: dev-to-tester
+      from: developer
+      to: tester
+      when:
+        outcome: implementation_ready
+      loop:
+        maxTraversals: 999
+        onExhausted: fail
+    - id: tester-to-dev
+      from: tester
+      to: developer
+      when:
+        outcome: tests_failed
+      loop:
+        maxTraversals: 3
+        onExhausted: fail
+    - id: tester-to-reviewer
+      from: tester
+      to: reviewer
+      when:
+        outcome: tests_passed
+      loop:
+        maxTraversals: 999
+        onExhausted: fail
+    - id: reviewer-to-dev
+      from: reviewer
+      to: developer
+      when:
+        outcome: changes_requested
+      loop:
+        maxTraversals: 3
+        onExhausted: fail
+    - id: reviewer-to-completed
+      from: reviewer
+      to: completed
+      when:
+        outcome: review_approved

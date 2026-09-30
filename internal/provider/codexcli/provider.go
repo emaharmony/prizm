@@ -27,6 +27,12 @@ import (
 
 const DefaultTimeoutMinutes = 10
 
+// CompatibleFallbackModel is used only when an unpinned Codex CLI rejects its
+// own default model because the installed CLI predates that model. Keeping the
+// fallback here preserves the user's default whenever it is supported while
+// allowing older installed CLIs to continue serving Prizm requests.
+const CompatibleFallbackModel = "gpt-5.5"
+
 // Config controls Codex CLI generation.
 type Config struct {
 	Executable     string
@@ -118,27 +124,38 @@ func (p *Provider) Generate(ctx context.Context, req provider.GenerateRequest) (
 	// `codex exec` is non-interactive (never prompts), so there is no approval
 	// flag; the sandbox mode alone bounds side effects. --skip-git-repo-check
 	// lets it run when the workspace isn't a git repo.
-	args := []string{
-		"exec",
-		"--cd", p.cfg.Workspace,
-		"--sandbox", p.cfg.Sandbox,
-		"--skip-git-repo-check",
-		"--output-last-message", lastPath,
-		"--color", "never",
+	buildArgs := func(model string) []string {
+		args := []string{
+			"exec",
+			"--cd", p.cfg.Workspace,
+			"--sandbox", p.cfg.Sandbox,
+			"--skip-git-repo-check",
+			"--output-last-message", lastPath,
+			"--color", "never",
+		}
+		// The agent's model (req.Model) is only a registry label; the real Codex
+		// model comes from the codex: config block (empty = Codex's own default).
+		if strings.TrimSpace(model) != "" {
+			args = append(args, "--model", model)
+		}
+		if strings.TrimSpace(p.cfg.Profile) != "" {
+			args = append(args, "--profile", p.cfg.Profile)
+		}
+		args = append(args, p.cfg.ExtraArgs...)
+		return append(args, "-") // read prompt from stdin
 	}
-	// The agent's model (req.Model) is only a registry label; the real Codex
-	// model comes from the codex: config block (empty = Codex's own default).
-	if strings.TrimSpace(p.cfg.Model) != "" {
-		args = append(args, "--model", p.cfg.Model)
-	}
-	if strings.TrimSpace(p.cfg.Profile) != "" {
-		args = append(args, "--profile", p.cfg.Profile)
-	}
-	args = append(args, p.cfg.ExtraArgs...)
-	args = append(args, "-") // read prompt from stdin
 
 	start := time.Now()
-	res, runErr := p.runner.Run(cctx, p.cfg.Executable, args, req.Prompt, p.cfg.Workspace)
+	modelArg := p.cfg.Model
+	res, runErr := p.runner.Run(cctx, p.cfg.Executable, buildArgs(modelArg), req.Prompt, p.cfg.Workspace)
+	// An empty model lets Codex use its own default. Older installed CLIs can
+	// reject a newer account default before producing any output. Retry once with
+	// a model known to work on those CLIs; explicit model settings still fail
+	// loudly so a deliberate choice is never silently changed.
+	if runErr != nil && strings.TrimSpace(modelArg) == "" && unsupportedDefaultModel(res.Stderr) {
+		modelArg = CompatibleFallbackModel
+		res, runErr = p.runner.Run(cctx, p.cfg.Executable, buildArgs(modelArg), req.Prompt, p.cfg.Workspace)
+	}
 	latency := time.Since(start).Milliseconds()
 
 	text := strings.TrimSpace(readIfExists(lastPath))
@@ -163,6 +180,12 @@ func (p *Provider) Generate(ctx context.Context, req provider.GenerateRequest) (
 			"sandbox":   p.cfg.Sandbox,
 		},
 	}, nil
+}
+
+func unsupportedDefaultModel(stderr string) bool {
+	lower := strings.ToLower(stderr)
+	return strings.Contains(lower, "requires a newer version of codex") ||
+		strings.Contains(lower, "unknown model")
 }
 
 func readIfExists(path string) string {

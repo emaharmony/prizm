@@ -367,10 +367,10 @@ func (s *Server) handleMemoriesStats(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(categories)
 
 	writeJSON(w, map[string]any{
-		"total":         len(memories),
-		"categories":    categoryCounts,
-		"tiers":         tierCounts,
-		"agents":        agentCounts,
-		"categoryList":  categories,
+		"total":        len(memories),
+		"categories":   categoryCounts,
+		"tiers":        tierCounts,
+		"agents":       agentCounts,
+		"categoryList": categories,
 	})
 }

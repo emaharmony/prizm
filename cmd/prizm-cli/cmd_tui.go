@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/emaharmony/prizm/internal/orchestrator"
-	"github.com/emaharmony/prizm/internal/plan"
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/emaharmony/prizm/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/plan"
 )
 
 // Prizm TUI — Plan Viewer
@@ -27,18 +27,18 @@ var (
 			Foreground(lipgloss.Color("#F4A261"))
 
 	statusStyle = map[plan.StepStatus]lipgloss.Style{
-		plan.StepCompleted:   lipgloss.NewStyle().Foreground(lipgloss.Color("#2ECC71")),
-		plan.StepInProgress:  lipgloss.NewStyle().Foreground(lipgloss.Color("#3498DB")),
-		plan.StepPending:     lipgloss.NewStyle().Foreground(lipgloss.Color("#95A5A6")),
-		plan.StepBlocked:      lipgloss.NewStyle().Foreground(lipgloss.Color("#E74C3C")),
-		plan.StepSkipped:     lipgloss.NewStyle().Foreground(lipgloss.Color("#F39C12")),
+		plan.StepCompleted:  lipgloss.NewStyle().Foreground(lipgloss.Color("#2ECC71")),
+		plan.StepInProgress: lipgloss.NewStyle().Foreground(lipgloss.Color("#3498DB")),
+		plan.StepPending:    lipgloss.NewStyle().Foreground(lipgloss.Color("#95A5A6")),
+		plan.StepBlocked:    lipgloss.NewStyle().Foreground(lipgloss.Color("#E74C3C")),
+		plan.StepSkipped:    lipgloss.NewStyle().Foreground(lipgloss.Color("#F39C12")),
 	}
 
 	planStatusStyle = map[plan.PlanStatus]lipgloss.Style{
-		plan.StatusAutoProceed:  lipgloss.NewStyle().Foreground(lipgloss.Color("#2ECC71")),
+		plan.StatusAutoProceed:     lipgloss.NewStyle().Foreground(lipgloss.Color("#2ECC71")),
 		plan.StatusPendingApproval: lipgloss.NewStyle().Foreground(lipgloss.Color("#F39C12")),
-		plan.StatusCompleted:    lipgloss.NewStyle().Foreground(lipgloss.Color("#95A5A6")),
-		plan.StatusAbandoned:    lipgloss.NewStyle().Foreground(lipgloss.Color("#E74C3C")),
+		plan.StatusCompleted:       lipgloss.NewStyle().Foreground(lipgloss.Color("#95A5A6")),
+		plan.StatusAbandoned:       lipgloss.NewStyle().Foreground(lipgloss.Color("#E74C3C")),
 	}
 
 	dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
@@ -49,8 +49,8 @@ var (
 )
 
 type planModel struct {
-	plans   []plan.Plan
-	cursor  int
+	plans    []plan.Plan
+	cursor   int
 	quitting bool
 	expanded map[string]bool
 }

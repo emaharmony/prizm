@@ -266,12 +266,12 @@ func (e *Executor) ExecuteWithPolicy(ctx context.Context, toolName, agent, proje
 					result.Output["auto_approved"] = true
 					e.emitEvent("prizm.mutation.applied", map[string]any{
 						"tool_name":      toolName,
-						"agent":           agent,
-						"project":         project,
-						"correlation_id":  correlationID,
-						"target_path":     resolvedPath,
-						"mutation_type":   "write_file",
-						"auto_approved":   true,
+						"agent":          agent,
+						"project":        project,
+						"correlation_id": correlationID,
+						"target_path":    resolvedPath,
+						"mutation_type":  "write_file",
+						"auto_approved":  true,
 					})
 				}
 			}

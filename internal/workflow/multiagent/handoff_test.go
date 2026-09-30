@@ -10,7 +10,7 @@ import (
 
 func TestHandoffValidate(t *testing.T) {
 	handoff := validHandoff()
-	if err := handoff.Validate(validDefinition()); err != nil {
+	if err := handoff.Validate(mustAdaptGraph(t, validDefinition())); err != nil {
 		t.Fatalf("valid handoff rejected: %v", err)
 	}
 }
@@ -69,7 +69,7 @@ func TestHandoffRejectsInvalidContracts(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			handoff := validHandoff()
 			test.mutate(&handoff)
-			err := handoff.Validate(validDefinition())
+			err := handoff.Validate(mustAdaptGraph(t, validDefinition()))
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("expected error containing %q, got %v", test.want, err)
 			}

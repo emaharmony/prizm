@@ -85,7 +85,8 @@ func (t *ShellTool) Execute(ctx context.Context, input map[string]any) (ToolResu
 	defer cancel()
 
 	// Build the command
-	cmd := exec.CommandContext(execCtx, "sh", "-c", command)
+	shell, args := shellCommand(command)
+	cmd := exec.CommandContext(execCtx, shell, args...)
 	cmd.Dir = cwd
 	configureShellCommand(cmd)
 

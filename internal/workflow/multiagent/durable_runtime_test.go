@@ -163,7 +163,7 @@ func TestDurableRuntimeRecoversBetweenRolesDuringCorrectionLoop(t *testing.T) {
 	}
 	if stored.Phase != CheckpointPendingRole ||
 		stored.State.CurrentRole != RoleDeveloper ||
-		stored.State.LoopTraversals.TesterToDeveloper != 1 {
+		stored.State.LoopTraversals.Get(LoopTesterToDeveloper) != 1 {
 		t.Fatalf("loop checkpoint = %#v", stored)
 	}
 
@@ -175,7 +175,7 @@ func TestDurableRuntimeRecoversBetweenRolesDuringCorrectionLoop(t *testing.T) {
 	}
 	if state.RoleStates[RoleDeveloper].Visits != 2 ||
 		state.RoleStates[RoleTester].Visits != 2 ||
-		state.LoopTraversals.TesterToDeveloper != 1 ||
+		state.LoopTraversals.Get(LoopTesterToDeveloper) != 1 ||
 		state.TransitionCount != 6 {
 		t.Fatalf("resumed loop counters = %#v", state)
 	}
@@ -493,7 +493,7 @@ type durableTestEnvironment struct {
 
 func newDurableTestEnvironment(t *testing.T) durableTestEnvironment {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "prizm-runtime.db")
+	dbPath := filepath.Join(t.TempDir(), "prism-runtime.db")
 	events, err := event.NewSQLiteEventStore(dbPath)
 	if err != nil {
 		t.Fatalf("new event store: %v", err)
@@ -527,8 +527,9 @@ func newDurableRuntimeForTest(
 	publisher EventPublisher,
 ) *DurableRuntime {
 	t.Helper()
+	graph := mustAdaptGraph(t, definition)
 	runtime, err := NewDurableRuntime(
-		definition,
+		graph,
 		runner,
 		store,
 		claimer,
