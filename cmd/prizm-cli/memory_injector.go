@@ -20,10 +20,9 @@ import (
 // If the QueryPlanner is unavailable or times out, it falls back to
 // heuristic keyword extraction.
 type MemoryInjector struct {
-	store        *memory.MarkdownStore
-	planner      *memory.QueryPlanner
-	cache        *memorySearchCache
-	plannerCache *plannerResultCache
+	store   *memory.MarkdownStore
+	planner *memory.QueryPlanner
+	cache   *memorySearchCache
 }
 
 // memorySearchCache caches recent search results keyed by query hash.
@@ -40,20 +39,6 @@ type memCacheEntry struct {
 	expires time.Time
 }
 
-// plannerResultCache caches query planner results to avoid redundant LLM calls.
-type plannerResultCache struct {
-	mu      sync.RWMutex
-	entries map[string]*memory.QueryPlanResult
-	ttl     time.Duration
-}
-
-func newPlannerResultCache() *plannerResultCache {
-	return &plannerResultCache{
-		entries: make(map[string]*memory.QueryPlanResult),
-		ttl:     5 * time.Minute,
-	}
-}
-
 // InjectMemoriesInt is the int-parameter version of InjectMemories,
 // satisfying the api.MemoryInjectorInterface (which uses int for mode
 // since it can't reference the main package's InjectMode type).
@@ -61,26 +46,13 @@ func (mi *MemoryInjector) InjectMemoriesInt(ctx context.Context, mode int, userM
 	return mi.InjectMemories(ctx, InjectMode(mode), userMessage, sessionMsgCount, maxTokens)
 }
 
-func (c *plannerResultCache) get(key string) *memory.QueryPlanResult {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.entries[key]
-}
-
-func (c *plannerResultCache) set(key string, result *memory.QueryPlanResult) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.entries[key] = result
-}
-
 // NewMemoryInjector creates a memory injector backed by the given store and
 // optional query planner. If planner is nil, heuristic keyword extraction is used.
 func NewMemoryInjector(store *memory.MarkdownStore, planner *memory.QueryPlanner) *MemoryInjector {
 	return &MemoryInjector{
-		store:        store,
-		planner:      planner,
-		cache:        &memorySearchCache{entries: make(map[string]*memCacheEntry), ttl: 5 * time.Minute, maxSlots: 50},
-		plannerCache: newPlannerResultCache(),
+		store:   store,
+		planner: planner,
+		cache:   &memorySearchCache{entries: make(map[string]*memCacheEntry), ttl: 5 * time.Minute, maxSlots: 50},
 	}
 }
 
@@ -212,12 +184,6 @@ func (mi *MemoryInjector) injectPlannedSearch(ctx context.Context, userMessage s
 	}
 
 	return formatMemories(results, "Relevant Memories", maxTokens)
-}
-
-// injectSearch is the legacy search path (kept for backward compatibility).
-// It searches using the raw user message without query planning.
-func (mi *MemoryInjector) injectSearch(ctx context.Context, query string, maxTokens int) string {
-	return mi.injectPlannedSearch(ctx, query, 0, maxTokens)
 }
 
 // injectRecent returns the most recent memories for conversation continuity.

@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,7 +11,7 @@ import (
 func TestSkillWriteTool_CreateSkill(t *testing.T) {
 	dir := t.TempDir()
 	tool := NewSkillWriteTool(dir)
-	result, err := tool.Execute(nil, map[string]any{
+	result, err := tool.Execute(context.TODO(), map[string]any{
 		"name":        "debug-nats",
 		"description": "Debug NATS connection issues",
 		"body":        "# Debug NATS\n\n## When to Use\nWhen NATS is unreachable.\n\n## Procedure\n1. Check nats-server is running\n2. Check port 4222",
@@ -42,7 +43,7 @@ func TestSkillWriteTool_CreateSkill(t *testing.T) {
 
 func TestSkillWriteTool_MissingName(t *testing.T) {
 	tool := NewSkillWriteTool(t.TempDir())
-	result, _ := tool.Execute(nil, map[string]any{
+	result, _ := tool.Execute(context.TODO(), map[string]any{
 		"description": "test",
 		"body":        "test",
 	})
@@ -53,7 +54,7 @@ func TestSkillWriteTool_MissingName(t *testing.T) {
 
 func TestSkillWriteTool_NilDir(t *testing.T) {
 	tool := NewSkillWriteTool("")
-	result, _ := tool.Execute(nil, map[string]any{
+	result, _ := tool.Execute(context.TODO(), map[string]any{
 		"name":        "test",
 		"description": "test",
 		"body":        "test",

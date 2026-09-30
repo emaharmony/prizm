@@ -13,6 +13,30 @@ Add newest entries first. Include date, roadmap IDs, branch/commit when known,
 completed work, verification, open risks, and the next action. Never record
 secrets, tokens, private prompts, or customer data.
 
+## 2026-09-30 — Linux CI Repair After R1 Foundation Merge
+
+**Roadmap IDs:** R1
+**Branch/baseline:** `codex/r1-approved-task`, from `staging` at `5270739`
+
+- Investigated the Linux failures from PR #83 merge workflow `36757367089`.
+  Staticcheck found dormant private code and small lint issues, including a
+  non-functional loop `break`; these were removed or corrected without adding
+  a new package. A Slack dispatch test now covers the registered-handler path.
+- Corrected `TestCancelRegistryConcurrent`: its 100 goroutines reused only 26
+  session IDs, allowing one registration to replace another before cancellation
+  and leaving a goroutine blocked. The test now uses unique session IDs.
+- Verified focused package tests, `go vet ./...`, `staticcheck ./...`, and
+  `go test ./... -count=1`. The test suite regenerated a timestamp in the
+  tracked memory embedding fixture; it was restored and is not part of this
+  change.
+
+**Open risks:** this repairs CI reliability only. The R1 approval → apply →
+verify → resume lifecycle, isolated worktree validation, and durable event
+contract remain unimplemented.
+
+**Next action:** commit and review the CI repair, then implement R1's exact
+proposal approval identity through durable apply, verify, and resume.
+
 ## 2026-09-30 — Roadmap-Alignment Review
 
 **Roadmap IDs:** R1, R2, R3, R4, R5, R6, R7, R8

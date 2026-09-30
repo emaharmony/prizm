@@ -33,9 +33,9 @@ task/review reports.
 | Field | Current value |
 | --- | --- |
 | Active roadmap IDs | R1 (primary); R2, R3, R4, R5, R6, and R8 have partial foundations; R7 is missing in Prizm. |
-| Reviewed baseline | Pre-push review snapshot: `codex/adapter-driven-runtime` at `059fb4f`, with refreshed `origin/staging` at `9d0833d`; no 9/10 gate is met. |
+| Reviewed baseline | PR #83 merged into `staging` at `5270739`; no 9/10 gate is met. |
 | Current state | Foundational and partial work already exists: R1 durable graph and existing approval components, delegation, worktree, and validation components; R4 adapter contracts and NATS/JetStream paths; and partial R2/R3/R5/R6/R8 capabilities. These remain disconnected from the required end-to-end evidence paths. |
-| PR handoff | A ready-for-review PR body is staged locally at `.tmp/pr-body.md`. GitHub rejected the branch push with HTTP 403 because no configured credential has write access; no PR, push, or merge occurred. |
+| PR handoff | PR #83 merged into `staging`. A local Linux CI repair branch, `codex/r1-approved-task`, removes newly surfaced staticcheck failures and fixes the non-unique-ID concurrency test. It is not pushed or merged. |
 | Next implementation decision | Carry the exact proposal approval identity through durable waiting state, apply, verify, and resume before modifying the live graph composition further. |
 | Evidence required before advancing | Focused unit/integration tests, a real-provider real-repo run, and review of the event trace and generated report. |
 

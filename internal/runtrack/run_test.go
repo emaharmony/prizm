@@ -2,6 +2,7 @@ package runtrack
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -99,7 +100,7 @@ func TestCancelRegistryConcurrent(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		go func(n int) {
 			ctx, cancel := context.WithCancel(context.Background())
-			id := string(rune('a' + n%26))
+			id := fmt.Sprintf("session-%d", n)
 			reg.Register(id, cancel)
 			reg.Cancel(id)
 			<-ctx.Done()

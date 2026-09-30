@@ -326,10 +326,6 @@ func openInspectionReferenceRuntime(runDir string, manifest referenceWorkflowMan
 	return openReferenceRuntimeWithInteraction(runDir, manifest, unavailableRoleRunner{}, nil)
 }
 
-func openReferenceRuntime(runDir string, manifest referenceWorkflowManifest, runner multiagent.RoleRunner) (*referenceRuntime, error) {
-	return openReferenceRuntimeWithInteraction(runDir, manifest, runner, nil)
-}
-
 func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkflowManifest, runner multiagent.RoleRunner, interaction *multiagent.InteractionScheduler) (*referenceRuntime, error) {
 	dbPath := filepath.Join(runDir, manifest.RunID, "multiagent.db")
 	store, err := multiagent.NewSQLiteDurableRunStore(dbPath)
