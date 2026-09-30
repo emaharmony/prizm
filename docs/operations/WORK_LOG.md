@@ -66,6 +66,31 @@ acknowledgement; Recall reliability/idempotency remains a dependency.
 boundary, then prove it through the R1 verification scenarios in the current
 plan.
 
+## 2026-09-30 — PR Setup Handoff Blocked by GitHub Authorization
+
+**Roadmap IDs:** R1, R4
+**Branch/base commit:** `codex/adapter-driven-runtime` at `059fb4f`; refreshed
+`origin/staging` at `9d0833d`
+
+- Confirmed the working tree was clean and the branch was 17 commits ahead of
+  refreshed `origin/staging` and zero commits behind.
+- Confirmed no existing GitHub pull request or remote branch existed for
+  `codex/adapter-driven-runtime`.
+- Prepared a ready-for-review PR body in ignored workspace path
+  `.tmp/pr-body.md`, covering the adapter-driven workflow runtime, validation,
+  and known R1/R4 limitations.
+- GitHub rejected the push with HTTP 403 because the available GitHub
+  credentials lack write access to `emaharmony/prizm`. No PR was created, no
+  push completed, and no merge was attempted.
+
+**Open risks:** the R1 approval → apply → verify → resume path and the R4
+unified graph/NATS event-outbox contract remain incomplete; remote review is
+blocked until an authorized GitHub credential is available.
+
+**Next action:** after GitHub authentication with write access is restored,
+push `codex/adapter-driven-runtime`, create the prepared PR against `staging`,
+then complete the R1 approval-to-verified-resume slice.
+
 ## See Also
 
 - [Prizm Roadmap](../architecture/PRIZM_ROADMAP.md)
