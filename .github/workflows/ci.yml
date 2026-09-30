@@ -55,7 +55,7 @@ jobs:
       - name: Test (Basic)
         run: go test ./internal/safety/... ./internal/config/... ./internal/run/... -count=1
       - name: CLI Smoke Test
-        run: go run ./cmd/prism-cli help
+        run: go run ./cmd/prizm-cli help
 
   test-python:
     runs-on: ubuntu-latest
