@@ -13,6 +13,40 @@ Add newest entries first. Include date, roadmap IDs, branch/commit when known,
 completed work, verification, open risks, and the next action. Never record
 secrets, tokens, private prompts, or customer data.
 
+## 2026-09-30 — R1 Durable Approved-Task Execution
+
+**Roadmap IDs:** R1
+**Branch/commits:** `codex/r1-approved-task`; `2785552`, `0315378`
+
+- Connected an exact proposal to durable approval, idempotent application,
+  crash reconciliation, bounded retry, validation, resume, and terminal result
+  retention. An unrelated approval cannot advance a waiting run, and an
+  ambiguous partially applied change fails closed for review.
+- New graph runs execute in persisted detached Git worktrees. Project-aware
+  validation records the command, arguments, working directory, output, and
+  worktree diff in the run evidence.
+- Added correlated proposal lifecycle events and focused coverage for grants,
+  denials, unrelated decisions, duplicate delivery, restart reconciliation,
+  retry, lifecycle evidence, validation, and real temporary-repository
+  worktree isolation. Existing adapters and `workflow/v2` remain green.
+- A bounded real-provider run exposed and fixed strict role-response parsing,
+  planner schema guidance, iteration budget, and proposal authority for coding
+  agents. The latest run reaches the developer in an isolated real Prizm
+  worktree but the provider returns a final response without calling the
+  required proposal tool.
+
+**Verification:** `go test ./... -count=1`, `go vet ./...`, `go build ./...`,
+and `staticcheck ./...` pass. The generated memory fixture timestamp was
+restored and is not part of the commits.
+
+**Open risks:** the real-provider end-to-end acceptance gate is incomplete.
+The developer role can currently finish without persisting a proposal, so the
+run stops before approval, restart recovery, validation, review, and report.
+
+**Next action:** enforce proposal-required completion for mutation-bearing
+roles with a bounded corrective turn, then repeat the real-provider acceptance
+run and inspect its run record and event trace.
+
 ## 2026-09-30 — Linux CI Repair After R1 Foundation Merge
 
 **Roadmap IDs:** R1
