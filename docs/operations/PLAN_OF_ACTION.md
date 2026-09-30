@@ -32,10 +32,10 @@ task/review reports.
 
 | Field | Current value |
 | --- | --- |
-| Active roadmap IDs | R1 |
-| Last reviewed commit | `0d04d0f` — CI smoke-test path fix |
-| Current state | Documentation and operating controls are being established; no roadmap feature implementation started in this plan. |
-| Next implementation decision | Define the durable approval identity and application boundary before modifying the live graph composition. |
+| Active roadmap IDs | R1 (primary); R2, R3, R4, R5, R6, and R8 have partial foundations; R7 is missing in Prizm. |
+| Reviewed baseline | `codex/adapter-driven-runtime` reviewed for roadmap alignment; no 9/10 gate is met. |
+| Current state | Foundational and partial work already exists: R1 durable graph and existing approval components, delegation, worktree, and validation components; R4 adapter contracts and NATS/JetStream paths; and partial R2/R3/R5/R6/R8 capabilities. These remain disconnected from the required end-to-end evidence paths. |
+| Next implementation decision | Carry the exact proposal approval identity through durable waiting state, apply, verify, and resume before modifying the live graph composition further. |
 | Evidence required before advancing | Focused unit/integration tests, a real-provider real-repo run, and review of the event trace and generated report. |
 
 ## Update Format

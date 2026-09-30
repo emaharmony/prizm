@@ -13,6 +13,37 @@ Add newest entries first. Include date, roadmap IDs, branch/commit when known,
 completed work, verification, open risks, and the next action. Never record
 secrets, tokens, private prompts, or customer data.
 
+## 2026-09-30 — Roadmap-Alignment Review
+
+**Roadmap IDs:** R1, R2, R3, R4, R5, R6, R7, R8
+**Branch/baseline:** `codex/adapter-driven-runtime` at `73fac4e`; documentation
+changes were uncommitted at review time.
+
+- Performed read-only code and documentation analysis. No code feature
+  implementation, tests, builds, or Git history operations were performed; this
+  session made documentation-only updates.
+- Corrected the plan handoff to reflect existing foundations instead of claiming
+  no roadmap work has started. Evidence includes durable approval and graph
+  components (`internal/approval`, workflow graph paths), isolated-worktree and
+  validation machinery (`internal/autopatch`, `internal/validation`), NATS and
+  JetStream bus paths (`internal/bus`, `cmd/prizm-bus`), adapter contracts
+  (`internal/adapter`), remote NATS bridge groundwork (`internal/bridge`), and
+  existing memory, skill, and autopatch subsystems.
+- The evidence supports partial R1 and R4 foundations, plus partial R2, R3, R5,
+  R6, and R8. R7 remains missing in Prizm, and the roadmap's 9/10 gates remain
+  unproven because the required integrated approval/apply/verify/resume,
+  durable event contract, real-provider/repository trials, and two-node failure
+  injection evidence do not yet exist.
+
+**Open risks:** the exact proposal approval is not yet proven to control apply
+and resume; graph and NATS paths remain split; project-aware validation is not
+the primary graph default; delegation lacks the required acknowledgement and
+recovery proof; Recall fallback and skill-version provenance remain incomplete.
+
+**Next action:** implement R1 approval identity → apply → verify → resume, then
+add worktree isolation and project-aware validation to the primary path before
+the unified event/outbox work.
+
 ## 2026-09-30 — Harness Audit and Roadmap Controls
 
 **Roadmap IDs:** R1, R2, R3, R4, R5, R6, R7, R8
