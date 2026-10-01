@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
 
@@ -108,6 +109,33 @@ func TestLoadReferenceManifestAllowsCleanedTerminalWorkspace(t *testing.T) {
 	loaded, err := loadReferenceManifest(runDir, manifest.RunID)
 	if err != nil || !loaded.WorkspaceCleaned {
 		t.Fatalf("loaded=%#v err=%v", loaded, err)
+	}
+}
+
+func TestBindConfiguredReferenceProfilesUsesCapabilitiesAndPreservesOverrides(t *testing.T) {
+	explicit := map[multiagent.Role]string{
+		multiagent.RoleReviewer: "explicit-reviewer",
+	}
+	definition, err := multiagent.ApplyReferenceOverrides(multiagent.DefaultReferenceDefinition(), multiagent.ReferenceWorkflowInput{
+		Objective: "profile composition", Workspace: ".", RoleProfiles: explicit,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindConfiguredReferenceProfiles(&definition, explicit, []orchestrator.AgentConfig{
+		{ID: "planner-profile", Role: "planner", Capabilities: []string{"plan"}},
+		{ID: "coder-profile", Role: "coder", Capabilities: []string{"code", "test"}},
+		{ID: "reviewer-profile", Role: "reviewer", Capabilities: []string{"review"}},
+	})
+	profiles := map[multiagent.Role]string{}
+	for _, role := range definition.Roles {
+		profiles[role.Role] = role.AgentRef
+	}
+	if profiles[multiagent.RolePlanner] != "planner-profile" ||
+		profiles[multiagent.RoleDeveloper] != "coder-profile" ||
+		profiles[multiagent.RoleTester] != "coder-profile" ||
+		profiles[multiagent.RoleReviewer] != "explicit-reviewer" {
+		t.Fatalf("profiles=%#v", profiles)
 	}
 }
 

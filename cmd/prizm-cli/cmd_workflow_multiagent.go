@@ -82,12 +82,17 @@ func executeReferenceWorkflowRun(inputFile, runDir, configPath string) error {
 	if err != nil {
 		return err
 	}
+	cfg, err := orchestrator.LoadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("load Prizm config: %w", err)
+	}
 	definition, err := multiagent.ApplyReferenceOverrides(
 		multiagent.DefaultReferenceDefinition(), input,
 	)
 	if err != nil {
 		return err
 	}
+	bindConfiguredReferenceProfiles(&definition, input.RoleProfiles, cfg.Agents)
 	runID := event.NewRunID()
 	workspacePath, workspaceID, sourceWorkspacePath, err := isolatedReferenceWorkspace(context.Background(), input.Workspace, runID)
 	if err != nil {
@@ -126,6 +131,62 @@ func executeReferenceWorkflowRun(inputFile, runDir, configPath string) error {
 	}
 	fmt.Printf("Status: %s\n", state.Status)
 	return runErr
+}
+
+// bindConfiguredReferenceProfiles adapts the fixed reference graph's
+// illustrative profile names to the configured local agent roster. Explicit
+// user role-profile overrides remain authoritative. This is composition, not a
+// workflow transition rule: the graph retains its bounded role capabilities.
+func bindConfiguredReferenceProfiles(definition *multiagent.Definition, explicit map[multiagent.Role]string, agents []orchestrator.AgentConfig) {
+	if definition == nil {
+		return
+	}
+	for index := range definition.Roles {
+		role := definition.Roles[index].Role
+		if _, overridden := explicit[role]; overridden {
+			continue
+		}
+		if profile := configuredProfileForRole(role, definition.Roles[index].Capabilities, agents); profile != "" {
+			definition.Roles[index].AgentRef = profile
+		}
+	}
+}
+
+func configuredProfileForRole(role multiagent.Role, required []string, agents []orchestrator.AgentConfig) string {
+	bestID, bestScore := "", -1
+	for _, candidate := range agents {
+		if strings.TrimSpace(candidate.ID) == "" || !agentHasCapabilities(candidate, required) {
+			continue
+		}
+		score := 0
+		candidateRole := strings.ToLower(strings.TrimSpace(candidate.Role))
+		if candidateRole == string(role) {
+			score += 100
+		}
+		if role == multiagent.RoleDeveloper && candidateRole == "coder" {
+			score += 90
+		}
+		if candidate.Primary {
+			score++
+		}
+		if score > bestScore {
+			bestID, bestScore = candidate.ID, score
+		}
+	}
+	return bestID
+}
+
+func agentHasCapabilities(candidate orchestrator.AgentConfig, required []string) bool {
+	available := make(map[string]struct{}, len(candidate.Capabilities))
+	for _, capability := range candidate.Capabilities {
+		available[capability] = struct{}{}
+	}
+	for _, capability := range required {
+		if _, ok := available[capability]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func executeReferenceWorkflowStatus(runID, runDir string, jsonOutput bool) error {
