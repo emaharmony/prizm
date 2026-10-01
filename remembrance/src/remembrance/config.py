@@ -79,7 +79,7 @@ def load_config(path: Optional[str] = None) -> RemembranceConfig:
             os.environ.get("REMEMBRANCE_CONFIG"),
             "remembrance.local.yaml",
             "remembrance.yaml",
-            str(Path(__file__).parent.parent.parent / "configs" / "remembrance.local.yaml"),
+            str(Path(__file__).parent.parent.parent / "configs" / "remembrance.yaml.example"),
         ]
         for candidate in candidates:
             if candidate and Path(candidate).exists():
