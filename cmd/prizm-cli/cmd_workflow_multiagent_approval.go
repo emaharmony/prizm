@@ -18,7 +18,10 @@ import (
 
 // approvalProposalResolver binds proposals created by one tool-loop execution
 // to the exact durable role checkpoint using its correlation/execution key.
-type approvalProposalResolver struct{ store *approval.Store }
+type approvalProposalResolver struct {
+	store     *approval.Store
+	workspace string
+}
 
 func (r approvalProposalResolver) ResolveProposals(_ context.Context, query multiagent.ProposalQuery) ([]multiagent.ProposalReference, error) {
 	approvals, err := r.store.List(query.RunID)
@@ -34,10 +37,32 @@ func (r approvalProposalResolver) ResolveProposals(_ context.Context, query mult
 		if proposalID == "" { // schema-v1 approval compatibility
 			proposalID = item.ApprovalID
 		}
-		refs = append(refs, multiagent.ProposalReference{ProposalID: proposalID, ApprovalID: item.ApprovalID})
+		artifact, artifactErr := canonicalProposalArtifact(item, r.workspace)
+		if artifactErr != nil {
+			return nil, artifactErr
+		}
+		refs = append(refs, multiagent.ProposalReference{ProposalID: proposalID, ApprovalID: item.ApprovalID, Artifacts: []multiagent.ArtifactRef{artifact}})
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].ProposalID < refs[j].ProposalID })
 	return refs, nil
+}
+
+func canonicalProposalArtifact(item *approval.Approval, workspace string) (multiagent.ArtifactRef, error) {
+	if item == nil || item.MutationType != approval.MutationWriteFile {
+		return multiagent.ArtifactRef{}, fmt.Errorf("proposal does not identify a canonical file artifact")
+	}
+	if workspace == "" {
+		return multiagent.ArtifactRef{}, fmt.Errorf("proposal workspace is required")
+	}
+	absolute, err := safety.ResolveAndContain(workspace, item.TargetPath)
+	if err != nil {
+		return multiagent.ArtifactRef{}, fmt.Errorf("resolve proposal target: %w", err)
+	}
+	relative, err := filepath.Rel(workspace, absolute)
+	if err != nil || relative == "." || filepath.IsAbs(relative) {
+		return multiagent.ArtifactRef{}, fmt.Errorf("canonicalize proposal target %q", item.TargetPath)
+	}
+	return multiagent.ArtifactRef{Kind: multiagent.ArtifactFile, URI: filepath.ToSlash(relative)}, nil
 }
 
 // approvalProposalLifecycle composes the existing approval store and mutation

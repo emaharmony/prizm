@@ -194,7 +194,12 @@ func (r *AgentRoleRunner) RunRole(
 		}
 	}
 
-	decoded, err := decodeRoleOutput(request.Run.CurrentRole, execution.Output)
+	var decoded decodedRoleOutput
+	if request.Run.CurrentRole == RoleDeveloper && len(proposals) > 0 {
+		decoded, err = decodeDeveloperOutputForProposals(execution.Output, proposals)
+	} else {
+		decoded, err = decodeRoleOutput(request.Run.CurrentRole, execution.Output)
+	}
 	if err != nil {
 		return RoleRunResult{}, err
 	}

@@ -167,6 +167,37 @@ func TestDecodeRoleOutputRejectsMalformedOrAmbiguousResults(t *testing.T) {
 	}
 }
 
+func TestDecodeDeveloperOutputForProposalsDerivesMissingArtifact(t *testing.T) {
+	raw := `{"schema_version":1,"summary":"proposed","handoff":{"objective":"test","reason":"proposal recorded"}}`
+	proposals := []ProposalReference{{ProposalID: "proposal-1", ApprovalID: "approval-1", Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "feature.txt"}}}}
+	decoded, err := decodeDeveloperOutputForProposals(raw, proposals)
+	if err != nil || decoded.Handoff == nil || len(decoded.Handoff.Artifacts) != 1 || decoded.Handoff.Artifacts[0].URI != "feature.txt" {
+		t.Fatalf("decoded=%#v err=%v", decoded, err)
+	}
+}
+
+func TestDecodeDeveloperOutputForProposalsRejectsMissingOrConflictingSource(t *testing.T) {
+	missing := `{"schema_version":1,"summary":"proposed","handoff":{"objective":"test","reason":"proposal recorded"}}`
+	if _, err := decodeDeveloperOutputForProposals(missing, nil); err == nil {
+		t.Fatal("missing proposal source was accepted")
+	}
+	conflict := `{"schema_version":1,"summary":"proposed","changed_artifacts":[{"kind":"file","uri":"model-claim.txt"}],"handoff":{"objective":"test","reason":"proposal recorded"}}`
+	proposals := []ProposalReference{{ProposalID: "proposal-1", ApprovalID: "approval-1", Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "canonical.txt"}}}}
+	if _, err := decodeDeveloperOutputForProposals(conflict, proposals); err == nil {
+		t.Fatal("conflicting model artifact was accepted")
+	}
+}
+
+func TestDecodeDeveloperOutputForProposalsIsRecoveryStable(t *testing.T) {
+	raw := `{"schema_version":1,"summary":"proposed","handoff":{"objective":"test","reason":"proposal recorded"}}`
+	proposals := []ProposalReference{{ProposalID: "proposal-1", ApprovalID: "approval-1", Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "feature.txt"}}}}
+	first, firstErr := decodeDeveloperOutputForProposals(raw, proposals)
+	second, secondErr := decodeDeveloperOutputForProposals(raw, proposals)
+	if firstErr != nil || secondErr != nil || first.Handoff == nil || second.Handoff == nil || !sameArtifactRefs(first.Handoff.Artifacts, second.Handoff.Artifacts) {
+		t.Fatalf("first=%#v firstErr=%v second=%#v secondErr=%v", first, firstErr, second, secondErr)
+	}
+}
+
 func TestDecodeReflectionOutputStrictContract(t *testing.T) {
 	raw := `{"schema_version":1,"verdict":"partial","confidence":0.75,"failure_class":"verification","evidence":[],"lesson_candidate":{"summary":"keep the check","content":"Run verification before routing.","category":"decision","topics":["verification"]},"replan_requested":true,"replan_reason":"verification evidence changed"}`
 	result, err := decodeReflectionOutput(raw)

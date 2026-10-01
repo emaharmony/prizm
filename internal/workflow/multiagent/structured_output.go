@@ -166,6 +166,58 @@ func decodeRoleOutput(role Role, raw string) (decodedRoleOutput, error) {
 	}
 }
 
+// decodeDeveloperOutputForProposals preserves the strict developer schema but
+// fills an omitted changed_artifacts field from exactly one persisted proposal.
+// The proposal artifact is a durable workspace fact, so model-provided claims
+// cannot substitute for it or conflict with it.
+func decodeDeveloperOutputForProposals(raw string, proposals []ProposalReference) (decodedRoleOutput, error) {
+	var output DeveloperOutput
+	if err := decodeStrictJSON(raw, &output); err != nil {
+		return decodedRoleOutput{}, structuredError(RoleDeveloper, err)
+	}
+	artifacts, err := canonicalProposalArtifacts(proposals)
+	if err != nil {
+		return decodedRoleOutput{}, structuredError(RoleDeveloper, err)
+	}
+	if len(output.ChangedArtifacts) == 0 {
+		output.ChangedArtifacts = artifacts
+	} else if !sameArtifactRefs(output.ChangedArtifacts, artifacts) {
+		return decodedRoleOutput{}, structuredError(RoleDeveloper, errors.New("changed_artifacts conflicts with the persisted proposal artifact"))
+	}
+	if err := validateDeveloperOutput(output); err != nil {
+		return decodedRoleOutput{}, structuredError(RoleDeveloper, err)
+	}
+	return decodedRoleOutput{
+		Outcome: OutcomeImplementationReady,
+		Handoff: handoffFromOutput(output.Handoff, output.ChangedArtifacts),
+	}, nil
+}
+
+func canonicalProposalArtifacts(proposals []ProposalReference) ([]ArtifactRef, error) {
+	if len(proposals) != 1 {
+		return nil, errors.New("exactly one persisted proposal is required to derive changed_artifacts")
+	}
+	if len(proposals[0].Artifacts) == 0 {
+		return nil, errors.New("persisted proposal has no canonical workspace artifact")
+	}
+	if err := validateOutputArtifacts(proposals[0].Artifacts); err != nil {
+		return nil, fmt.Errorf("persisted proposal artifact: %w", err)
+	}
+	return cloneArtifactRefs(proposals[0].Artifacts), nil
+}
+
+func sameArtifactRefs(left, right []ArtifactRef) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].Kind != right[index].Kind || left[index].URI != right[index].URI || left[index].Digest != right[index].Digest {
+			return false
+		}
+	}
+	return true
+}
+
 func decodeReflectionOutput(raw string) (ReflectionResult, error) {
 	var output ReflectionOutput
 	if err := decodeStrictJSON(raw, &output); err != nil {

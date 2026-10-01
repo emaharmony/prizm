@@ -370,7 +370,7 @@ func openLiveReferenceRuntime(runDir, configPath string, manifest referenceWorkf
 			return multiagent.Workspace{ID: manifest.WorkspaceID, Path: manifest.WorkspacePath}, nil
 		}),
 		Validation: validationRunner,
-		Proposals:  approvalProposalResolver{store: approvalStore},
+		Proposals:  approvalProposalResolver{store: approvalStore, workspace: manifest.WorkspacePath},
 	})
 	if err != nil {
 		return nil, err

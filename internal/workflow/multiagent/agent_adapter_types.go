@@ -130,6 +130,9 @@ type WorkspaceValidationRunner interface {
 type ProposalReference struct {
 	ProposalID string `json:"proposal_id"`
 	ApprovalID string `json:"approval_id"`
+	// Artifacts are canonical workspace-relative facts derived from the
+	// persisted proposal, never from model-reported change claims.
+	Artifacts []ArtifactRef `json:"artifacts,omitempty"`
 }
 
 // ProposalQuery identifies the role execution whose proposals must be
