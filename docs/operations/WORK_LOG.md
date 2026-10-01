@@ -13,6 +13,21 @@ Add newest entries first. Include date, roadmap IDs, branch/commit when known,
 completed work, verification, open risks, and the next action. Never record
 secrets, tokens, private prompts, or customer data.
 
+## 2026-10-01 — R1 Tool-First Provider Contract
+
+**Roadmap IDs:** R1
+**Branch/commits:** `codex/r1-approved-task`; `6cf33f3`
+
+- Corrected the text-provider tool protocol: the parser now selects a valid `tool_request` before any final envelope, developer instructions require a separate proposal request before the developer role JSON, and the corrective path requests only the proposal action before accepting the final role JSON after its tool result.
+- Reserved two remaining local iterations for a correction so a proposal action and its final role JSON can both complete inside the existing role budget. Added focused parser, mixed-response, proposal-tool-to-final-loop, corrective proposal, and budget tests.
+- The bounded real-provider run used a disposable repository and persisted an approval record through `write_file_proposal`, proving the tool request reached the approved mutation boundary. The provider then returned a developer final object without the required `changed_artifacts` field. Strict decoding failed the run before approval pause, application, validation, and review; the terminal report and cleanup completed without external publication.
+
+**Verification:** Focused protocol tests and `go build ./...`, `go vet ./...`, `staticcheck ./...`, `go test ./... -count=1`, and `git diff --check` passed before the real-provider run.
+
+**Open risks:** The real provider can now create the approval artifact but does not yet reliably emit the required developer final schema after the tool result. Therefore the proposal → approval → apply → validation → review/report acceptance gate remains incomplete.
+
+**Next action:** make the post-proposal developer final-schema contract more reliable, then repeat the disposable-repository run through approval, restart, application, workspace validation, and report.
+
 ## 2026-10-01 — R1 Proposal-Required Coding and Roster Binding
 
 **Roadmap IDs:** R1

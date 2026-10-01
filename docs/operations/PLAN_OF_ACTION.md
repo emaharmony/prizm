@@ -18,7 +18,7 @@ must be complete before adding broader autonomy triggers or remote delegation.
 | 2 | Apply the granted proposal before continuing the graph. | Done in `2785552`: stable apply keys, reconciliation, bounded retry, denial, and duplicate delivery are durable and event-visible. |
 | 3 | Verify in an isolated worktree with a project-aware validation profile. | Done in `2785552`: new runs persist a detached worktree; validation evidence includes command, arguments, working directory, output, and diff. |
 | 4 | Complete the durable transition. | Done in `2785552`: the saved role result resumes without another model call, then continues to review/report or fails closed. |
-| 5 | Prove the slice. | Deterministic grant, deny, unrelated approval, restart, duplicate, reconciliation, retry, failure, event, worktree, corrective-turn, and terminal-cleanup tests pass. A real provider reached the configured planner and developer in an isolated worktree, then failed closed after the developer omitted a proposal on its one corrective turn. |
+| 5 | Prove the slice. | Deterministic grant, deny, unrelated approval, restart, duplicate, reconciliation, retry, failure, event, worktree, corrective-turn, and terminal-cleanup tests pass. A real provider now persisted a proposal approval in an isolated worktree, then failed closed because its final developer JSON omitted the required `changed_artifacts` field. |
 
 ## Follow-on R1 Work
 
@@ -33,10 +33,10 @@ task/review reports.
 | Field | Current value |
 | --- | --- |
 | Active roadmap IDs | R1 (primary); R2, R3, R4, R5, R6, and R8 have partial foundations; R7 is missing in Prizm. |
-| Reviewed baseline | `codex/r1-approved-task` at `75c06df`, based on merged PR #83 plus CI repair `8232f7e`; no 9/10 gate is met. |
-| Current state | Exact proposal approval, durable idempotent apply, crash reconciliation, isolated worktree execution, workspace-aware validation, diff evidence, correlated lifecycle events, proposal-required developer completion, and terminal worktree cleanup are integrated. Reference runs bind role capability requirements to the configured agent roster unless an input override is supplied. Status-only approvals and `workflow/v2` remain compatible. |
-| PR handoff | Local commits `2785552`, `0315378`, `be616e0`, and `75c06df` implement and harden the slice. They are not pushed or merged. |
-| Next implementation decision | Improve the coding-agent tool contract so the real provider reliably invokes the proposal tool; preserve the one-turn, remaining-budget fail-closed enforcement. |
+| Reviewed baseline | `codex/r1-approved-task` at `6cf33f3`, based on merged PR #83 plus CI repair `8232f7e`; no 9/10 gate is met. |
+| Current state | Exact proposal approval, durable idempotent apply, crash reconciliation, isolated worktree execution, workspace-aware validation, diff evidence, correlated lifecycle events, proposal-required developer completion, and terminal worktree cleanup are integrated. The coding contract now requires a separate proposal tool request before the final role JSON; the parser prioritizes tool requests, and reference runs bind capabilities to the configured agent roster unless an input override is supplied. Status-only approvals and `workflow/v2` remain compatible. |
+| PR handoff | Local commits `2785552`, `0315378`, `be616e0`, `75c06df`, and `6cf33f3` implement and harden the slice. They are not pushed or merged. |
+| Next implementation decision | Improve final developer-schema reliability after a successful proposal tool result, while preserving the one-turn, remaining-budget fail-closed enforcement. |
 | Evidence required before advancing | Repeat the real-provider/repository run through proposal, approval, restart recovery, apply, validation, review/report, and inspect the complete event trace. |
 
 ## Update Format
