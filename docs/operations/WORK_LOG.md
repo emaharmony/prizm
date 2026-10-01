@@ -13,6 +13,37 @@ Add newest entries first. Include date, roadmap IDs, branch/commit when known,
 completed work, verification, open risks, and the next action. Never record
 secrets, tokens, private prompts, or customer data.
 
+## 2026-10-01 — R1 Canonical Proposal Artifact Recovery
+
+**Roadmap IDs:** R1
+**Branch/commit:** `codex/r1-approved-task`; `2c6ec11`
+
+- Retained the strict developer final-response schema and repaired the one
+  known provider omission: after exactly one persisted proposal, an omitted
+  `changed_artifacts` field is derived from the proposal's canonical file
+  target. The resolver confines that target to the persisted worktree before
+  storing the workspace-relative artifact reference.
+- Conflicting model artifacts, no persisted proposal, multiple persisted
+  proposals, missing canonical artifacts, non-file proposals, and traversal
+  targets fail closed. The general developer schema is unchanged when there
+  is no proposal.
+- Added focused coverage for missing, conflicting, and absent proposal facts,
+  deterministic recovery, and traversal rejection.
+
+**Verification:** Focused proposal-artifact and approval-resolver tests passed.
+`go build ./...`, `go vet ./...`, `staticcheck ./...`, `go test ./... -count=1`,
+and `git diff --check` passed using workspace-local Go caches.
+
+**Open risks:** The required real-provider path was not rerun. Automatic review
+rejected the bounded disposable-repository command because the configured
+provider destination and exported repository/task scope were not verified.
+No egress workaround was attempted. The proposal → approval → restart → apply
+→ validation → review/report acceptance evidence therefore remains incomplete.
+
+**Next action:** obtain explicit authorization for the provider egress, then
+run the disposable isolated-repository acceptance path and inspect the durable
+event trace and report.
+
 ## 2026-10-01 — R1 Tool-First Provider Contract
 
 **Roadmap IDs:** R1
