@@ -305,7 +305,7 @@ func TestAgentRoleRunnerRequiresDeveloperProposalWithOneCorrectiveTurn(t *testin
 	executor := agentExecutorFunc(func(_ context.Context, request AgentExecutionRequest) (AgentExecutionResult, error) {
 		calls++
 		if calls == 2 {
-			if !strings.Contains(request.Prompt, "only corrective turn") || !strings.Contains(request.Prompt, `"summary":"done"`) {
+			if !strings.Contains(request.Prompt, "only corrective turn") || !strings.Contains(request.Prompt, `"summary":"done"`) || !strings.Contains(request.Prompt, "NEXT response must be ONLY one JSON tool_request") {
 				t.Fatal("corrective prompt does not carry bounded provider state")
 			}
 			if request.MaxIterations != 2 || request.MaxTokens != 990 {
@@ -340,6 +340,17 @@ func TestAgentRoleRunnerRequiresDeveloperProposalWithOneCorrectiveTurn(t *testin
 	}
 }
 
+func TestBuildRolePromptRequiresDeveloperProposalBeforeFinalJSON(t *testing.T) {
+	prompt, err := BuildRolePrompt(adapterRoleRequest(RoleDeveloper))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "DEVELOPER TOOL PROTOCOL") ||
+		!strings.Contains(prompt, "Do not combine the tool request") {
+		t.Fatalf("developer prompt missing proposal protocol: %s", prompt)
+	}
+}
+
 func TestAgentRoleRunnerFailsClosedWhenProposalCorrectionHasNoBudget(t *testing.T) {
 	calls := 0
 	runner := newAdapterForTest(t, agentExecutorFunc(func(context.Context, AgentExecutionRequest) (AgentExecutionResult, error) {
@@ -348,6 +359,22 @@ func TestAgentRoleRunnerFailsClosedWhenProposalCorrectionHasNoBudget(t *testing.
 	}), nil, nil)
 	runner.proposals = ProposalResolverFunc(func(context.Context, ProposalQuery) ([]ProposalReference, error) { return nil, nil })
 	request := adapterRoleRequest(RoleDeveloper)
+	_, err := runner.RunRole(context.Background(), request)
+	var governanceErr *GovernanceError
+	if !errors.As(err, &governanceErr) || governanceErr.Kind != "proposal" || calls != 1 {
+		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+}
+
+func TestAgentRoleRunnerReservesToolAndFinalIterationsForProposalCorrection(t *testing.T) {
+	calls := 0
+	runner := newAdapterForTest(t, agentExecutorFunc(func(context.Context, AgentExecutionRequest) (AgentExecutionResult, error) {
+		calls++
+		return AgentExecutionResult{Output: `{"schema_version":1,"summary":"done","changed_artifacts":[],"handoff":{"objective":"test","reason":"implemented"}}`, LocalIterations: 1}, nil
+	}), nil, nil)
+	runner.proposals = ProposalResolverFunc(func(context.Context, ProposalQuery) ([]ProposalReference, error) { return nil, nil })
+	request := adapterRoleRequest(RoleDeveloper)
+	request.RoleConfig.MaxLocalIterations = 2
 	_, err := runner.RunRole(context.Background(), request)
 	var governanceErr *GovernanceError
 	if !errors.As(err, &governanceErr) || governanceErr.Kind != "proposal" || calls != 1 {

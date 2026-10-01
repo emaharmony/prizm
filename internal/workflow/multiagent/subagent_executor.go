@@ -31,12 +31,16 @@ func (e SubagentExecutor) ExecuteAgent(
 		deadlineValue = request.Deadline.UTC().Format(time.RFC3339)
 	}
 	maxTokens := int(request.MaxTokens)
+	expectedDeliverable := "one strict JSON object matching the role schema"
+	if request.Role == RoleDeveloper {
+		expectedDeliverable = "first emit one write_file_proposal or create_directory_proposal tool_request JSON; after its result, emit one strict developer role-schema JSON"
+	}
 	result, err := e.Runner.Run(ctx, v2.TaskPacket{
 		Type:                "task_delegation",
 		TargetAgent:         request.Profile.ID,
 		TaskID:              executionTaskID(request),
 		Description:         request.Prompt,
-		ExpectedDeliverable: "one strict JSON object matching the role schema",
+		ExpectedDeliverable: expectedDeliverable,
 		Deadline:            deadlineValue,
 		MaxTokens:           maxTokens,
 	}, subagent.AgentRuntime{

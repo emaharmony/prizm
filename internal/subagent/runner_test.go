@@ -16,11 +16,13 @@ type scriptBackend struct {
 	parse     Parser
 	toolErr   error
 	toolCalls []string
+	messages  [][]v2.Message
 }
 
 func (b *scriptBackend) Bind(_ AgentRuntime) (LLMFunc, Parser, ToolExec, error) {
 	i := 0
-	llm := func(_ context.Context, _ []v2.Message) (Turn, error) {
+	llm := func(_ context.Context, messages []v2.Message) (Turn, error) {
+		b.messages = append(b.messages, append([]v2.Message(nil), messages...))
 		if i >= len(b.turns) {
 			return Turn{Text: "FINAL: done (ran out of script)"}, nil
 		}
@@ -78,6 +80,32 @@ func TestLoopRunner_ToolThenFinal(t *testing.T) {
 	}
 	if len(backend.toolCalls) != 1 {
 		t.Errorf("expected 1 tool call, got %d", len(backend.toolCalls))
+	}
+}
+
+func TestLoopRunner_ProposalToolThenRoleFinal(t *testing.T) {
+	backend := &scriptBackend{
+		parse: func(text string) Action {
+			if strings.Contains(text, `"type":"tool_request"`) {
+				return Action{Tool: "write_file_proposal", Input: map[string]any{"path": "feature.txt", "content": "proposal"}}
+			}
+			return Action{Final: true, Content: text}
+		},
+		turns: []Turn{
+			{Text: `{"type":"tool_request","tool":"write_file_proposal","input":{"path":"feature.txt","content":"proposal"}}`},
+			{Text: `{"schema_version":1,"summary":"proposed","changed_artifacts":[{"kind":"file","uri":"feature.txt"}],"handoff":{"objective":"test","reason":"proposal recorded"}}`},
+		},
+	}
+	// The existing scripted backend is intentionally simple; this focused run
+	// proves the loop accepts a proposal action then a strict role final within
+	// the narrowed two-turn budget.
+	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 2})
+	res, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T-proposal"}, AgentRuntime{AgentID: "forge", MaxIterations: 2})
+	if err != nil || !strings.Contains(res.Summary, `"schema_version":1`) || len(backend.toolCalls) != 1 {
+		t.Fatalf("result=%+v toolCalls=%v err=%v", res, backend.toolCalls, err)
+	}
+	if len(backend.messages) < 2 || !strings.Contains(backend.messages[1][len(backend.messages[1])-1].Content, `Tool "write_file_proposal" result`) {
+		t.Fatalf("proposal result was not returned before final: %#v", backend.messages)
 	}
 }
 

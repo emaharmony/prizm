@@ -356,7 +356,7 @@ func openLiveReferenceRuntime(runDir, configPath string, manifest referenceWorkf
 		Backend: backend,
 		Scope:   subagent.DefaultToolScope(),
 		SystemPrompt: func(_ v2.TaskPacket, runtime subagent.AgentRuntime) string {
-			charter := fmt.Sprintf("You are the distinct %q authority in a bounded multi-agent software workflow. Follow the role contract in the task and return exactly one final JSON object.", runtime.AgentID)
+			charter := fmt.Sprintf("You are the distinct %q authority in a bounded multi-agent software workflow. Follow the role contract in the task. When it requires a tool, emit one tool_request JSON, wait for its result, then return exactly one final role JSON object.", runtime.AgentID)
 			return charter + agent.BuildToolPromptSuffix(toolInfos, manifest.WorkspacePath, manifest.WorkspacePath)
 		},
 	})

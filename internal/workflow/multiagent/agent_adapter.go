@@ -159,13 +159,16 @@ func (r *AgentRoleRunner) RunRole(
 		if !ok {
 			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "developer exhausted local iteration budget without persisting a mutation proposal"}
 		}
+		if remainingIterations != Unlimited && remainingIterations < 2 {
+			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "developer lacks the two remaining iterations required for proposal tool result and final role JSON"}
+		}
 		remainingTokens, ok := remainingLimit(request.RoleConfig.TokenBudget, execution.Usage.TotalTokens)
 		if !ok {
 			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "developer exhausted token budget without persisting a mutation proposal"}
 		}
 		executionRequest.MaxIterations = remainingIterations
 		executionRequest.MaxTokens = remainingTokens
-		executionRequest.Prompt += fmt.Sprintf("\n\nCORRECTION: Your previous response did not persist a mutation proposal. Previous output follows:\n%s\n\nYou must call write_file_proposal or create_directory_proposal now, then return the required developer JSON. This is your only corrective turn.", execution.Output)
+		executionRequest.Prompt += fmt.Sprintf("\n\nCORRECTION: Your previous response did not persist a mutation proposal. Previous output follows:\n%s\n\nYour NEXT response must be ONLY one JSON tool_request for write_file_proposal or create_directory_proposal. Do not include the developer role JSON in that response. After the tool result, return ONLY the required developer role JSON. This is your only corrective turn.", execution.Output)
 		correctiveRetries = 1
 		corrected, correctErr := r.executor.ExecuteAgent(executionContext, executionRequest)
 		if correctErr != nil {
@@ -322,7 +325,7 @@ func BuildRolePrompt(request RoleRunRequest) (string, error) {
 		return "", err
 	}
 
-	return fmt.Sprintf(
+	prompt := fmt.Sprintf(
 		"ROLE: %s\nTASK ID: %s\nTASK: %s\nVISIT: %d\nTRANSITIONS USED: %d\n"+
 			"INCOMING HANDOFF JSON: %s\nLATEST REFLECTION JSON: %s\n\n%s\n"+
 			"Return exactly one JSON object. Do not wrap it in Markdown and do not add prose.",
@@ -334,7 +337,11 @@ func BuildRolePrompt(request RoleRunRequest) (string, error) {
 		handoffJSON,
 		reflectionJSON,
 		schema,
-	), nil
+	)
+	if request.Run.CurrentRole == RoleDeveloper {
+		prompt += "\n\nDEVELOPER TOOL PROTOCOL: Before returning the developer role-schema JSON, emit exactly one separate JSON tool_request for write_file_proposal or create_directory_proposal. Do not combine the tool request with the role-schema JSON. After Prizm returns the tool result, return only the developer role-schema JSON."
+	}
+	return prompt, nil
 }
 
 func BuildReflectionPrompt(request ReflectionRequest) (string, error) {

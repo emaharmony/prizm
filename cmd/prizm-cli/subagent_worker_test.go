@@ -93,3 +93,11 @@ func TestParseSubAgentActionAcceptsStrictRoleJSON(t *testing.T) {
 		t.Fatalf("tool action = %#v", toolAction)
 	}
 }
+
+func TestParseSubAgentActionPrioritizesToolRequestOverFinal(t *testing.T) {
+	input := `{"type":"final","content":"premature"}\n{"type":"tool_request","tool":"write_file_proposal","input":{"path":"feature.txt","content":"approved"}}`
+	action := parseSubAgentAction(input)
+	if action.Final || action.Tool != "write_file_proposal" || action.Input["path"] != "feature.txt" {
+		t.Fatalf("action = %#v", action)
+	}
+}

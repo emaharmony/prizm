@@ -182,11 +182,11 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 }
 
 func parseSubAgentAction(text string) subagent.Action {
-	if content, ok := v2.ParseFinalText(text); ok {
-		return subagent.Action{Final: true, Content: content}
-	}
 	if toolName, input, ok := v2.ParseToolRequestText(text); ok {
 		return subagent.Action{Tool: toolName, Input: input}
+	}
+	if content, ok := v2.ParseFinalText(text); ok {
+		return subagent.Action{Final: true, Content: content}
 	}
 	// Multi-agent role prompts require the role schema itself as the final
 	// JSON object. Accept that strict object directly after ruling out the
