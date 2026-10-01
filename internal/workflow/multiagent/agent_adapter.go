@@ -209,6 +209,14 @@ func (r *AgentRoleRunner) RunRole(
 	// run after the durable approval/application transition, never against the
 	// pre-change worktree.
 	deferValidation := request.Run.CurrentRole == RoleDeveloper && len(proposals) > 0 && len(request.RoleConfig.ValidationProfiles) > 0
+	if deferValidation {
+		if r.validation == nil {
+			return RoleRunResult{}, &GovernanceError{Kind: "validation", Reason: "mutation-bearing developer requires workspace-aware post-apply validation"}
+		}
+		if _, ok := r.validation.(WorkspaceValidationRunner); !ok {
+			return RoleRunResult{}, &GovernanceError{Kind: "validation", Reason: "mutation-bearing developer requires a workspace-aware validation runner"}
+		}
+	}
 	if !deferValidation {
 		validationResults, status, validationErr := r.runValidations(ctx, request)
 		if validationErr != nil {

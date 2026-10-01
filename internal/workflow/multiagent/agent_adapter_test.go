@@ -29,6 +29,16 @@ func (f agentExecutorFunc) ExecuteAgent(
 	return f(ctx, request)
 }
 
+type workspaceValidationRunnerFunc func(context.Context, string, string, Workspace) (*validation.Result, error)
+
+func (f workspaceValidationRunnerFunc) RunValidation(context.Context, string, string) (*validation.Result, error) {
+	return nil, errors.New("workspace validation was not invoked in its workspace")
+}
+
+func (f workspaceValidationRunnerFunc) RunValidationInWorkspace(ctx context.Context, profile, runID string, workspace Workspace) (*validation.Result, error) {
+	return f(ctx, profile, runID, workspace)
+}
+
 func TestAgentRoleRunnerBuildsGovernedExecutionRequest(t *testing.T) {
 	var captured AgentExecutionRequest
 	runner := newAdapterForTest(t, agentExecutorFunc(func(
@@ -410,7 +420,7 @@ func TestAgentRoleRunnerDefersDeveloperValidationUntilProposalApplied(t *testing
 	validationCalls := 0
 	runner := newAdapterForTest(t, agentExecutorFunc(func(context.Context, AgentExecutionRequest) (AgentExecutionResult, error) {
 		return AgentExecutionResult{Output: `{"schema_version":1,"summary":"done","changed_artifacts":[{"kind":"file","uri":"feature.txt"}],"handoff":{"objective":"test","reason":"implemented"}}`, LocalIterations: 1}, nil
-	}), ValidationRunnerFunc(func(context.Context, string, string) (*validation.Result, error) {
+	}), workspaceValidationRunnerFunc(func(context.Context, string, string, Workspace) (*validation.Result, error) {
 		validationCalls++
 		return &validation.Result{Profile: "go_test_all", Status: "passed"}, nil
 	}), nil)
@@ -426,6 +436,24 @@ func TestAgentRoleRunnerDefersDeveloperValidationUntilProposalApplied(t *testing
 	result, err = runner.ValidateApprovedRole(context.Background(), request, result)
 	if err != nil || validationCalls != 1 || result.Metadata.ValidationStatus != "passed" || len(result.OutgoingHandoff.ValidationResults) != 1 {
 		t.Fatalf("post-apply result=%#v calls=%d err=%v", result, validationCalls, err)
+	}
+}
+
+func TestAgentRoleRunnerRejectsNonWorkspacePostApplyValidator(t *testing.T) {
+	runner := newAdapterForTest(t, agentExecutorFunc(func(context.Context, AgentExecutionRequest) (AgentExecutionResult, error) {
+		return AgentExecutionResult{Output: `{"schema_version":1,"summary":"done","changed_artifacts":[{"kind":"file","uri":"feature.txt"}],"handoff":{"objective":"test","reason":"implemented"}}`, LocalIterations: 1}, nil
+	}), ValidationRunnerFunc(func(context.Context, string, string) (*validation.Result, error) {
+		return &validation.Result{Profile: "go_test_all", Status: "passed"}, nil
+	}), nil)
+	runner.proposals = ProposalResolverFunc(func(context.Context, ProposalQuery) ([]ProposalReference, error) {
+		return []ProposalReference{{ProposalID: "proposal-1", ApprovalID: "approval-1", Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "feature.txt"}}}}, nil
+	})
+	request := adapterRoleRequest(RoleDeveloper)
+	request.RoleConfig.ValidationProfiles = []string{"go_test_all"}
+	_, err := runner.RunRole(context.Background(), request)
+	var governance *GovernanceError
+	if !errors.As(err, &governance) || governance.Kind != "validation" {
+		t.Fatalf("err=%v", err)
 	}
 }
 

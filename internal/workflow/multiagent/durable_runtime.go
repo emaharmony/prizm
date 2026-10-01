@@ -912,7 +912,14 @@ func (r *DurableRuntime) advanceApprovedTask(ctx context.Context, record Durable
 
 	task := record.ApprovedTask
 	roleConfig, _ := r.supervisor.graph.RoleConfig(task.Role)
-	if validator, ok := r.supervisor.runner.(ApprovedRoleValidator); ok {
+	validator, ok := r.supervisor.runner.(ApprovedRoleValidator)
+	if !ok {
+		return r.persistRoleFailure(ctx, record, task.Role, &GovernanceError{
+			Kind:   "validation",
+			Reason: "mutation-bearing proposal requires post-apply validation support",
+		})
+	}
+	{
 		validated, validationErr := validator.ValidateApprovedRole(ctx, RoleRunRequest{
 			Run:        r.supervisor.runView(record.State),
 			RoleConfig: cloneRoleConfig(roleConfig),

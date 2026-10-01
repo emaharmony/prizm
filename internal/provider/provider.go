@@ -22,6 +22,21 @@ type Provider interface {
 	Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error)
 }
 
+// RunScope confines a provider invocation to a durable run workspace. It is
+// used only by providers that can launch their own local tools.
+type RunScope struct {
+	Workspace string
+	ReadOnly  bool
+}
+
+// RunScopedProvider is an optional provider boundary for backends that can
+// execute native tools. Callers use it to prevent a delegated run from falling
+// back to a process-global workspace or a mutation-capable native sandbox.
+type RunScopedProvider interface {
+	Provider
+	GenerateInRunScope(context.Context, GenerateRequest, RunScope) (GenerateResponse, error)
+}
+
 // ErrQuotaExhausted indicates a provider/model has hit an account-level
 // usage quota (e.g. "weekly usage limit reached"), as opposed to a
 // transient rate limit. Implementations should wrap their returned error

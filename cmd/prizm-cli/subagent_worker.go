@@ -132,10 +132,21 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 			sb.WriteString(m.Content)
 			sb.WriteString("\n\n")
 		}
-		resp, gerr := prov.Generate(ctx, provider.GenerateRequest{
+		request := provider.GenerateRequest{
 			Agent: rt.AgentID, Model: rt.Model, Prompt: sb.String(),
 			Temperature: 0.7, MaxTokens: 4096,
-		})
+		}
+		var resp provider.GenerateResponse
+		var gerr error
+		if rt.Provider == "codex" {
+			scoped, ok := prov.(provider.RunScopedProvider)
+			if !ok {
+				return subagent.Turn{}, fmt.Errorf("codex provider cannot guarantee an isolated read-only run scope")
+			}
+			resp, gerr = scoped.GenerateInRunScope(ctx, request, provider.RunScope{Workspace: rt.WorkDir, ReadOnly: true})
+		} else {
+			resp, gerr = prov.Generate(ctx, request)
+		}
 		if gerr != nil {
 			return subagent.Turn{}, gerr
 		}

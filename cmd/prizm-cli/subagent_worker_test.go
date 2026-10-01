@@ -9,8 +9,30 @@ import (
 	"testing"
 
 	"github.com/emaharmony/prizm/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/subagent"
 	"github.com/emaharmony/prizm/internal/tool"
+	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 )
+
+type scopedProbeProvider struct {
+	scope provider.RunScope
+}
+
+type unscopedProbeProvider struct{}
+
+func (unscopedProbeProvider) Generate(context.Context, provider.GenerateRequest) (provider.GenerateResponse, error) {
+	return provider.GenerateResponse{}, nil
+}
+
+func (p *scopedProbeProvider) Generate(context.Context, provider.GenerateRequest) (provider.GenerateResponse, error) {
+	return provider.GenerateResponse{}, fmt.Errorf("unscoped generation must not be used")
+}
+
+func (p *scopedProbeProvider) GenerateInRunScope(_ context.Context, _ provider.GenerateRequest, scope provider.RunScope) (provider.GenerateResponse, error) {
+	p.scope = scope
+	return provider.GenerateResponse{Text: `{"type":"final","content":"done"}`}, nil
+}
 
 func TestSubAgentResolver_MapsAgents(t *testing.T) {
 	cfg := &orchestrator.Config{
@@ -79,6 +101,39 @@ func TestSubAgentBackend_ExecutorRootedAtWorktree(t *testing.T) {
 	// Empty workDir → shared executor (no isolation).
 	if b.executorFor("") != sharedExec {
 		t.Error("empty workDir should return the shared executor")
+	}
+}
+
+func TestSubAgentBackendCodexUsesReadOnlyRunScope(t *testing.T) {
+	workDir := t.TempDir()
+	probe := &scopedProbeProvider{}
+	registry := provider.NewProviderRegistry()
+	registry.Register("codex", probe, provider.ModelInfo{ProviderName: "codex"})
+	backend := &subAgentBackend{providers: registry}
+	llm, _, _, err := backend.Bind(subagent.AgentRuntime{AgentID: "developer", Provider: "codex", Model: "codex", WorkDir: workDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = llm(context.Background(), []v2.Message{{Content: "bounded task"}}); err != nil {
+		t.Fatal(err)
+	}
+	if probe.scope.Workspace != workDir || !probe.scope.ReadOnly {
+		t.Fatalf("codex scope=%#v", probe.scope)
+	}
+}
+
+func TestSubAgentBackendRejectsUnscopedCodexProvider(t *testing.T) {
+	registry := provider.NewProviderRegistry()
+	registry.Register("codex", &scopedProbeProvider{}, provider.ModelInfo{ProviderName: "codex"})
+	// Register a provider that satisfies only the base interface.
+	registry.Register("unscoped", unscopedProbeProvider{}, provider.ModelInfo{ProviderName: "codex"})
+	backend := &subAgentBackend{providers: registry}
+	llm, _, _, err := backend.Bind(subagent.AgentRuntime{AgentID: "developer", Provider: "codex", Model: "unscoped", WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = llm(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "cannot guarantee") {
+		t.Fatalf("unscoped codex err=%v", err)
 	}
 }
 

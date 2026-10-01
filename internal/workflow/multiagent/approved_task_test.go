@@ -49,6 +49,12 @@ type postApplyValidationRunner struct {
 	validationErr    error
 }
 
+type roleRunnerWithoutPostValidation struct{ inner *scriptedRunner }
+
+func (r roleRunnerWithoutPostValidation) RunRole(ctx context.Context, request RoleRunRequest) (RoleRunResult, error) {
+	return r.inner.RunRole(ctx, request)
+}
+
 func (r *postApplyValidationRunner) ValidateApprovedRole(_ context.Context, request RoleRunRequest, result RoleRunResult) (RoleRunResult, error) {
 	r.validationCalls++
 	if request.Run.CurrentRole != RoleDeveloper {
@@ -234,6 +240,25 @@ func TestDurableApprovedTaskPostApplyValidationFailureStopsContinuation(t *testi
 	}
 	if got := runnerCalls(base); !reflect.DeepEqual(got, []Role{RolePlanner, RoleDeveloper}) {
 		t.Fatalf("post-apply validation continued roles: %v", got)
+	}
+}
+
+func TestDurableApprovedTaskRejectsMissingPostApplyValidator(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	base := approvedTaskRunner()
+	lifecycle := &fakeProposalLifecycle{decisions: map[string]ProposalDecision{"approval-1": ProposalPending}}
+	runtime := newDurableRuntimeForTest(t, validDefinition(), roleRunnerWithoutPostValidation{inner: base}, env.store, env.claimer, env.events,
+		DurableRuntimeOptions{Proposals: lifecycle})
+	request := testRunRequest()
+	request.RunID = "run-missing-post-apply-validator"
+	_, _ = runtime.Run(context.Background(), request)
+	lifecycle.decisions["approval-1"] = ProposalGranted
+	state, err := runtime.Resume(context.Background(), request.RunID)
+	if err == nil || state.Status != RunStatusFailed || len(lifecycle.applyCalls) != 1 {
+		t.Fatalf("state=%q apply=%d err=%v", state.Status, len(lifecycle.applyCalls), err)
+	}
+	if got := runnerCalls(base); !reflect.DeepEqual(got, []Role{RolePlanner, RoleDeveloper}) {
+		t.Fatalf("missing validator continued roles: %v", got)
 	}
 }
 

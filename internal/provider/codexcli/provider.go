@@ -108,6 +108,29 @@ func (p *Provider) Name() string { return "codex" }
 // transcript arrives flattened in req.Prompt (the text-provider path), which is
 // what Codex reads from stdin.
 func (p *Provider) Generate(ctx context.Context, req provider.GenerateRequest) (provider.GenerateResponse, error) {
+	return p.generate(ctx, req, p.cfg.Workspace, p.cfg.Sandbox)
+}
+
+// GenerateInRunScope executes Codex against the isolated run workspace. The
+// delegated workflow never grants Codex native mutation authority: Prizm's
+// approval-governed tool executor owns every mutation.
+func (p *Provider) GenerateInRunScope(ctx context.Context, req provider.GenerateRequest, scope provider.RunScope) (provider.GenerateResponse, error) {
+	workspace := strings.TrimSpace(scope.Workspace)
+	if workspace == "" || !scope.ReadOnly {
+		return provider.GenerateResponse{}, errors.New("codex: delegated run requires an explicit read-only workspace scope")
+	}
+	info, err := os.Stat(workspace)
+	if err != nil || !info.IsDir() {
+		return provider.GenerateResponse{}, fmt.Errorf("codex: scoped workspace is unavailable: %s", workspace)
+	}
+	absolute, err := filepath.Abs(workspace)
+	if err != nil {
+		return provider.GenerateResponse{}, fmt.Errorf("codex: resolve scoped workspace: %w", err)
+	}
+	return p.generate(ctx, req, absolute, "read-only")
+}
+
+func (p *Provider) generate(ctx context.Context, req provider.GenerateRequest, workspace, sandbox string) (provider.GenerateResponse, error) {
 	cctx, cancel := context.WithTimeout(ctx, time.Duration(p.cfg.TimeoutMinutes)*time.Minute)
 	defer cancel()
 
@@ -127,8 +150,8 @@ func (p *Provider) Generate(ctx context.Context, req provider.GenerateRequest) (
 	buildArgs := func(model string) []string {
 		args := []string{
 			"exec",
-			"--cd", p.cfg.Workspace,
-			"--sandbox", p.cfg.Sandbox,
+			"--cd", workspace,
+			"--sandbox", sandbox,
 			"--skip-git-repo-check",
 			"--output-last-message", lastPath,
 			"--color", "never",
@@ -147,14 +170,14 @@ func (p *Provider) Generate(ctx context.Context, req provider.GenerateRequest) (
 
 	start := time.Now()
 	modelArg := p.cfg.Model
-	res, runErr := p.runner.Run(cctx, p.cfg.Executable, buildArgs(modelArg), req.Prompt, p.cfg.Workspace)
+	res, runErr := p.runner.Run(cctx, p.cfg.Executable, buildArgs(modelArg), req.Prompt, workspace)
 	// An empty model lets Codex use its own default. Older installed CLIs can
 	// reject a newer account default before producing any output. Retry once with
 	// a model known to work on those CLIs; explicit model settings still fail
 	// loudly so a deliberate choice is never silently changed.
 	if runErr != nil && strings.TrimSpace(modelArg) == "" && unsupportedDefaultModel(res.Stderr) {
 		modelArg = CompatibleFallbackModel
-		res, runErr = p.runner.Run(cctx, p.cfg.Executable, buildArgs(modelArg), req.Prompt, p.cfg.Workspace)
+		res, runErr = p.runner.Run(cctx, p.cfg.Executable, buildArgs(modelArg), req.Prompt, workspace)
 	}
 	latency := time.Since(start).Milliseconds()
 
@@ -177,7 +200,7 @@ func (p *Provider) Generate(ctx context.Context, req provider.GenerateRequest) (
 		LatencyMS: latency,
 		Raw: map[string]any{
 			"exit_code": res.ExitCode,
-			"sandbox":   p.cfg.Sandbox,
+			"sandbox":   sandbox,
 		},
 	}, nil
 }
