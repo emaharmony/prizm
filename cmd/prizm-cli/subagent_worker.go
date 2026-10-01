@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/emaharmony/prizm/internal/agent"
 	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/safety"
 	"github.com/emaharmony/prizm/internal/subagent"
 	"github.com/emaharmony/prizm/internal/tool"
 	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
@@ -72,6 +74,7 @@ type subAgentBackend struct {
 	toolReg         *tool.Registry // shared registry, source for non-root tools
 	protectedBranch string         // branch git_commit/git_push in worktree executors must refuse to write to
 	approvalStore   tool.ApprovalStorer
+	worktreeRoot    string // canonical <repo>/.prizm/worktrees root for native-tool providers
 }
 
 // subAgentWorktreeMaxFileSize matches serve's builtin file-size cap.
@@ -138,12 +141,14 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 		}
 		var resp provider.GenerateResponse
 		var gerr error
-		if rt.Provider == "codex" {
-			scoped, ok := prov.(provider.RunScopedProvider)
-			if !ok {
-				return subagent.Turn{}, fmt.Errorf("codex provider cannot guarantee an isolated read-only run scope")
+		if scoped, ok := prov.(provider.RunScopedProvider); ok {
+			workspace, scopeErr := b.validateScopedWorkspace(rt.WorkDir)
+			if scopeErr != nil {
+				return subagent.Turn{}, scopeErr
 			}
-			resp, gerr = scoped.GenerateInRunScope(ctx, request, provider.RunScope{Workspace: rt.WorkDir, ReadOnly: true})
+			resp, gerr = scoped.GenerateInRunScope(ctx, request, provider.RunScope{Workspace: workspace, ReadOnly: true})
+		} else if native, ok := prov.(provider.NativeToolProvider); ok && native.UsesNativeTools() {
+			return subagent.Turn{}, fmt.Errorf("native-tool provider cannot guarantee an isolated read-only run scope")
 		} else {
 			resp, gerr = prov.Generate(ctx, request)
 		}
@@ -190,6 +195,28 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 	}
 
 	return llm, parse, execFn, nil
+}
+
+func (b *subAgentBackend) validateScopedWorkspace(workDir string) (string, error) {
+	if strings.TrimSpace(workDir) == "" || strings.TrimSpace(b.worktreeRoot) == "" {
+		return "", fmt.Errorf("scoped provider requires an owned run worktree")
+	}
+	workspace, err := filepath.Abs(workDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve scoped provider workspace: %w", err)
+	}
+	root, err := filepath.Abs(b.worktreeRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve owned worktree root: %w", err)
+	}
+	if !safety.IsWithinRoot(workspace, root) || filepath.Clean(workspace) == filepath.Clean(root) {
+		return "", fmt.Errorf("scoped provider workspace is outside the owned run worktree root")
+	}
+	info, err := os.Stat(workspace)
+	if err != nil || !info.IsDir() {
+		return "", fmt.Errorf("scoped provider workspace is unavailable")
+	}
+	return workspace, nil
 }
 
 func parseSubAgentAction(text string) subagent.Action {
@@ -241,7 +268,12 @@ func startSubAgentWorker(nc *nats.Conn, providers *provider.ProviderRegistry, ex
 	}
 
 	resolver := newSubAgentResolver(cfg)
-	backend := &subAgentBackend{providers: providers, exec: exec, toolReg: toolReg, protectedBranch: cfg.ProtectedBranch()}
+	root := subAgentRepoRoot(cfg)
+	worktreeRoot := ""
+	if root != "" {
+		worktreeRoot = filepath.Join(root, ".prizm", "worktrees")
+	}
+	backend := &subAgentBackend{providers: providers, exec: exec, toolReg: toolReg, protectedBranch: cfg.ProtectedBranch(), worktreeRoot: worktreeRoot}
 	runner := subagent.NewLoopRunner(subagent.LoopRunnerConfig{
 		Backend: backend,
 		// Per-agent tool scoping: keep each sub-agent in its role lane (only
@@ -261,7 +293,7 @@ func startSubAgentWorker(nc *nats.Conn, providers *provider.ProviderRegistry, ex
 	worker := subagent.NewWorker(resolver, runner, 0)
 	// Per-task worktree isolation for code-capable agents, rooted at the default
 	// project repo (falls back to the workspace). Non-mutating agents skip it.
-	if root := subAgentRepoRoot(cfg); root != "" {
+	if root != "" {
 		worker.SetWorktrees(subagent.GitWorktreeProvider{Root: root})
 	}
 	pub := &subAgentPublisher{nc: nc, subject: subAgentCompletionSubject}

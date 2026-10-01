@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/emaharmony/prizm/internal/crossprizm"
 )
 
 type fakeRunner struct {
@@ -142,8 +144,39 @@ func TestRunTaskBuildsExecCommandAndCapturesLastMessage(t *testing.T) {
 	if !strings.Contains(execCall.stdin, "do work") {
 		t.Fatalf("stdin missing task: %q", execCall.stdin)
 	}
+	if !containsArgPair(execCall.args, "--sandbox", "read-only") || containsArgPair(execCall.args, "--sandbox", "workspace-write") {
+		t.Fatalf("delegated worker was not forced read-only: %v", execCall.args)
+	}
+	if containsArgPair(execCall.args, "--ask-for-approval", "on-request") {
+		t.Fatalf("delegated worker passed native approval flags: %v", execCall.args)
+	}
+	if !strings.Contains(execCall.stdin, "read-only delegated task") {
+		t.Fatalf("prompt lacks no-mutation instruction: %q", execCall.stdin)
+	}
 	if _, err := os.Stat(filepath.Join(dataDir, "task-1", "prompt.md")); err != nil {
 		t.Fatalf("prompt artifact missing: %v", err)
+	}
+}
+
+func TestHandleCrossPrizmTaskForcesReadOnlyExecution(t *testing.T) {
+	workspace := t.TempDir()
+	fake := &fakeRunner{run: func(_ context.Context, _ string, args []string, _ string, _ string) (RunResult, error) {
+		if len(args) >= 2 && args[0] == "login" && args[1] == "status" {
+			return RunResult{ExitCode: 0}, nil
+		}
+		return RunResult{ExitCode: 0, Stdout: "research report"}, nil
+	}}
+	worker, err := NewWithRunner(Config{Enabled: true, Executable: "codex", Workspace: workspace, DataDir: t.TempDir(), Sandbox: "danger-full-access", ApprovalPolicy: "on-request", TimeoutMinutes: 1, MaxConcurrency: 1}, fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := worker.HandleCrossPrizmTask(context.Background(), crossprizm.Message{MessageType: crossprizm.TypeTaskRequest, CorrelationID: "cross-test", Request: map[string]any{"text": "research only"}})
+	if err != nil || response == nil || response.MessageType != crossprizm.TypeTaskResult {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	execCall := fake.calls[len(fake.calls)-1]
+	if !containsArgPair(execCall.args, "--sandbox", "read-only") || !strings.Contains(execCall.stdin, "read-only delegated task") {
+		t.Fatalf("cross-prizm execution was not read-only: args=%v prompt=%q", execCall.args, execCall.stdin)
 	}
 }
 

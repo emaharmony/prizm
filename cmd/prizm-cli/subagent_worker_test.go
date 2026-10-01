@@ -25,6 +25,8 @@ func (unscopedProbeProvider) Generate(context.Context, provider.GenerateRequest)
 	return provider.GenerateResponse{}, nil
 }
 
+func (unscopedProbeProvider) UsesNativeTools() bool { return true }
+
 func (p *scopedProbeProvider) Generate(context.Context, provider.GenerateRequest) (provider.GenerateResponse, error) {
 	return provider.GenerateResponse{}, fmt.Errorf("unscoped generation must not be used")
 }
@@ -105,11 +107,16 @@ func TestSubAgentBackend_ExecutorRootedAtWorktree(t *testing.T) {
 }
 
 func TestSubAgentBackendCodexUsesReadOnlyRunScope(t *testing.T) {
-	workDir := t.TempDir()
+	repo := t.TempDir()
+	worktreeRoot := filepath.Join(repo, ".prizm", "worktrees")
+	workDir := filepath.Join(worktreeRoot, "run-1")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	probe := &scopedProbeProvider{}
 	registry := provider.NewProviderRegistry()
 	registry.Register("codex", probe, provider.ModelInfo{ProviderName: "codex"})
-	backend := &subAgentBackend{providers: registry}
+	backend := &subAgentBackend{providers: registry, worktreeRoot: worktreeRoot}
 	llm, _, _, err := backend.Bind(subagent.AgentRuntime{AgentID: "developer", Provider: "codex", Model: "codex", WorkDir: workDir})
 	if err != nil {
 		t.Fatal(err)
@@ -127,13 +134,32 @@ func TestSubAgentBackendRejectsUnscopedCodexProvider(t *testing.T) {
 	registry.Register("codex", &scopedProbeProvider{}, provider.ModelInfo{ProviderName: "codex"})
 	// Register a provider that satisfies only the base interface.
 	registry.Register("unscoped", unscopedProbeProvider{}, provider.ModelInfo{ProviderName: "codex"})
-	backend := &subAgentBackend{providers: registry}
-	llm, _, _, err := backend.Bind(subagent.AgentRuntime{AgentID: "developer", Provider: "codex", Model: "unscoped", WorkDir: t.TempDir()})
+	repo := t.TempDir()
+	worktreeRoot := filepath.Join(repo, ".prizm", "worktrees")
+	workDir := filepath.Join(worktreeRoot, "run-1")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	backend := &subAgentBackend{providers: registry, worktreeRoot: worktreeRoot}
+	llm, _, _, err := backend.Bind(subagent.AgentRuntime{AgentID: "developer", Provider: "alias", Model: "unscoped", WorkDir: workDir})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = llm(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "cannot guarantee") {
 		t.Fatalf("unscoped codex err=%v", err)
+	}
+}
+
+func TestSubAgentBackendRejectsScopedProviderOutsideOwnedWorktree(t *testing.T) {
+	registry := provider.NewProviderRegistry()
+	registry.Register("scoped", &scopedProbeProvider{}, provider.ModelInfo{ProviderName: "alias"})
+	backend := &subAgentBackend{providers: registry, worktreeRoot: filepath.Join(t.TempDir(), ".prizm", "worktrees")}
+	llm, _, _, err := backend.Bind(subagent.AgentRuntime{AgentID: "developer", Provider: "alias", Model: "scoped", WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = llm(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "outside") {
+		t.Fatalf("outside worktree err=%v", err)
 	}
 }
 

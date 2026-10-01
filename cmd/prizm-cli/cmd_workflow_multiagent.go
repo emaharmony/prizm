@@ -350,6 +350,7 @@ func openLiveReferenceRuntime(runDir, configPath string, manifest referenceWorkf
 	backend := &subAgentBackend{
 		providers: providerRegistry, exec: toolExecutor, toolReg: toolRegistry,
 		protectedBranch: cfg.ProtectedBranch(), approvalStore: approvalStore,
+		worktreeRoot: filepath.Join(manifest.SourceWorkspacePath, ".prizm", "worktrees"),
 	}
 	toolInfos := toolRegistry.ListWithDescriptions()
 	loop := subagent.NewLoopRunner(subagent.LoopRunnerConfig{

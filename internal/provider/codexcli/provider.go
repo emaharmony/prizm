@@ -104,6 +104,9 @@ func Normalize(cfg Config) Config {
 // Name identifies this provider (implements provider.NamedProvider).
 func (p *Provider) Name() string { return "codex" }
 
+// UsesNativeTools reports that Codex can invoke tools inside its own sandbox.
+func (p *Provider) UsesNativeTools() bool { return true }
+
 // Generate runs `codex exec` and returns the model's final message. The full
 // transcript arrives flattened in req.Prompt (the text-provider path), which is
 // what Codex reads from stdin.

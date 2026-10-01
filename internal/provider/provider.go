@@ -37,6 +37,14 @@ type RunScopedProvider interface {
 	GenerateInRunScope(context.Context, GenerateRequest, RunScope) (GenerateResponse, error)
 }
 
+// NativeToolProvider identifies a backend that can execute tools outside
+// Prizm's governed tool executor. Such a backend must be run-scoped whenever
+// it participates in delegated execution.
+type NativeToolProvider interface {
+	Provider
+	UsesNativeTools() bool
+}
+
 // ErrQuotaExhausted indicates a provider/model has hit an account-level
 // usage quota (e.g. "weekly usage limit reached"), as opposed to a
 // transient rate limit. Implementations should wrap their returned error
