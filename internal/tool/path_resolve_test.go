@@ -137,7 +137,7 @@ func TestFuzzyResolvePath_HomePathCorrection(t *testing.T) {
 		t.Skip("skipping /home→/Users correction test on non-macOS")
 	}
 
-	// /home/ema/projects/repos/bassbook → fuzzy match "bassbook" in allowed paths
+	// /home/example/projects/repos/myproject → fuzzy match "bassbook" in allowed paths
 	tmpDir := t.TempDir()
 	nestedDir := filepath.Join(tmpDir, "projects", "repos", "bassbook")
 	if err := os.MkdirAll(nestedDir, 0755); err != nil {
@@ -149,11 +149,11 @@ func TestFuzzyResolvePath_HomePathCorrection(t *testing.T) {
 		AllowedPaths:  []string{tmpDir},
 	}
 
-	// On macOS, /home/ema is corrected to /Users/ema, but that won't exist
+	// On macOS, /home/example is corrected to /Users/example, but that won't exist
 	// in our test dirs. The fuzzy matcher should still find "bassbook".
-	resolved, err := FuzzyResolvePath(tp, "/home/ema/projects/repos/bassbook")
+	resolved, err := FuzzyResolvePath(tp, "/home/example/projects/repos/myproject")
 	if err != nil {
-		// The /home→/Users correction runs, but /Users/ema may not contain our dirs.
+		// The /home→/Users correction runs, but /Users/example may not contain our dirs.
 		// Fuzzy match should still find "bassbook" in the allowed paths.
 		t.Logf("/home correction + fuzzy match: %v", err)
 	}

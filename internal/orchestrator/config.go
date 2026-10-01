@@ -169,7 +169,7 @@ type PrizmConfig struct {
 	// AllowedPaths is a list of additional directory roots the agent can access
 	// beyond the workspace root. Paths are absolute or relative to CWD.
 	// The workspace root is always implicitly allowed.
-	// Example: ["/Users/ema/projects/repos", "/tmp/prizm-data"]
+	// Example: ["/Users/example/projects/repos", "/tmp/prizm-data"]
 	AllowedPaths []string `yaml:"allowed_paths"`
 
 	// ReadRoots grants recursive read/search/list access beyond the workspace root.

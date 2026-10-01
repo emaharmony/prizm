@@ -17,7 +17,7 @@ import (
 //  3. macOS path correction: /home/user → /Users/user (no-op on Linux)
 //  4. Recursive fuzzy match: search allowed roots for directories matching
 //     the last component, including nested subdirectories (up to depth 4)
-//     e.g., "bassbook" → /Users/ema/projects/repos/bassbook
+//     e.g., "myproject" → /Users/example/projects/repos/myproject
 //
 // This allows agents to say "summarize bassbook" or "read ~/projects/repos/bassbook"
 // and have the tools find the right path even if the model doesn't know the exact

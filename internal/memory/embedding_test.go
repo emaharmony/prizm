@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 )
 
@@ -49,6 +50,7 @@ func TestEmbeddingIndexNew(t *testing.T) {
 
 func TestEmbeddingIndexIndexMemories(t *testing.T) {
 	cfg := DefaultEmbeddingConfig()
+	cfg.IndexPath = filepath.Join(t.TempDir(), "embeddings.json")
 	idx := NewEmbeddingIndex(cfg)
 	idx.httpClient = &mockEmbeddingClient{}
 
@@ -71,6 +73,7 @@ func TestEmbeddingIndexIndexMemories(t *testing.T) {
 
 func TestEmbeddingIndexIncrementalUpdate(t *testing.T) {
 	cfg := DefaultEmbeddingConfig()
+	cfg.IndexPath = filepath.Join(t.TempDir(), "embeddings.json")
 	idx := NewEmbeddingIndex(cfg)
 	idx.httpClient = &mockEmbeddingClient{}
 
@@ -100,6 +103,7 @@ func TestEmbeddingIndexIncrementalUpdate(t *testing.T) {
 
 func TestEmbeddingIndexSearch(t *testing.T) {
 	cfg := DefaultEmbeddingConfig()
+	cfg.IndexPath = filepath.Join(t.TempDir(), "embeddings.json")
 	idx := NewEmbeddingIndex(cfg)
 	idx.dims = 4 // override for test with short vectors
 
@@ -207,6 +211,7 @@ func TestSummaryHash(t *testing.T) {
 
 func TestEmbeddingSearchFallback(t *testing.T) {
 	cfg := DefaultEmbeddingConfig()
+	cfg.IndexPath = filepath.Join(t.TempDir(), "embeddings.json")
 	idx := NewEmbeddingIndex(cfg)
 	// No entries — search should return nil
 	results := idx.Search(context.Background(), "test", 5)

@@ -71,7 +71,7 @@ func (t *GitStatusTool) Description() string {
 func (t *GitStatusTool) Schema() ToolSchema {
 	return ToolSchema{
 		Input: map[string]ParamSpec{
-			"repo_path": {Type: "string", Description: "Absolute path to the git repository. Use absolute paths like /Users/ema/projects/repos/bassbook. If unsure, use project_overview first.", Required: false},
+			"repo_path": {Type: "string", Description: "Absolute path to the git repository. Use absolute paths like /Users/example/projects/repos/myproject. If unsure, use project_overview first.", Required: false},
 		},
 		Output: ParamSpec{Type: "string", Description: "Git status output"},
 	}
@@ -113,7 +113,7 @@ func (t *GitLogTool) Schema() ToolSchema {
 		Input: map[string]ParamSpec{
 			"count":     {Type: "integer", Description: "Number of commits to show (default: 10, max: 50)", Required: false},
 			"branch":    {Type: "string", Description: "Branch name to show log for (default: current branch)", Required: false},
-			"repo_path": {Type: "string", Description: "Absolute path to the git repository. Use absolute paths like /Users/ema/projects/repos/bassbook.", Required: false},
+			"repo_path": {Type: "string", Description: "Absolute path to the git repository. Use absolute paths like /Users/example/projects/repos/myproject.", Required: false},
 		},
 		Output: ParamSpec{Type: "string", Description: "Git log output with commit hashes, authors, dates, and messages"},
 	}
@@ -173,7 +173,7 @@ func (t *GitDiffTool) Schema() ToolSchema {
 			"staged":    {Type: "boolean", Description: "Show staged changes instead of unstaged (default: false)", Required: false},
 			"branch":    {Type: "string", Description: "Compare against a branch (e.g., 'main') instead of working tree", Required: false},
 			"path":      {Type: "string", Description: "Specific file or directory to diff", Required: false},
-			"repo_path": {Type: "string", Description: "Absolute path to the git repository. Use absolute paths like /Users/ema/projects/repos/bassbook.", Required: false},
+			"repo_path": {Type: "string", Description: "Absolute path to the git repository. Use absolute paths like /Users/example/projects/repos/myproject.", Required: false},
 		},
 		Output: ParamSpec{Type: "string", Description: "Git diff output"},
 	}
@@ -238,7 +238,7 @@ func (t *GitBranchListTool) Description() string {
 func (t *GitBranchListTool) Schema() ToolSchema {
 	return ToolSchema{
 		Input: map[string]ParamSpec{
-			"repo_path": {Type: "string", Description: "Absolute path to the git repository. Use absolute paths like /Users/ema/projects/repos/bassbook.", Required: false},
+			"repo_path": {Type: "string", Description: "Absolute path to the git repository. Use absolute paths like /Users/example/projects/repos/myproject.", Required: false},
 		},
 		Output: ParamSpec{Type: "array", Description: "List of branch names with current branch indicator"},
 	}
@@ -362,7 +362,7 @@ func (t *GitAddTool) Schema() ToolSchema {
 	return ToolSchema{
 		Input: map[string]ParamSpec{
 			"path":      {Type: "string", Description: "File or directory to stage (use '.' for all changes)", Required: true},
-			"repo_path": {Type: "string", Description: "Absolute path to the git repository. Use absolute paths like /Users/ema/projects/repos/bassbook.", Required: false},
+			"repo_path": {Type: "string", Description: "Absolute path to the git repository. Use absolute paths like /Users/example/projects/repos/myproject.", Required: false},
 		},
 		Output: ParamSpec{Type: "string", Description: "Staging result"},
 	}
@@ -422,7 +422,7 @@ func (t *GitCommitTool) Schema() ToolSchema {
 	return ToolSchema{
 		Input: map[string]ParamSpec{
 			"message":   {Type: "string", Description: "The commit message", Required: true},
-			"repo_path": {Type: "string", Description: "Absolute path to the git repository. Use absolute paths like /Users/ema/projects/repos/bassbook.", Required: false},
+			"repo_path": {Type: "string", Description: "Absolute path to the git repository. Use absolute paths like /Users/example/projects/repos/myproject.", Required: false},
 		},
 		Output: ParamSpec{Type: "string", Description: "Commit hash and summary"},
 	}
@@ -499,7 +499,7 @@ func (t *GitPushTool) Schema() ToolSchema {
 		Input: map[string]ParamSpec{
 			"remote":    {Type: "string", Description: "Remote name (default: origin)", Required: false},
 			"branch":    {Type: "string", Description: "Branch to push (default: current branch)", Required: false},
-			"repo_path": {Type: "string", Description: "Absolute path to the git repository. Use absolute paths like /Users/ema/projects/repos/bassbook.", Required: false},
+			"repo_path": {Type: "string", Description: "Absolute path to the git repository. Use absolute paths like /Users/example/projects/repos/myproject.", Required: false},
 		},
 		Output: ParamSpec{Type: "string", Description: "Push output or error"},
 	}
