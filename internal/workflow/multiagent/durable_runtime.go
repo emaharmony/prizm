@@ -82,6 +82,9 @@ func NewDurableRuntime(
 	if options.Interaction != nil {
 		options.Interaction.SetEventSink(buffer)
 	}
+	if setter, ok := runner.(interface{ SetEventSink(EventSink) }); ok {
+		setter.SetEventSink(buffer)
+	}
 	return &DurableRuntime{
 		supervisor:  supervisor,
 		buffer:      buffer,

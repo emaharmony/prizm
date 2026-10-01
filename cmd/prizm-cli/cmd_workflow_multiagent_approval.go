@@ -30,7 +30,11 @@ func (r approvalProposalResolver) ResolveProposals(_ context.Context, query mult
 		if item.CorrelationID != query.ExecutionKey || item.RequestedBy != query.AgentID {
 			continue
 		}
-		refs = append(refs, multiagent.ProposalReference{ProposalID: item.ApprovalID, ApprovalID: item.ApprovalID})
+		proposalID := item.ProposalID
+		if proposalID == "" { // schema-v1 approval compatibility
+			proposalID = item.ApprovalID
+		}
+		refs = append(refs, multiagent.ProposalReference{ProposalID: proposalID, ApprovalID: item.ApprovalID})
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].ProposalID < refs[j].ProposalID })
 	return refs, nil
@@ -54,7 +58,11 @@ func (l approvalProposalLifecycle) load(op multiagent.ProposalOperation) (*appro
 	if err != nil {
 		return nil, err
 	}
-	if item.ApprovalID != op.ApprovalID || item.RunID != op.RunID || op.ProposalID != item.ApprovalID {
+	proposalID := item.ProposalID
+	if proposalID == "" { // schema-v1 approval compatibility
+		proposalID = item.ApprovalID
+	}
+	if item.ApprovalID != op.ApprovalID || item.RunID != op.RunID || op.ProposalID != proposalID {
 		return nil, fmt.Errorf("approval identity does not match proposal checkpoint")
 	}
 	return item, nil

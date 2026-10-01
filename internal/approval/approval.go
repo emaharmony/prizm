@@ -55,29 +55,30 @@ const (
 
 // Approval represents a pending, approved, or denied file mutation.
 type Approval struct {
-	ApprovalID    string         `json:"approval_id"`
-	RunID         string         `json:"run_id"`
-	CorrelationID string         `json:"correlation_id"`
-	Status        string         `json:"status"` // pending, approved, denied, expired
-	RequestedBy   string         `json:"requested_by"`
-	Project       string         `json:"project"`
-	MutationType  string         `json:"mutation_type"` // write_file, create_directory, apply_patch, tool_call
-	TargetPath    string         `json:"target_path"`
-	Content       string         `json:"content,omitempty"`
-	Preview       string         `json:"preview,omitempty"`
+	ProposalID    string `json:"proposal_id,omitempty"`
+	ApprovalID    string `json:"approval_id"`
+	RunID         string `json:"run_id"`
+	CorrelationID string `json:"correlation_id"`
+	Status        string `json:"status"` // pending, approved, denied, expired
+	RequestedBy   string `json:"requested_by"`
+	Project       string `json:"project"`
+	MutationType  string `json:"mutation_type"` // write_file, create_directory, apply_patch, tool_call
+	TargetPath    string `json:"target_path"`
+	Content       string `json:"content,omitempty"`
+	Preview       string `json:"preview,omitempty"`
 	// ToolName and Input preserve the original tool call for MutationToolCall
 	// approvals, so mutation.Executor can re-invoke the exact same tool with
 	// the exact same input after a human approves it.
-	ToolName string         `json:"tool_name,omitempty"`
-	Input    map[string]any `json:"input,omitempty"`
-	CreatedAt     time.Time      `json:"created_at"`
-	ExpiresAt     *time.Time     `json:"expires_at,omitempty"`
-	ApprovedBy    string         `json:"approved_by,omitempty"`
-	ApprovedAt    *time.Time     `json:"approved_at,omitempty"`
-	DeniedBy      string         `json:"denied_by,omitempty"`
-	DeniedAt      *time.Time     `json:"denied_at,omitempty"`
-	DenialReason  string         `json:"denial_reason,omitempty"`
-	Policy        PolicyDecision `json:"policy"`
+	ToolName     string         `json:"tool_name,omitempty"`
+	Input        map[string]any `json:"input,omitempty"`
+	CreatedAt    time.Time      `json:"created_at"`
+	ExpiresAt    *time.Time     `json:"expires_at,omitempty"`
+	ApprovedBy   string         `json:"approved_by,omitempty"`
+	ApprovedAt   *time.Time     `json:"approved_at,omitempty"`
+	DeniedBy     string         `json:"denied_by,omitempty"`
+	DeniedAt     *time.Time     `json:"denied_at,omitempty"`
+	DenialReason string         `json:"denial_reason,omitempty"`
+	Policy       PolicyDecision `json:"policy"`
 }
 
 // PolicyDecision captures the policy outcome that led to this approval request.
@@ -91,6 +92,13 @@ type PolicyDecision struct {
 func NewApprovalID() string {
 	id := ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader)
 	return fmt.Sprintf("appr_%s", id.String())
+}
+
+// NewProposalID generates the identity of the proposed mutation. It remains
+// distinct from the authorization decision that may later approve it.
+func NewProposalID() string {
+	id := ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader)
+	return fmt.Sprintf("prop_%s", id.String())
 }
 
 // NewApproval creates a new Approval in pending status.
@@ -110,6 +118,7 @@ func NewApproval(runID, correlationID, requestedBy, project, mutationType, targe
 	}
 
 	return &Approval{
+		ProposalID:    NewProposalID(),
 		ApprovalID:    NewApprovalID(),
 		RunID:         runID,
 		CorrelationID: correlationID,

@@ -39,6 +39,13 @@ func TestNewApproval(t *testing.T) {
 	}
 }
 
+func TestNewApprovalKeepsProposalAndApprovalIdentitiesDistinct(t *testing.T) {
+	a := NewApproval("run", "execution", "developer", "prizm", MutationWriteFile, "feature.txt", "content", PolicyDecision{Decision: DecisionRequiresApproval})
+	if a.ProposalID == "" || a.ApprovalID == "" || a.ProposalID == a.ApprovalID {
+		t.Fatalf("proposal_id=%q approval_id=%q", a.ProposalID, a.ApprovalID)
+	}
+}
+
 func TestNewApprovalLongContentPreview(t *testing.T) {
 	policy := PolicyDecision{Decision: "requires_approval", Reason: "test"}
 	longContent := ""

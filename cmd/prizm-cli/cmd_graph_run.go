@@ -75,6 +75,15 @@ func executeGraphRun(args []string) error {
 	fmt.Printf("Artifacts: %s\n", filepath.Join(*runDir, runID))
 
 	state, runErr := rt.runtime.Run(context.Background(), multiagent.RunRequest{RunID: runID, Task: task})
+	if state.RunID != "" && state.Status.Terminal() {
+		manifest, manifestErr := loadReferenceManifest(*runDir, runID)
+		if manifestErr == nil {
+			manifestErr = finalizeTerminalReferenceRun(context.Background(), *runDir, &manifest, rt, state)
+		}
+		if manifestErr != nil {
+			runErr = errors.Join(runErr, manifestErr)
+		}
+	}
 	fmt.Printf("Status: %s\n", state.Status)
 	fmt.Println()
 	fmt.Println("To manage this run later (these existing commands work against any durable multi-agent run):")
@@ -267,7 +276,15 @@ func (g *graphRunStarter) StartRun(
 		// request/response cycle that started it — the caller observes
 		// progress via the existing SSE stream, matching how
 		// referenceMultiAgentController.Resume already detaches Resume().
-		if _, runErr := rt.runtime.Run(context.Background(), multiagent.RunRequest{RunID: runID, Task: task}); runErr != nil {
+		state, runErr := rt.runtime.Run(context.Background(), multiagent.RunRequest{RunID: runID, Task: task})
+		if state.RunID != "" && state.Status.Terminal() {
+			manifest, manifestErr := loadReferenceManifest(g.runDir, runID)
+			if manifestErr == nil {
+				manifestErr = finalizeTerminalReferenceRun(context.Background(), g.runDir, &manifest, rt, state)
+			}
+			runErr = errors.Join(runErr, manifestErr)
+		}
+		if runErr != nil {
 			log.Printf("[WARN] graph run %s ended: %v", runID, runErr)
 		}
 	}()

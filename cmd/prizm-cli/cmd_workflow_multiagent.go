@@ -19,6 +19,7 @@ import (
 	"github.com/emaharmony/prizm/internal/memory"
 	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/safety"
 	"github.com/emaharmony/prizm/internal/subagent"
 	"github.com/emaharmony/prizm/internal/tool"
 	"github.com/emaharmony/prizm/internal/validation"
@@ -55,6 +56,7 @@ type referenceWorkflowManifest struct {
 	WorkspaceID         string                            `json:"workspace_id"`
 	WorkspacePath       string                            `json:"workspace_path"`
 	SourceWorkspacePath string                            `json:"source_workspace_path,omitempty"`
+	WorkspaceCleaned    bool                              `json:"workspace_cleaned,omitempty"`
 	WorkflowVersion     int64                             `json:"workflow_version,omitempty"`
 	DefinitionDBPath    string                            `json:"definition_db_path,omitempty"`
 }
@@ -118,7 +120,7 @@ func executeReferenceWorkflowRun(inputFile, runDir, configPath string) error {
 		},
 	})
 	if state.RunID != "" && state.Status.Terminal() {
-		if err := writeReferenceReport(context.Background(), runDir, manifest, runtime, state); err != nil {
+		if err := finalizeTerminalReferenceRun(context.Background(), runDir, &manifest, runtime, state); err != nil {
 			return errors.Join(runErr, err)
 		}
 	}
@@ -177,7 +179,7 @@ func executeReferenceWorkflowCancel(runID, runDir, reason string) error {
 		return err
 	}
 	if state.Status.Terminal() {
-		if err := writeReferenceReport(context.Background(), runDir, manifest, runtime, state); err != nil {
+		if err := finalizeTerminalReferenceRun(context.Background(), runDir, &manifest, runtime, state); err != nil {
 			return err
 		}
 		fmt.Printf("Run %s cancelled.\n", runID)
@@ -200,7 +202,7 @@ func executeReferenceWorkflowResume(runID, runDir, configPath string) error {
 	fmt.Printf("Run ID: %s\n", runID)
 	state, resumeErr := runtime.runtime.Resume(context.Background(), runID)
 	if state.RunID != "" && state.Status.Terminal() {
-		if err := writeReferenceReport(context.Background(), runDir, manifest, runtime, state); err != nil {
+		if err := finalizeTerminalReferenceRun(context.Background(), runDir, &manifest, runtime, state); err != nil {
 			return errors.Join(resumeErr, err)
 		}
 	}
@@ -230,7 +232,7 @@ func executeReferenceWorkflowReport(runID, runDir string, jsonOutput bool) error
 		return err
 	}
 	report := multiagent.BuildReferenceRunReport(manifest.Input, record.State, events)
-	if err := persistReferenceReport(runDir, runID, report); err != nil {
+	if err := finalizeTerminalReferenceRun(context.Background(), runDir, &manifest, runtime, record.State); err != nil {
 		return err
 	}
 	if jsonOutput {
@@ -530,12 +532,14 @@ func loadReferenceManifest(runDir, runID string) (referenceWorkflowManifest, err
 			return manifest, err
 		}
 	}
-	workspacePath, workspaceID, err := referenceWorkspace(manifest.WorkspacePath)
-	if err != nil {
-		return manifest, err
-	}
-	if workspacePath != manifest.WorkspacePath || workspaceID != manifest.WorkspaceID {
-		return manifest, errors.New("workspace continuity check failed: persisted workspace identity changed")
+	if !manifest.WorkspaceCleaned {
+		workspacePath, workspaceID, err := referenceWorkspace(manifest.WorkspacePath)
+		if err != nil {
+			return manifest, err
+		}
+		if workspacePath != manifest.WorkspacePath || workspaceID != manifest.WorkspaceID {
+			return manifest, errors.New("workspace continuity check failed: persisted workspace identity changed")
+		}
 	}
 	if manifest.SourceWorkspacePath != "" {
 		sourcePath, _, sourceErr := referenceWorkspace(manifest.SourceWorkspacePath)
@@ -552,6 +556,37 @@ func writeReferenceReport(ctx context.Context, runDir string, manifest reference
 		return err
 	}
 	return persistReferenceReport(runDir, state.RunID, multiagent.BuildReferenceRunReport(manifest.Input, state, events))
+}
+
+// finalizeTerminalReferenceRun persists the complete report before reclaiming
+// the detached worktree. Diff artifacts already live under runDir, so cleanup
+// cannot erase the evidence needed for later inspection.
+func finalizeTerminalReferenceRun(ctx context.Context, runDir string, manifest *referenceWorkflowManifest, runtime *referenceRuntime, state multiagent.RunState) error {
+	if !state.Status.Terminal() {
+		return nil
+	}
+	if err := writeReferenceReport(ctx, runDir, *manifest, runtime, state); err != nil {
+		return err
+	}
+	return cleanupTerminalReferenceWorkspace(ctx, runDir, manifest)
+}
+
+func cleanupTerminalReferenceWorkspace(ctx context.Context, runDir string, manifest *referenceWorkflowManifest) error {
+	if manifest.WorkspaceCleaned || manifest.SourceWorkspacePath == "" || manifest.WorkspacePath == "" {
+		return nil
+	}
+	worktreeRoot := filepath.Join(manifest.SourceWorkspacePath, ".prizm", "worktrees")
+	if !safety.IsWithinRoot(manifest.WorkspacePath, worktreeRoot) {
+		return fmt.Errorf("refuse to clean unexpected run workspace %q", manifest.WorkspacePath)
+	}
+	if err := gitx.RemoveWorktreeChecked(ctx, manifest.SourceWorkspacePath, manifest.WorkspacePath); err != nil {
+		return err
+	}
+	if _, err := os.Stat(manifest.WorkspacePath); !os.IsNotExist(err) {
+		return fmt.Errorf("remove terminal run worktree: path still exists")
+	}
+	manifest.WorkspaceCleaned = true
+	return writeReferenceManifest(runDir, *manifest)
 }
 
 func persistReferenceReport(runDir, runID string, report multiagent.ReferenceRunReport) error {

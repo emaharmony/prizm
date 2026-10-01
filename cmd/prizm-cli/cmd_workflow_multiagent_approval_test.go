@@ -23,7 +23,7 @@ func TestApprovalProposalResolverUsesExecutionCorrelation(t *testing.T) {
 		t.Fatal(err)
 	}
 	refs, err := (approvalProposalResolver{store: store}).ResolveProposals(context.Background(), multiagent.ProposalQuery{RunID: "run-1", ExecutionKey: "execution-1", AgentID: "developer"})
-	if err != nil || len(refs) != 1 || refs[0].ApprovalID != matching.ApprovalID || refs[0].ProposalID != matching.ApprovalID {
+	if err != nil || len(refs) != 1 || refs[0].ApprovalID != matching.ApprovalID || refs[0].ProposalID != matching.ProposalID || refs[0].ProposalID == refs[0].ApprovalID {
 		t.Fatalf("refs=%#v err=%v", refs, err)
 	}
 }
@@ -52,7 +52,6 @@ func TestIsolatedReferenceWorkspaceCreatesRunWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { gitx.RemoveWorktree(context.Background(), source, workspace) })
 	if workspace == source || workspaceID == "" {
 		t.Fatalf("workspace=%q source=%q id=%q", workspace, source, workspaceID)
 	}
@@ -61,6 +60,17 @@ func TestIsolatedReferenceWorkspaceCreatesRunWorktree(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "feature.txt")); !os.IsNotExist(err) {
 		t.Fatalf("source workspace was mutated: %v", err)
+	}
+	runDir := t.TempDir()
+	manifest := referenceWorkflowManifest{SchemaVersion: referenceManifestSchemaVersion, RunID: "run-isolated", WorkspacePath: workspace, SourceWorkspacePath: source}
+	if err := cleanupTerminalReferenceWorkspace(context.Background(), runDir, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if !manifest.WorkspaceCleaned {
+		t.Fatal("terminal worktree was not marked cleaned")
+	}
+	if _, err := os.Stat(workspace); !os.IsNotExist(err) {
+		t.Fatalf("terminal worktree still exists: %v", err)
 	}
 }
 
@@ -72,7 +82,7 @@ func TestApprovalProposalLifecycleAppliesAndReconcilesExactContent(t *testing.T)
 		t.Fatal(err)
 	}
 	lifecycle := newApprovalProposalLifecycle(store, workspace, t.TempDir())
-	op := multiagent.ProposalOperation{RunID: "run-1", ProposalID: item.ApprovalID, ApprovalID: item.ApprovalID, ApplyKey: "apply-1", WorkspaceID: "workspace-1", ExecutionKey: "execution-1"}
+	op := multiagent.ProposalOperation{RunID: "run-1", ProposalID: item.ProposalID, ApprovalID: item.ApprovalID, ApplyKey: "apply-1", WorkspaceID: "workspace-1", ExecutionKey: "execution-1"}
 	decision, _, err := lifecycle.Decision(context.Background(), op)
 	if err != nil || decision != multiagent.ProposalPending {
 		t.Fatalf("decision=%q err=%v", decision, err)

@@ -81,6 +81,36 @@ func TestReferenceManifestPersistsEffectiveDefinitionAndWorkspace(t *testing.T) 
 	}
 }
 
+func TestLoadReferenceManifestAllowsCleanedTerminalWorkspace(t *testing.T) {
+	runDir := t.TempDir()
+	workspace := t.TempDir()
+	workspacePath, workspaceID, err := referenceWorkspace(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := multiagent.ReferenceWorkflowInput{Objective: "terminal recovery", Workspace: workspace}
+	definition, err := multiagent.ApplyReferenceOverrides(multiagent.DefaultReferenceDefinition(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := referenceWorkflowManifest{
+		SchemaVersion: referenceManifestSchemaVersion,
+		RunID: "run-cleaned-workspace", WorkflowID: multiagent.ReferenceWorkflowID,
+		Input: input, Definition: definition, WorkspaceID: workspaceID,
+		WorkspacePath: workspacePath, WorkspaceCleaned: true,
+	}
+	if err := writeReferenceManifest(runDir, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(workspace); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadReferenceManifest(runDir, manifest.RunID)
+	if err != nil || !loaded.WorkspaceCleaned {
+		t.Fatalf("loaded=%#v err=%v", loaded, err)
+	}
+}
+
 func TestReferenceWorkspaceIdentityIsStableAndScoped(t *testing.T) {
 	workspace := t.TempDir()
 	firstPath, firstID, err := referenceWorkspace(workspace)

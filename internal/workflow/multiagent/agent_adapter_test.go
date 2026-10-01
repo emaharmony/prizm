@@ -300,6 +300,85 @@ func TestAgentRoleRunnerEnforcesRoleTimeBudget(t *testing.T) {
 	}
 }
 
+func TestAgentRoleRunnerRequiresDeveloperProposalWithOneCorrectiveTurn(t *testing.T) {
+	calls := 0
+	executor := agentExecutorFunc(func(_ context.Context, request AgentExecutionRequest) (AgentExecutionResult, error) {
+		calls++
+		if calls == 2 {
+			if !strings.Contains(request.Prompt, "only corrective turn") || !strings.Contains(request.Prompt, `"summary":"done"`) {
+				t.Fatal("corrective prompt does not carry bounded provider state")
+			}
+			if request.MaxIterations != 2 || request.MaxTokens != 990 {
+				t.Fatalf("corrective budget iterations=%d tokens=%d", request.MaxIterations, request.MaxTokens)
+			}
+		}
+		return AgentExecutionResult{Output: `{"schema_version":1,"summary":"done","changed_artifacts":[{"kind":"file","uri":"feature.txt"}],"handoff":{"objective":"test","reason":"implemented"}}`, Usage: cost.TokenUsage{TotalTokens: 10}, LocalIterations: 1}, nil
+	})
+	profiles := profileResolverFunc(func(ref string) (AgentProfile, error) {
+		return AgentProfile{ID: ref, Provider: "mock", Model: "fake", Capabilities: []string{"developer", "code"}}, nil
+	})
+	runner, err := NewAgentRoleRunner(AgentRoleRunnerOptions{
+		Profiles: profiles, Executor: executor,
+		Workspaces: WorkspaceResolverFunc(func(context.Context, string) (Workspace, error) {
+			return Workspace{ID: "workspace", Path: "/workspace"}, nil
+		}),
+		Proposals: ProposalResolverFunc(func(context.Context, ProposalQuery) ([]ProposalReference, error) {
+			if calls < 2 {
+				return nil, nil
+			}
+			return []ProposalReference{{ProposalID: "proposal-1", ApprovalID: "approval-1"}}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := adapterRoleRequest(RoleDeveloper)
+	request.Run.WorkspaceID = "workspace"
+	result, err := runner.RunRole(context.Background(), request)
+	if err != nil || calls != 2 || len(result.Proposals) != 1 || result.Retries != 1 {
+		t.Fatalf("calls=%d result=%#v err=%v", calls, result, err)
+	}
+}
+
+func TestAgentRoleRunnerFailsClosedWhenProposalCorrectionHasNoBudget(t *testing.T) {
+	calls := 0
+	runner := newAdapterForTest(t, agentExecutorFunc(func(context.Context, AgentExecutionRequest) (AgentExecutionResult, error) {
+		calls++
+		return AgentExecutionResult{Output: `{"schema_version":1,"summary":"done","changed_artifacts":[],"handoff":{"objective":"test","reason":"implemented"}}`, LocalIterations: 3}, nil
+	}), nil, nil)
+	runner.proposals = ProposalResolverFunc(func(context.Context, ProposalQuery) ([]ProposalReference, error) { return nil, nil })
+	request := adapterRoleRequest(RoleDeveloper)
+	_, err := runner.RunRole(context.Background(), request)
+	var governanceErr *GovernanceError
+	if !errors.As(err, &governanceErr) || governanceErr.Kind != "proposal" || calls != 1 {
+		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+}
+
+func TestAgentRoleRunnerEmitsValidationLifecycleEvents(t *testing.T) {
+	runner := newAdapterForTest(t, agentExecutorFunc(func(context.Context, AgentExecutionRequest) (AgentExecutionResult, error) {
+		return AgentExecutionResult{Output: testerPassedJSON(), LocalIterations: 1}, nil
+	}), ValidationRunnerFunc(func(context.Context, string, string) (*validation.Result, error) {
+		return &validation.Result{Profile: "go_test_all", Status: "passed"}, nil
+	}), nil)
+	sink := &captureEventSink{}
+	runner.SetEventSink(sink)
+	request := adapterRoleRequest(RoleTester)
+	request.RoleConfig.ValidationProfiles = []string{"go_test_all"}
+	if _, err := runner.RunRole(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	events := sink.snapshot()
+	if len(events) != 2 || events[0].Type != event.EventValidationStarted || events[1].Type != event.EventValidationCompleted {
+		t.Fatalf("validation events = %#v", events)
+	}
+	for _, evt := range events {
+		if evt.CorrelationID != request.Run.RunID || evt.Payload["profile"] != "go_test_all" {
+			t.Fatalf("uncorrelated validation event: %#v", evt)
+		}
+	}
+}
+
 func TestSupervisorWithRealAgentAdapterBoundary(t *testing.T) {
 	var mu sync.Mutex
 	roleVisits := map[Role]int{}

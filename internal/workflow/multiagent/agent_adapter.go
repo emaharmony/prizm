@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/validation"
 )
 
@@ -19,8 +20,13 @@ type AgentRoleRunner struct {
 	approvals  ApprovalChecker
 	validation ValidationRunner
 	proposals  ProposalResolver
+	events     EventSink
 	now        func() time.Time
 }
+
+// SetEventSink connects validation lifecycle events to the durable runtime's
+// canonical outbox. It is called during runtime composition.
+func (r *AgentRoleRunner) SetEventSink(sink EventSink) { r.events = sink }
 
 // AgentRoleRunnerOptions supplies the existing governance and workspace
 // authorities used by the adapter.
@@ -111,7 +117,7 @@ func (r *AgentRoleRunner) RunRole(
 		executionContext, cancelExecution = context.WithTimeout(ctx, request.RoleConfig.TimeBudget)
 	}
 	defer cancelExecution()
-	execution, err := r.executor.ExecuteAgent(executionContext, AgentExecutionRequest{
+	executionRequest := AgentExecutionRequest{
 		RunID:                request.Run.RunID,
 		TaskID:               request.Run.Task.ID,
 		ExecutionKey:         request.Run.ExecutionKey,
@@ -125,12 +131,13 @@ func (r *AgentRoleRunner) RunRole(
 		MaxIterations:        request.RoleConfig.MaxLocalIterations,
 		MaxTokens:            request.RoleConfig.TokenBudget,
 		Deadline:             deadline(startedAt, request.RoleConfig.TimeBudget),
-	})
-	finishedAt := r.now().UTC()
+	}
+	execution, err := r.executor.ExecuteAgent(executionContext, executionRequest)
 	if err != nil {
 		return RoleRunResult{}, err
 	}
 	var proposals []ProposalReference
+	correctiveRetries := 0
 	if r.proposals != nil {
 		proposals, err = r.proposals.ResolveProposals(ctx, ProposalQuery{
 			RunID: request.Run.RunID, ExecutionKey: request.Run.ExecutionKey, AgentID: profile.ID,
@@ -139,11 +146,56 @@ func (r *AgentRoleRunner) RunRole(
 			return RoleRunResult{}, fmt.Errorf("resolve execution proposals: %w", err)
 		}
 	}
+	if request.Run.CurrentRole == RoleDeveloper && r.proposals != nil && len(proposals) == 0 {
+		// A mutation-bearing developer may not complete with prose/structured
+		// output alone. Give the provider one bounded correction opportunity to
+		// create the proposal through the authorized tool boundary. The second
+		// turn receives the first turn's output and shares its deadline; its
+		// iteration and token ceilings are the remaining role budget.
+		if err := executionContext.Err(); err != nil {
+			return RoleRunResult{}, fmt.Errorf("proposal corrective turn: %w", err)
+		}
+		remainingIterations, ok := remainingLimit(request.RoleConfig.MaxLocalIterations, execution.LocalIterations)
+		if !ok {
+			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "developer exhausted local iteration budget without persisting a mutation proposal"}
+		}
+		remainingTokens, ok := remainingLimit(request.RoleConfig.TokenBudget, execution.Usage.TotalTokens)
+		if !ok {
+			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "developer exhausted token budget without persisting a mutation proposal"}
+		}
+		executionRequest.MaxIterations = remainingIterations
+		executionRequest.MaxTokens = remainingTokens
+		executionRequest.Prompt += fmt.Sprintf("\n\nCORRECTION: Your previous response did not persist a mutation proposal. Previous output follows:\n%s\n\nYou must call write_file_proposal or create_directory_proposal now, then return the required developer JSON. This is your only corrective turn.", execution.Output)
+		correctiveRetries = 1
+		corrected, correctErr := r.executor.ExecuteAgent(executionContext, executionRequest)
+		if correctErr != nil {
+			return RoleRunResult{}, fmt.Errorf("proposal corrective turn: %w", correctErr)
+		}
+		execution.Usage.PromptTokens += corrected.Usage.PromptTokens
+		execution.Usage.CompletionTokens += corrected.Usage.CompletionTokens
+		execution.Usage.TotalTokens += corrected.Usage.TotalTokens
+		execution.Usage.EstimatedCostUsd += corrected.Usage.EstimatedCostUsd
+		execution.LocalIterations += corrected.LocalIterations
+		execution.ToolCalls += corrected.ToolCalls
+		execution.DeniedToolCalls += corrected.DeniedToolCalls
+		execution.Output = corrected.Output
+		execution.Artifacts = append(execution.Artifacts, corrected.Artifacts...)
+		proposals, err = r.proposals.ResolveProposals(ctx, ProposalQuery{
+			RunID: request.Run.RunID, ExecutionKey: request.Run.ExecutionKey, AgentID: profile.ID,
+		})
+		if err != nil {
+			return RoleRunResult{}, fmt.Errorf("resolve corrected execution proposals: %w", err)
+		}
+		if len(proposals) == 0 {
+			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "developer completed without persisting a mutation proposal after one corrective turn"}
+		}
+	}
 
 	decoded, err := decodeRoleOutput(request.Run.CurrentRole, execution.Output)
 	if err != nil {
 		return RoleRunResult{}, err
 	}
+	finishedAt := r.now().UTC()
 	validationResults, validationStatus, err := r.runValidations(ctx, request)
 	if err != nil {
 		return RoleRunResult{}, err
@@ -175,6 +227,7 @@ func (r *AgentRoleRunner) RunRole(
 		OutgoingHandoff: decoded.Handoff,
 		TokenUsage:      execution.Usage,
 		LocalIterations: localIterations,
+		Retries:         correctiveRetries,
 		Metadata: ExecutionMetadata{
 			AgentRef:         profile.ID,
 			Provider:         profile.Provider,
@@ -343,6 +396,7 @@ func (r *AgentRoleRunner) runValidations(
 	results := make([]validation.Result, 0, len(request.RoleConfig.ValidationProfiles))
 	status := "passed"
 	for _, profile := range request.RoleConfig.ValidationProfiles {
+		r.emitValidationEvent(event.EventValidationStarted, request, profile, "started", "")
 		var result *validation.Result
 		var err error
 		if workspaceRunner, ok := r.validation.(WorkspaceValidationRunner); ok {
@@ -361,10 +415,16 @@ func (r *AgentRoleRunner) runValidations(
 			}
 		}
 		if err != nil && request.Run.CurrentRole != RoleTester {
+			r.emitValidationEvent(event.EventValidationFailed, request, profile, "failed", err.Error())
 			return results, "failed", fmt.Errorf("validation profile %q: %w", profile, err)
 		}
 		if err != nil {
 			status = "failed"
+			r.emitValidationEvent(event.EventValidationFailed, request, profile, "failed", err.Error())
+		} else if result != nil && result.Status != "passed" {
+			r.emitValidationEvent(event.EventValidationFailed, request, profile, result.Status, "validation result did not pass")
+		} else {
+			r.emitValidationEvent(event.EventValidationCompleted, request, profile, "passed", "")
 		}
 	}
 	if status == "failed" && request.Run.CurrentRole != RoleTester {
@@ -374,6 +434,18 @@ func (r *AgentRoleRunner) runValidations(
 		}
 	}
 	return results, status, nil
+}
+
+func (r *AgentRoleRunner) emitValidationEvent(typ string, request RoleRunRequest, profile, status, message string) {
+	if r.events == nil {
+		return
+	}
+	payload := map[string]any{"run_id": request.Run.RunID, "workflow_id": request.Run.WorkflowID,
+		"role": request.Run.CurrentRole, "profile": profile, "status": status}
+	if message != "" {
+		payload["error"] = message
+	}
+	r.events.Emit(event.NewEvent(typ, "prizm-multi-agent-validation", payload).WithCorrelationID(request.Run.RunID))
 }
 
 func requireCapabilities(profile AgentProfile, required []string) error {
@@ -397,6 +469,19 @@ func deadline(start time.Time, limit time.Duration) time.Time {
 		return time.Time{}
 	}
 	return start.Add(limit)
+}
+
+// remainingLimit derives the allocation for the one permitted corrective
+// provider turn. A correction never expands a configured role budget.
+func remainingLimit(limit Limit, used int) (Limit, bool) {
+	if limit == Unlimited {
+		return Unlimited, true
+	}
+	remaining := int(limit) - used
+	if remaining <= 0 {
+		return 0, false
+	}
+	return Limit(remaining), true
 }
 
 func roleSchemaInstruction(role Role) (string, error) {

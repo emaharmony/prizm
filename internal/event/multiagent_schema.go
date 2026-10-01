@@ -106,6 +106,12 @@ func init() {
 		Required: []string{"run_id", "workflow_id", "status", "reason"},
 		Optional: []string{"terminal_condition"},
 	}
+	for _, eventType := range []string{EventValidationStarted, EventValidationCompleted, EventValidationFailed} {
+		Schemas[eventType] = Schema{
+			Required: []string{"run_id", "workflow_id", "role", "profile", "status"},
+			Optional: []string{"error"},
+		}
+	}
 	for _, eventType := range []string{
 		EventInteractionObserved,
 		EventInteractionDecisionSelected,
