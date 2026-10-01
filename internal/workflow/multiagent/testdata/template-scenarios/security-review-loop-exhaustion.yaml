@@ -1,0 +1,53 @@
+# security-review-loop-exhaustion.yaml proves templates/security-review.yaml's
+# security-reviewer -> implementer correction loop is actually bounded
+# (loop.maxTraversals: 3 on the reviewer-to-impl edge): a 4th consecutive
+# issues_found outcome must stop the run with a budget-exhausted status.
+#
+# Because this workflow's role/outcome vocabulary ("security-reviewer" ->
+# "implementer" on "issues_found") does not collide with either of Phase 1's
+# two built-in loop constants, the loop's stable edge ID
+# (edge:security-reviewer:issues_found) IS its own budget-name slug (no
+# backward-compatible remapping applies — see supervisor_types.go's
+# loopBudgetSlug), so the expected budget name below is the generic
+# "max_edge:security-reviewer:issues_found_loops" form, not a short
+# hand-picked name.
+workflow: ../../templates/security-review.yaml
+scenarios:
+  - name: reviewer-loop-exhausted
+    input:
+      id: task-loop-exhaustion
+      description: the reviewer keeps finding issues past the loop's traversal budget
+    script:
+      - role: implementer
+        outcome: ready_for_scan
+      - role: security-scanner
+        outcome: findings_ready
+      - role: security-reviewer
+        outcome: issues_found
+      - role: implementer
+        outcome: ready_for_scan
+      - role: security-scanner
+        outcome: findings_ready
+      - role: security-reviewer
+        outcome: issues_found
+      - role: implementer
+        outcome: ready_for_scan
+      - role: security-scanner
+        outcome: findings_ready
+      - role: security-reviewer
+        outcome: issues_found
+      - role: implementer
+        outcome: ready_for_scan
+      - role: security-scanner
+        outcome: findings_ready
+      - role: security-reviewer
+        outcome: issues_found
+    expect:
+      finalStatus: budget_exhausted
+      loopExhausted: "max_edge:security-reviewer:issues_found_loops"
+      nodeVisits:
+        implementer: 4
+        security-scanner: 4
+        security-reviewer: 4
+      edgeTraversals:
+        "edge:security-reviewer:issues_found": 3

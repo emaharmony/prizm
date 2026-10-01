@@ -10,6 +10,11 @@ approval, validation, and terminal decisions under runtime control.
 This is a supported reference flow, not a general graph-authoring interface.
 Its runtime contracts and recovery model are defined in
 [Multi-Agent Loop Runtime Contracts](architecture/MULTI_AGENT_LOOP_RUNTIME.md).
+If you want to author your own role/outcome workflow graph instead of using
+this fixed flow, see [Developer-Authored Workflow Graphs](workflows/README.md)
+— this exact workflow's shape is also available as a shipped, hand-authored
+YAML template (`templates/software-delivery.yaml`), see
+[Migrating from the Phase 1 built-in workflow](workflows/migration-from-phase-1.md).
 
 ## Workflow contract
 
@@ -93,6 +98,13 @@ after a run reaches a terminal state.
 Existing named-step workflow commands retain their prior behavior. Prizm
 detects multi-agent runs by their persisted manifest and routes only those
 runs through the Phase 1 control plane.
+
+`prism serve`'s dashboard also exposes read-only inspection plus pause/
+resume/cancel for a run from the browser, backed by the same underlying
+operations described here. See
+[Multi-Agent Execution Graph Dashboard](architecture/MULTI_AGENT_EXECUTION_GRAPH.md#operator-controls)
+for its behavior and current limitations (notably: no Approve/Reject there,
+and mutating requests/the live stream do not carry an auth token today).
 
 ## Safety ceilings
 

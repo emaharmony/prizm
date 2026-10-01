@@ -30,9 +30,10 @@ func estimateTokenCount(messages []provider.ChatMessage) int {
 
 // compressToolResults progressively compresses older tool results to keep the
 // conversation within the token budget. Uses a two-tier strategy:
-// - Tier 1 (keepRecent results): preserved in full
-// - Tier 2 (older results): compressed to a brief digest with tool name,
-//   success/failure, and a one-line summary
+//   - Tier 1 (keepRecent results): preserved in full
+//   - Tier 2 (older results): compressed to a brief digest with tool name,
+//     success/failure, and a one-line summary
+//
 // Returns the number of messages compressed.
 func compressToolResults(messages []provider.ChatMessage, keepRecent int) int {
 	compressed := 0
@@ -228,15 +229,15 @@ func (cb *contextBudget) checkAndCompress(messages []provider.ChatMessage, itera
 // modelContextTokens maps known model names to their maximum context window size.
 func getModelContextTokens(model string) (int, bool) {
 	known := map[string]int{
-		"glm-5.1:cloud":         202752,
-		"glm-5.2:cloud":        202752,
-		"glm-4:cloud":           131072,
-		"deepseek-v4-pro:cloud": 131072,
+		"glm-5.1:cloud":           202752,
+		"glm-5.2:cloud":           202752,
+		"glm-4:cloud":             131072,
+		"deepseek-v4-pro:cloud":   131072,
 		"deepseek-v4-flash:cloud": 131072,
-		"qwen3.5:4b":            32768,
-		"qwen3.5:9b":            65536,
-		"qwen3.5:cloud":         131072,
-		"qwen3-coder:480b-cloud": 131072,
+		"qwen3.5:4b":              32768,
+		"qwen3.5:9b":              65536,
+		"qwen3.5:cloud":           131072,
+		"qwen3-coder:480b-cloud":  131072,
 	}
 	tokens, ok := known[model]
 	return tokens, ok

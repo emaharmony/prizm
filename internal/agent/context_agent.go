@@ -41,9 +41,9 @@ type ContextAgent struct {
 }
 
 type compressedContext struct {
-	text      string
-	builtAt   time.Time
-	ttl       time.Duration
+	text    string
+	builtAt time.Time
+	ttl     time.Duration
 }
 
 // CompressionConfig controls context compression behavior.
@@ -52,7 +52,7 @@ type CompressionConfig struct {
 	Model      string `yaml:"model"`       // default: deepseek-v4-flash:cloud
 	OllamaURL  string `yaml:"ollama_url"`  // default: http://localhost:11434
 	CacheTTL   string `yaml:"cache_ttl"`   // default: 5m
-	MaxContext int    `yaml:"max_context"`  // default: 400 tokens (~1600 chars)
+	MaxContext int    `yaml:"max_context"` // default: 400 tokens (~1600 chars)
 }
 
 // DefaultCompressionConfig returns sensible defaults.
@@ -78,11 +78,11 @@ func NewContextAgent(workspaceRoot string, cfg CompressionConfig) *ContextAgent 
 	return &ContextAgent{
 		workspaceRoot: workspaceRoot,
 		model:         cfg.Model,
-		ollamaURL:      cfg.OllamaURL,
+		ollamaURL:     cfg.OllamaURL,
 		maxContext:    cfg.MaxContext,
-		builder:        builder,
-		fileInfo:       make(map[string]fs.FileInfo),
-		cacheTTL:       cacheTTL,
+		builder:       builder,
+		fileInfo:      make(map[string]fs.FileInfo),
+		cacheTTL:      cacheTTL,
 	}
 }
 
@@ -403,7 +403,7 @@ func stripThinkingPrefix(s string) string {
 			// by looking for a blank line separator
 			if idx := strings.Index(after, "\n\n"); idx >= 0 {
 				return after[idx+2:]
-				}
+			}
 		}
 	}
 	return s

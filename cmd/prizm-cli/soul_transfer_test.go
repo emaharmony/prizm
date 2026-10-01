@@ -895,6 +895,10 @@ func (s *MockTranscriptSender) Send(ctx context.Context, input string) (*Transcr
 func TestSoulTransferSuite(t *testing.T) {
 	// This is an integration test that requires a running Prizm instance.
 	// Skip if PRIZM_URL is not set and no local instance is detected.
+	if os.Getenv("SOUL_TRANSFER_LIVE") != "1" {
+		t.Skip("Skipping live Soul Transfer suite (set SOUL_TRANSFER_LIVE=1 to enable)")
+	}
+
 	prizmURL := os.Getenv("PRIZM_URL")
 	if prizmURL == "" {
 		t.Skip("SoulTransfer suite requires PRIZM_URL to be set — skipping integration test")

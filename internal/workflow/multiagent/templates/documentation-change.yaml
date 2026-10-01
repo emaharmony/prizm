@@ -1,0 +1,151 @@
+# documentation-change.yaml is a shipped example of a simple, purely linear
+# (acyclic) workflow: Writer -> Technical Reviewer -> Editor -> Published.
+# Unlike software-delivery.yaml and security-review.yaml, this workflow has
+# NO cycle at all, by deliberate choice: a technical reviewer or editor that
+# is unhappy with the draft does not loop the work back to the writer
+# automatically — it routes to a separate "needs-revision" terminal instead,
+# ending the automated run and leaving the actual revision to a human-started
+# follow-up run. This keeps the graph a strict DAG, so none of its edges need
+# a `loop:` policy at all (contrast with the other two shipped templates,
+# where `prism graph validate`'s SCC-wide cycle rule forces a loop policy
+# onto every edge inside a cyclic component, including non-corrective forward
+# edges — see docs/architecture/decisions/0002-graph-defined-workflows.md).
+# This is the simpler, more common shape for a workflow whose roles do not
+# need automated back-and-forth correction; reach for a bounded loop (as in
+# the other two templates) only when the workflow really does need one.
+apiVersion: prism.dev/v1alpha1
+kind: MultiAgentWorkflow
+metadata:
+  name: documentation-change
+  version: "1.0.0"
+  description: >-
+    Draft, technically review, and copy-edit a documentation change. A
+    purely linear (acyclic) pipeline: a reviewer or editor that is not
+    satisfied routes to a "needs-revision" terminal rather than looping
+    the work back to the writer automatically.
+  labels:
+    category: documentation
+    phase: "3"
+spec:
+  entryNode: writer
+  budgets:
+    maxTransitions: 10
+    maxTokens: 50000
+    maxLocalIterations: 12
+    maxRetries: 2
+    maxDuration: 15m
+  defaults:
+    failure:
+      defaultOnUnhandledOutcome: fail
+  nodes:
+    - id: writer
+      type: role
+      role: writer
+      displayName: Writer
+      description: Drafts the documentation change.
+      agentProfile: writer-default
+      allowedTools:
+        - list_dir
+        - read_file
+        - search_files
+        - project_overview
+        - write_file_dry_run
+        - write_file_proposal
+      capabilities:
+        - write
+      allowedOutcomes:
+        - draft_ready
+      maxVisits: 1
+      localIterations: 4
+      tokenBudget: 10000
+      durationBudget: 5m
+
+    - id: technical-reviewer
+      type: role
+      role: technical-reviewer
+      displayName: Technical Reviewer
+      description: Checks the draft for technical accuracy.
+      agentProfile: technical-reviewer-default
+      allowedTools:
+        - list_dir
+        - read_file
+        - search_files
+        - project_overview
+      capabilities:
+        - review
+      allowedOutcomes:
+        - technically_accurate
+        - needs_revision
+      maxVisits: 1
+      localIterations: 3
+      tokenBudget: 10000
+      durationBudget: 5m
+
+    - id: editor
+      type: role
+      role: editor
+      displayName: Editor
+      description: Copy-edits a technically-accurate draft for style and clarity.
+      agentProfile: editor-default
+      allowedTools:
+        - list_dir
+        - read_file
+        - search_files
+        - project_overview
+        - write_file_dry_run
+        - write_file_proposal
+      capabilities:
+        - edit
+      allowedOutcomes:
+        - ready_to_publish
+        - needs_more_edits
+      maxVisits: 1
+      localIterations: 4
+      tokenBudget: 10000
+      durationBudget: 5m
+
+    - id: published
+      type: terminal
+      displayName: Published
+      terminalCondition: published
+
+    - id: needs-revision
+      type: terminal
+      displayName: Needs Revision
+      terminalCondition: needs_revision
+
+  edges:
+    - id: writer-to-reviewer
+      from: writer
+      to: technical-reviewer
+      when:
+        outcome: draft_ready
+      label: draft ready
+
+    - id: reviewer-to-editor
+      from: technical-reviewer
+      to: editor
+      when:
+        outcome: technically_accurate
+      label: technically accurate
+
+    - id: reviewer-to-revision
+      from: technical-reviewer
+      to: needs-revision
+      when:
+        outcome: needs_revision
+      label: needs revision
+
+    - id: editor-to-published
+      from: editor
+      to: published
+      when:
+        outcome: ready_to_publish
+      label: ready to publish
+
+    - id: editor-to-revision
+      from: editor
+      to: needs-revision
+      when:
+        outcome: needs_more_edits
+      label: needs more edits

@@ -1,0 +1,87 @@
+# security-review-happy-path.yaml is a `prism graph test` scenario fixture
+# for templates/security-review.yaml: a straight-through run with no findings
+# to correct, a run that exercises the bounded correction loop once before
+# the reviewer approves, and a run that exercises the scanner's direct
+# escape to the "needs-human-review" terminal on a critical finding (a
+# custom, non-legacy terminal condition — this scenario is also the
+# regression proof for the finishTerminal fix documented in
+# docs/workflows/security.md and supervisor.go's finishTerminal doc
+# comment: before that fix, ANY custom terminal condition value made a run
+# fail with a spurious *InvalidTransitionError* instead of completing).
+#
+# Lives outside templates/ for the same reason documented in
+# software-delivery-happy-path.yaml's header comment.
+workflow: ../../templates/security-review.yaml
+scenarios:
+  - name: happy-path
+    input:
+      id: task-happy-path
+      description: implementation passes the security scan and review cleanly
+    script:
+      - role: implementer
+        outcome: ready_for_scan
+      - role: security-scanner
+        outcome: findings_ready
+      - role: security-reviewer
+        outcome: approved
+    expect:
+      finalStatus: completed
+      terminalNode: "node:terminal:completed"
+      transitions:
+        - "edge:implementer:ready_for_scan"
+        - "edge:security-scanner:findings_ready"
+        - "edge:security-reviewer:approved"
+      nodeVisits:
+        implementer: 1
+        security-scanner: 1
+        security-reviewer: 1
+      edgeTraversals:
+        "edge:implementer:ready_for_scan": 1
+        "edge:security-scanner:findings_ready": 1
+        "edge:security-reviewer:approved": 1
+
+  - name: one-correction-loop-then-approved
+    input:
+      id: task-with-fix
+      description: reviewer finds an issue once, implementer fixes it, then approved
+    script:
+      - role: implementer
+        outcome: ready_for_scan
+      - role: security-scanner
+        outcome: findings_ready
+      - role: security-reviewer
+        outcome: issues_found
+      - role: implementer
+        outcome: ready_for_scan
+      - role: security-scanner
+        outcome: findings_ready
+      - role: security-reviewer
+        outcome: approved
+    expect:
+      finalStatus: completed
+      terminalNode: "node:terminal:completed"
+      nodeVisits:
+        implementer: 2
+        security-scanner: 2
+        security-reviewer: 2
+      edgeTraversals:
+        "edge:security-reviewer:issues_found": 1
+
+  - name: critical-finding-escapes-to-human-review
+    input:
+      id: task-critical-finding
+      description: scanner finds a critical issue and escapes straight to a human
+    script:
+      - role: implementer
+        outcome: ready_for_scan
+      - role: security-scanner
+        outcome: critical_finding
+    expect:
+      finalStatus: completed
+      terminalNode: "node:terminal:needs_human_review"
+      transitions:
+        - "edge:implementer:ready_for_scan"
+        - "edge:security-scanner:critical_finding"
+      nodeVisits:
+        implementer: 1
+        security-scanner: 1

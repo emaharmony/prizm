@@ -139,6 +139,14 @@ func EnsureExcluded(ctx context.Context, root, pattern string) error {
 // RunCommand executes name with args in dir, feeding stdin when non-empty,
 // and returns the combined output. Errors include the trimmed output.
 func RunCommand(ctx context.Context, dir, stdin, name string, args ...string) (string, error) {
+	// A host-level core.excludesFile can point at an unreadable profile path
+	// (common in managed Windows environments). Git then writes warnings to
+	// stderr, which makes a clean-tree check look dirty to callers that include
+	// combined output. Disable only the global excludes file for this isolated
+	// plumbing command; repository-local excludes remain active.
+	if name == "git" {
+		args = append([]string{"-c", "core.excludesFile="}, args...)
+	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	if stdin != "" {

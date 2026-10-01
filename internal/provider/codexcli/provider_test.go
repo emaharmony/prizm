@@ -2,6 +2,7 @@ package codexcli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -12,6 +13,9 @@ import (
 type fakeRunner struct {
 	result       RunResult
 	err          error
+	results      []RunResult
+	errs         []error
+	calls        int
 	gotArgs      []string
 	gotStdin     string
 	gotCwd       string
@@ -19,6 +23,7 @@ type fakeRunner struct {
 }
 
 func (f *fakeRunner) Run(_ context.Context, _ string, args []string, stdin, cwd string) (RunResult, error) {
+	f.calls++
 	f.gotArgs = args
 	f.gotStdin = stdin
 	f.gotCwd = cwd
@@ -28,6 +33,13 @@ func (f *fakeRunner) Run(_ context.Context, _ string, args []string, stdin, cwd 
 				_ = os.WriteFile(args[i+1], []byte(f.writeLastMsg), 0644)
 			}
 		}
+	}
+	if len(f.results) >= f.calls {
+		var err error
+		if len(f.errs) >= f.calls {
+			err = f.errs[f.calls-1]
+		}
+		return f.results[f.calls-1], err
 	}
 	return f.result, f.err
 }
@@ -102,6 +114,31 @@ func TestGeneratePrefersLastMessageAndModel(t *testing.T) {
 	}
 	if argVal(fr.gotArgs, "--model") != "gpt-5-codex" {
 		t.Errorf("model = %q, want gpt-5-codex", argVal(fr.gotArgs, "--model"))
+	}
+}
+
+func TestGenerateFallsBackWhenCodexDefaultIsTooNew(t *testing.T) {
+	fr := &fakeRunner{
+		results: []RunResult{
+			{Stderr: "The 'gpt-6-astra' model requires a newer version of Codex."},
+			{Stdout: "fallback works"},
+		},
+		errs: []error{errors.New("exit status 1"), nil},
+	}
+	p := NewWithRunner(Config{Workspace: "."}, fr)
+
+	resp, err := p.Generate(context.Background(), provider.GenerateRequest{Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if resp.Text != "fallback works" {
+		t.Fatalf("Text = %q, want fallback works", resp.Text)
+	}
+	if fr.calls != 2 {
+		t.Fatalf("calls = %d, want 2", fr.calls)
+	}
+	if argVal(fr.gotArgs, "--model") != CompatibleFallbackModel {
+		t.Fatalf("fallback model = %q, want %q", argVal(fr.gotArgs, "--model"), CompatibleFallbackModel)
 	}
 }
 

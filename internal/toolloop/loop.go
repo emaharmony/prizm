@@ -15,7 +15,8 @@ import (
 
 	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/provider"
-	"github.com/emaharmony/prizm/internal/tool")
+	"github.com/emaharmony/prizm/internal/tool"
+)
 
 // ModelInfo reports which (provider, model) actually produced a response.
 // FailoverProvider can silently fail over to a different target.

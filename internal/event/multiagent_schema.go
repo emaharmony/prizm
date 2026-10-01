@@ -106,4 +106,34 @@ func init() {
 		Required: []string{"run_id", "workflow_id", "status", "reason"},
 		Optional: []string{"terminal_condition"},
 	}
+	for _, eventType := range []string{
+		EventInteractionObserved,
+		EventInteractionDecisionSelected,
+		EventInteractionActionValidated,
+		EventInteractionActionRejected,
+		EventInteractionActionExecuted,
+		EventInteractionActionFailed,
+		EventInteractionVerification,
+		EventInteractionNeutralized,
+		EventInteractionApprovalPaused,
+		EventInteractionResumed,
+	} {
+		Schemas[eventType] = Schema{
+			Required: []string{"run_id", "adapter", "step"},
+			Optional: []string{"action", "lane", "reason", "success", "error", "observation_id"},
+		}
+	}
+	for _, eventType := range []string{
+		EventReflectionRequested,
+		EventReflectionCompleted,
+		EventReflectionReplanRequested,
+		EventReflectionMemoryAccepted,
+		EventReflectionMemoryRejected,
+		EventReflectionFailed,
+	} {
+		Schemas[eventType] = Schema{
+			Required: []string{"run_id", "trigger"},
+			Optional: []string{"role", "verdict", "confidence", "reason", "status"},
+		}
+	}
 }

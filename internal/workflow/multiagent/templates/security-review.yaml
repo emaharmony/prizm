@@ -1,0 +1,192 @@
+# security-review.yaml is a shipped example workflow for a security-scan and
+# review pipeline: Implementer -> Security Scanner -> Security Reviewer, with
+# a bounded correction loop back to the implementer when the reviewer finds
+# issues, and a direct escape hatch to human review for anything the
+# automated pipeline should never try to resolve on its own (a critical
+# finding from the scanner).
+#
+# Like software-delivery.yaml, implementer/security-scanner/security-reviewer
+# form a single cyclic strongly-connected component (implementer ->
+# security-scanner -> security-reviewer -> implementer), so — per
+# `prism graph validate`'s SCC-wide cycle rule, see
+# docs/architecture/decisions/0002-graph-defined-workflows.md — EVERY edge
+# among those three nodes needs a `loop:` policy, including the two forward
+# edges (implementer -> security-scanner, security-scanner ->
+# security-reviewer) that are not corrections. Those two get a generous
+# maxTraversals (99) with onExhausted: fail, since they are not meant to bind
+# in practice; the real bound comes from each node's maxVisits and from the
+# genuine correction loop's tight limit below.
+#
+# A note on loop.onExhausted: route_to — the schema accepts it and the
+# validator checks it (RouteTo must name a known node and must escape the
+# cycle), but as of this release the supervisor's runtime loop-exhaustion
+# check (checkLoopBudget in supervisor.go) does not actually consult
+# OnExhausted/RouteTo at all: it always ends the run with a budget-exhausted
+# error, identical to onExhausted: fail. This template therefore uses
+# onExhausted: fail on its correction loop below rather than authoring a
+# route_to that would silently not do what it says — see
+# docs/workflows/limitations.md and this PR's security review
+# (docs/workflows/security.md) for the full finding. A critical finding still
+# reaches the "needs-human-review" terminal below, just via a real routed
+# edge (scanner-to-human-review) rather than loop exhaustion.
+apiVersion: prism.dev/v1alpha1
+kind: MultiAgentWorkflow
+metadata:
+  name: security-review
+  version: "1.0.0"
+  description: >-
+    Implement a change, scan it for security issues, and route it through a
+    security reviewer. A bounded correction loop sends findings back to the
+    implementer; a critical finding or an exhausted correction loop escapes
+    to human review rather than looping indefinitely.
+  labels:
+    category: security
+    phase: "3"
+spec:
+  entryNode: implementer
+  budgets:
+    maxTransitions: 20
+    maxTokens: 100000
+    maxLocalIterations: 16
+    maxRetries: 3
+    maxDuration: 20m
+  defaults:
+    failure:
+      defaultOnUnhandledOutcome: fail
+  nodes:
+    - id: implementer
+      type: role
+      role: implementer
+      displayName: Implementer
+      description: Implements the change and submits it for a security scan.
+      agentProfile: implementer-default
+      allowedTools:
+        - list_dir
+        - read_file
+        - search_files
+        - project_overview
+        - write_file_dry_run
+        - write_file_proposal
+      capabilities:
+        - code
+      allowedOutcomes:
+        - ready_for_scan
+      maxVisits: 4
+      localIterations: 6
+      tokenBudget: 20000
+      durationBudget: 15m
+
+    - id: security-scanner
+      type: role
+      role: security-scanner
+      displayName: Security Scanner
+      description: >-
+        Runs automated security scanning against the implementer's latest
+        change. A critical finding escapes straight to human review instead
+        of entering the (slower, bounded) automated correction loop.
+      agentProfile: security-scanner-default
+      allowedTools:
+        - list_dir
+        - read_file
+        - search_files
+        - project_overview
+      capabilities:
+        - security-scan
+      allowedOutcomes:
+        - findings_ready
+        - critical_finding
+      maxVisits: 4
+      localIterations: 4
+      tokenBudget: 15000
+      durationBudget: 10m
+      validation:
+        profiles:
+          - security_scan_clean
+
+    - id: security-reviewer
+      type: role
+      role: security-reviewer
+      displayName: Security Reviewer
+      description: Reviews scan findings and either approves or requests fixes.
+      agentProfile: security-reviewer-default
+      allowedTools:
+        - list_dir
+        - read_file
+        - search_files
+        - project_overview
+      capabilities:
+        - security-review
+      allowedOutcomes:
+        - approved
+        - issues_found
+      maxVisits: 4
+      localIterations: 4
+      tokenBudget: 15000
+      durationBudget: 10m
+
+    - id: completed
+      type: terminal
+      displayName: Completed
+      terminalCondition: completed
+
+    - id: needs-human-review
+      type: terminal
+      displayName: Needs Human Review
+      terminalCondition: needs_human_review
+
+  edges:
+    # Forward edge inside the implementer/scanner/reviewer cycle — see the
+    # file-level comment for why this needs a loop policy.
+    - id: impl-to-scanner
+      from: implementer
+      to: security-scanner
+      when:
+        outcome: ready_for_scan
+      loop:
+        maxTraversals: 99
+        onExhausted: fail
+      label: ready for scan
+
+    # Forward edge inside the cycle.
+    - id: scanner-to-reviewer
+      from: security-scanner
+      to: security-reviewer
+      when:
+        outcome: findings_ready
+      loop:
+        maxTraversals: 99
+        onExhausted: fail
+      label: findings ready
+
+    # Real (non-loop-exhaustion) escape: a critical finding never enters the
+    # bounded correction loop below — it goes straight to a human. This edge
+    # also makes "needs-human-review" statically reachable, so the loop
+    # exhaustion route below (which targets the same terminal) never leaves
+    # an unreachable-node warning.
+    - id: scanner-to-human-review
+      from: security-scanner
+      to: needs-human-review
+      when:
+        outcome: critical_finding
+      label: critical finding
+
+    # Genuine, bounded correction loop: the reviewer sends findings back to
+    # the implementer up to 3 times. A 4th round of issues ends the run with
+    # a budget-exhausted status (onExhausted: fail — see the file-level note
+    # above on why this template does not use onExhausted: route_to today).
+    - id: reviewer-to-impl
+      from: security-reviewer
+      to: implementer
+      when:
+        outcome: issues_found
+      loop:
+        maxTraversals: 3
+        onExhausted: fail
+      label: issues found
+
+    - id: reviewer-to-completed
+      from: security-reviewer
+      to: completed
+      when:
+        outcome: approved
+      label: approved

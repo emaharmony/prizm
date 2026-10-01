@@ -3,12 +3,12 @@
 Status: Phase 1 complete reference runtime
 
 This document defines the canonical vocabulary and ownership boundaries for
-Prizm's bounded multi-agent loop runtime. The contract baseline arrived in PR2;
-PR3 adds deterministic in-memory supervision; PR4 connects configured Prizm
+Prism's bounded multi-agent loop runtime. The contract baseline arrived in PR2;
+PR3 adds deterministic in-memory supervision; PR4 connects configured Prism
 agents to that supervisor through the existing bounded sub-agent execution
 domain; and PR5 adds durable checkpoints, exclusive claims, idempotent event
 publication, recovery, and safe resume. PR6 composes those foundations through
-the existing `prizm workflow` control plane as the supported
+the existing `prism workflow` control plane as the supported
 `multi-agent-software-task` reference flow.
 
 The contracts follow [Package Boundaries](PACKAGE_BOUNDARIES.md) and preserve
@@ -27,7 +27,7 @@ Planner -> Developer -> Tester -> Reviewer -> Complete
 ```
 
 The flow is intentionally bounded. Roles may perform local iterations, but
-Prizm owns global routing, budgets, terminal outcomes, and the durable state
+Prism owns global routing, budgets, terminal outcomes, and the durable state
 required for eventual recovery.
 
 This contract baseline makes later implementation PRs depend on one vocabulary
@@ -59,7 +59,7 @@ Invariants owned:
 
 Primary callers:
 
-- the real Prizm agent adapter introduced in PR4;
+- the real Prism agent adapter introduced in PR4;
 - the persistence and recovery boundary introduced in PR5; and
 - composition roots that start a multi-agent run.
 
@@ -69,12 +69,12 @@ Allowed dependencies:
 - `internal/cost` for the existing token-usage contract;
 - `internal/retry` for the existing retry policy;
 - `internal/validation` for existing validation results;
-- `internal/event` for the canonical Prizm event envelope and vocabulary;
+- `internal/event` for the canonical Prism event envelope and vocabulary;
 - `internal/agent` for configured agent identity;
 - `internal/subagent` for bounded agent execution;
 - `internal/workflow/v2` for the existing delegated-task execution contract;
 - `internal/run` for the existing single-host run lock; and
-- `internal/sqlite` for Prizm's registered SQLite driver and connection policy.
+- `internal/sqlite` for Prism's registered SQLite driver and connection policy.
 
 Responsibilities explicitly excluded:
 
@@ -112,9 +112,9 @@ flowchart LR
   definition["Multi-agent definition"] --> supervisor["Future supervisor"]
   supervisor --> state["Explicit run state"]
   supervisor --> runner["Future role runner"]
-  runner --> agents["Configured Prizm agents"]
+  runner --> agents["Configured Prism agents"]
   supervisor --> handoff["Structured handoffs"]
-  supervisor --> events["Canonical Prizm events"]
+  supervisor --> events["Canonical Prism events"]
   supervisor --> governance["Policy / approval / validation"]
   state --> storage["Durable state and outbox"]
 ```
@@ -132,7 +132,7 @@ event names and payload schemas. Existing governance packages retain authority.
 | Local iteration | One bounded attempt performed within a role |
 | Visit | One entry into a role; correction loops create additional visits |
 | Handoff | Structured context transferred from one role to the next |
-| Transition outcome | A typed result returned by a role for Prizm to route |
+| Transition outcome | A typed result returned by a role for Prism to route |
 | Transition rule | A declared mapping from role and outcome to a role or terminal condition |
 | Traversal | One selected transition in the execution history |
 | Run state | The complete logical state required to observe and eventually resume a run |
@@ -169,7 +169,7 @@ The initial logical roles are:
 - `tester`; and
 - `reviewer`.
 
-A role is not an agent. `AgentRef` identifies an existing Prizm agent or
+A role is not an agent. `AgentRef` identifies an existing Prism agent or
 profile that a later adapter resolves. This separation allows a deployment to
 change its configured agents without changing workflow meaning.
 
@@ -180,12 +180,12 @@ Each role configuration records:
 - allowed tools and required capabilities;
 - maximum local iterations;
 - token and time budgets;
-- the existing Prizm retry policy;
+- the existing Prism retry policy;
 - approval requirements; and
 - validation-profile references.
 
 Tool names, capabilities, agent references, and validation profiles remain
-references. The PR4 adapter resolves configured agents against Prizm's agent
+references. The PR4 adapter resolves configured agents against Prism's agent
 registry and supplies the references to their existing authority domains. The
 contract validates shape; the adapter validates that the resolved agent has
 every required capability and preserves tool and validation references for
@@ -223,7 +223,7 @@ A handoff is the primary contract between roles. It contains:
 - a task reference and objective;
 - typed artifact and evidence references;
 - a typed transition outcome and reason;
-- existing Prizm validation results;
+- existing Prism validation results;
 - structured unresolved issues; and
 - a creation timestamp.
 
@@ -297,7 +297,7 @@ timestamp, and reason must agree. Active states cannot carry a terminal
 outcome.
 
 PR5 persists this state in a package-owned SQLite table. Persistence retains
-the domain contract while reusing Prizm's SQLite registration, WAL policy, and
+the domain contract while reusing Prism's SQLite registration, WAL policy, and
 single-host run lock rather than moving multi-agent invariants into a generic
 storage or helper package.
 
@@ -338,7 +338,7 @@ correlation IDs, parent IDs, event store, and opt-in payload validation. The
 supervisor emits this vocabulary through an injected sink; it does not
 introduce another event bus or envelope.
 
-The namespace is `prizm.workflow.multi_agent.*`.
+The namespace is `prism.workflow.multi_agent.*`.
 
 | Event | Payload contract |
 | --- | --- |
@@ -376,7 +376,7 @@ flowchart LR
   runner --> result["Typed RoleRunResult"]
   result --> resolver["Deterministic resolver"]
   resolver --> state
-  state --> events["Canonical Prizm events"]
+  state --> events["Canonical Prism events"]
 ```
 
 ### Role runner boundary
@@ -436,7 +436,7 @@ capability and does not replace either existing workflow engine.
 - `internal/workflow/multiagent` owns stable contracts, deterministic
   supervision, persistence, recovery, and the fixed Phase 1 workflow
   definition.
-- `cmd/prizm-cli` is the composition root. It wires configured agents,
+- `cmd/prism-cli` is the composition root. It wires configured agents,
   providers, governed tools, approvals, validation, SQLite state, events, and
   run claims without taking ownership of their domain rules.
 - `multi-agent-software-task` is the only supported Phase 1 product workflow.
@@ -467,11 +467,15 @@ underlying assignment. Permission does not imply that the edge executed, and
 an executed edge does not grant new delegation authority. The graphs are
 related but never interchangeable.
 
+> Phase 2 adds a read-only dashboard rendering of the execution graph defined
+> here — nodes, edges, stable IDs, and status/counter semantics — without
+> changing anything in this section. See
+> [Multi-Agent Execution Graph Dashboard](MULTI_AGENT_EXECUTION_GRAPH.md).
 
-## Real Prizm agent adapter
+## Real Prism agent adapter
 
 `AgentRoleRunner` is the Phase 1 integration boundary between deterministic
-supervision and real Prizm agent execution. It remains in
+supervision and real Prism agent execution. It remains in
 `internal/workflow/multiagent` because it translates this domain's role,
 handoff, outcome, and budget contracts. It does not establish a new package or
 a second agent runtime.
@@ -480,7 +484,7 @@ The adapter delegates bounded execution to `internal/subagent.TaskRunner`.
 Production composition uses the existing `subagent.LoopRunner`, worker, and
 tool executor path. This seam was selected because it already owns local agent
 iterations, provider invocation, tool dispatch, cancellation, and execution
-telemetry. Calling a provider directly would bypass Prizm's tool, policy, and
+telemetry. Calling a provider directly would bypass Prism's tool, policy, and
 approval path; adding another runner would duplicate an existing domain.
 
 The ownership chain is:
@@ -553,7 +557,7 @@ existing workspace composition.
 
 Validation failures from the tester produce the typed `tests_failed` outcome,
 even if an agent reports success. Other validation failures are governance
-errors because no role may override Prizm's validation authority.
+errors because no role may override Prism's validation authority.
 
 ### Accounting and observability
 
@@ -660,7 +664,7 @@ treated as uncertain, not failed, because retrying it could repeat a mutation.
 ## Security and governance invariants
 
 - Agents perform bounded local work.
-- Prizm owns global routing and terminal decisions.
+- Prism owns global routing and terminal decisions.
 - Agents return typed outcomes and cannot directly control arbitrary
   transitions.
 - Delegation may narrow authority but cannot widen it.
@@ -711,9 +715,9 @@ transition resolution, fail-closed budget enforcement, canonical event
 ordering, cancellation checks, explicit state accounting, and bounded loop
 tests. It invokes no real agents and adds no persistence.
 
-### Completed foundation: PR4 real Prizm agent integration
+### Completed foundation: PR4 real Prism agent integration
 
-PR4 adapts configured Prizm agents to the PR3 role-runner boundary through the
+PR4 adapts configured Prism agents to the PR3 role-runner boundary through the
 existing bounded sub-agent runtime. It adds strict role outputs, deterministic
 outcome mapping, capability and tool-scope enforcement, approval and validation
 checks, run-workspace propagation, cancellation, and execution telemetry
@@ -729,7 +733,7 @@ in-flight work pauses for reconciliation instead of being rerun unsafely.
 
 ### Completed foundation: PR6 supported reference flow
 
-PR6 exposes one safe reference flow through `prizm workflow`, persists the
+PR6 exposes one safe reference flow through `prism workflow`, persists the
 effective input and definition before execution, scopes all tools to the
 selected workspace, requires a distinct reviewer, supports inspection,
 persisted cancellation, safe resume, and deterministic terminal reports, and

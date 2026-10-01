@@ -138,7 +138,7 @@ func TestSQLiteDurableRunStoreRejectsDuplicateRun(t *testing.T) {
 func newSQLiteDurableStoreForTest(t *testing.T) *SQLiteDurableRunStore {
 	t.Helper()
 	store, err := NewSQLiteDurableRunStore(
-		filepath.Join(t.TempDir(), "prizm-test.db"),
+		filepath.Join(t.TempDir(), "prism-test.db"),
 	)
 	if err != nil {
 		t.Fatalf("new sqlite durable store: %v", err)

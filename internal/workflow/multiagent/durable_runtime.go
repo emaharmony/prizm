@@ -10,32 +10,44 @@ import (
 	"sync"
 	"time"
 
+	prizmAdapter "github.com/emaharmony/prizm/internal/adapter"
 	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/validation"
 )
 
-const durableEventSource = "prizm-multi-agent-durable-runtime"
+const durableEventSource = "prism-multi-agent-durable-runtime"
 
 // DurableRuntimeOptions contains deterministic supervisor seams.
 type DurableRuntimeOptions struct {
 	Clock        func() time.Time
 	NewHandoffID func() string
 	Logger       *slog.Logger
+	// Interaction optionally runs the adapter cascade for graph nodes that
+	// advertise execution metadata. Its audit events are connected to the
+	// same durable outbox as supervisor events.
+	Interaction *InteractionScheduler
+	Reflection  ReflectionRunner
+	Memory      ReflectionMemorySink
 }
 
 // DurableRuntime advances a run only through atomically persisted checkpoints.
 type DurableRuntime struct {
-	supervisor *Supervisor
-	buffer     *durableEventBuffer
-	store      DurableRunStore
-	claimer    RunClaimer
-	publisher  EventPublisher
-	now        func() time.Time
+	supervisor  *Supervisor
+	buffer      *durableEventBuffer
+	store       DurableRunStore
+	claimer     RunClaimer
+	publisher   EventPublisher
+	now         func() time.Time
+	interaction *InteractionScheduler
+	reflection  ReflectionRunner
+	memory      ReflectionMemorySink
 }
 
-// NewDurableRuntime creates the Phase 1 persistence and recovery boundary.
+// NewDurableRuntime creates the Phase 1 persistence and recovery boundary
+// from an already-compiled graph (see NewSupervisor's doc for why this is no
+// longer a legacy Definition).
 func NewDurableRuntime(
-	definition Definition,
+	graph *CompiledGraph,
 	runner RoleRunner,
 	store DurableRunStore,
 	claimer RunClaimer,
@@ -53,21 +65,31 @@ func NewDurableRuntime(
 	}
 	buffer := &durableEventBuffer{}
 	supervisor, err := NewSupervisor(
-		definition,
+		graph,
 		runner,
 		buffer,
-		SupervisorOptions(options),
+		SupervisorOptions{
+			Clock:        options.Clock,
+			NewHandoffID: options.NewHandoffID,
+			Logger:       options.Logger,
+		},
 	)
 	if err != nil {
 		return nil, err
 	}
+	if options.Interaction != nil {
+		options.Interaction.SetEventSink(buffer)
+	}
 	return &DurableRuntime{
-		supervisor: supervisor,
-		buffer:     buffer,
-		store:      store,
-		claimer:    claimer,
-		publisher:  publisher,
-		now:        supervisor.now,
+		supervisor:  supervisor,
+		buffer:      buffer,
+		store:       store,
+		claimer:     claimer,
+		publisher:   publisher,
+		now:         supervisor.now,
+		interaction: options.Interaction,
+		reflection:  options.Reflection,
+		memory:      options.Memory,
 	}, nil
 }
 
@@ -95,7 +117,7 @@ func (r *DurableRuntime) Run(
 		State:         state,
 		Phase:         CheckpointPendingRole,
 	}
-	if err := record.Validate(r.supervisor.definition); err != nil {
+	if err := record.Validate(r.supervisor.graph); err != nil {
 		return RunState{}, err
 	}
 	record, err = r.store.Create(ctx, record, r.buffer.snapshot())
@@ -126,7 +148,7 @@ func (r *DurableRuntime) Resume(
 		r.publishRecoveryFailure(ctx, runID, err)
 		return RunState{}, &RecoveryFailedError{RunID: runID, Cause: err}
 	}
-	if err := record.Validate(r.supervisor.definition); err != nil {
+	if err := record.Validate(r.supervisor.graph); err != nil {
 		r.publishRecoveryFailure(ctx, runID, err)
 		return record.State, &RecoveryFailedError{RunID: runID, Cause: err}
 	}
@@ -136,6 +158,28 @@ func (r *DurableRuntime) Resume(
 	if record.Phase == CheckpointTerminal {
 		r.publishRecoveryCompleted(ctx, record.State, "terminal run unchanged")
 		return record.State, nil
+	}
+
+	// An operator pause is a special CheckpointWaiting exit: it was taken
+	// before the role was ever prepared (see prepareRole), so — unlike the
+	// approval/execution-reconciliation waits drive's own CheckpointWaiting
+	// case retries mid-role — resuming out of it must return to
+	// CheckpointPendingRole so the next drive() loop prepares the role from
+	// scratch (enterRole, a fresh execution key, a RoleEntered event). The
+	// pause request is cleared here, before the run can reach another role
+	// boundary, so it does not immediately re-pause.
+	if record.Phase == CheckpointWaiting &&
+		record.Waiting != nil &&
+		record.Waiting.Kind == "operator_pause" {
+		if err := r.store.ClearPauseRequest(ctx, runID); err != nil {
+			return record.State, err
+		}
+		now := r.now().UTC()
+		record.State.Status = RunStatusRunning
+		record.State.UpdatedAt = now
+		record.Waiting = nil
+		record.Phase = CheckpointPendingRole
+		r.supervisor.emitRun(event.EventMultiAgentRunResumed, record.State, "operator pause cleared")
 	}
 
 	r.emitRecovery(event.EventMultiAgentRecoveryStarted, record.State, "")
@@ -152,7 +196,7 @@ func (r *DurableRuntime) Inspect(ctx context.Context, runID string) (DurableRun,
 	if err != nil {
 		return DurableRun{}, err
 	}
-	if err := record.Validate(r.supervisor.definition); err != nil {
+	if err := record.Validate(r.supervisor.graph); err != nil {
 		return record, &RecoveryFailedError{RunID: runID, Cause: err}
 	}
 	return record, nil
@@ -190,7 +234,7 @@ func (r *DurableRuntime) Cancel(
 	if err != nil {
 		return RunState{}, err
 	}
-	if err := record.Validate(r.supervisor.definition); err != nil {
+	if err := record.Validate(r.supervisor.graph); err != nil {
 		return record.State, &RecoveryFailedError{RunID: runID, Cause: err}
 	}
 	if record.Phase == CheckpointTerminal {
@@ -217,6 +261,39 @@ func (r *DurableRuntime) Cancel(
 	return record.State, nil
 }
 
+// Pause persists an operator pause request without acquiring the execution
+// claim and without forcing any state transition itself: an active owner
+// observes it at the next role boundary (see prepareRole); an idle run only
+// observes it the next time Resume is called. Unlike Cancel, Pause never
+// makes the run terminal — a paused run must remain resumable. A run that
+// has already reached a terminal status cannot be paused; ErrRunAlreadyTerminal
+// is returned in that case without persisting a request.
+func (r *DurableRuntime) Pause(
+	ctx context.Context,
+	runID string,
+	reason string,
+) (RunState, error) {
+	if reason = strings.TrimSpace(reason); reason == "" {
+		reason = "paused by user"
+	}
+	reason = boundedDiagnostic(errors.New(reason))
+
+	record, err := r.store.Load(ctx, runID)
+	if err != nil {
+		return RunState{}, err
+	}
+	if err := record.Validate(r.supervisor.graph); err != nil {
+		return record.State, &RecoveryFailedError{RunID: runID, Cause: err}
+	}
+	if record.Phase == CheckpointTerminal {
+		return record.State, fmt.Errorf("%w: %s", ErrRunAlreadyTerminal, runID)
+	}
+	if err := r.store.RequestPause(ctx, runID, reason); err != nil {
+		return record.State, err
+	}
+	return record.State, nil
+}
+
 func (r *DurableRuntime) drive(
 	ctx context.Context,
 	record DurableRun,
@@ -236,6 +313,15 @@ func (r *DurableRuntime) drive(
 					r.publishRecoveryCompleted(ctx, record.State, "run reached terminal state")
 				}
 				return record.State, terminalError(record.State)
+			}
+			if record.Phase == CheckpointWaiting {
+				// An operator pause observed at this role boundary: return
+				// immediately rather than falling through to the
+				// CheckpointWaiting case below, whose SafeToRetry
+				// auto-continue is built for waits that resume mid-role
+				// (approval/execution-reconciliation), not a pause taken
+				// before the role was ever prepared.
+				return record.State, waitingError(record)
 			}
 			canExecutePrepared = true
 
@@ -277,6 +363,21 @@ func (r *DurableRuntime) drive(
 		case CheckpointWaiting:
 			if record.Waiting == nil || !record.Waiting.SafeToRetry {
 				return record.State, waitingError(record)
+			}
+			if r.reflection != nil {
+				trigger := ReflectionRecovery
+				if record.Waiting.Kind == "approval" || record.Waiting.Kind == "interaction_approval" {
+					trigger = ReflectionApprovalResume
+				}
+				input := ReflectionInput{Trigger: trigger, SourceRole: record.State.CurrentRole, Error: record.Waiting.Reason, Goal: record.State.CurrentTask.Description}
+				if r.runReflection(ctx, &record, trigger, input) {
+					var checkpointErr error
+					record, checkpointErr = r.checkpoint(ctx, record)
+					if checkpointErr != nil {
+						return record.State, checkpointErr
+					}
+					continue
+				}
 			}
 			record.State.Status = RunStatusRunning
 			roleState := record.State.RoleStates[record.State.CurrentRole]
@@ -346,6 +447,24 @@ func (r *DurableRuntime) prepareRole(
 		}
 		return record, cancelErr
 	}
+	pauseReason, pauseRequested, err := r.store.PauseRequest(ctx, record.State.RunID)
+	if err != nil {
+		return record, err
+	}
+	if pauseRequested {
+		now := r.now().UTC()
+		record.State.Status = RunStatusPaused
+		record.State.UpdatedAt = now
+		record.Phase = CheckpointWaiting
+		record.Waiting = &WaitingState{
+			Kind:        "operator_pause",
+			Reason:      pauseReason,
+			SafeToRetry: true,
+			Since:       now,
+		}
+		r.supervisor.emitRun(event.EventMultiAgentRunPaused, record.State, pauseReason)
+		return r.checkpoint(ctx, record)
+	}
 	if budgetErr := r.supervisor.checkBeforeRole(record.State); budgetErr != nil {
 		state, terminalErr := r.supervisor.exhaustRun(record.State, budgetErr)
 		record.State = state
@@ -376,8 +495,42 @@ func (r *DurableRuntime) executePreparedRole(
 	record DurableRun,
 ) (DurableRun, error) {
 	role := record.State.CurrentRole
-	roleConfig, _ := r.supervisor.definition.RoleConfig(role)
+	roleConfig, _ := r.supervisor.graph.RoleConfig(role)
 	startedAt := r.now().UTC()
+	if r.interaction != nil {
+		if node, ok := r.supervisor.graph.Node(nodeID(role)); ok && node.Execution != nil {
+			roleState := record.State.RoleStates[role]
+			interactionID := fmt.Sprintf("%s-%s-%d", record.State.RunID, role, roleState.Visits)
+			interactionRecord, interactionErr := r.interaction.Run(ctx, InteractionRunRequest{
+				RunID:       interactionID,
+				EventRunID:  record.State.RunID,
+				Goal:        record.State.CurrentTask.Description,
+				Observation: prizmAdapter.ObservationRequest{},
+				Plan:        interactionPlanForNode(node),
+			})
+			if interactionErr != nil {
+				if interactionRecord.Status == InteractionPaused {
+					return r.pauseForInteractionApproval(ctx, record, interactionRecord)
+				}
+				if r.runReflection(ctx, &record, ReflectionFailure, reflectionFailureInput(role, "", interactionErr, record.State)) {
+					return r.checkpoint(ctx, record)
+				}
+				return r.persistRoleFailure(ctx, record, role, &RoleExecutionError{Role: role, Cause: interactionErr})
+			}
+			if interactionRecord.Status == InteractionPaused {
+				return r.pauseForInteractionApproval(ctx, record, interactionRecord)
+			}
+			if interactionRecord.Status == InteractionFailed {
+				return r.persistRoleFailure(ctx, record, role, &RoleExecutionError{Role: role, Cause: errors.New(interactionRecord.LastError)})
+			}
+			if interactionRecord.Interrupted {
+				input := ReflectionInput{Trigger: ReflectionInterruption, SourceRole: role, Error: interactionRecord.InterruptReason, Goal: record.State.CurrentTask.Description, Observation: interactionRecord.LastObservation, Action: interactionRecord.LastAction, ActionResult: interactionRecord.LastResult}
+				if r.runReflection(ctx, &record, ReflectionInterruption, input) {
+					return r.checkpoint(ctx, record)
+				}
+			}
+		}
+	}
 	result, runErr := r.supervisor.runner.RunRole(ctx, RoleRunRequest{
 		Run:        r.supervisor.runView(record.State),
 		RoleConfig: cloneRoleConfig(roleConfig),
@@ -408,6 +561,9 @@ func (r *DurableRuntime) executePreparedRole(
 		return r.pauseForApproval(ctx, record, role, approvalErr)
 	}
 	if runErr != nil {
+		if r.runReflection(ctx, &record, ReflectionFailure, reflectionFailureInput(role, "", runErr, record.State)) {
+			return r.checkpoint(ctx, record)
+		}
 		return r.persistRoleFailure(
 			ctx,
 			record,
@@ -415,7 +571,10 @@ func (r *DurableRuntime) executePreparedRole(
 			&RoleExecutionError{Role: role, Cause: runErr},
 		)
 	}
-	if err := validateRoleRunResult(result); err != nil {
+	if err := validateRoleRunResult(r.supervisor.graph, result); err != nil {
+		if r.runReflection(ctx, &record, ReflectionFailure, reflectionFailureInput(role, result.Outcome, err, record.State)) {
+			return r.checkpoint(ctx, record)
+		}
 		return r.persistRoleFailure(
 			ctx,
 			record,
@@ -423,8 +582,11 @@ func (r *DurableRuntime) executePreparedRole(
 			&RoleExecutionError{Role: role, Cause: err},
 		)
 	}
-	transition, err := r.supervisor.resolver.Resolve(role, result.Outcome)
+	transition, err := r.supervisor.graph.Resolve(role, result.Outcome)
 	if err != nil {
+		if r.runReflection(ctx, &record, ReflectionFailure, reflectionFailureInput(role, result.Outcome, err, record.State)) {
+			return r.checkpoint(ctx, record)
+		}
 		return r.persistRoleFailure(ctx, record, role, err)
 	}
 
@@ -433,6 +595,16 @@ func (r *DurableRuntime) executePreparedRole(
 	roleState.LastExecutionKey = record.ActiveExecutionKey
 	record.State.RoleStates[role] = roleState
 	record.LastCompletedExecutionKey = record.ActiveExecutionKey
+	if transition.Terminal != "" {
+		input := ReflectionInput{Trigger: ReflectionTerminal, SourceRole: role, Outcome: result.Outcome, Goal: record.State.CurrentTask.Description}
+		if result.OutgoingHandoff != nil {
+			input.Evidence = append(input.Evidence, result.OutgoingHandoff.Evidence...)
+			input.Evidence = append(input.Evidence, result.OutgoingHandoff.Artifacts...)
+		}
+		if r.runReflection(ctx, &record, ReflectionTerminal, input) {
+			return r.checkpoint(ctx, record)
+		}
+	}
 
 	if budgetErr := r.supervisor.checkAfterRole(record.State, role, roleConfig); budgetErr != nil {
 		state, terminalErr := r.supervisor.exhaustRun(record.State, budgetErr)
@@ -455,6 +627,28 @@ func (r *DurableRuntime) executePreparedRole(
 			return record, checkpointErr
 		}
 		return record, terminalErr
+	}
+	// Purely additive: warn one traversal before this loop edge's budget
+	// would be exhausted. This changes no pass/fail/routing decision — it
+	// only adds an event on the existing checkLoopBudget code path, using
+	// the same used/limit values checkLoopBudget itself just computed to
+	// decide the transition was still within budget. loopBudgetSlug
+	// (supervisor_types.go) keeps the exact
+	// "tester_to_developer_loop"/"reviewer_to_developer_loop" payload
+	// strings stable, since LoopKind's underlying value is no longer that
+	// literal slug (it is now edgeID-shaped).
+	if loop, ok := r.supervisor.graph.LoopFor(transition); ok {
+		used := record.State.LoopTraversals.Get(loop.Kind) + 1
+		limit := loop.MaxTraversals
+		if limit != Unlimited && used == int(limit)-1 {
+			r.supervisor.emitBudgetWarning(
+				record.State,
+				loopBudgetSlug(loop.Kind)+"_loop",
+				transition.From,
+				used,
+				int(limit),
+			)
+		}
 	}
 
 	record.PendingTransition = &PendingTransition{
@@ -502,8 +696,8 @@ func (r *DurableRuntime) applyPendingTransition(
 	record.State.TransitionCount++
 	record.State.UpdatedAt = r.now().UTC()
 	r.supervisor.emitTransition(record.State, transition)
-	if loopKind, ok := correctionLoop(transition); ok {
-		record.State.LoopTraversals.increment(loopKind)
+	if loop, ok := r.supervisor.graph.LoopFor(transition); ok {
+		record.State.LoopTraversals.increment(loop.Kind)
 		r.supervisor.emitLoopTraversal(record.State, transition)
 	}
 
@@ -555,6 +749,36 @@ func (r *DurableRuntime) pauseForApproval(
 	record.Waiting = &WaitingState{
 		Kind:        "approval",
 		Reason:      boundedDiagnostic(approvalErr),
+		SafeToRetry: true,
+		Since:       now,
+	}
+	r.supervisor.emitRun(event.EventMultiAgentRunPaused, record.State, record.Waiting.Reason)
+	record, err := r.checkpoint(ctx, record)
+	if err != nil {
+		return record, err
+	}
+	return record, waitingError(record)
+}
+
+func (r *DurableRuntime) pauseForInteractionApproval(
+	ctx context.Context,
+	record DurableRun,
+	interaction InteractionRunRecord,
+) (DurableRun, error) {
+	now := r.now().UTC()
+	role := record.State.CurrentRole
+	roleState := record.State.RoleStates[role]
+	roleState.Status = RoleStatusWaiting
+	roleState.ApprovalStatus = string(InteractionApprovalPending)
+	roleState.LastError = boundedDiagnostic(errors.New(interaction.LastError))
+	roleState.UpdatedAt = now
+	record.State.RoleStates[role] = roleState
+	record.State.Status = RunStatusPaused
+	record.State.UpdatedAt = now
+	record.Phase = CheckpointWaiting
+	record.Waiting = &WaitingState{
+		Kind:        "interaction_approval",
+		Reason:      boundedDiagnostic(errors.New(interaction.LastError)),
 		SafeToRetry: true,
 		Since:       now,
 	}
@@ -618,7 +842,7 @@ func (r *DurableRuntime) checkpoint(
 	ctx context.Context,
 	record DurableRun,
 ) (DurableRun, error) {
-	if err := record.Validate(r.supervisor.definition); err != nil {
+	if err := record.Validate(r.supervisor.graph); err != nil {
 		return record, err
 	}
 	saved, err := r.store.Checkpoint(
@@ -692,7 +916,7 @@ func (r *DurableRuntime) publishRecoveryFailure(
 ) {
 	state := RunState{
 		RunID:      runID,
-		WorkflowID: r.supervisor.definition.ID,
+		WorkflowID: r.supervisor.graph.WorkflowID(),
 		Status:     RunStatusFailed,
 	}
 	evt := r.recoveryEvent(

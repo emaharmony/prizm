@@ -1,0 +1,10 @@
+apiVersion: prism.dev/v1alpha1
+kind: MultiAgentWorkflow
+metadata:
+  name: software-delivery
+spec:
+  entryNode: planner
+  nodes:
+    - id: planner
+     type: role
+      role: planner

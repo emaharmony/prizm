@@ -20,7 +20,7 @@ func TestSQLiteEventStore_StoreAndQuery(t *testing.T) {
 
 	event := Event{
 		ID:            "evt_001",
-		Type:          "prizm.task.created",
+		Type:          "prism.task.created",
 		Timestamp:     "2026-05-18T12:00:00Z",
 		CorrelationID: "corr_001",
 		ParentID:      "",
@@ -44,8 +44,8 @@ func TestSQLiteEventStore_StoreAndQuery(t *testing.T) {
 	if events[0].ID != "evt_001" {
 		t.Errorf("event ID = %q, want evt_001", events[0].ID)
 	}
-	if events[0].Type != "prizm.task.created" {
-		t.Errorf("event Type = %q, want prizm.task.created", events[0].Type)
+	if events[0].Type != "prism.task.created" {
+		t.Errorf("event Type = %q, want prism.task.created", events[0].Type)
 	}
 }
 
@@ -60,9 +60,9 @@ func TestSQLiteEventStore_StoreBatch(t *testing.T) {
 	defer store.Close()
 
 	events := []Event{
-		{ID: "evt_001", Type: "prizm.task.created", Timestamp: "2026-05-18T12:00:00Z", Payload: map[string]any{}, Metadata: EventMetadata{RunID: "run_batch"}},
-		{ID: "evt_002", Type: "prizm.task.started", Timestamp: "2026-05-18T12:00:01Z", Payload: map[string]any{}, Metadata: EventMetadata{RunID: "run_batch"}},
-		{ID: "evt_003", Type: "prizm.task.completed", Timestamp: "2026-05-18T12:00:02Z", Payload: map[string]any{}, Metadata: EventMetadata{RunID: "run_batch"}},
+		{ID: "evt_001", Type: "prism.task.created", Timestamp: "2026-05-18T12:00:00Z", Payload: map[string]any{}, Metadata: EventMetadata{RunID: "run_batch"}},
+		{ID: "evt_002", Type: "prism.task.started", Timestamp: "2026-05-18T12:00:01Z", Payload: map[string]any{}, Metadata: EventMetadata{RunID: "run_batch"}},
+		{ID: "evt_003", Type: "prism.task.completed", Timestamp: "2026-05-18T12:00:02Z", Payload: map[string]any{}, Metadata: EventMetadata{RunID: "run_batch"}},
 	}
 
 	ctx := context.Background()
@@ -92,13 +92,13 @@ func TestSQLiteEventStore_QueryByType(t *testing.T) {
 
 	ctx := context.Background()
 	events := []Event{
-		{ID: "evt_001", Type: "prizm.task.created", Timestamp: "2026-05-18T12:00:00Z", Payload: map[string]any{}, Metadata: EventMetadata{RunID: "run_1"}},
-		{ID: "evt_002", Type: "prizm.agent.started", Timestamp: "2026-05-18T12:00:01Z", Payload: map[string]any{}, Metadata: EventMetadata{RunID: "run_1"}},
-		{ID: "evt_003", Type: "prizm.task.completed", Timestamp: "2026-05-18T12:00:02Z", Payload: map[string]any{}, Metadata: EventMetadata{RunID: "run_1"}},
+		{ID: "evt_001", Type: "prism.task.created", Timestamp: "2026-05-18T12:00:00Z", Payload: map[string]any{}, Metadata: EventMetadata{RunID: "run_1"}},
+		{ID: "evt_002", Type: "prism.agent.started", Timestamp: "2026-05-18T12:00:01Z", Payload: map[string]any{}, Metadata: EventMetadata{RunID: "run_1"}},
+		{ID: "evt_003", Type: "prism.task.completed", Timestamp: "2026-05-18T12:00:02Z", Payload: map[string]any{}, Metadata: EventMetadata{RunID: "run_1"}},
 	}
 	store.StoreBatch(ctx, events)
 
-	results, err := store.Query(ctx, EventFilter{Type: "prizm.task"})
+	results, err := store.Query(ctx, EventFilter{Type: "prism.task"})
 	if err != nil {
 		t.Fatalf("Query() error = %v", err)
 	}
@@ -122,7 +122,7 @@ func TestSQLiteEventStore_QueryWithLimit(t *testing.T) {
 	for i := range events {
 		events[i] = Event{
 			ID:        fmt.Sprintf("evt_%03d", i),
-			Type:      "prizm.task.created",
+			Type:      "prism.task.created",
 			Timestamp: "2026-05-18T12:00:00Z",
 			Payload:   map[string]any{},
 			Metadata:  EventMetadata{RunID: "run_limit"},
@@ -174,7 +174,7 @@ func TestSQLiteEventStore_DefaultLimit(t *testing.T) {
 	for i := range events {
 		events[i] = Event{
 			ID:        fmt.Sprintf("evt_%03d", i),
-			Type:      "prizm.task.created",
+			Type:      "prism.task.created",
 			Timestamp: "2026-05-18T12:00:00Z",
 			Payload:   map[string]any{},
 			Metadata:  EventMetadata{RunID: "run_default_limit"},
@@ -241,14 +241,14 @@ func TestSQLiteEventStore_QueryOrdersByIDNotTimestamp(t *testing.T) {
 	const collidingTimestamp = "2026-07-30T12:00:00Z"
 	later := Event{
 		ID:        "evt_b_second",
-		Type:      "prizm.task.created",
+		Type:      "prism.task.created",
 		Timestamp: collidingTimestamp,
 		Payload:   map[string]any{},
 		Metadata:  EventMetadata{RunID: "run_id_order"},
 	}
 	earlier := Event{
 		ID:        "evt_a_first",
-		Type:      "prizm.task.created",
+		Type:      "prism.task.created",
 		Timestamp: collidingTimestamp,
 		Payload:   map[string]any{},
 		Metadata:  EventMetadata{RunID: "run_id_order"},
@@ -283,7 +283,7 @@ func TestSQLiteEventStore_DuplicateEventIDIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	evt := Event{
 		ID:        "evt_idempotent_reemit",
-		Type:      "prizm.workflow.multi_agent.recovery.completed",
+		Type:      "prism.workflow.multi_agent.recovery.completed",
 		Timestamp: "2026-07-23T12:00:00Z",
 		Payload: map[string]any{
 			"run_id":      "run_idempotent",

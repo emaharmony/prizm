@@ -123,8 +123,8 @@ func TestCompressToolResultsDigest(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 		{Role: "tool", Content: longResult, ToolID: "1"},  // index 1, old
 		{Role: "tool", Content: longResult, ToolID: "2"},  // index 2, old
-		{Role: "tool", Content: shortResult, ToolID: "3"},  // index 3, recent
-		{Role: "tool", Content: "plan data", ToolID: "4"},   // index 4, most recent
+		{Role: "tool", Content: shortResult, ToolID: "3"}, // index 3, recent
+		{Role: "tool", Content: "plan data", ToolID: "4"}, // index 4, most recent
 	}
 
 	compressed := compressToolResults(messages, 2)

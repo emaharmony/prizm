@@ -39,7 +39,6 @@ import (
 	"github.com/emaharmony/prizm/internal/delegation"
 	"github.com/emaharmony/prizm/internal/guard"
 	"github.com/emaharmony/prizm/internal/memory"
-	"github.com/emaharmony/prizm/internal/toolloop"
 	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/plan"
 	"github.com/emaharmony/prizm/internal/provider"
@@ -51,34 +50,35 @@ import (
 	"github.com/emaharmony/prizm/internal/state"
 	"github.com/emaharmony/prizm/internal/task"
 	"github.com/emaharmony/prizm/internal/tool"
+	"github.com/emaharmony/prizm/internal/toolloop"
 	"github.com/nats-io/nats.go"
 )
 
 // chatContext holds all dependencies for the interactive chat loop.
 // It mirrors conversationContext but without Discord-specific fields.
 type chatContext struct {
-	router      *router.Router
-	sessMgr     *session.Manager
-	cfg         *orchestrator.Config
-	providers   *provider.ProviderRegistry
-	ctxBuilder  *context.Builder
-	toolExec    *tool.Executor
-	toolPolicy  tool.PolicyConfig
-	eventLog    *runtrack.EventLogger
-	cancelReg   *runtrack.CancelRegistry
-	actionReg   *action.Registry
-	taskStore   *task.Store
-	delegEngine *delegation.Engine
-	natsConn    *nats.Conn     // Persistent NATS connection for event pipeline
-	natsURL     string         // NATS URL (embedded or external)
-	natsCleanup func()         // Cleanup for embedded NATS
-	rateLimiter *chatRateLimit // Per-message rate limiting for CLI
-	stateMgr    *state.Manager // V32: Working state manager for adaptive context
-	planMgr     *plan.Manager  // V32: Plan manager for plan-first pipeline
-	guardian    *guard.Guard   // V32: Guard rail for plan enforcement
-	memInjector *MemoryInjector // V79: Smart memory injection
-	memoryStore *memory.MarkdownStore // V77: Local memory store for recall
-	hasSoulContent bool        // True when SOUL.md is loaded — takes precedence over postfix
+	router         *router.Router
+	sessMgr        *session.Manager
+	cfg            *orchestrator.Config
+	providers      *provider.ProviderRegistry
+	ctxBuilder     *context.Builder
+	toolExec       *tool.Executor
+	toolPolicy     tool.PolicyConfig
+	eventLog       *runtrack.EventLogger
+	cancelReg      *runtrack.CancelRegistry
+	actionReg      *action.Registry
+	taskStore      *task.Store
+	delegEngine    *delegation.Engine
+	natsConn       *nats.Conn            // Persistent NATS connection for event pipeline
+	natsURL        string                // NATS URL (embedded or external)
+	natsCleanup    func()                // Cleanup for embedded NATS
+	rateLimiter    *chatRateLimit        // Per-message rate limiting for CLI
+	stateMgr       *state.Manager        // V32: Working state manager for adaptive context
+	planMgr        *plan.Manager         // V32: Plan manager for plan-first pipeline
+	guardian       *guard.Guard          // V32: Guard rail for plan enforcement
+	memInjector    *MemoryInjector       // V79: Smart memory injection
+	memoryStore    *memory.MarkdownStore // V77: Local memory store for recall
+	hasSoulContent bool                  // True when SOUL.md is loaded — takes precedence over postfix
 
 	// Cached static system content — built once, reused every message.
 	// Includes: agent identity, workspace context, postfix, tool instructions.
@@ -392,10 +392,10 @@ func executeChat(args []string) {
 			}
 			embIdx := memory.NewEmbeddingIndex(memory.EmbeddingConfig{
 				Enabled:          true,
-				Model:           embModel,
-				URL:             embURL,
-				Dimensions:      embDims,
-				IndexPath:       embPath,
+				Model:            embModel,
+				URL:              embURL,
+				Dimensions:       embDims,
+				IndexPath:        embPath,
 				ReindexOnStartup: cfg.Memory.EmbeddingReindexOnStartup,
 			})
 			if err := embIdx.Load(); err != nil {
@@ -408,11 +408,11 @@ func executeChat(args []string) {
 		var queryPlanner *memory.QueryPlanner
 		if cfg.Memory.QueryPlannerEnabled {
 			queryPlanner = memory.NewQueryPlanner(memory.QueryPlanConfig{
-				Enabled:  true,
-				Model:    cfg.Memory.QueryPlannerModel,
+				Enabled:   true,
+				Model:     cfg.Memory.QueryPlannerModel,
 				OllamaURL: cfg.Prizm.OllamaURL,
-				Timeout:  time.Duration(cfg.Memory.QueryPlannerTimeoutS) * time.Second,
-				Fallback: "heuristic",
+				Timeout:   time.Duration(cfg.Memory.QueryPlannerTimeoutS) * time.Second,
+				Fallback:  "heuristic",
 			})
 		}
 		chatMemInjector = NewMemoryInjector(chatMemStore, queryPlanner)

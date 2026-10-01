@@ -5,6 +5,7 @@ package echo
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/emaharmony/prizm/internal/adapter"
 )
@@ -39,6 +40,45 @@ func (e *EchoAdapter) Execute(ctx context.Context, action string, input map[stri
 	default:
 		return nil, fmt.Errorf("echo adapter: unknown action %q", action)
 	}
+}
+
+// Observe makes the echo adapter usable as a deterministic interaction
+// endpoint in graph runs. The observation is intentionally opaque and
+// stateless so it remains useful in tests and demos.
+func (e *EchoAdapter) Observe(ctx context.Context, _ adapter.ObservationRequest) (*adapter.Observation, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	return &adapter.Observation{
+		ID:         fmt.Sprintf("echo-%d", now.UnixNano()),
+		CapturedAt: now,
+		Data:       map[string]any{"adapter": e.Name(), "ready": true},
+	}, nil
+}
+
+// LegalActions exposes the echo capability as the complete legal action set.
+func (e *EchoAdapter) LegalActions(ctx context.Context, _ *adapter.Observation) ([]adapter.Capability, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return e.Capabilities(), nil
+}
+
+// ValidateAction rejects actions before they reach Execute.
+func (e *EchoAdapter) ValidateAction(ctx context.Context, action string, _ map[string]any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if action != "echo" {
+		return fmt.Errorf("echo adapter: action %q is not legal", action)
+	}
+	return nil
+}
+
+// Neutralize is a no-op because echo has no external side effects.
+func (e *EchoAdapter) Neutralize(ctx context.Context, _ string) error {
+	return ctx.Err()
 }
 
 // Health reports that the echo adapter is always ready.

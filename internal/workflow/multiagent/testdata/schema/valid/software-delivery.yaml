@@ -1,0 +1,82 @@
+apiVersion: prism.dev/v1alpha1
+kind: MultiAgentWorkflow
+metadata:
+  name: software-delivery
+  version: "1.0.0"
+  description: Reference planner/developer/tester/reviewer workflow
+spec:
+  entryNode: planner
+  budgets:
+    maxTransitions: 40
+    maxTokens: 200000
+    maxDuration: 30m
+  nodes:
+    - id: planner
+      type: role
+      role: planner
+      agentProfile: planner-default
+      allowedOutcomes:
+        - plan_ready
+    - id: developer
+      type: role
+      role: developer
+      agentProfile: developer-default
+      allowedOutcomes:
+        - implementation_ready
+    - id: tester
+      type: role
+      role: tester
+      agentProfile: tester-default
+      allowedOutcomes:
+        - tests_passed
+        - tests_failed
+    - id: reviewer
+      type: role
+      role: reviewer
+      agentProfile: reviewer-default
+      allowedOutcomes:
+        - review_approved
+        - changes_requested
+    - id: completed
+      type: terminal
+      terminalCondition: completed
+    - id: failed
+      type: terminal
+      terminalCondition: failed
+  edges:
+    - id: plan-to-dev
+      from: planner
+      to: developer
+      when:
+        outcome: plan_ready
+    - id: dev-to-tester
+      from: developer
+      to: tester
+      when:
+        outcome: implementation_ready
+    - id: tester-to-dev
+      from: tester
+      to: developer
+      when:
+        outcome: tests_failed
+      loop:
+        maxTraversals: 3
+        onExhausted: fail
+    - id: tester-to-reviewer
+      from: tester
+      to: reviewer
+      when:
+        outcome: tests_passed
+    - id: reviewer-to-dev
+      from: reviewer
+      to: developer
+      when:
+        outcome: changes_requested
+      loop:
+        maxTraversals: 3
+        onExhausted: fail
+    - id: reviewer-to-completed
+      from: reviewer
+      to: completed
+      when:
+        outcome: review_approved
