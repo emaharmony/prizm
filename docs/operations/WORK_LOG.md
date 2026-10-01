@@ -13,6 +13,36 @@ Add newest entries first. Include date, roadmap IDs, branch/commit when known,
 completed work, verification, open risks, and the next action. Never record
 secrets, tokens, private prompts, or customer data.
 
+## 2026-10-01 — R1 Scoped Provider and Validation Safety Boundary
+
+**Roadmap IDs:** R1
+**Branch/commit:** `codex/r1-approved-task`; pending local commit
+
+- Added an optional run-scoped provider boundary. Codex CLI now accepts an
+  explicit run workspace and forces its native invocation to `read-only`;
+  both `--cd` and process cwd point at the isolated worktree instead of the
+  configured global workspace. Prizm remains the only mutation authority via
+  its policy and approval-governed tool executor.
+- The multi-agent backend requires that boundary for a configured Codex agent
+  and fails closed if the provider cannot prove it. Generic existing provider
+  use remains compatible.
+- An applied mutation proposal now requires an `ApprovedRoleValidator` in the
+  durable runtime. Mutation-bearing developers additionally require a
+  workspace-aware validation runner before they can pause for approval.
+
+**Verification:** Added command/cwd/sandbox, unscoped-provider rejection,
+missing-validator, and non-workspace-validator tests. Focused suites and
+`go build ./...`, `go vet ./...`, `staticcheck ./...`, `go test ./... -count=1`,
+and `git diff --check` passed using workspace-local Go caches.
+
+**Open risks:** The real-provider acceptance remains blocked by automatic
+review of unverified provider egress. No provider invocation or workaround was
+attempted after adding these safeguards.
+
+**Next action:** after explicit egress authorization, run the disposable
+isolated-repository acceptance path and inspect the durable event trace and
+report.
+
 ## 2026-10-01 — R1 Post-Apply Workspace Validation
 
 **Roadmap IDs:** R1
