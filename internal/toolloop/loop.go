@@ -221,6 +221,7 @@ func RunChatLoop(
 		}
 
 		if response.Content != "" {
+			response.Content = stripThinkingContent(response.Content)
 			lastContent = response.Content
 			sink.OnProgress(response.Content)
 		}
@@ -446,6 +447,7 @@ func synthesizeFinalAnswer(
 		LocalFallback: localFallback,
 	}
 
+	synthesisResp.Content = stripThinkingContent(synthesisResp.Content)
 	if synthesisResp.Content != "" {
 		log.Printf("[TOOL-LOOP] synthesis produced %d chars", len(synthesisResp.Content))
 		sink.OnComplete(synthesisResp.Content, modelInfo)
