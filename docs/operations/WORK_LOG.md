@@ -13,6 +13,22 @@ Add newest entries first. Include date, roadmap IDs, branch/commit when known,
 completed work, verification, open risks, and the next action. Never record
 secrets, tokens, private prompts, or customer data.
 
+## 2026-10-01 — R1 Proposal-Required Coding and Roster Binding
+
+**Roadmap IDs:** R1
+**Branch/commits:** `codex/r1-approved-task`; `be616e0`, `75c06df`
+
+- Added distinct proposal and approval identities through the existing approval, tool, and graph lifecycle. The durable checkpoint now retains both identities, preserving schema-v1 compatibility when a historical approval lacks a proposal ID.
+- A developer that returns without a persisted proposal receives exactly one corrective provider turn. That turn carries the prior output, shares the original deadline, and is limited to the remaining token and iteration budget. Exhaustion or a second omission fails closed with an inspectable governance outcome.
+- Added validation lifecycle events, checked terminal worktree cleanup after report persistence, containment enforcement, and cleaned-workspace manifest recovery. Role-profile composition now selects configured agents by required capability while preserving explicit role-profile input overrides.
+- A real provider run used a disposable repository and reached the configured planner and developer in an isolated worktree. The developer omitted the required proposal on both turns; the run terminated safely, emitted a terminal failure event, wrote an inspectable report, and reclaimed its worktree. No commit, push, or pull request was created by the run.
+
+**Verification:** Focused corrective-turn, validation-event, worktree-cleanup, cleaned-manifest recovery, and roster-binding tests passed. `go build ./...`, `go vet ./...`, `staticcheck ./...`, `go test ./... -count=1`, and `git diff --check` passed using workspace-local Go caches.
+
+**Open risks:** The real provider has not yet completed proposal → approval → apply → validation → review/report. The enforcement is proven to fail closed, but the coding-agent/tool prompt still needs to yield reliable proposal-tool use before the R1 real-provider acceptance gate can pass.
+
+**Next action:** refine the coding-agent proposal-tool contract, then repeat the disposable-repository acceptance run including approval, restart, application, validation, and report evidence.
+
 ## 2026-09-30 — R1 Durable Approved-Task Execution
 
 **Roadmap IDs:** R1
