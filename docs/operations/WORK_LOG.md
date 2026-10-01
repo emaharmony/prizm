@@ -13,6 +13,39 @@ Add newest entries first. Include date, roadmap IDs, branch/commit when known,
 completed work, verification, open risks, and the next action. Never record
 secrets, tokens, private prompts, or customer data.
 
+## 2026-10-01 — R1 Post-Apply Workspace Validation
+
+**Roadmap IDs:** R1
+**Branch/commit:** `codex/r1-approved-task`; pending local commit
+
+- Corrected the mutation lifecycle ordering. A developer result carrying an
+  approval proposal now persists without running configured validation against
+  the pre-change worktree. After exact approval and idempotent application,
+  the durable runtime invokes optional post-apply validation before the graph
+  can transition or report success.
+- Post-apply validation evidence is checkpointed into the saved result before
+  continuation. A validation failure retains that evidence and uses the
+  existing reflection/failure escalation path; a denial or unapplied proposal
+  never invokes validation. Non-mutating role validation remains unchanged.
+- Removed `create_directory_proposal` from the mutation-bearing developer
+  contract and default allowed tools because the canonical artifact resolver
+  intentionally validates file proposals only.
+- Added regressions for pre-change failure versus post-apply success,
+  restart after durable application before validation, failure stopping later
+  roles, and direct adapter deferral.
+
+**Verification:** Focused multi-agent and CLI package suites passed. `go build
+./...`, `go vet ./...`, `staticcheck ./...`, `go test ./... -count=1`, and
+`git diff --check` passed using workspace-local Go caches.
+
+**Open risks:** The required real-provider acceptance remains blocked by the
+unverified provider-egress review. No provider rerun or workaround was
+attempted. The end-to-end approval → restart → apply → validation → report
+evidence is therefore still pending explicit egress authorization.
+
+**Next action:** obtain that authorization, then run the disposable isolated
+repository acceptance path and inspect its correlated event trace and report.
+
 ## 2026-10-01 — R1 Canonical Proposal Artifact Recovery
 
 **Roadmap IDs:** R1
