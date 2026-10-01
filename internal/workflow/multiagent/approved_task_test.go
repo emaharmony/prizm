@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/validation"
 )
 
 type fakeProposalLifecycle struct {
@@ -17,6 +18,7 @@ type fakeProposalLifecycle struct {
 	applyCalls []ProposalOperation
 	reconciled ProposalReconciliation
 	applyFails int
+	onApply    func()
 }
 
 func (f *fakeProposalLifecycle) Decision(_ context.Context, op ProposalOperation) (ProposalDecision, string, error) {
@@ -33,7 +35,41 @@ func (f *fakeProposalLifecycle) Apply(_ context.Context, op ProposalOperation) (
 		f.applyFails--
 		return ProposalApplyResult{}, errors.New("injected apply failure")
 	}
+	if f.onApply != nil {
+		f.onApply()
+	}
 	return ProposalApplyResult{Success: true, TargetPath: "feature.txt", Message: "applied"}, nil
+}
+
+type postApplyValidationRunner struct {
+	*scriptedRunner
+	workspaceChanged bool
+	validationCalls  int
+	lastResult       RoleRunResult
+	validationErr    error
+}
+
+func (r *postApplyValidationRunner) ValidateApprovedRole(_ context.Context, request RoleRunRequest, result RoleRunResult) (RoleRunResult, error) {
+	r.validationCalls++
+	if request.Run.CurrentRole != RoleDeveloper {
+		return result, errors.New("post-apply validation received the wrong role")
+	}
+	if !r.workspaceChanged {
+		return result, errors.New("pre-change validation would fail")
+	}
+	if result.OutgoingHandoff == nil {
+		return result, errors.New("developer result has no handoff")
+	}
+	result.Metadata.ValidationStatus = "passed"
+	if r.validationErr != nil {
+		result.Metadata.ValidationStatus = "failed"
+		result.OutgoingHandoff.ValidationResults = []validation.Result{{Profile: "post_apply", Status: "failed"}}
+		r.lastResult = result
+		return result, r.validationErr
+	}
+	result.OutgoingHandoff.ValidationResults = []validation.Result{{Profile: "post_apply", Status: "passed"}}
+	r.lastResult = result
+	return result, nil
 }
 
 func (f *fakeProposalLifecycle) Reconcile(_ context.Context, _ ProposalOperation) (ProposalReconciliation, ProposalApplyResult, error) {
@@ -117,6 +153,87 @@ func TestDurableApprovedTaskExactGrantApplyResumeAndDuplicate(t *testing.T) {
 		if !found {
 			t.Errorf("missing lifecycle event %s", typ)
 		}
+	}
+}
+
+func TestDurableApprovedTaskValidatesOnlyAfterApplyAndPersistsResults(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	base := approvedTaskRunner()
+	runner := &postApplyValidationRunner{scriptedRunner: base}
+	lifecycle := &fakeProposalLifecycle{decisions: map[string]ProposalDecision{"approval-1": ProposalPending}}
+	lifecycle.onApply = func() { runner.workspaceChanged = true }
+	runtime := newDurableRuntimeForTest(t, validDefinition(), runner, env.store, env.claimer, env.events,
+		DurableRuntimeOptions{Proposals: lifecycle})
+	request := testRunRequest()
+	request.RunID = "run-post-apply-validation"
+
+	state, err := runtime.Run(context.Background(), request)
+	var waiting *RunWaitingError
+	if !errors.As(err, &waiting) || state.Status != RunStatusPaused || runner.validationCalls != 0 {
+		t.Fatalf("pre-approval state=%q calls=%d err=%v", state.Status, runner.validationCalls, err)
+	}
+	lifecycle.decisions["approval-1"] = ProposalGranted
+	state, err = runtime.Resume(context.Background(), request.RunID)
+	if err != nil || state.Status != RunStatusCompleted || runner.validationCalls != 1 {
+		t.Fatalf("post-apply state=%q calls=%d err=%v", state.Status, runner.validationCalls, err)
+	}
+	record, err := runtime.Inspect(context.Background(), request.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	developer := record.State.RoleStates[RoleDeveloper]
+	if developer.ValidationStatus != "passed" || len(runner.lastResult.OutgoingHandoff.ValidationResults) != 1 {
+		t.Fatalf("developer validation state=%q result=%#v", developer.ValidationStatus, runner.lastResult.OutgoingHandoff)
+	}
+}
+
+func TestDurableApprovedTaskRestartsAfterApplyBeforeValidation(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	base := approvedTaskRunner()
+	runner := &postApplyValidationRunner{scriptedRunner: base, workspaceChanged: true}
+	lifecycle := &fakeProposalLifecycle{decisions: map[string]ProposalDecision{"approval-1": ProposalGranted}}
+	runtime := newDurableRuntimeForTest(t, validDefinition(), runner, env.store, env.claimer, env.events,
+		DurableRuntimeOptions{Proposals: lifecycle})
+	request := testRunRequest()
+	request.RunID = "run-post-apply-validation-restart"
+	_, _ = runtime.Run(context.Background(), request)
+	record, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a crash after application was durably recorded and before
+	// post-apply validation. Resume must validate before transition.
+	record.ApprovedTask.Proposals[0].Phase = "applied"
+	record.ApprovedTask.Proposals[0].Result = &ProposalApplyResult{Success: true, TargetPath: "feature.txt"}
+	if _, err = env.store.Checkpoint(context.Background(), record.Revision, record, nil); err != nil {
+		t.Fatal(err)
+	}
+	restarted := newDurableRuntimeForTest(t, validDefinition(), runner, env.store, env.claimer, env.events,
+		DurableRuntimeOptions{Proposals: lifecycle})
+	state, err := restarted.Resume(context.Background(), request.RunID)
+	if err != nil || state.Status != RunStatusCompleted || runner.validationCalls != 1 {
+		t.Fatalf("restart state=%q calls=%d err=%v", state.Status, runner.validationCalls, err)
+	}
+}
+
+func TestDurableApprovedTaskPostApplyValidationFailureStopsContinuation(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	base := approvedTaskRunner()
+	runner := &postApplyValidationRunner{scriptedRunner: base, validationErr: errors.New("post-change validation failed")}
+	lifecycle := &fakeProposalLifecycle{decisions: map[string]ProposalDecision{"approval-1": ProposalPending}}
+	lifecycle.onApply = func() { runner.workspaceChanged = true }
+	runtime := newDurableRuntimeForTest(t, validDefinition(), runner, env.store, env.claimer, env.events,
+		DurableRuntimeOptions{Proposals: lifecycle})
+	request := testRunRequest()
+	request.RunID = "run-post-apply-validation-failure"
+	_, _ = runtime.Run(context.Background(), request)
+	lifecycle.decisions["approval-1"] = ProposalGranted
+	state, err := runtime.Resume(context.Background(), request.RunID)
+	if err == nil || state.Status != RunStatusFailed || runner.validationCalls != 1 {
+		t.Fatalf("failure state=%q calls=%d err=%v", state.Status, runner.validationCalls, err)
+	}
+	if got := runnerCalls(base); !reflect.DeepEqual(got, []Role{RolePlanner, RoleDeveloper}) {
+		t.Fatalf("post-apply validation continued roles: %v", got)
 	}
 }
 

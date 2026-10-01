@@ -243,6 +243,13 @@ type RoleRunner interface {
 	RunRole(context.Context, RoleRunRequest) (RoleRunResult, error)
 }
 
+// ApprovedRoleValidator is an optional extension for mutation-bearing roles.
+// The durable runtime calls it only after the exact approved proposals have
+// been applied in the run workspace and before it transitions the saved role.
+type ApprovedRoleValidator interface {
+	ValidateApprovedRole(context.Context, RoleRunRequest, RoleRunResult) (RoleRunResult, error)
+}
+
 // EventSink consumes canonical Prism events emitted by the supervisor.
 type EventSink interface {
 	Emit(event.Event)

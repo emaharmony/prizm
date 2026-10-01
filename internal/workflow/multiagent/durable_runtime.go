@@ -911,6 +911,28 @@ func (r *DurableRuntime) advanceApprovedTask(ctx context.Context, record Durable
 	}
 
 	task := record.ApprovedTask
+	roleConfig, _ := r.supervisor.graph.RoleConfig(task.Role)
+	if validator, ok := r.supervisor.runner.(ApprovedRoleValidator); ok {
+		validated, validationErr := validator.ValidateApprovedRole(ctx, RoleRunRequest{
+			Run:        r.supervisor.runView(record.State),
+			RoleConfig: cloneRoleConfig(roleConfig),
+		}, task.Result)
+		// Retain post-apply validation evidence even when it fails, so recovery
+		// and the terminal report explain why continuation was stopped.
+		record.ApprovedTask.Result = validated
+		var checkpointErr error
+		record, checkpointErr = r.checkpoint(ctx, record)
+		if checkpointErr != nil {
+			return record, checkpointErr
+		}
+		if validationErr != nil {
+			if r.runReflection(ctx, &record, ReflectionFailure, reflectionFailureInput(task.Role, validated.Outcome, validationErr, record.State)) {
+				return r.checkpoint(ctx, record)
+			}
+			return r.persistRoleFailure(ctx, record, task.Role, &RoleExecutionError{Role: task.Role, Cause: validationErr})
+		}
+		task = record.ApprovedTask
+	}
 	record.ProposalResults = append(record.ProposalResults, task.Proposals...)
 	record.ApprovedTask = nil
 	record.Waiting = nil
@@ -930,7 +952,6 @@ func (r *DurableRuntime) advanceApprovedTask(ctx context.Context, record Durable
 	if err != nil {
 		return record, err
 	}
-	roleConfig, _ := r.supervisor.graph.RoleConfig(task.Role)
 	return r.finishPreparedRole(ctx, record, task.Role, roleConfig, task.Result, task.StartedAt, task.FinishedAt)
 }
 

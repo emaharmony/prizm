@@ -326,7 +326,7 @@ func TestAgentRoleRunnerRequiresDeveloperProposalWithOneCorrectiveTurn(t *testin
 			if calls < 2 {
 				return nil, nil
 			}
-			return []ProposalReference{{ProposalID: "proposal-1", ApprovalID: "approval-1"}}, nil
+			return []ProposalReference{{ProposalID: "proposal-1", ApprovalID: "approval-1", Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "feature.txt"}}}}, nil
 		}),
 	})
 	if err != nil {
@@ -403,6 +403,29 @@ func TestAgentRoleRunnerEmitsValidationLifecycleEvents(t *testing.T) {
 		if evt.CorrelationID != request.Run.RunID || evt.Payload["profile"] != "go_test_all" {
 			t.Fatalf("uncorrelated validation event: %#v", evt)
 		}
+	}
+}
+
+func TestAgentRoleRunnerDefersDeveloperValidationUntilProposalApplied(t *testing.T) {
+	validationCalls := 0
+	runner := newAdapterForTest(t, agentExecutorFunc(func(context.Context, AgentExecutionRequest) (AgentExecutionResult, error) {
+		return AgentExecutionResult{Output: `{"schema_version":1,"summary":"done","changed_artifacts":[{"kind":"file","uri":"feature.txt"}],"handoff":{"objective":"test","reason":"implemented"}}`, LocalIterations: 1}, nil
+	}), ValidationRunnerFunc(func(context.Context, string, string) (*validation.Result, error) {
+		validationCalls++
+		return &validation.Result{Profile: "go_test_all", Status: "passed"}, nil
+	}), nil)
+	runner.proposals = ProposalResolverFunc(func(context.Context, ProposalQuery) ([]ProposalReference, error) {
+		return []ProposalReference{{ProposalID: "proposal-1", ApprovalID: "approval-1", Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "feature.txt"}}}}, nil
+	})
+	request := adapterRoleRequest(RoleDeveloper)
+	request.RoleConfig.ValidationProfiles = []string{"go_test_all"}
+	result, err := runner.RunRole(context.Background(), request)
+	if err != nil || validationCalls != 0 || result.Metadata.ValidationStatus != "deferred_until_applied" {
+		t.Fatalf("pre-apply result=%#v calls=%d err=%v", result, validationCalls, err)
+	}
+	result, err = runner.ValidateApprovedRole(context.Background(), request, result)
+	if err != nil || validationCalls != 1 || result.Metadata.ValidationStatus != "passed" || len(result.OutgoingHandoff.ValidationResults) != 1 {
+		t.Fatalf("post-apply result=%#v calls=%d err=%v", result, validationCalls, err)
 	}
 }
 

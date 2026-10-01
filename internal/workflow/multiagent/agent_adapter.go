@@ -168,7 +168,7 @@ func (r *AgentRoleRunner) RunRole(
 		}
 		executionRequest.MaxIterations = remainingIterations
 		executionRequest.MaxTokens = remainingTokens
-		executionRequest.Prompt += fmt.Sprintf("\n\nCORRECTION: Your previous response did not persist a mutation proposal. Previous output follows:\n%s\n\nYour NEXT response must be ONLY one JSON tool_request for write_file_proposal or create_directory_proposal. Do not include the developer role JSON in that response. After the tool result, return ONLY the required developer role JSON. This is your only corrective turn.", execution.Output)
+		executionRequest.Prompt += fmt.Sprintf("\n\nCORRECTION: Your previous response did not persist a mutation proposal. Previous output follows:\n%s\n\nYour NEXT response must be ONLY one JSON tool_request for write_file_proposal. Do not include the developer role JSON in that response. After the tool result, return ONLY the required developer role JSON. This is your only corrective turn.", execution.Output)
 		correctiveRetries = 1
 		corrected, correctErr := r.executor.ExecuteAgent(executionContext, executionRequest)
 		if correctErr != nil {
@@ -204,26 +204,32 @@ func (r *AgentRoleRunner) RunRole(
 		return RoleRunResult{}, err
 	}
 	finishedAt := r.now().UTC()
-	validationResults, validationStatus, err := r.runValidations(ctx, request)
-	if err != nil {
-		return RoleRunResult{}, err
+	validationStatus := "not_required"
+	// A developer proposal has not changed the workspace yet. Validation must
+	// run after the durable approval/application transition, never against the
+	// pre-change worktree.
+	deferValidation := request.Run.CurrentRole == RoleDeveloper && len(proposals) > 0 && len(request.RoleConfig.ValidationProfiles) > 0
+	if !deferValidation {
+		validationResults, status, validationErr := r.runValidations(ctx, request)
+		if validationErr != nil {
+			return RoleRunResult{}, validationErr
+		}
+		validationStatus = status
+		if decoded.Handoff != nil {
+			decoded.Handoff.ValidationResults = append([]validation.Result(nil), validationResults...)
+		}
+		if validationStatus == "failed" && request.Run.CurrentRole == RoleTester {
+			decoded.Outcome = OutcomeTestsFailed
+			if decoded.Handoff == nil {
+				return RoleRunResult{}, &StructuredOutputError{Role: RoleTester, Cause: errors.New("validation failure requires a tester handoff")}
+			}
+			decoded.Handoff.Reason = "allowlisted validation failed"
+		}
+	} else {
+		validationStatus = "deferred_until_applied"
 	}
 	if decoded.Handoff != nil {
 		decoded.Handoff.Artifacts = mergeArtifacts(decoded.Handoff.Artifacts, execution.Artifacts)
-		decoded.Handoff.ValidationResults = append(
-			[]validation.Result(nil),
-			validationResults...,
-		)
-	}
-	if validationStatus == "failed" && request.Run.CurrentRole == RoleTester {
-		decoded.Outcome = OutcomeTestsFailed
-		if decoded.Handoff == nil {
-			return RoleRunResult{}, &StructuredOutputError{
-				Role:  RoleTester,
-				Cause: errors.New("validation failure requires a tester handoff"),
-			}
-		}
-		decoded.Handoff.Reason = "allowlisted validation failed"
 	}
 
 	localIterations := execution.LocalIterations
@@ -251,6 +257,24 @@ func (r *AgentRoleRunner) RunRole(
 		},
 		Proposals: proposals,
 	}, nil
+}
+
+// ValidateApprovedRole validates a saved developer result after its exact
+// approved proposal is applied. It is intentionally separate from RunRole so
+// the durable runtime can checkpoint the pre-apply result before pausing.
+func (r *AgentRoleRunner) ValidateApprovedRole(ctx context.Context, request RoleRunRequest, result RoleRunResult) (RoleRunResult, error) {
+	if request.Run.CurrentRole != RoleDeveloper || len(result.Proposals) == 0 || len(request.RoleConfig.ValidationProfiles) == 0 {
+		return result, nil
+	}
+	validationResults, validationStatus, err := r.runValidations(ctx, request)
+	if result.OutgoingHandoff != nil {
+		result.OutgoingHandoff.ValidationResults = append([]validation.Result(nil), validationResults...)
+	}
+	result.Metadata.ValidationStatus = validationStatus
+	if err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 // Reflect runs the dedicated reflector role through the same profile,
@@ -344,7 +368,7 @@ func BuildRolePrompt(request RoleRunRequest) (string, error) {
 		schema,
 	)
 	if request.Run.CurrentRole == RoleDeveloper {
-		prompt += "\n\nDEVELOPER TOOL PROTOCOL: Before returning the developer role-schema JSON, emit exactly one separate JSON tool_request for write_file_proposal or create_directory_proposal. Do not combine the tool request with the role-schema JSON. After Prizm returns the tool result, return only the developer role-schema JSON."
+		prompt += "\n\nDEVELOPER TOOL PROTOCOL: Before returning the developer role-schema JSON, emit exactly one separate JSON tool_request for write_file_proposal. Do not combine the tool request with the role-schema JSON. After Prizm returns the tool result, return only the developer role-schema JSON."
 	}
 	return prompt, nil
 }
