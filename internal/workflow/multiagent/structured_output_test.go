@@ -81,6 +81,18 @@ func TestDecodeRoleOutput(t *testing.T) {
 			wantOutcome: OutcomeReviewApproved,
 		},
 		{
+			name: "reviewer string finding evidence",
+			role: RoleReviewer,
+			raw: `{
+				"schema_version": 1,
+				"decision": "approved",
+				"findings": [{"severity": "info", "summary": "validated", "evidence": ["validation/go_test_all.stdout.txt"]}],
+				"required_corrections": [],
+				"evidence": []
+			}`,
+			wantOutcome: OutcomeReviewApproved,
+		},
+		{
 			name: "reviewer requests changes",
 			role: RoleReviewer,
 			raw: `{

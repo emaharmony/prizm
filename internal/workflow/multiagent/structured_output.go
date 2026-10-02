@@ -66,6 +66,40 @@ type ReviewFinding struct {
 	Evidence []ArtifactRef `json:"evidence,omitempty"`
 }
 
+// UnmarshalJSON accepts the documented artifact objects and the string-only
+// evidence form emitted by some text providers. Reviewer evidence is
+// descriptive rather than an execution or mutation authority; normalizing a
+// string to a file reference keeps the review record inspectable without
+// weakening the strict contract for unknown fields or governed artifacts.
+func (f *ReviewFinding) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Severity string          `json:"severity"`
+		Summary  string          `json:"summary"`
+		Evidence json.RawMessage `json:"evidence"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&wire); err != nil {
+		return err
+	}
+	*f = ReviewFinding{Severity: wire.Severity, Summary: wire.Summary}
+	if len(wire.Evidence) == 0 || string(wire.Evidence) == "null" {
+		return nil
+	}
+	if err := json.Unmarshal(wire.Evidence, &f.Evidence); err == nil {
+		return nil
+	}
+	var uris []string
+	if err := json.Unmarshal(wire.Evidence, &uris); err != nil {
+		return fmt.Errorf("evidence must be artifact objects or strings: %w", err)
+	}
+	f.Evidence = make([]ArtifactRef, 0, len(uris))
+	for _, uri := range uris {
+		f.Evidence = append(f.Evidence, ArtifactRef{Kind: ArtifactFile, URI: uri})
+	}
+	return nil
+}
+
 // ReviewerOutput is the strict reviewer result contract.
 type ReviewerOutput struct {
 	SchemaVersion       int             `json:"schema_version"`

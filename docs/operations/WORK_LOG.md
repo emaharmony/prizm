@@ -7,6 +7,43 @@ the next contributor.
 > Prizm is source-available under an all-rights-reserved [license](../../LICENSE)
 > and is preview-stage.
 
+## 2026-10-02 — R1 Full Live Lifecycle Evidence and Reviewer Compatibility
+
+**Roadmap IDs:** R1
+**Branch/commit:** `codex/r1-approved-task`; reviewer-evidence compatibility fix pending commit
+
+- Ran one bounded, authorized Codex-provider acceptance workflow against an
+  isolated worktree of the real Prizm repository. It persisted one exact
+  proposal (`prop_1790967959904137400`) and approval
+  (`appr_1790967959904137400`), paused, then resumed from a fresh CLI process.
+  Recovery reconciled the applied content with the stable apply key before the
+  graph continued.
+- The governed mutation created only `R1_ACCEPTANCE_PROOF.md` inside the
+  detached run worktree. The source checkout was not changed and no commit,
+  push, or pull request was created by the workflow.
+- The tester completed `go test ./...` in that isolated worktree with exit code
+  zero and durable command, working-directory, and output-path evidence. The
+  reviewer then returned a string in a finding's `evidence` array, which the
+  strict object-only decoder rejected before terminal approval/report.
+- Added a narrow `ReviewFinding` decoder compatibility path for string-form
+  descriptive evidence. It retains strict unknown-field handling and maps only
+  the compatibility strings to non-authoritative file references; proposal,
+  approval, validation, and mutation authority are unchanged.
+
+**Verification:** Focused structured-output tests pass. The full build, vet,
+staticcheck, and repository test command completed; its generated embeddings
+fixture was restored. The acceptance record and report remain in
+`.tmp/r1-final-provider-runs/run_01M3Z02G75YMNE9TX92VYWENQV/`.
+
+**Open risks:** This one permitted trial proved every lifecycle stage through
+tester validation, but not a terminal reviewer-approved report. The narrow
+parser fix needs a subsequent bounded real-provider run. R1 event/outbox
+unification, parallel fan-out/fan-in, and delegation acknowledgements remain
+separate roadmap work.
+
+**Next action:** commit and push this compatibility fix, then schedule one new
+bounded provider run to prove the terminal review/report stage.
+
 ## Entry Format
 
 Add newest entries first. Include date, roadmap IDs, branch/commit when known,
