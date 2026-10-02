@@ -7,6 +7,40 @@ the next contributor.
 > Prizm is source-available under an all-rights-reserved [license](../../LICENSE)
 > and is preview-stage.
 
+## 2026-10-02 — R1 Terminal Trial Handoff Recovery
+
+**Roadmap IDs:** R1
+**Branch/commit:** `codex/r1-approved-task`; pending commit
+
+- Ran exactly one further bounded, user-authorized Codex-provider workflow in a
+  detached worktree. It produced one exact proposal
+  (`prop_1790968701752227200`) and approval (`appr_1790968701752227200`),
+  paused, was inspected from a fresh CLI process, then reconciled the
+  user-approved artifact without reapplying it.
+- The run reached the tester after the developer's durable completion. The
+  provider reported `result: failed` while all of its reported tests passed;
+  strict tester decoding correctly rejected that contradictory evidence before
+  validation and review. No additional provider trial was run.
+- Added a focused recovery correction: once a proposal is durably applied and
+  post-apply validation completes, its outgoing handoff removes only a
+  matching pending/outstanding issue that names that proposal or approval and
+  records the authoritative lifecycle fact. Unrelated developer issues remain.
+
+**Verification:** focused approved-task tests, build, vet, staticcheck, and
+repository tests were run with workspace-local Go caches. The test-generated
+memory embeddings timestamp was restored. The failed run's manifest, report,
+approval, durable database, and apply evidence remain under
+`.tmp/r1-terminal-provider-runs/run_01M3Z0T1FZ4V2K63JW2GYFSJVC/`.
+
+**Open risks:** this run did not produce post-apply validation or a terminal
+review/report because strict tester decoding stopped it. R1 still lacks a
+complete terminal provider acceptance and its later outbox, fan-out/fan-in,
+and delegation acknowledgement gates.
+
+**Next action:** review and push this narrow recovery fix; before advancing
+R1, obtain a separately authorized bounded provider run for validation,
+review/report, and the complete correlated event trace.
+
 ## 2026-10-02 — R1 Full Live Lifecycle Evidence and Reviewer Compatibility
 
 **Roadmap IDs:** R1

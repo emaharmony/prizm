@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -93,6 +94,25 @@ func approvedTaskRunner() *scriptedRunner {
 	result.Proposals = []ProposalReference{{ProposalID: "proposal-1", ApprovalID: "approval-1"}}
 	runner.scripts[RoleDeveloper][0].result = result
 	return runner
+}
+
+func TestReconcileApprovedTaskHandoffSupersedesOnlySettledApprovalIssue(t *testing.T) {
+	result := RoleRunResult{OutgoingHandoff: &HandoffDraft{
+		Notes: "proposal created before human decision",
+		UnresolvedIssues: []Issue{
+			{ID: "approval-pending", Summary: "Approval approval-1 is pending", Blocking: true},
+			{ID: "real-blocker", Summary: "Repository fixture still needs review", Blocking: true},
+		},
+	}}
+	reconcileApprovedTaskHandoff(&result, []ProposalProgress{{
+		ProposalOperation: ProposalOperation{ProposalID: "proposal-1", ApprovalID: "approval-1"},
+	}})
+	if len(result.OutgoingHandoff.UnresolvedIssues) != 1 || result.OutgoingHandoff.UnresolvedIssues[0].ID != "real-blocker" {
+		t.Fatalf("unresolved issues = %#v", result.OutgoingHandoff.UnresolvedIssues)
+	}
+	if !strings.Contains(result.OutgoingHandoff.Notes, "Authoritative runtime state") {
+		t.Fatalf("missing settled lifecycle fact: %q", result.OutgoingHandoff.Notes)
+	}
 }
 
 func TestDurableApprovedTaskExactGrantApplyResumeAndDuplicate(t *testing.T) {

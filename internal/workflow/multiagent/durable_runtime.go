@@ -940,6 +940,17 @@ func (r *DurableRuntime) advanceApprovedTask(ctx context.Context, record Durable
 		}
 		task = record.ApprovedTask
 	}
+	// The developer's handoff was produced before the operator decided the
+	// proposal. Remove only a now-stale, identity-bearing pending-approval
+	// issue and add the durable fact that supersedes it. Later roles must not
+	// treat a resolved human gate as an outstanding blocker after recovery.
+	reconcileApprovedTaskHandoff(&task.Result, task.Proposals)
+	record.ApprovedTask.Result = task.Result
+	var checkpointErr error
+	record, checkpointErr = r.checkpoint(ctx, record)
+	if checkpointErr != nil {
+		return record, checkpointErr
+	}
 	record.ProposalResults = append(record.ProposalResults, task.Proposals...)
 	record.ApprovedTask = nil
 	record.Waiting = nil
@@ -960,6 +971,41 @@ func (r *DurableRuntime) advanceApprovedTask(ctx context.Context, record Durable
 		return record, err
 	}
 	return r.finishPreparedRole(ctx, record, task.Role, roleConfig, task.Result, task.StartedAt, task.FinishedAt)
+}
+
+// reconcileApprovedTaskHandoff preserves developer-raised issues except for a
+// pending-approval claim that identifies a proposal or approval this runtime
+// has durably reconciled as applied. The durable lifecycle, not a pre-approval
+// model response, is authoritative for that fact.
+func reconcileApprovedTaskHandoff(result *RoleRunResult, proposals []ProposalProgress) {
+	if result == nil || result.OutgoingHandoff == nil || len(proposals) == 0 {
+		return
+	}
+	identities := make([]string, 0, len(proposals)*2)
+	for _, proposal := range proposals {
+		identities = append(identities, strings.ToLower(proposal.ProposalID), strings.ToLower(proposal.ApprovalID))
+	}
+	issues := result.OutgoingHandoff.UnresolvedIssues[:0]
+	for _, issue := range result.OutgoingHandoff.UnresolvedIssues {
+		summary := strings.ToLower(issue.Summary)
+		isPending := strings.Contains(summary, "pending") || strings.Contains(summary, "outstanding")
+		identifiesAppliedProposal := false
+		for _, identity := range identities {
+			if identity != "" && strings.Contains(summary, identity) {
+				identifiesAppliedProposal = true
+				break
+			}
+		}
+		if isPending && identifiesAppliedProposal {
+			continue
+		}
+		issues = append(issues, issue)
+	}
+	result.OutgoingHandoff.UnresolvedIssues = issues
+	const settled = "Authoritative runtime state: the exact approved proposal was applied and post-apply validation completed; earlier pending-approval statements for that proposal are superseded."
+	if !strings.Contains(result.OutgoingHandoff.Notes, settled) {
+		result.OutgoingHandoff.Notes = strings.TrimSpace(strings.Join([]string{result.OutgoingHandoff.Notes, settled}, "\n"))
+	}
 }
 
 func proposalWaitingState(progress ProposalProgress, reason string, safe bool, since time.Time) *WaitingState {
