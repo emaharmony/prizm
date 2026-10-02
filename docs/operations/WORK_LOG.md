@@ -13,6 +13,36 @@ Add newest entries first. Include date, roadmap IDs, branch/commit when known,
 completed work, verification, open risks, and the next action. Never record
 secrets, tokens, private prompts, or customer data.
 
+## 2026-10-01 — R1 Legacy Delegation and Workspace Provenance Safeguards
+
+**Roadmap IDs:** R1
+**Branch/commit:** `codex/r1-approved-task` at `74e7d53`
+
+- Closed the legacy Codex worker bypass used by both local delegation and the
+  Cross-Prizm adapter. Its construction now forces a read-only sandbox, no
+  native approval/mutation mode, no diff capture, and an explicit no-mutation
+  task instruction. It remains available for research and report work.
+- Native-tool provider scoping now depends on the resolved provider capability,
+  not the configured provider label. A native provider without the optional
+  run-scoped interface fails closed.
+- Before a scoped provider executes, Prizm resolves and verifies that its
+  workspace exists below the configured repository's `.prizm/worktrees` root;
+  an arbitrary path, shared root, missing root, or absent directory is refused.
+
+**Verification:** Added local-worker and Cross-Prizm read-only command tests,
+resolved-provider alias rejection, and outside-worktree rejection. Targeted
+subagent, provider, Codex worker, multi-agent, and CLI suites passed, followed
+by `go build ./...`, `go vet ./...`, `staticcheck ./...`, `go test ./...
+-count=1`, and `git diff --check` using workspace-local Go caches.
+
+**Open risks:** The required real-provider acceptance remains blocked by
+automatic review of unverified provider egress. No external provider call was
+attempted.
+
+**Next action:** after explicit egress authorization, run the disposable
+isolated-repository acceptance path and inspect its durable event trace and
+report.
+
 ## 2026-10-01 — R1 Scoped Provider and Validation Safety Boundary
 
 **Roadmap IDs:** R1
