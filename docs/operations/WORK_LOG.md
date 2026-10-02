@@ -16,7 +16,7 @@ secrets, tokens, private prompts, or customer data.
 ## 2026-10-02 — R1 Real-Provider Acceptance Boundary Hardening
 
 **Roadmap IDs:** R1
-**Branch/commit:** `codex/r1-approved-task`; pending local commit
+**Branch/commit:** `codex/r1-approved-task`; provider-boundary hardening commit
 
 - Ran an authorized disposable Codex-provider workflow against an isolated
   Prizm worktree. The run completed planning, persisted one exact proposal and
