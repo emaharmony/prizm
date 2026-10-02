@@ -176,15 +176,16 @@ func TestDecodeDeveloperOutputForProposalsDerivesMissingArtifact(t *testing.T) {
 	}
 }
 
-func TestDecodeDeveloperOutputForProposalsRejectsMissingOrConflictingSource(t *testing.T) {
+func TestDecodeDeveloperOutputForProposalsRequiresProposalAndUsesCanonicalSource(t *testing.T) {
 	missing := `{"schema_version":1,"summary":"proposed","handoff":{"objective":"test","reason":"proposal recorded"}}`
 	if _, err := decodeDeveloperOutputForProposals(missing, nil); err == nil {
 		t.Fatal("missing proposal source was accepted")
 	}
 	conflict := `{"schema_version":1,"summary":"proposed","changed_artifacts":[{"kind":"file","uri":"model-claim.txt"}],"handoff":{"objective":"test","reason":"proposal recorded"}}`
 	proposals := []ProposalReference{{ProposalID: "proposal-1", ApprovalID: "approval-1", Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "canonical.txt"}}}}
-	if _, err := decodeDeveloperOutputForProposals(conflict, proposals); err == nil {
-		t.Fatal("conflicting model artifact was accepted")
+	decoded, err := decodeDeveloperOutputForProposals(conflict, proposals)
+	if err != nil || decoded.Handoff == nil || len(decoded.Handoff.Artifacts) != 1 || decoded.Handoff.Artifacts[0].URI != "canonical.txt" {
+		t.Fatalf("decoded=%#v err=%v", decoded, err)
 	}
 }
 

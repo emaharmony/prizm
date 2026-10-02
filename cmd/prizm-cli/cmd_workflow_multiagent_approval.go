@@ -54,7 +54,10 @@ func canonicalProposalArtifact(item *approval.Approval, workspace string) (multi
 	if workspace == "" {
 		return multiagent.ArtifactRef{}, fmt.Errorf("proposal workspace is required")
 	}
-	absolute, err := safety.ResolveAndContain(workspace, item.TargetPath)
+	// Proposal tools accept either a workspace-relative path or an absolute
+	// path already contained by the run workspace. Preserve that tool contract
+	// when deriving the canonical, workspace-relative artifact reference.
+	absolute, err := safety.ResolveAndContainMulti([]string{workspace}, item.TargetPath)
 	if err != nil {
 		return multiagent.ArtifactRef{}, fmt.Errorf("resolve proposal target: %w", err)
 	}

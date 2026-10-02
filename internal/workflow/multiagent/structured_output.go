@@ -167,9 +167,9 @@ func decodeRoleOutput(role Role, raw string) (decodedRoleOutput, error) {
 }
 
 // decodeDeveloperOutputForProposals preserves the strict developer schema but
-// fills an omitted changed_artifacts field from exactly one persisted proposal.
+// replaces changed_artifacts with exactly one persisted proposal artifact.
 // The proposal artifact is a durable workspace fact, so model-provided claims
-// cannot substitute for it or conflict with it.
+// are advisory output only and never become a second source of mutation truth.
 func decodeDeveloperOutputForProposals(raw string, proposals []ProposalReference) (decodedRoleOutput, error) {
 	var output DeveloperOutput
 	if err := decodeStrictJSON(raw, &output); err != nil {
@@ -179,11 +179,7 @@ func decodeDeveloperOutputForProposals(raw string, proposals []ProposalReference
 	if err != nil {
 		return decodedRoleOutput{}, structuredError(RoleDeveloper, err)
 	}
-	if len(output.ChangedArtifacts) == 0 {
-		output.ChangedArtifacts = artifacts
-	} else if !sameArtifactRefs(output.ChangedArtifacts, artifacts) {
-		return decodedRoleOutput{}, structuredError(RoleDeveloper, errors.New("changed_artifacts conflicts with the persisted proposal artifact"))
-	}
+	output.ChangedArtifacts = artifacts
 	if err := validateDeveloperOutput(output); err != nil {
 		return decodedRoleOutput{}, structuredError(RoleDeveloper, err)
 	}

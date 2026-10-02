@@ -13,6 +13,38 @@ Add newest entries first. Include date, roadmap IDs, branch/commit when known,
 completed work, verification, open risks, and the next action. Never record
 secrets, tokens, private prompts, or customer data.
 
+## 2026-10-02 — R1 Real-Provider Acceptance Boundary Hardening
+
+**Roadmap IDs:** R1
+**Branch/commit:** `codex/r1-approved-task`; pending local commit
+
+- Ran an authorized disposable Codex-provider workflow against an isolated
+  Prizm worktree. The run completed planning, persisted one exact proposal and
+  approval identity, paused, survived inspection from a fresh process, and
+  applied the approved one-file mutation only in the detached worktree.
+- The run exposed two production boundary mismatches: proposal tools may
+  produce contained absolute paths while canonical artifact derivation expected
+  relative paths, and model-supplied artifact claims could conflict with the
+  durable proposal artifact. The resolver now canonicalizes either contained
+  form; the durable proposal remains the sole artifact authority.
+- The resumed run reached the tester role, whose provider response omitted the
+  required test evidence. Strengthened the tester contract to require a
+  non-empty validation record or an explicit error/timeout. The full
+  validation/review/report acceptance remains unproven because the trial was
+  intentionally capped after this bounded failure.
+
+**Verification:** Focused multi-agent structured-output and CLI proposal
+resolver tests pass. The live event trace records proposal, exact approval
+wait, resume, and mutation application; no source checkout mutation or
+external publication occurred.
+
+**Open risks:** A complete live terminal report and post-apply validation
+evidence still require one more bounded provider run. Event/outbox unification,
+parallel fan-out/fan-in, and delegation acknowledgement remain later R1 work.
+
+**Next action:** run the full repository checks, push this hardening commit,
+then schedule the final capped provider acceptance trial before advancing R1.
+
 ## 2026-10-01 — R1 Legacy Delegation and Workspace Provenance Safeguards
 
 **Roadmap IDs:** R1

@@ -29,6 +29,20 @@ func TestApprovalProposalResolverUsesExecutionCorrelation(t *testing.T) {
 	}
 }
 
+func TestApprovalProposalResolverCanonicalizesContainedAbsoluteTarget(t *testing.T) {
+	store := approval.NewStore(t.TempDir())
+	workspace := t.TempDir()
+	target := filepath.Join(workspace, "a.txt")
+	matching := approval.NewApproval("run-1", "execution-1", "developer", "prizm", approval.MutationWriteFile, target, "a", approval.PolicyDecision{Decision: approval.DecisionRequiresApproval})
+	if err := store.Save(matching); err != nil {
+		t.Fatal(err)
+	}
+	refs, err := (approvalProposalResolver{store: store, workspace: workspace}).ResolveProposals(context.Background(), multiagent.ProposalQuery{RunID: "run-1", ExecutionKey: "execution-1", AgentID: "developer"})
+	if err != nil || len(refs) != 1 || len(refs[0].Artifacts) != 1 || refs[0].Artifacts[0].URI != "a.txt" {
+		t.Fatalf("refs=%#v err=%v", refs, err)
+	}
+}
+
 func TestApprovalProposalResolverRejectsTraversalTarget(t *testing.T) {
 	store := approval.NewStore(t.TempDir())
 	item := approval.NewApproval("run-1", "execution-1", "developer", "prizm", approval.MutationWriteFile, "../escape.txt", "x", approval.PolicyDecision{Decision: approval.DecisionRequiresApproval})
