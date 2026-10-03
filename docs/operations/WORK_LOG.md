@@ -7,6 +7,35 @@ the next contributor.
 > Prizm is source-available under an all-rights-reserved [license](../../LICENSE)
 > and is preview-stage.
 
+## 2026-10-02 — R2 Scope Isolation and Serve Wiring
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r2-scoped-memory`, rebased onto `origin/staging` at `a2a5622`
+
+- Rebased the single R2 commit directly onto merged R1 staging; obsolete stacked
+  R1 history was not replayed. Explicit capture keys now derive a distinct
+  local identity from canonical user/project/task scope, preventing a producer
+  key from colliding across authorization boundaries.
+- Scoped capture and search require a correlation ID. `serve` injects trusted
+  workspace/run/agent identity for memory tools and overrides model input;
+  operations without those real identities fail closed. Scoped events persist
+  their correlated lifecycle facts in the existing SQLite event store.
+- Recall search now requests project/task/user/session/agent scope and rejects
+  every missing or mismatched result before local/primary merge. The adapter
+  maps available topics, timestamps, and supersession metadata.
+
+**Verification:** focused memory, Remembrance, tool, and CLI tests; `go build
+./...`, `go vet ./...`, `staticcheck ./...`, `go test ./... -count=1`, and
+`git diff --check` passed.
+
+**Open risks:** CLI chat remains on legacy memory composition and therefore
+does not invent a scoped task identity. Local fallback is immediate, but
+durable retry/reconciliation needs a local-store contract and is deferred to
+R6. The 10-case real Recall score gate remains unproven.
+
+**Next action:** run the seeded scoped-retrieval acceptance set and a real
+Recall outage/recovery trace, then design durable reconciliation from evidence.
+
 ## 2026-10-02 — R2 Scoped Local Memory Foundation
 
 **Roadmap IDs:** R2, R6 (depends on R1 event-outbox follow-up)

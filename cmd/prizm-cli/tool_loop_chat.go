@@ -306,6 +306,18 @@ func (cc *conversationContext) executeChatTool(
 	if channelID != "" {
 		input["_channel_id"] = channelID
 	}
+	// Scoped memory must derive its boundary from the active serve run, never
+	// from model-supplied arguments. A run ID is the exact task identity for
+	// this interaction; without it or a configured workspace the scoped tool
+	// rejects the operation rather than inventing a task scope.
+	if tc.Function.Name == "memory_search" || tc.Function.Name == "memory_write" {
+		if cc.cfg != nil && strings.TrimSpace(cc.cfg.Prizm.Workspace) != "" && runID != "" {
+			input["project_id"] = cc.cfg.Prizm.Workspace
+			input["task_id"] = runID
+			input["agent_id"] = agentCfg.ID
+			input["correlation_id"] = runID
+		}
+	}
 
 	result, execErr := cc.toolExec.ExecuteWithPolicy(ctx, tc.Function.Name, agentCfg.ID, "prizm", runID, input)
 

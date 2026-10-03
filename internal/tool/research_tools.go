@@ -51,6 +51,9 @@ func (t *MemorySearchTool) Schema() ToolSchema {
 			"limit":              {Type: "number", Description: "Max results (default 5)", Required: false},
 			"project_id":         {Type: "string", Description: "Exact project scope (required when scoped memory is enabled)", Required: false},
 			"task_id":            {Type: "string", Description: "Exact task scope (required when scoped memory is enabled)", Required: false},
+			"session_id":         {Type: "string", Description: "Session context for scoped retrieval", Required: false},
+			"agent_id":           {Type: "string", Description: "Agent context for scoped retrieval", Required: false},
+			"correlation_id":     {Type: "string", Description: "Canonical run or request correlation ID required for scoped retrieval", Required: false},
 			"user_id":            {Type: "string", Description: "User scope; requires include_user_scope", Required: false},
 			"include_user_scope": {Type: "boolean", Description: "Explicitly authorize user-scoped recall", Required: false},
 		},
@@ -239,7 +242,13 @@ func (t *WebSearchTool) Execute(ctx context.Context, input map[string]any) (Tool
 // RegisterResearchTools adds web_search and memory_search to the registry.
 // Pass a nil searcher to register memory_search in a disabled state.
 func RegisterResearchTools(registry *Registry, searcher MemorySearcher, localStore LocalMemoryStore, webCfg WebSearchConfig) *Registry {
-	registry.Register(&MemorySearchTool{Searcher: searcher, LocalStore: localStore})
+	return RegisterResearchToolsWithScoped(registry, searcher, localStore, nil, webCfg)
+}
+
+// RegisterResearchToolsWithScoped wires the R2 facade when composition has a
+// trusted scoped-memory lifecycle. A nil facade preserves the legacy contract.
+func RegisterResearchToolsWithScoped(registry *Registry, searcher MemorySearcher, localStore LocalMemoryStore, scoped *memory.Facade, webCfg WebSearchConfig) *Registry {
+	registry.Register(&MemorySearchTool{Searcher: searcher, LocalStore: localStore, Scoped: scoped})
 	registry.Register(&WebSearchTool{Config: webCfg})
 	return registry
 }

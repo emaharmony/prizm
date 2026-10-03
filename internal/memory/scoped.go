@@ -30,6 +30,9 @@ func (s Scope) Validate() error {
 	if strings.TrimSpace(s.ProjectID) == "" || strings.TrimSpace(s.TaskID) == "" {
 		return errors.New("memory scope requires exact project and task IDs")
 	}
+	if strings.TrimSpace(s.CorrelationID) == "" {
+		return errors.New("memory scope requires a canonical correlation ID")
+	}
 	if s.IncludeUserScope && strings.TrimSpace(s.UserID) == "" {
 		return errors.New("user memory scope requires a user ID")
 	}
@@ -108,7 +111,7 @@ func (f *Facade) Capture(ctx context.Context, req CaptureRequest) (Memory, bool,
 	if key == "" {
 		key = stableCaptureKey(req)
 	}
-	mem := Memory{ID: "mem_" + key, Content: req.Content, Summary: req.Summary,
+	mem := Memory{ID: scopedCaptureID(req.Scope, key), Content: req.Content, Summary: req.Summary,
 		Category: req.Category, Tier: req.Tier, KeyTopics: append([]string(nil), req.Topics...),
 		Source: req.Source, UserID: req.Scope.UserID, ProjectID: req.Scope.ProjectID,
 		TaskID: req.Scope.TaskID, SessionID: req.Scope.SessionID, AgentID: req.Scope.AgentID,
@@ -187,6 +190,18 @@ func (f *Facade) Search(ctx context.Context, req SearchRequest) ([]Memory, bool,
 func stableCaptureKey(req CaptureRequest) string {
 	h := sha256.Sum256([]byte(strings.Join([]string{req.Scope.UserID, req.Scope.ProjectID, req.Scope.TaskID, req.Scope.SessionID, req.Scope.AgentID, req.Content, req.Summary, req.Category, req.SupersedesID}, "\x00")))
 	return hex.EncodeToString(h[:16])
+}
+
+// scopedCaptureID isolates producer-supplied delivery keys. A producer may
+// reuse its key in another task, project, or user scope without retrieving or
+// overwriting a memory from that other authorization boundary.
+func scopedCaptureID(scope Scope, key string) string {
+	canonicalUser := ""
+	if scope.IncludeUserScope {
+		canonicalUser = strings.TrimSpace(scope.UserID)
+	}
+	h := sha256.Sum256([]byte(strings.Join([]string{canonicalUser, strings.TrimSpace(scope.ProjectID), strings.TrimSpace(scope.TaskID), key}, "\x00")))
+	return "mem_" + hex.EncodeToString(h[:16])
 }
 
 func scopeMatches(mem Memory, scope Scope) bool {

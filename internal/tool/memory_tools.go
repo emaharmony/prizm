@@ -34,6 +34,7 @@ func (t *MemoryWriteTool) Schema() ToolSchema {
 			"source":             {Type: "string", Description: "Source agent (e.g., prizm:lumi)", Required: false},
 			"agent_id":           {Type: "string", Description: "Agent that created this memory", Required: false},
 			"session_id":         {Type: "string", Description: "Session context", Required: false},
+			"correlation_id":     {Type: "string", Description: "Canonical run or request correlation ID required for scoped memory", Required: false},
 			"project_id":         {Type: "string", Description: "Project context", Required: false},
 			"task_id":            {Type: "string", Description: "Exact task scope when scoped memory is enabled", Required: false},
 			"user_id":            {Type: "string", Description: "User scope; requires include_user_scope", Required: false},

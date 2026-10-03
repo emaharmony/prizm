@@ -2,7 +2,9 @@ package remembrance
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/emaharmony/prizm/internal/memory"
@@ -38,7 +40,16 @@ func (b ScopedMemoryBackend) Search(_ context.Context, req memory.SearchRequest)
 	if b.Client == nil {
 		return nil, fmt.Errorf("remembrance client is not configured")
 	}
-	result, err := b.Client.Search(req.Query, "keyword", "", "", req.Limit)
+	scope := req.Scope
+	result, err := b.Client.SearchScoped(req.Query, "keyword", req.Limit, ScopedSearchRequest{
+		ProjectID: scope.ProjectID, TaskID: scope.TaskID, SessionID: scope.SessionID, AgentID: scope.AgentID,
+		OwnerID: func() string {
+			if scope.IncludeUserScope {
+				return scope.UserID
+			}
+			return ""
+		}(),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -49,13 +60,50 @@ func (b ScopedMemoryBackend) Search(_ context.Context, req memory.SearchRequest)
 		if !ok {
 			continue
 		}
-		mem := memory.Memory{ID: stringValue(fields, "id", "memory_id"), Content: stringValue(fields, "content", "text"), Summary: stringValue(fields, "summary", "title"), Category: stringValue(fields, "category"), ProjectID: stringValue(fields, "project_id"), TaskID: stringValue(fields, "task_id"), UserID: stringValue(fields, "owner_id", "user_id"), Source: "recall"}
-		if mem.CreatedAt.IsZero() {
-			mem.CreatedAt = time.Time{}
+		mem := memory.Memory{ID: stringValue(fields, "id", "memory_id"), Content: stringValue(fields, "content", "text"), Summary: stringValue(fields, "summary", "title"), Category: stringValue(fields, "category"), ProjectID: stringValue(fields, "project_id"), TaskID: stringValue(fields, "task_id"), UserID: stringValue(fields, "owner_id", "user_id"), SessionID: stringValue(fields, "session_id"), AgentID: stringValue(fields, "agent_id"), Source: "recall", SupersedesID: stringValue(fields, "supersedes_id")}
+		if mem.ProjectID != scope.ProjectID || mem.TaskID != scope.TaskID || (scope.IncludeUserScope && mem.UserID != scope.UserID) || (!scope.IncludeUserScope && mem.UserID != "") {
+			continue
 		}
+		mem.CreatedAt = timeValue(fields, "created_at", "created")
+		mem.KeyTopics = stringSlice(fields["topics"])
 		out = append(out, mem)
 	}
 	return out, nil
+}
+
+func timeValue(fields map[string]any, names ...string) time.Time {
+	for _, name := range names {
+		switch value := fields[name].(type) {
+		case string:
+			if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+				return parsed
+			}
+		case float64:
+			return time.Unix(int64(value), 0).UTC()
+		case json.Number:
+			if seconds, err := strconv.ParseInt(string(value), 10, 64); err == nil {
+				return time.Unix(seconds, 0).UTC()
+			}
+		}
+	}
+	return time.Time{}
+}
+
+func stringSlice(value any) []string {
+	items, ok := value.([]any)
+	if !ok {
+		if strings, ok := value.([]string); ok {
+			return append([]string(nil), strings...)
+		}
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if text, ok := item.(string); ok {
+			out = append(out, text)
+		}
+	}
+	return out
 }
 
 func stringValue(fields map[string]any, names ...string) string {

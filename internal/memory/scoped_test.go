@@ -146,3 +146,30 @@ func TestScopedScopeRequiresExplicitUserOptIn(t *testing.T) {
 		t.Fatal("expected explicit user scope error")
 	}
 }
+
+func TestScopedCaptureKeyIsNamespacedByScope(t *testing.T) {
+	local := tempStore(t)
+	f := &Facade{Local: local}
+	first, _, err := f.Capture(context.Background(), CaptureRequest{Scope: scopedTestScope(), CaptureKey: "provider-delivery-1", Content: "project a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := scopedTestScope()
+	other.ProjectID = "project-b"
+	second, _, err := f.Capture(context.Background(), CaptureRequest{Scope: other, CaptureKey: "provider-delivery-1", Content: "project b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == second.ID {
+		t.Fatalf("capture key collided across scopes: %s", first.ID)
+	}
+}
+
+func TestScopedOperationsRequireCorrelationID(t *testing.T) {
+	scope := scopedTestScope()
+	scope.CorrelationID = ""
+	_, _, err := (&Facade{Local: tempStore(t)}).Search(context.Background(), SearchRequest{Scope: scope, Query: "x"})
+	if err == nil {
+		t.Fatal("expected missing correlation rejection")
+	}
+}

@@ -56,6 +56,7 @@ import (
 	"github.com/emaharmony/prizm/internal/dashboard"
 	"github.com/emaharmony/prizm/internal/debounce"
 	"github.com/emaharmony/prizm/internal/delegation"
+	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/factory"
 	"github.com/emaharmony/prizm/internal/factorymonitor"
 	"github.com/emaharmony/prizm/internal/governance"
@@ -601,6 +602,20 @@ func executeServe(args []string) {
 
 	// V79: Smart memory injector — query planner + search + recent modes
 	var memInjector *MemoryInjector
+	var scopedMemory *memory.Facade
+	if memoryStore != nil {
+		memoryEventStore, eventErr := event.NewSQLiteEventStore(filepath.Join(cfg.Prizm.DataDir, "memory-events.db"))
+		if eventErr != nil {
+			log.Printf("[MEMORY] scoped lifecycle events unavailable: %v", eventErr)
+		} else {
+			defer memoryEventStore.Close()
+			var primary memory.PrimaryBackend
+			if remClient != nil {
+				primary = remembrance.ScopedMemoryBackend{Client: remClient}
+			}
+			scopedMemory = &memory.Facade{Local: memoryStore, Primary: primary, Events: memoryEventStore, Source: "prizm:serve"}
+		}
+	}
 	if memoryStore != nil {
 		var queryPlanner *memory.QueryPlanner
 		if memCfg.QueryPlannerEnabled {
@@ -809,7 +824,10 @@ func executeServe(args []string) {
 	} else {
 		log.Printf("[MEMORY] WARNING: local MarkdownStore is nil, memory_search will have no fallback")
 	}
-	tool.RegisterResearchTools(toolReg, memSearcher, localStore, tool.WebSearchConfig{})
+	tool.RegisterResearchToolsWithScoped(toolReg, memSearcher, localStore, scopedMemory, tool.WebSearchConfig{})
+	if scopedMemory != nil {
+		toolReg.Register(&tool.MemoryWriteTool{Store: memoryStore, Scoped: scopedMemory})
+	}
 
 	// Researcher reference-image tools: fetch/generate/analyze/collect.
 	// Images save under <workspace>/references by default and may target

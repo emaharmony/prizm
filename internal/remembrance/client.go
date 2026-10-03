@@ -163,6 +163,16 @@ type CaptureRequest struct {
 	SourceAgent     string   `json:"source_agent,omitempty"`
 }
 
+// ScopedSearchRequest carries the exact authorization boundary to Recall.
+// It is deliberately separate from the legacy Search signature.
+type ScopedSearchRequest struct {
+	OwnerID   string
+	ProjectID string
+	TaskID    string
+	SessionID string
+	AgentID   string
+}
+
 // ── Client ───────────────────────────────────────────────────────
 
 // Client is an HTTP client for the Remembrance memory layer.
@@ -337,6 +347,32 @@ func (c *Client) Search(query, mode, category, tier string, limit int) (map[stri
 
 	reqURL := fmt.Sprintf("%s/search?%s", c.BaseURL, params.Encode())
 	return c.doGetMap(reqURL)
+}
+
+// SearchScoped asks Recall for results constrained to the exact task scope.
+// Callers must still validate returned metadata because an external service is
+// never an authorization boundary for Prizm.
+func (c *Client) SearchScoped(query, mode string, limit int, scope ScopedSearchRequest) (map[string]any, error) {
+	params := url.Values{}
+	params.Set("q", query)
+	if mode != "" {
+		params.Set("mode", mode)
+	}
+	if limit > 0 {
+		params.Set("limit", strconv.Itoa(limit))
+	}
+	params.Set("project_id", scope.ProjectID)
+	params.Set("task_id", scope.TaskID)
+	if scope.OwnerID != "" {
+		params.Set("owner_id", scope.OwnerID)
+	}
+	if scope.SessionID != "" {
+		params.Set("session_id", scope.SessionID)
+	}
+	if scope.AgentID != "" {
+		params.Set("agent_id", scope.AgentID)
+	}
+	return c.doGetMap(fmt.Sprintf("%s/search?%s", c.BaseURL, params.Encode()))
 }
 
 // EntityGet retrieves an entity by name (compiled truth + timeline).
