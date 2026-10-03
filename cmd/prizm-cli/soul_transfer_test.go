@@ -261,20 +261,20 @@ PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
 
 EXPECTED FACTS (the agent's memory contains these):
 - Prizm is replacing OpenClaw as Lumi's primary harness (migration called "Soul Transfer")
-- Current version is V82+ (tool loop adapter, context pipeline, LLM judge, superseded memory fix)
+- Recent versions: V82-V24 (tool loop adapter, context pipeline, LLM judge, memory grounding, authoritative framing, knowledge contamination fixes)
 - Memory search uses keyword + embedding hybrid pipeline (V80 decision)
 - Embedding model is nomic-embed-text via Ollama
 - Query planner uses deepseek-v4-flash:cloud
-- Soul Transfer score is around 78/100, threshold is 93
+- Soul Transfer score is around 90-92/100, threshold is 93
 - Mango is the coding partner (deepseek-v4-pro:cloud)
 
 SCORING (score each 1-5, then average):
-- Soul Transfer / migration: 2=clearly mentions Prizm replacing OpenClaw or Soul Transfer, 3=mentions project but vaguely, 1=no mention
-- Memory system details: 2=mentions keyword+embedding or query planner or V80, 3=mentions memory system vaguely, 1=no mention
-- Accuracy: 2=all stated facts match memory content, 1=mostly accurate with minor errors, 1=fabricated or wrong
-- Completeness: 2=provides multiple specific details from memory, 1=one specific detail, 1=generic only
+- Soul Transfer / migration: 4-5=clearly mentions Prizm replacing OpenClaw or Soul Transfer, 2-3=mentions project but vaguely, 1=no mention
+- Memory system details: 4-5=mentions keyword+embedding or query planner or V80+, 2-3=mentions memory system vaguely, 1=no mention
+- Accuracy: 4-5=all stated facts match memory content, 2-3=mostly accurate with minor errors, 1=fabricated or wrong
+- Completeness: 4-5=provides multiple specific details from memory, 2-3=one specific detail, 1=generic only
 
-PASS = average ≥ 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
+PASS = average >= 3.5, UNCERTAIN = 2.5-3.5, FAIL = < 2.5`,
 			Deterministic: false,
 		},
 		{
@@ -867,16 +867,18 @@ func (s *MockTranscriptSender) Send(ctx context.Context, input string) (*Transcr
 // ---------------------------------------------------------------------------
 
 func TestSoulTransferSuite(t *testing.T) {
+	// This is an integration test that requires a running Prizm instance.
+	// Skip if PRIZM_URL is not set and no local instance is detected.
 	if os.Getenv("SOUL_TRANSFER_LIVE") != "1" {
 		t.Skip("Skipping live Soul Transfer suite (set SOUL_TRANSFER_LIVE=1 to enable)")
 	}
-	tests := defineSoulTransferTests()
 
-	// Check if we have a live Prizm instance to test against
 	prizmURL := os.Getenv("PRIZM_URL")
 	if prizmURL == "" {
-		prizmURL = "http://localhost:8100"
+		t.Skip("SoulTransfer suite requires PRIZM_URL to be set — skipping integration test")
 	}
+
+	tests := defineSoulTransferTests()
 
 	// Group tests by category
 	categoryMap := map[string][]SoulTransferTest{}
@@ -911,9 +913,19 @@ func TestSoulTransferSuite(t *testing.T) {
 			})
 		}
 
-		// We'll compute the category score once all results are in
-		// For now, just collect the test definitions
-		_ = results
+		// Compute category score from collected results
+		catScore := computeCategoryScore(results)
+		// Derive category weight from test definitions (sum of per-test weights)
+		var catWeight float64
+		for _, test := range catTests {
+			catWeight += test.Weight
+		}
+		categories = append(categories, CategoryScore{
+			Category: catName,
+			Weight:   catWeight,
+			Score:    catScore,
+			Results:  results,
+		})
 	}
 
 	// Generate and print report

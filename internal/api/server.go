@@ -89,6 +89,9 @@ import (
 // The API package uses this interface to avoid importing cmd types.
 type MemoryInjectorInterface interface {
 	InjectMemoriesInt(ctx contextctx.Context, mode int, userMessage string, sessionMsgCount int, maxTokens int) string
+	// V23: GetLastMemories returns the memories from the most recent injection call.
+	// Used for post-hoc citation verification.
+	GetLastMemories() []memory.Memory
 }
 
 // CoreIdentityInterface is the interface for the permanent core identity block.
@@ -769,7 +772,13 @@ func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig, sear
 
 	var sb strings.Builder
 
-	// Layer 1: Identity (SOUL.md)
+	// V24: Reordered prompt layers for authoritative memory framing.
+	// Research (Knowledge Contamination, CK-PLUG) shows that RoPE positional decay
+	// causes lower attention on tokens in the middle of the context window.
+	// Memories should come EARLY — after identity, before context and behavior.
+	// Order: 1. Identity → 2. Core Identity Facts → 3. OFFICIAL RECORD (memories) → 4. Context → 5. Behavior
+
+	// Layer 1: Identity (SOUL.md) — who you are
 	identityContent := ""
 	hasSoul := false
 	builder := context.NewBuilder(s.ctxBuilder.WorkspaceRoot).WithNamedContexts([]string{"soul", "identity"})
@@ -787,7 +796,7 @@ func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig, sear
 	sb.WriteString("## Who You Are\n")
 	sb.WriteString(identityContent + "\n\n")
 
-	// V83: Core Identity Block — permanent identity facts always in prompt.
+	// Layer 2: Core Identity Facts — permanent facts, always present
 	if s.coreIdentityForInject != nil {
 		coreBlock := s.coreIdentityForInject.Build(s.memStoreForInvoke)
 		if coreBlock != "" {
@@ -795,7 +804,32 @@ func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig, sear
 		}
 	}
 
-	// Layer 2: Context files (USER.md, HEARTBEAT.md, AGENTS.md, etc.)
+	// Layer 3 (V24: MOVED UP): OFFICIAL RECORD — memories injected BEFORE context
+	// to leverage positional attention. Research shows retrieved context in the
+	// middle-to-end of prompts gets lower attention due to RoPE decay.
+	if s.memInjectorForInvoke != nil {
+		// Smart path: query planner + embedding + grounding-aware format
+		memBlock := s.memInjectorForInvoke.InjectMemoriesInt(contextctx.Background(), 0, searchQuery, 1, 800)
+		if memBlock != "" {
+			sb.WriteString(memBlock + "\n")
+		}
+	} else if s.memStoreForInvoke != nil {
+		// Legacy fallback: bare keyword search, no grounding
+		ctx := contextctx.Background()
+		memories, err := s.memStoreForInvoke.Search(ctx, searchQuery, 10)
+		if err == nil && len(memories) > 0 {
+			sb.WriteString("## OFFICIAL RECORD (Authoritative)\n")
+			for i, mem := range memories {
+				if i >= 5 {
+					break
+			}
+				sb.WriteString(fmt.Sprintf("- %s\n", mem.Content))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	// Layer 4: Context files (USER.md, HEARTBEAT.md, AGENTS.md, etc.)
 	if len(agentCfg.Context) > 0 {
 		budget := 4000
 		if s.orch != nil && s.orch.Config.Prizm.ContextTokenBudget > 0 {
@@ -818,31 +852,7 @@ func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig, sear
 		}
 	}
 
-	// V83: Memory injection — use smart injector with grounding-aware format when available.
-	// Falls back to bare keyword search when injector is nil.
-	if s.memInjectorForInvoke != nil {
-		// Smart path: query planner + embedding + grounding-aware format
-		memBlock := s.memInjectorForInvoke.InjectMemoriesInt(contextctx.Background(), 0, searchQuery, 1, 800)
-		if memBlock != "" {
-			sb.WriteString(memBlock + "\n")
-		}
-	} else if s.memStoreForInvoke != nil {
-		// Legacy fallback: bare keyword search, no grounding
-		ctx := contextctx.Background()
-		memories, err := s.memStoreForInvoke.Search(ctx, searchQuery, 10)
-		if err == nil && len(memories) > 0 {
-			sb.WriteString("## Memories\n")
-			for i, mem := range memories {
-				if i >= 5 {
-					break
-				}
-				sb.WriteString(fmt.Sprintf("- %s\n", mem.Content))
-			}
-			sb.WriteString("\n")
-		}
-	}
-
-	// Layer 4: Conversation postfix (behavior)
+	// Layer 5: Conversation postfix (behavior) — last, as framing instructions
 	postfix := resolveConversationPostfixForInvoke(agentCfg, hasSoul)
 	if postfix != "" {
 		sb.WriteString("## How You Respond\n")
@@ -1016,6 +1026,63 @@ func (s *Server) runInvocationWithToolLoop(ctx contextctx.Context, agentCfg orch
 		sink.mu.Lock()
 		finalContent = sink.content
 		sink.mu.Unlock()
+	}
+
+	// V23: Post-hoc citation verification with tiered auto-correction
+	if s.memInjectorForInvoke != nil && finalContent != "" {
+		memories := s.memInjectorForInvoke.GetLastMemories()
+		if len(memories) > 0 {
+			entries := make([]toolloop.MemoryEntry, len(memories))
+			for i, m := range memories {
+				entries[i] = toolloop.MemoryEntry{
+					ID:      fmt.Sprintf("M%d", i+1),
+					Summary: m.Summary,
+					Content: m.Content,
+				}
+			}
+			verification := toolloop.VerifyCitations(finalContent, entries)
+			if verification.FlaggedCount > 0 {
+				log.Printf("[API] V23 citation verification: %d/%d citations flagged (%d patches, %d rewrites)",
+					verification.FlaggedCount, verification.TotalCitations, verification.PatchCount, verification.RewriteCount)
+				for _, flag := range verification.Flags {
+					log.Printf("[API] V23 %s: %s — %s", flag.Tier.String(), flag.CitationID, flag.Issue)
+				}
+				// Apply corrections — replace the response with the verified version
+				if verification.PatchCount > 0 || verification.RewriteCount > 0 {
+					log.Printf("[API] V23 applied %d contradiction patches and %d low-overlap rewrites",
+						verification.PatchCount, verification.RewriteCount)
+					finalContent = verification.Verified
+				}
+			}
+		}
+
+		// V24d: Tagless claim verification — catch fabricated claims WITHOUT citation tags
+		// This catches the M-06 failure mode: model fabricates narratives without [M1] tags.
+		if s.memInjectorForInvoke != nil {
+			memories := s.memInjectorForInvoke.GetLastMemories()
+			if len(memories) > 0 {
+				taglessEntries := make([]toolloop.MemoryEntry, len(memories))
+				for i, m := range memories {
+					taglessEntries[i] = toolloop.MemoryEntry{
+						ID:      fmt.Sprintf("M%d", i+1),
+						Summary: m.Summary,
+						Content: m.Content,
+					}
+				}
+				taglessVerification := toolloop.VerifyTaglessClaims(finalContent, taglessEntries)
+				if len(taglessVerification.Flags) > 0 {
+					log.Printf("[API] V24d tagless verification: %d claims flagged (%d patches, %d rewrites, %d flags)",
+						len(taglessVerification.Flags), taglessVerification.PatchCount, taglessVerification.RewriteCount, taglessVerification.FlagCount)
+					for _, flag := range taglessVerification.Flags {
+						log.Printf("[API] V24d %s: %s", flag.Tier.String(), flag.Issue)
+					}
+					// V24d: Tagless verification is LOGGING ONLY. Auto-correction of
+					// uncited claims has too many false positives (flagging casual
+					// conversation as fabrication). V24's authoritative framing is
+					// the primary defense. We log but don't modify the response.
+				}
+			}
+		}
 	}
 
 	if sessionID != "" && s.sessions != nil {

@@ -1123,7 +1123,7 @@ func (wh *WakeHandler) checkPRStatus() string {
 		"--limit", "20",
 	)
 	// Run in the Prizm repo directory so gh pr list checks Prizm's PRs specifically
-	cmd.Dir = "/Users/ema/projects/repos/prizm"
+	cmd.Dir = "" // inherit working directory (LaunchAgent sets it to the repo root)
 
 	output, err := cmd.Output()
 	if err != nil {

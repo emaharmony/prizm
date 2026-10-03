@@ -20,9 +20,12 @@ import (
 // If the QueryPlanner is unavailable or times out, it falls back to
 // heuristic keyword extraction.
 type MemoryInjector struct {
-	store   *memory.MarkdownStore
-	planner *memory.QueryPlanner
-	cache   *memorySearchCache
+	store        *memory.MarkdownStore
+	planner      *memory.QueryPlanner
+	cache        *memorySearchCache
+	plannerCache *plannerResultCache
+	lastMemories []memory.Memory // V23: cached for citation verification
+	lastMu       sync.RWMutex    // protects lastMemories
 }
 
 // memorySearchCache caches recent search results keyed by query hash.
@@ -56,6 +59,14 @@ func NewMemoryInjector(store *memory.MarkdownStore, planner *memory.QueryPlanner
 	}
 }
 
+// GetLastMemories returns the memories from the most recent InjectMemories call.
+// Used for post-hoc citation verification (V23).
+func (mi *MemoryInjector) GetLastMemories() []memory.Memory {
+	mi.lastMu.RLock()
+	defer mi.lastMu.RUnlock()
+	return mi.lastMemories
+}
+
 // InjectMode determines how memories should be injected.
 type InjectMode int
 
@@ -86,6 +97,15 @@ func (mi *MemoryInjector) InjectMemories(ctx context.Context, mode InjectMode, u
 	default:
 		return mi.injectPlannedSearch(ctx, userMessage, sessionMsgCount, maxTokens)
 	}
+}
+
+// cacheAndFormat caches the memory list for citation verification and formats them.
+func (mi *MemoryInjector) cacheAndFormat(memories []memory.Memory, title string, maxTokens int) string {
+	mi.lastMu.Lock()
+	// Convert to toolloop.MemoryEntry for verification
+	mi.lastMemories = memories
+	mi.lastMu.Unlock()
+	return formatMemories(memories, title, maxTokens)
 }
 
 // injectPlannedSearch uses the QueryPlanner to generate keywords from the
@@ -124,7 +144,7 @@ func (mi *MemoryInjector) injectPlannedSearch(ctx context.Context, userMessage s
 	cacheKey := queryKey(searchQuery)
 	if cached := mi.cache.get(cacheKey); cached != nil {
 		log.Printf("[MEMORY-INJECTOR] cache hit for key=%s", cacheKey)
-		return formatMemories(cached, "Relevant Memories", maxTokens)
+		return mi.cacheAndFormat(cached, "Relevant Memories", maxTokens)
 	}
 
 	results, err := mi.store.Search(ctx, searchQuery, 20)
@@ -165,10 +185,17 @@ func (mi *MemoryInjector) injectPlannedSearch(ctx context.Context, userMessage s
 	}
 
 	if len(results) == 0 {
-		// V86: Empty-search grounding — when all searches return nothing, inject a grounding
-		// message telling the model to admit ignorance rather than fabricating.
+		// V24: Empty-result boundary signal (DTA-inspired). When memory search returns
+		// nothing relevant, explicitly tell the model it has NO records — not just silence.
+		// Silence is an invitation for the model to fill gaps from parametric knowledge.
+		// A clear "NO RECORDS FOUND" signal creates an honest boundary.
 		log.Printf("[MEMORY-INJECTOR] no search results from any query, injecting empty-result grounding")
-		return "\n## Memory Search Results\nNo memories were found for this query. If you don't have relevant memories about this topic, say \"I don't have that in my records\" — do NOT fabricate or guess specific details about your own identity, project history, or relationships.\n"
+		return "\n## OFFICIAL RECORD: NO RELEVANT RECORDS FOUND\n" +
+			"Your memory system found NO records matching this query. \n" +
+			"You MUST respond: 'I don't have specific memories/records about this.' \n" +
+			"Do NOT construct an answer from general knowledge, common sense, or what you think might be true. \n" +
+			"Do NOT fabricate specific details, numbers, dates, or narratives. \n" +
+			"It is ALWAYS better to honestly say 'I don't have that in my records' than to guess.\n"
 	}
 
 	mi.cache.set(cacheKey, results)
@@ -183,7 +210,7 @@ func (mi *MemoryInjector) injectPlannedSearch(ctx context.Context, userMessage s
 		}
 	}
 
-	return formatMemories(results, "Relevant Memories", maxTokens)
+	return mi.cacheAndFormat(results, "Relevant Memories", maxTokens)
 }
 
 // injectRecent returns the most recent memories for conversation continuity.
@@ -202,7 +229,7 @@ func (mi *MemoryInjector) injectRecent(ctx context.Context, maxTokens int) strin
 		return ""
 	}
 
-	return formatMemories(recent, "Recent Context", maxTokens)
+	return mi.cacheAndFormat(recent, "Recent Context", maxTokens)
 }
 
 // ChooseMode decides the injection mode based on session context.
@@ -217,13 +244,10 @@ func ChooseMode(sessionMsgCount int, sessionAge time.Duration) InjectMode {
 
 // formatMemories formats a slice of memories into a grounding-aware prompt block,
 // respecting the token budget. V83: Each memory includes date stamps, confidence
-// labels, source attribution, and supersession status. The block includes explicit
-// grounding instructions telling the model HOW to use these memories.
-//
-// Research showed that production agent systems that include grounding instructions
-// with retrieved memories see 40-70% hallucination reduction. Our previous format
-// said "The following memories were recalled from local storage" — which gives the
-// model no guidance on whether to trust or use them.
+// labels, source attribution, and supersession status. V21: Each memory is tagged
+// with an ID ([M1], [M2], etc.) and the grounding instructions require the model
+// to cite these IDs when making claims. This is the "grounded generation" pattern
+// from production RAG systems — citation forcing reduces fabrication by 50-80%.
 func formatMemories(memories []memory.Memory, title string, maxTokens int) string {
 	if len(memories) == 0 {
 		return ""
@@ -236,12 +260,18 @@ func formatMemories(memories []memory.Memory, title string, maxTokens int) strin
 
 	var sb strings.Builder
 
-	// V83: Grounding header — explicit instructions on how to use these memories
-	sb.WriteString("## " + title + "\n")
-	sb.WriteString("The following memories were recalled from your verified local storage. ")
-	sb.WriteString("These ARE your knowledge about yourself, your relationships, your projects, and your history. ")
-	sb.WriteString("When these memories address the current question, TRUST THEM over your general training knowledge. ")
-	sb.WriteString("Synthesize these memories into a natural, coherent answer — don't just list or quote them. \n\n")
+	// V24: Authoritative memory framing — research shows that positive-constraint framing
+	// ("these records are authoritative") significantly reduces knowledge contamination vs.
+	// negative framing ("don't use training data"). See docs/v24-knowledge-contamination-research.md.
+	sb.WriteString("## OFFICIAL RECORD (Authoritative)\n")
+	sb.WriteString("The following records were recalled from your verified local memory system. ")
+	sb.WriteString("These are AUTHORITATIVE — they override what you think you know from training data about your own identity, projects, and history. ")
+	sb.WriteString("Each record has an ID like [M1], [M2], etc. ")
+	sb.WriteString("When stating a specific fact, date, number, or project detail from these records, cite the source FIRST then the claim: '[M3] shows the score was 78/100' — NOT 'the score was 91.4 [M3]'. ")
+	sb.WriteString("For casual conversation, personality, opinions, and emotional responses, do NOT use citation tags — just be your natural self. ")
+	sb.WriteString("If you cannot find a record that directly contains the specific number, date, or detail you want to state, do NOT infer or fill in from your training data — say 'I do not have that in my records' instead. ")
+	sb.WriteString("If no records address the question, say 'I do not have that in my records.' ")
+	sb.WriteString("Synthesize these records into a natural answer — don't just list or quote them.\n\n")
 
 	charsUsed := 0
 	for i, m := range memories {
@@ -256,14 +286,17 @@ func formatMemories(memories []memory.Memory, title string, maxTokens int) strin
 
 		var entry strings.Builder
 
+		// V21: Memory ID tag for citation forcing
+		memID := fmt.Sprintf("M%d", i+1)
+
 		// V83: Date stamp + confidence label + source + supersession status
 		dateStr := m.CreatedAt.Format("2006-01-02")
 		confidenceLabel := confidenceLabel(m)
 		sourceLabel := sourceLabel(m)
 		supersededLabel := supersededLabel(m)
 
-		// Format: [date | confidence | source] Summary
-		entry.WriteString(fmt.Sprintf("[%s | %s | %s] ", dateStr, confidenceLabel, sourceLabel))
+		// V21: Format: [M1] [date | confidence | source] Summary
+		entry.WriteString(fmt.Sprintf("[%s] [%s | %s | %s] ", memID, dateStr, confidenceLabel, sourceLabel))
 		if m.Category != "" {
 			entry.WriteString(fmt.Sprintf("**%s** (%s)", m.Summary, m.Category))
 		} else {
@@ -294,11 +327,13 @@ func formatMemories(memories []memory.Memory, title string, maxTokens int) strin
 		charsUsed += len(entryStr)
 	}
 
-	// V83: Grounding footer — reinforce memory-first behavior
+	// V24: Authoritative framing for footer
 	sb.WriteString("\n---\n")
-	sb.WriteString("When answering questions about yourself, your relationships, your projects, or your history: ")
-	sb.WriteString("check these memories FIRST. If a memory addresses your question, use it. ")
-	sb.WriteString("If no memory is relevant, say \"I don't have that in my records\" — do not guess or fabricate details about your own identity or history.\n")
+	sb.WriteString("AUTHORITY: These records are verified facts about your history. When they conflict with what you believe from training, THE RECORDS ARE CORRECT. ")
+	sb.WriteString("When stating a specific fact, date, number, or project detail from these records, cite the source FIRST then the claim: '[M3] shows X, so Y' — not 'Y [M3]'. Derive the claim FROM the record's actual text, not from your training data. ")
+	sb.WriteString("For casual conversation, greetings, opinions, and emotional responses, do NOT use citation tags — just be your natural self. ")
+	sb.WriteString("If no record supports a specific factual claim, say 'I do not have that in my records' — do NOT fabricate specifics. ")
+	sb.WriteString("Honesty over completeness.\n")
 
 	return sb.String()
 }

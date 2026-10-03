@@ -190,7 +190,7 @@ func BuildToolPromptSuffix(toolInfos []tool.ToolInfo, workspaceRoot string, allo
 			sb.WriteString(fmt.Sprintf("  - %s\n", p))
 		}
 		sb.WriteString("IMPORTANT: When reading files, searching, or getting project overviews for projects OUTSIDE your workspace, you MUST use the absolute path from the list above.\n")
-		sb.WriteString("For example, to read a project at /Users/ema/projects/repos/bassbook, use path=\"/Users/ema/projects/repos/bassbook\" NOT path=\"../bassbook\" or path=\"bassbook\".\n")
+		sb.WriteString("For example, to read a project at /Users/example/projects/repos/myproject, use path=\"/Users/example/projects/repos/myproject\" NOT path=\"../myproject\" or path=\"myproject\".\n")
 		sb.WriteString("Relative paths and .. are blocked. Always use full absolute paths from the allowed directories list.\n")
 	}
 	sb.WriteString("\n")

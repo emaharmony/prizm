@@ -101,3 +101,6 @@ docs/PUDGYPOWER-FACTORY-RUNBOOK.md
 .codeium/
 # Remove the next line if your team commits a shared MCP config:
 .mcp.json
+
+# Test-run artifact: relative default embedding index path resolves inside source tree
+internal/memory/memory/

@@ -48,7 +48,7 @@ func TestToolRelevanceGate_IncludeReadFile(t *testing.T) {
 	gate := NewToolRelevanceGate(true)
 	tools := []string{"read_file", "search_files", "git_status"}
 
-	result := gate.Evaluate("Read the file at /Users/ema/projects/test.go", tools)
+	result := gate.Evaluate("Read the file at /Users/example/projects/test.go", tools)
 	if result.Decision != ToolDecisionInclude {
 		t.Errorf("expected Include for file read request, got %v", result.Decision)
 	}
@@ -107,7 +107,7 @@ func TestToolRelevanceGate_IncludeFilePath(t *testing.T) {
 	gate := NewToolRelevanceGate(true)
 	tools := []string{"read_file", "search_files"}
 
-	result := gate.Evaluate("Look at /Users/ema/projects/repos/prizm/main.go", tools)
+	result := gate.Evaluate("Look at /Users/example/projects/repos/sample/main.go", tools)
 	if result.Decision != ToolDecisionInclude {
 		t.Errorf("expected Include for message with file path, got %v", result.Decision)
 	}

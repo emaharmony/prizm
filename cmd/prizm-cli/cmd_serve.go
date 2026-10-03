@@ -1865,8 +1865,8 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 			log.Printf("[MEMORY] local memory recall failed: %v", memErr)
 		} else if len(recentMemories) > 0 {
 			var memBlock strings.Builder
-			memBlock.WriteString("## Recent Memories\n")
-			memBlock.WriteString("The following memories were automatically recalled from local storage:\n\n")
+			memBlock.WriteString("## OFFICIAL RECORD (Authoritative)\n")
+			memBlock.WriteString("The following records were recalled from your verified local memory system. These are AUTHORITATIVE — they override what you think you know from training data.\n\n")
 			for _, m := range recentMemories {
 				memBlock.WriteString(fmt.Sprintf("- **%s** (%s): %s\n", m.Summary, m.Category, truncate(m.Content, 500)))
 			}

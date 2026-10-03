@@ -12,7 +12,7 @@ func TestToolResultContentExtraction_ContentKeyAlwaysWins(t *testing.T) {
 	// This map will be iterated in random order by Go runtime.
 	// "content" must always win regardless of iteration order.
 	output := map[string]any{
-		"path":    "/Users/ema/projects/repos/PudgyPower/docs/architecture.md",
+		"path":    "/Users/example/projects/repos/sample/docs/architecture.md",
 		"content": "This is the actual file content that matters.",
 		"size":    13771,
 	}
@@ -38,7 +38,7 @@ func TestToolResultContentExtraction_ContentKeyAlwaysWins(t *testing.T) {
 		}
 
 		// Also verify we're not getting the path
-		if resultStr == "/Users/ema/projects/repos/PudgyPower/docs/architecture.md" {
+		if resultStr == "/Users/example/projects/repos/sample/docs/architecture.md" {
 			t.Errorf("iteration %d: got path instead of content — P-007 regression!", i)
 		}
 
@@ -155,7 +155,7 @@ func TestAgentLoopDetection_AllowsLegitimateMessages(t *testing.T) {
 	// These messages should NOT be suppressed
 	legitimateMessages := []string{
 		"I found the architecture doc and here's my review.",
-		"Can you read the file at /Users/ema/projects/PudgyPower/docs/architecture.md?",
+		"Can you read the file at /Users/example/projects/sample/docs/architecture.md?",
 		"The project structure looks solid, but I'd split LaunchEngine's scoring logic.",
 		"Hey Astraea, what's the status on the Pudgy Power project?",
 		"I had trouble finding the right file, but I located it eventually.",

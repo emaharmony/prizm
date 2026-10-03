@@ -152,7 +152,7 @@ func containsStr(s, sub string) bool {
 }
 func TestParseAgentOutputWithFallbackEmbeddedToolRequest(t *testing.T) {
 	// This is the exact pattern Prizm produces: natural language + embedded JSON
-	input := `Let me start by staging the files. I'll also add the backward-compatible aliases. {"type":"tool_request","tool":"git_add","input":{"path":"/Users/ema/projects/repos/BassBook/apps/web/src/app/globals.css"}}`
+	input := `Let me start by staging the files. I'll also add the backward-compatible aliases. {"type":"tool_request","tool":"git_add","input":{"path":"/Users/example/projects/repos/myproject/apps/web/src/app/main.css"}}`
 	resp := ParseAgentOutputWithFallback(input)
 
 	if resp.Type != ResponseToolRequest {
