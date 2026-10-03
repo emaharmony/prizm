@@ -485,3 +485,34 @@ then complete the R1 approval-to-verified-resume slice.
 
 - [Prizm Roadmap](../architecture/PRIZM_ROADMAP.md)
 - [Current Plan of Action](PLAN_OF_ACTION.md)
+
+## 2026-10-02 — R2 Scoped Memory Hardening and Score Gate
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r2-scoped-memory` at `6179a36`, based on merged staging `a2a5622`
+
+- Made serve-chat memory authority explicit: model-supplied project, task, user,
+  session, agent, correlation, and user-scope fields are removed before the
+  trusted workspace and run identity are applied. Missing either trusted value
+  fails closed.
+- Made scoped lifecycle events strict. An event-store failure returns an error;
+  a retry finds the existing local capture and does not duplicate it. Capture
+  keys now reject changed content or metadata unless an explicit superseding
+  relation identifies the prior memory.
+- Repaired Markdown persistence for project, session, and agent scope fields;
+  those fields now round-trip through the local fallback store.
+- The deterministic R2 seeded retrieval gate passed **10/10** with zero scope
+  leakage. Focused memory/remembrance/tool/serve tests, `go build ./...`,
+  `go vet ./...`, and `staticcheck ./...` passed.
+- A deterministic primary-outage/recovery trace confirms local fallback remains
+  readable after the primary returns. A real local Remembrance trace was not
+  possible: the available Python launcher could not start and Ollama could not
+  start because its local log rotation was denied. No remote reconciliation was
+  claimed or implemented.
+
+**Open risks:** local fallback captures still need an R6 idempotent
+reconciliation path to Recall. Live service recovery remains unproven in this
+environment. R1's event-outbox and delegation gates remain open.
+
+**Next action:** add the R6 reconciliation record and run the live service
+outage/recovery acceptance trace when Python and Ollama are available.

@@ -306,16 +306,13 @@ func (cc *conversationContext) executeChatTool(
 	if channelID != "" {
 		input["_channel_id"] = channelID
 	}
-	// Scoped memory must derive its boundary from the active serve run, never
-	// from model-supplied arguments. A run ID is the exact task identity for
-	// this interaction; without it or a configured workspace the scoped tool
-	// rejects the operation rather than inventing a task scope.
 	if tc.Function.Name == "memory_search" || tc.Function.Name == "memory_write" {
-		if cc.cfg != nil && strings.TrimSpace(cc.cfg.Prizm.Workspace) != "" && runID != "" {
-			input["project_id"] = cc.cfg.Prizm.Workspace
-			input["task_id"] = runID
-			input["agent_id"] = agentCfg.ID
-			input["correlation_id"] = runID
+		var scopeErr error
+		input, scopeErr = cc.trustedScopedMemoryInput(input, agentCfg, runID)
+		if scopeErr != nil {
+			return scopeErr.Error(), toolCallSummary{
+				Tool: tc.Function.Name, Input: tc.Function.Arguments, Status: "error", Error: scopeErr.Error(),
+			}
 		}
 	}
 
@@ -413,6 +410,30 @@ func (cc *conversationContext) executeChatTool(
 	}
 
 	return resultStr, summary
+}
+
+// trustedScopedMemoryInput removes every model-controlled scope field before
+// deriving scope from serve-owned identity. Scoped memory never treats a tool
+// call argument as authority for a project, task, user, session, agent, or
+// correlation boundary.
+func (cc *conversationContext) trustedScopedMemoryInput(input map[string]any, agentCfg *orchestrator.AgentConfig, runID string) (map[string]any, error) {
+	trusted := make(map[string]any, len(input))
+	for key, value := range input {
+		trusted[key] = value
+	}
+	for _, key := range []string{"project_id", "task_id", "user_id", "include_user_scope", "session_id", "agent_id", "correlation_id"} {
+		delete(trusted, key)
+	}
+	if cc == nil || cc.cfg == nil || strings.TrimSpace(cc.cfg.Prizm.Workspace) == "" || strings.TrimSpace(runID) == "" {
+		return nil, fmt.Errorf("scoped memory requires a trusted serve workspace and run identity")
+	}
+	trusted["project_id"] = cc.cfg.Prizm.Workspace
+	trusted["task_id"] = runID
+	trusted["correlation_id"] = runID
+	if agentCfg != nil {
+		trusted["agent_id"] = agentCfg.ID
+	}
+	return trusted, nil
 }
 
 func formatApprovalOutput(output map[string]any) string {

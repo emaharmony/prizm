@@ -126,29 +126,70 @@ func (f *Facade) Capture(ctx context.Context, req CaptureRequest) (Memory, bool,
 		mem.Summary = truncateScopeText(mem.Content, 200)
 	}
 
-	f.emit(req.Scope, EventScopedCaptureStarted, map[string]any{"memory_id": mem.ID, "capture_key": key})
-	if existing, err := f.Local.Get(ctx, mem.ID); err != nil {
+	existing, err := f.Local.Get(ctx, mem.ID)
+	if err != nil {
 		return Memory{}, false, err
-	} else if existing != nil {
-		f.emit(req.Scope, EventScopedCapturePersisted, map[string]any{"memory_id": existing.ID, "capture_key": key, "duplicate": true})
-		return *existing, false, nil
+	}
+	if existing != nil {
+		if sameCapture(*existing, mem) {
+			if err := f.emit(ctx, req.Scope, EventScopedCaptureStarted, map[string]any{"memory_id": existing.ID, "capture_key": key, "duplicate": true}); err != nil {
+				return Memory{}, false, err
+			}
+			if err := f.emit(ctx, req.Scope, EventScopedCapturePersisted, map[string]any{"memory_id": existing.ID, "capture_key": key, "duplicate": true}); err != nil {
+				return Memory{}, false, err
+			}
+			return *existing, false, nil
+		}
+		if req.SupersedesID != existing.ID {
+			return Memory{}, false, errors.New("capture key already names different memory; supersedes_id must name the existing memory")
+		}
+		// A replacement shares the producer delivery key but has a distinct,
+		// deterministic identity. Retrying it cannot create another entry.
+		mem.ID = scopedCaptureID(req.Scope, key+"\x00supersedes:"+existing.ID)
+		replacement, err := f.Local.Get(ctx, mem.ID)
+		if err != nil {
+			return Memory{}, false, err
+		}
+		if replacement != nil {
+			if !sameCapture(*replacement, mem) {
+				return Memory{}, false, errors.New("capture key replacement conflicts with existing memory")
+			}
+			if err := f.emit(ctx, req.Scope, EventScopedCaptureStarted, map[string]any{"memory_id": replacement.ID, "capture_key": key, "duplicate": true}); err != nil {
+				return Memory{}, false, err
+			}
+			if err := f.emit(ctx, req.Scope, EventScopedCapturePersisted, map[string]any{"memory_id": replacement.ID, "capture_key": key, "duplicate": true}); err != nil {
+				return Memory{}, false, err
+			}
+			return *replacement, false, nil
+		}
+	}
+	if err := f.emit(ctx, req.Scope, EventScopedCaptureStarted, map[string]any{"memory_id": mem.ID, "capture_key": key}); err != nil {
+		return Memory{}, false, err
 	}
 	if _, err := f.Local.Store(ctx, mem); err != nil {
 		return Memory{}, false, err
 	}
-	f.emit(req.Scope, EventScopedCapturePersisted, map[string]any{"memory_id": mem.ID, "capture_key": key})
+	if err := f.emit(ctx, req.Scope, EventScopedCapturePersisted, map[string]any{"memory_id": mem.ID, "capture_key": key}); err != nil {
+		return Memory{}, false, err
+	}
 	if req.SupersedesID != "" {
-		f.emit(req.Scope, EventScopedSuperseded, map[string]any{"memory_id": mem.ID, "supersedes_id": req.SupersedesID})
+		if err := f.emit(ctx, req.Scope, EventScopedSuperseded, map[string]any{"memory_id": mem.ID, "supersedes_id": req.SupersedesID}); err != nil {
+			return Memory{}, false, err
+		}
 	}
 	if f.Primary == nil {
 		return mem, false, nil
 	}
 	remoteID, err := f.Primary.Capture(ctx, mem)
 	if err != nil {
-		f.emit(req.Scope, EventScopedCaptureFallback, map[string]any{"memory_id": mem.ID, "reason": "primary_unavailable"})
+		if eventErr := f.emit(ctx, req.Scope, EventScopedCaptureFallback, map[string]any{"memory_id": mem.ID, "reason": "primary_unavailable"}); eventErr != nil {
+			return Memory{}, true, eventErr
+		}
 		return mem, true, nil
 	}
-	f.emit(req.Scope, EventScopedCaptureSynced, map[string]any{"memory_id": mem.ID, "primary_id": remoteID})
+	if err := f.emit(ctx, req.Scope, EventScopedCaptureSynced, map[string]any{"memory_id": mem.ID, "primary_id": remoteID}); err != nil {
+		return Memory{}, false, err
+	}
 	return mem, false, nil
 }
 
@@ -165,14 +206,18 @@ func (f *Facade) Search(ctx context.Context, req SearchRequest) ([]Memory, bool,
 	if req.Limit <= 0 {
 		req.Limit = 5
 	}
-	f.emit(req.Scope, EventScopedSearchRequested, map[string]any{"query": req.Query, "limit": req.Limit})
+	if err := f.emit(ctx, req.Scope, EventScopedSearchRequested, map[string]any{"query": req.Query, "limit": req.Limit}); err != nil {
+		return nil, false, err
+	}
 	var combined []Memory
 	fallback := false
 	if f.Primary != nil {
 		remote, err := f.Primary.Search(ctx, req)
 		if err != nil {
 			fallback = true
-			f.emit(req.Scope, EventScopedSearchFallback, map[string]any{"reason": "primary_unavailable"})
+			if eventErr := f.emit(ctx, req.Scope, EventScopedSearchFallback, map[string]any{"reason": "primary_unavailable"}); eventErr != nil {
+				return nil, true, eventErr
+			}
 		} else {
 			combined = append(combined, remote...)
 		}
@@ -183,12 +228,14 @@ func (f *Facade) Search(ctx context.Context, req SearchRequest) ([]Memory, bool,
 	}
 	combined = append(combined, local...)
 	results := filterAndDedupe(combined, req.Scope, req.Limit)
-	f.emit(req.Scope, EventScopedSearchCompleted, map[string]any{"query": req.Query, "count": len(results), "fallback": fallback})
+	if err := f.emit(ctx, req.Scope, EventScopedSearchCompleted, map[string]any{"query": req.Query, "count": len(results), "fallback": fallback}); err != nil {
+		return nil, fallback, err
+	}
 	return results, fallback, nil
 }
 
 func stableCaptureKey(req CaptureRequest) string {
-	h := sha256.Sum256([]byte(strings.Join([]string{req.Scope.UserID, req.Scope.ProjectID, req.Scope.TaskID, req.Scope.SessionID, req.Scope.AgentID, req.Content, req.Summary, req.Category, req.SupersedesID}, "\x00")))
+	h := sha256.Sum256([]byte(strings.Join([]string{req.Scope.UserID, req.Scope.ProjectID, req.Scope.TaskID, req.Scope.SessionID, req.Scope.AgentID, req.Content, req.Summary, req.Category, req.Tier, strings.Join(req.Topics, "\x1f"), req.Source, req.SupersedesID}, "\x00")))
 	return hex.EncodeToString(h[:16])
 }
 
@@ -244,9 +291,9 @@ func filterAndDedupe(memories []Memory, scope Scope, limit int) []Memory {
 	return out
 }
 
-func (f *Facade) emit(scope Scope, typ string, payload map[string]any) {
+func (f *Facade) emit(ctx context.Context, scope Scope, typ string, payload map[string]any) error {
 	if f.Events == nil {
-		return
+		return nil
 	}
 	payload["project_id"] = scope.ProjectID
 	payload["task_id"] = scope.TaskID
@@ -254,7 +301,31 @@ func (f *Facade) emit(scope Scope, typ string, payload map[string]any) {
 		payload["user_id"] = scope.UserID
 	}
 	e := event.NewEvent(typ, f.Source, payload).WithCorrelationID(scope.CorrelationID).WithMetadata(event.EventMetadata{Project: scope.ProjectID, SessionID: scope.SessionID, Agent: scope.AgentID})
-	_ = f.Events.Store(context.Background(), e)
+	if err := f.Events.Store(ctx, e); err != nil {
+		return fmt.Errorf("persist %s: %w", typ, err)
+	}
+	return nil
+}
+
+func sameCapture(existing, candidate Memory) bool {
+	return existing.Content == candidate.Content && existing.Summary == candidate.Summary &&
+		existing.Category == candidate.Category && existing.Tier == candidate.Tier &&
+		existing.Source == candidate.Source && existing.UserID == candidate.UserID &&
+		existing.ProjectID == candidate.ProjectID && existing.TaskID == candidate.TaskID &&
+		existing.SessionID == candidate.SessionID && existing.AgentID == candidate.AgentID &&
+		existing.SupersedesID == candidate.SupersedesID && slicesEqual(existing.KeyTopics, candidate.KeyTopics)
+}
+
+func slicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func truncateScopeText(s string, max int) string {

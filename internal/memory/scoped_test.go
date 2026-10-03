@@ -27,10 +27,18 @@ func (p *scopedPrimary) Search(_ context.Context, _ SearchRequest) ([]Memory, er
 	return append([]Memory(nil), p.memories...), nil
 }
 
-type scopedEvents struct{ events []event.Event }
+type scopedEvents struct {
+	events   []event.Event
+	failType string
+	failNext int
+}
 
 func (s *scopedEvents) Store(_ context.Context, e event.Event) error {
 	s.events = append(s.events, e)
+	if s.failType == e.Type && s.failNext > 0 {
+		s.failNext--
+		return errors.New("event store unavailable")
+	}
 	return nil
 }
 func (s *scopedEvents) StoreBatch(_ context.Context, events []event.Event) error {
@@ -171,5 +179,147 @@ func TestScopedOperationsRequireCorrelationID(t *testing.T) {
 	_, _, err := (&Facade{Local: tempStore(t)}).Search(context.Background(), SearchRequest{Scope: scope, Query: "x"})
 	if err == nil {
 		t.Fatal("expected missing correlation rejection")
+	}
+}
+
+func TestScopedCaptureRejectsConflictingDeliveryKeyUnlessItSupersedes(t *testing.T) {
+	local := tempStore(t)
+	f := &Facade{Local: local}
+	first, _, err := f.Capture(context.Background(), CaptureRequest{Scope: scopedTestScope(), CaptureKey: "delivery", Content: "first", Category: "decision"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.Capture(context.Background(), CaptureRequest{Scope: scopedTestScope(), CaptureKey: "delivery", Content: "changed", Category: "decision"}); err == nil {
+		t.Fatal("conflicting capture key was accepted")
+	}
+	if _, _, err := f.Capture(context.Background(), CaptureRequest{Scope: scopedTestScope(), CaptureKey: "delivery", Content: "first", Category: "decision", Source: "changed-metadata"}); err == nil {
+		t.Fatal("capture key with changed metadata was accepted")
+	}
+	replacement, _, err := f.Capture(context.Background(), CaptureRequest{Scope: scopedTestScope(), CaptureKey: "delivery", Content: "changed", Category: "decision", SupersedesID: first.ID})
+	if err != nil || replacement.ID == first.ID {
+		t.Fatalf("replacement = %#v, %v", replacement, err)
+	}
+	duplicate, _, err := f.Capture(context.Background(), CaptureRequest{Scope: scopedTestScope(), CaptureKey: "delivery", Content: "changed", Category: "decision", SupersedesID: first.ID})
+	if err != nil || duplicate.ID != replacement.ID {
+		t.Fatalf("replacement retry = %#v, %v", duplicate, err)
+	}
+}
+
+func TestScopedCaptureSurfacesEventFailureAndRetryIsIdempotent(t *testing.T) {
+	local := tempStore(t)
+	events := &scopedEvents{failType: EventScopedCapturePersisted, failNext: 1}
+	f := &Facade{Local: local, Events: events, Source: "test"}
+	req := CaptureRequest{Scope: scopedTestScope(), CaptureKey: "event-retry", Content: "durable before event"}
+	if _, _, err := f.Capture(context.Background(), req); err == nil {
+		t.Fatal("expected lifecycle event persistence failure")
+	}
+	all, err := local.ListRecent(context.Background(), 0)
+	if err != nil || len(all) != 1 {
+		t.Fatalf("local record after failed event = %d, %v", len(all), err)
+	}
+	got, _, err := f.Capture(context.Background(), req)
+	if err != nil || got.ID != all[0].ID {
+		t.Fatalf("idempotent retry = %#v, %v", got, err)
+	}
+	all, err = local.ListRecent(context.Background(), 0)
+	if err != nil || len(all) != 1 {
+		t.Fatalf("retry duplicated memory: %d, %v", len(all), err)
+	}
+}
+
+func TestScopedSearchSurfacesEventFailure(t *testing.T) {
+	f := &Facade{Local: tempStore(t), Events: &scopedEvents{failType: EventScopedSearchRequested, failNext: 1}}
+	if _, _, err := f.Search(context.Background(), SearchRequest{Scope: scopedTestScope(), Query: "anything"}); err == nil {
+		t.Fatal("expected search lifecycle event persistence failure")
+	}
+}
+
+func TestScopedPrimaryOutageThenRecoveryKeepsLocalRecordWithoutClaimingReconciliation(t *testing.T) {
+	local := tempStore(t)
+	primary := &scopedPrimary{err: errors.New("offline")}
+	f := &Facade{Local: local, Primary: primary}
+	stored, fallback, err := f.Capture(context.Background(), CaptureRequest{Scope: scopedTestScope(), CaptureKey: "outage", Content: "recoverable local record"})
+	if err != nil || !fallback {
+		t.Fatalf("outage capture = %#v fallback=%v err=%v", stored, fallback, err)
+	}
+	primary.err = nil
+	results, fallback, err := f.Search(context.Background(), SearchRequest{Scope: scopedTestScope(), Query: "recoverable", Limit: 5})
+	if err != nil || fallback || len(results) != 1 || results[0].ID != stored.ID {
+		t.Fatalf("recovered search = %#v fallback=%v err=%v", results, fallback, err)
+	}
+	if len(primary.memories) != 0 {
+		t.Fatalf("unexpected reconciliation: %#v", primary.memories)
+	}
+}
+
+// TestScopedMemoryScoreGate is the deterministic R2 retrieval gate. It seeds
+// a shared local store with allowed, denied, superseded, and remote candidates
+// and requires every expected result without a cross-scope leak.
+func TestScopedMemoryScoreGate(t *testing.T) {
+	local := tempStore(t)
+	base := scopedTestScope()
+	seed := []Memory{
+		{ID: "project", Content: "project-alpha architecture", ProjectID: "project-a", TaskID: "task-a"},
+		{ID: "task", Content: "task-alpha decision", ProjectID: "project-a", TaskID: "task-a"},
+		{ID: "user", Content: "user-alpha preference", ProjectID: "project-a", TaskID: "task-a", UserID: "user-a"},
+		{ID: "other-user", Content: "other-user secret", ProjectID: "project-a", TaskID: "task-a", UserID: "user-b"},
+		{ID: "other-project", Content: "other-project secret", ProjectID: "project-b", TaskID: "task-a"},
+		{ID: "other-task", Content: "other-task secret", ProjectID: "project-a", TaskID: "task-b"},
+		{ID: "old", Content: "superseded-alpha old", ProjectID: "project-a", TaskID: "task-a"},
+		{ID: "new", Content: "superseded-alpha new", ProjectID: "project-a", TaskID: "task-a", SupersedesID: "old"},
+	}
+	for _, mem := range seed {
+		mem.Summary = mem.Content
+		if _, err := local.Store(context.Background(), mem); err != nil {
+			t.Fatal(err)
+		}
+	}
+	primary := &scopedPrimary{memories: []Memory{{ID: "remote", Content: "remote-alpha fact", ProjectID: "project-a", TaskID: "task-a"}, {ID: "remote-leak", Content: "remote-leak secret", ProjectID: "project-b", TaskID: "task-a"}}}
+	f := &Facade{Local: local, Primary: primary}
+	type scoreCase struct {
+		name, query, want string
+		scope             Scope
+		absent            string
+		outage            bool
+	}
+	noUser := base
+	noUser.UserID = ""
+	noUser.IncludeUserScope = false
+	cases := []scoreCase{
+		{"project", "architecture", "project", base, "", false},
+		{"task", "decision", "task", base, "", false},
+		{"user opt in", "preference", "user", base, "", false},
+		{"user denied", "preference", "", noUser, "user", false},
+		{"other user denied", "other-user", "", base, "other-user", false},
+		{"other project denied", "other-project", "", base, "other-project", false},
+		{"other task denied", "other-task", "", base, "other-task", false},
+		{"supersession", "superseded-alpha", "new", base, "old", false},
+		{"primary allowed", "remote-alpha", "remote", base, "", false},
+		{"primary leak denied", "remote-leak", "", base, "remote-leak", false},
+	}
+	passed := 0
+	for _, tc := range cases {
+		results, _, err := f.Search(context.Background(), SearchRequest{Scope: tc.scope, Query: tc.query, Limit: 10})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		foundWant, foundAbsent := tc.want == "", false
+		for _, result := range results {
+			if result.ID == tc.want {
+				foundWant = true
+			}
+			if result.ID == tc.absent {
+				foundAbsent = true
+			}
+		}
+		if foundWant && !foundAbsent {
+			passed++
+		} else {
+			t.Errorf("%s: want=%q absent=%q results=%#v", tc.name, tc.want, tc.absent, results)
+		}
+	}
+	t.Logf("R2 scoped retrieval score: %d/%d; leakage=%t", passed, len(cases), passed != len(cases))
+	if passed < 9 {
+		t.Fatalf("R2 score gate failed: %d/%d", passed, len(cases))
 	}
 }

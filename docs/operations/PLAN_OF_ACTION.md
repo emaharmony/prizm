@@ -15,11 +15,11 @@ opt-in, and Recall failure falls back to local durable memory without leakage.
 
 | Order | Work | Done when |
 | --- | --- | --- |
-| 1 | Require exact project and task scope on new autonomous memory reads and writes. | Done for serve: trusted workspace/run identities override model input; missing identity fails closed. |
-| 2 | Make capture idempotent and replacements explicit. | Done: capture IDs namespace delivery keys by user/project/task; append-only replacement links suppress superseded memories. |
-| 3 | Make Recall primary with safe local fallback. | Partial: scoped Recall requests and local fallback are wired; durable retry/reconciliation remains R6 work. |
-| 4 | Emit inspectable memory lifecycle facts. | Done for scoped serve operations: canonical correlation, capture/search/fallback events persist in SQLite. |
-| 5 | Prove the memory score gate. | Pending: seed and measure 10 scoped preference/task cases, exercise a real Recall outage and later reconciliation, and prove no denied or stale context crosses a boundary. |
+| 1 | Require exact project and task scope on new autonomous memory reads and writes. | Done for serve chat: all model-supplied scope fields are cleared, trusted workspace/run identity supplies project/task/correlation/agent, and missing identity fails closed. |
+| 2 | Make capture idempotent and replacements explicit. | Done: delivery keys are namespaced by scope; conflicting content or metadata is rejected, while an explicit superseding replacement receives a distinct stable ID. |
+| 3 | Make Recall primary with safe local fallback. | Partial: scoped Recall requests, local fallback, and a deterministic outage/recovery trace pass; durable retry/reconciliation remains R6 work. |
+| 4 | Emit inspectable memory lifecycle facts. | Done: lifecycle event persistence is strict for scoped operations; event-store failure surfaces and an idempotent retry retains the original local record. |
+| 5 | Prove the memory score gate. | Done: deterministic seeded retrieval gate scores 10/10 with zero cross-scope leakage. |
 
 ## Follow-on R1 Work
 
@@ -35,10 +35,10 @@ task/review reports.
 | --- | --- |
 | Active roadmap IDs | R2 (primary), with R6 integration dependency; R1 acceptance and event-outbox work remain open. |
 | Reviewed baseline | `origin/staging` at `a2a5622` includes merged R1 PR #84; no 9/10 gate is met. |
-| Current state | Scoped memory is wired into `serve`: trusted workspace/run identities supply project/task/correlation, model scope is overridden, and absent identity fails closed. Recall receives exact scope parameters and incomplete or mismatched response metadata is discarded before merge. Legacy APIs remain compatible. |
+| Current state | Scoped chat memory clears every model-supplied scope field before deriving trusted workspace/run scope. Capture conflicts fail closed unless they explicitly supersede the prior memory; event persistence errors surface without duplicating the local record on retry. Recall responses still require exact metadata before merge. Legacy APIs remain compatible. |
 | PR handoff | R2 work is on `codex/r2-scoped-memory`, rebased onto `a2a5622`; it is not pushed or merged. |
-| Next implementation decision | Prove ten seeded cases and a real Recall outage/recovery trace; add durable reconciliation only after the local store contract supports it. |
-| Evidence required before advancing | Ten seeded scoped-memory cases with 9/10 correct recall and no cross-scope return; one real Recall outage and recovery trace. |
+| Next implementation decision | Implement R6 durable local-to-Recall reconciliation with an idempotent delivery record, then run a live outage/recovery trace in an environment with a working Remembrance service and embedding provider. |
+| Evidence required before advancing | The seeded gate is 10/10 with no leakage. Still required: a live Recall outage/recovery trace and proof that deferred local captures reconcile once without duplicate remote writes. |
 
 ## Update Format
 

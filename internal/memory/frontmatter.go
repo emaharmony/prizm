@@ -92,8 +92,14 @@ func applyFrontMatter(mem *Memory, meta map[string]string) {
 			mem.Tier = val
 		case "user_id":
 			mem.UserID = val
+		case "project_id":
+			mem.ProjectID = val
 		case "task_id":
 			mem.TaskID = val
+		case "session_id":
+			mem.SessionID = val
+		case "agent_id":
+			mem.AgentID = val
 		case "supersedes":
 			mem.SupersedesID = val
 		case "created":
@@ -162,8 +168,17 @@ func formatFrontMatter(mem Memory) string {
 	if mem.UserID != "" {
 		sb.WriteString("user_id: " + mem.UserID + "\n")
 	}
+	if mem.ProjectID != "" {
+		sb.WriteString("project_id: " + mem.ProjectID + "\n")
+	}
 	if mem.TaskID != "" {
 		sb.WriteString("task_id: " + mem.TaskID + "\n")
+	}
+	if mem.SessionID != "" {
+		sb.WriteString("session_id: " + mem.SessionID + "\n")
+	}
+	if mem.AgentID != "" {
+		sb.WriteString("agent_id: " + mem.AgentID + "\n")
 	}
 	if mem.SupersedesID != "" {
 		sb.WriteString("supersedes: " + mem.SupersedesID + "\n")
