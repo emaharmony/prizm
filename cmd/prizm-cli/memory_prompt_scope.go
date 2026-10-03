@@ -61,6 +61,9 @@ func remembranceContextMatchesScope(pack *remembrance.ContextPackResponse, scope
 	if scope.IncludeUserScope && pack.OwnerID != scope.UserID {
 		return false
 	}
+	if !scope.IncludeUserScope && pack.OwnerID != "" {
+		return false
+	}
 	if pack.ContextJSON != nil && (pack.ContextJSON.ProjectID != scope.ProjectID || pack.ContextJSON.TaskID != scope.TaskID || pack.ContextJSON.SessionID != scope.SessionID || pack.ContextJSON.AgentID != scope.AgentID) {
 		return false
 	}

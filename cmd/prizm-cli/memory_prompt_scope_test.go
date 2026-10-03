@@ -65,3 +65,15 @@ func TestRemembranceContextRequiresCompleteScopeMetadata(t *testing.T) {
 		t.Fatal("complete trusted context metadata was rejected")
 	}
 }
+
+func TestRemembranceContextRejectsOwnerOutsideUserScope(t *testing.T) {
+	scope := memory.Scope{ProjectID: "project", TaskID: "run", SessionID: "session", AgentID: "agent", IncludeUserScope: false, CorrelationID: "run"}
+	pack := &remembrance.ContextPackResponse{ProjectID: "project", TaskID: "run", SessionID: "session", AgentID: "agent", OwnerID: "user"}
+	if remembranceContextMatchesScope(pack, scope) {
+		t.Fatal("context with an owner was accepted outside the user scope")
+	}
+	pack.OwnerID = ""
+	if !remembranceContextMatchesScope(pack, scope) {
+		t.Fatal("context without an owner was rejected outside the user scope")
+	}
+}
