@@ -427,7 +427,11 @@ func (cc *conversationContext) trustedScopedMemoryInput(input map[string]any, ag
 	if cc == nil || cc.cfg == nil || strings.TrimSpace(cc.cfg.Prizm.Workspace) == "" || strings.TrimSpace(runID) == "" {
 		return nil, fmt.Errorf("scoped memory requires a trusted serve workspace and run identity")
 	}
-	trusted["project_id"] = cc.cfg.Prizm.Workspace
+	projectID, err := canonicalMemoryProjectID(cc.cfg.Prizm.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	trusted["project_id"] = projectID
 	trusted["task_id"] = runID
 	trusted["correlation_id"] = runID
 	if agentCfg != nil {

@@ -11,14 +11,46 @@ import (
 type scopedPrimary struct {
 	memories []Memory
 	err      error
+	captures int
 }
 
 func (p *scopedPrimary) Capture(_ context.Context, mem Memory) (string, error) {
+	p.captures++
 	if p.err != nil {
 		return "", p.err
 	}
 	p.memories = append(p.memories, mem)
 	return "recall-" + mem.ID, nil
+}
+
+func TestScopedCapturePersistsPendingSyncAndRetriesWithoutDuplicateLocalMemory(t *testing.T) {
+	local := tempStore(t)
+	primary := &scopedPrimary{err: errors.New("offline")}
+	events := &scopedEvents{}
+	f := &Facade{Local: local, Primary: primary, Events: events, Source: "test"}
+	req := CaptureRequest{Scope: scopedTestScope(), CaptureKey: "sync-retry", Content: "durable sync candidate"}
+	first, fallback, err := f.Capture(context.Background(), req)
+	if err != nil || !fallback {
+		t.Fatalf("failed primary capture = %#v fallback=%v err=%v", first, fallback, err)
+	}
+	foundPending := false
+	for _, e := range events.events {
+		if e.Type == EventScopedCaptureSyncPending && e.Payload["memory_id"] == first.ID && e.Payload["sync_key"] == first.ID {
+			foundPending = true
+		}
+	}
+	if !foundPending {
+		t.Fatalf("pending sync event missing: %#v", events.events)
+	}
+	primary.err = nil
+	second, fallback, err := f.Capture(context.Background(), req)
+	if err != nil || fallback || second.ID != first.ID || primary.captures != 2 {
+		t.Fatalf("idempotent sync retry = %#v fallback=%v captures=%d err=%v", second, fallback, primary.captures, err)
+	}
+	all, err := local.ListRecent(context.Background(), 0)
+	if err != nil || len(all) != 1 {
+		t.Fatalf("retry duplicated local memory: %#v err=%v", all, err)
+	}
 }
 func (p *scopedPrimary) Search(_ context.Context, _ SearchRequest) ([]Memory, error) {
 	if p.err != nil {

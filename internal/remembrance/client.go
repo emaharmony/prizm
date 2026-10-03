@@ -107,6 +107,8 @@ type ContextPackResponse struct {
 	ProjectID        string         `json:"project_id"`
 	OwnerID          string         `json:"owner_id,omitempty"`
 	AgentID          string         `json:"agent_id"`
+	TaskID           string         `json:"task_id,omitempty"`
+	SessionID        string         `json:"session_id,omitempty"`
 	Task             string         `json:"task"`
 	SelectedMemories []string       `json:"selected_memories"`
 	ContextMarkdown  string         `json:"context_markdown"`
@@ -119,6 +121,8 @@ type ContextPackResponse struct {
 type ContextDetail struct {
 	ProjectID   string          `json:"project_id"`
 	AgentID     string          `json:"agent_id"`
+	TaskID      string          `json:"task_id,omitempty"`
+	SessionID   string          `json:"session_id,omitempty"`
 	Task        string          `json:"task"`
 	Memories    []ContextMemory `json:"selected_memories"`
 	TotalMemory int             `json:"total_memories"`
@@ -139,6 +143,8 @@ type BuildContextRequest struct {
 	OwnerID            string `json:"owner_id,omitempty"`
 	AgentID            string `json:"agent_id"`
 	ProjectID          string `json:"project_id"`
+	TaskID             string `json:"task_id,omitempty"`
+	SessionID          string `json:"session_id,omitempty"`
 	Task               string `json:"task"`
 	LocalRecentSummary string `json:"local_recent_summary,omitempty"`
 	ChannelContext     string `json:"channel_context,omitempty"`

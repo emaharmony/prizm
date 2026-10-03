@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -17,7 +18,8 @@ import (
 )
 
 func TestTrustedScopedMemoryInputOverridesAndClearsModelScope(t *testing.T) {
-	cc := &conversationContext{cfg: &orchestrator.Config{Prizm: orchestrator.PrizmConfig{Workspace: "C:/trusted/project"}}}
+	workspace := t.TempDir()
+	cc := &conversationContext{cfg: &orchestrator.Config{Prizm: orchestrator.PrizmConfig{Workspace: workspace}}}
 	input := map[string]any{
 		"query": "memory", "project_id": "spoof-project", "task_id": "spoof-task", "user_id": "spoof-user",
 		"include_user_scope": true, "session_id": "spoof-session", "agent_id": "spoof-agent", "correlation_id": "spoof-correlation",
@@ -26,7 +28,11 @@ func TestTrustedScopedMemoryInputOverridesAndClearsModelScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got["project_id"] != "C:/trusted/project" || got["task_id"] != "run-123" || got["correlation_id"] != "run-123" || got["agent_id"] != "trusted-agent" {
+	projectID, err := filepath.Abs(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["project_id"] != filepath.Clean(projectID) || got["task_id"] != "run-123" || got["correlation_id"] != "run-123" || got["agent_id"] != "trusted-agent" {
 		t.Fatalf("trusted scope = %#v", got)
 	}
 	for _, key := range []string{"user_id", "include_user_scope", "session_id"} {

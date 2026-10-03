@@ -83,12 +83,16 @@ type Facade struct {
 const (
 	EventScopedCaptureStarted   = "prizm.memory.capture.started"
 	EventScopedCapturePersisted = "prizm.memory.capture.persisted"
-	EventScopedCaptureSynced    = "prizm.memory.capture.synced"
-	EventScopedCaptureFallback  = "prizm.memory.capture.fallback"
-	EventScopedSuperseded       = "prizm.memory.superseded"
-	EventScopedSearchRequested  = "prizm.memory.search.requested"
-	EventScopedSearchCompleted  = "prizm.memory.search.completed"
-	EventScopedSearchFallback   = "prizm.memory.search.fallback"
+	// EventScopedCaptureSyncPending records locally durable memory that has
+	// not yet been confirmed by the primary backend. R6 reconciliation will
+	// consume this fact; Capture itself never claims it reconciled a retry.
+	EventScopedCaptureSyncPending = "prizm.memory.capture.sync_pending"
+	EventScopedCaptureSynced      = "prizm.memory.capture.synced"
+	EventScopedCaptureFallback    = "prizm.memory.capture.fallback"
+	EventScopedSuperseded         = "prizm.memory.superseded"
+	EventScopedSearchRequested    = "prizm.memory.search.requested"
+	EventScopedSearchCompleted    = "prizm.memory.search.completed"
+	EventScopedSearchFallback     = "prizm.memory.search.fallback"
 )
 
 func (f *Facade) Capture(ctx context.Context, req CaptureRequest) (Memory, bool, error) {
@@ -138,7 +142,7 @@ func (f *Facade) Capture(ctx context.Context, req CaptureRequest) (Memory, bool,
 			if err := f.emit(ctx, req.Scope, EventScopedCapturePersisted, map[string]any{"memory_id": existing.ID, "capture_key": key, "duplicate": true}); err != nil {
 				return Memory{}, false, err
 			}
-			return *existing, false, nil
+			return f.syncPrimary(ctx, req.Scope, *existing)
 		}
 		if req.SupersedesID != existing.ID {
 			return Memory{}, false, errors.New("capture key already names different memory; supersedes_id must name the existing memory")
@@ -160,7 +164,7 @@ func (f *Facade) Capture(ctx context.Context, req CaptureRequest) (Memory, bool,
 			if err := f.emit(ctx, req.Scope, EventScopedCapturePersisted, map[string]any{"memory_id": replacement.ID, "capture_key": key, "duplicate": true}); err != nil {
 				return Memory{}, false, err
 			}
-			return *replacement, false, nil
+			return f.syncPrimary(ctx, req.Scope, *replacement)
 		}
 	}
 	if err := f.emit(ctx, req.Scope, EventScopedCaptureStarted, map[string]any{"memory_id": mem.ID, "capture_key": key}); err != nil {
@@ -177,17 +181,29 @@ func (f *Facade) Capture(ctx context.Context, req CaptureRequest) (Memory, bool,
 			return Memory{}, false, err
 		}
 	}
+	return f.syncPrimary(ctx, req.Scope, mem)
+}
+
+// syncPrimary records a durable pending fact before returning local fallback.
+// It intentionally has no replay worker: durable reconciliation belongs to R6.
+func (f *Facade) syncPrimary(ctx context.Context, scope Scope, mem Memory) (Memory, bool, error) {
 	if f.Primary == nil {
+		if err := f.emit(ctx, scope, EventScopedCaptureSyncPending, map[string]any{"memory_id": mem.ID, "sync_key": mem.ID, "reason": "primary_not_configured"}); err != nil {
+			return Memory{}, true, err
+		}
 		return mem, false, nil
 	}
 	remoteID, err := f.Primary.Capture(ctx, mem)
 	if err != nil {
-		if eventErr := f.emit(ctx, req.Scope, EventScopedCaptureFallback, map[string]any{"memory_id": mem.ID, "reason": "primary_unavailable"}); eventErr != nil {
+		if eventErr := f.emit(ctx, scope, EventScopedCaptureSyncPending, map[string]any{"memory_id": mem.ID, "sync_key": mem.ID, "reason": "primary_unavailable"}); eventErr != nil {
+			return Memory{}, true, eventErr
+		}
+		if eventErr := f.emit(ctx, scope, EventScopedCaptureFallback, map[string]any{"memory_id": mem.ID, "reason": "primary_unavailable"}); eventErr != nil {
 			return Memory{}, true, eventErr
 		}
 		return mem, true, nil
 	}
-	if err := f.emit(ctx, req.Scope, EventScopedCaptureSynced, map[string]any{"memory_id": mem.ID, "primary_id": remoteID}); err != nil {
+	if err := f.emit(ctx, scope, EventScopedCaptureSynced, map[string]any{"memory_id": mem.ID, "primary_id": remoteID, "sync_key": mem.ID}); err != nil {
 		return Memory{}, false, err
 	}
 	return mem, false, nil
@@ -253,6 +269,12 @@ func scopedCaptureID(scope Scope, key string) string {
 
 func scopeMatches(mem Memory, scope Scope) bool {
 	if mem.ProjectID != scope.ProjectID || mem.TaskID != scope.TaskID {
+		return false
+	}
+	if scope.SessionID != "" && mem.SessionID != scope.SessionID {
+		return false
+	}
+	if scope.AgentID != "" && mem.AgentID != scope.AgentID {
 		return false
 	}
 	return mem.UserID == "" || (scope.IncludeUserScope && mem.UserID == scope.UserID)

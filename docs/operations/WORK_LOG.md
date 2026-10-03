@@ -486,6 +486,35 @@ then complete the R1 approval-to-verified-resume slice.
 - [Prizm Roadmap](../architecture/PRIZM_ROADMAP.md)
 - [Current Plan of Action](PLAN_OF_ACTION.md)
 
+## 2026-10-02 — R2 Autonomous Prompt Scope and Sync-Pending Evidence
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r2-scoped-memory` based on merged staging `a2a5622`
+
+- Replaced autonomous serve prompt injection's unscoped local search and
+  `ListRecent` fallback. The prompt path derives canonical workspace project,
+  active run, session, agent, and authorized owner identity, and sends the same
+  identifiers to Recall context building.
+- Recall context is injected only when it echoes all trusted scope metadata.
+  Its cache key includes the complete scope and a task-text digest. A missing or
+  mismatched field fails closed and the scoped memory facade supplies the local
+  fallback.
+- Added a durable `prizm.memory.capture.sync_pending` lifecycle fact for primary
+  capture outage or absence. A duplicate delivery reuses the local memory ID and
+  retries the primary call; this is evidence for a future R6 reconciliation
+  worker, not a claim that reconciliation exists.
+- Focused scoped-memory, Remembrance, and serve prompt-scope tests pass.
+  Full `go test ./... -count=1`, build, vet, staticcheck, and diff checks pass
+  when Go uses its normal host cache; the restricted sandbox alone denies that
+  cache's metadata writes.
+
+**Open risks:** A live Recall service must implement and echo task/session scope
+metadata before its context packs can be used. R6 still needs a durable replay
+consumer that drains pending sync facts after recovery.
+
+**Next action:** implement the R6 idempotent reconciliation consumer and run a
+live outage/recovery trace against a scope-aware Recall service.
+
 ## 2026-10-02 — R2 Scoped Memory Hardening and Score Gate
 
 **Roadmap IDs:** R2, R6

@@ -170,6 +170,7 @@ type conversationContext struct {
 	reviewStore      *reviewResultStore    // V77: Pending Mango review results for feedback injection
 	memoryStoreLocal *memory.MarkdownStore // V77: Local memory store for automatic recall
 	memInjector      *MemoryInjector       // V79: Smart memory injection (search vs recent)
+	scopedMemory     *memory.Facade        // R2: trusted autonomous prompt-memory boundary
 	coreIdentity     *CoreIdentityBlock    // V83: Permanent identity block — always in system prompt
 
 	// V74: Interactive tool approval — blocking wait for Discord button responses
@@ -979,11 +980,12 @@ func executeServe(args []string) {
 				reviewStore:      globalReviewStore, // V77: Mango review feedback
 				memoryStoreLocal: memoryStore,       // V77: Local memory recall
 				memInjector:      memInjector,       // V79: Smart memory injection
-				coreIdentity:     coreIdentity,      // V83: Permanent identity block
-				stateMgr:         stateMgr,          // V32: shared state manager (same instance as tools)
-				planMgr:          planMgr,           // V32: plan manager
-				improveMgr:       improveMgr,        // V32: improvement manager
-				guardian:         guardian,          // V32: guard rail
+				scopedMemory:     scopedMemory,
+				coreIdentity:     coreIdentity, // V83: Permanent identity block
+				stateMgr:         stateMgr,     // V32: shared state manager (same instance as tools)
+				planMgr:          planMgr,      // V32: plan manager
+				improveMgr:       improveMgr,   // V32: improvement manager
+				guardian:         guardian,     // V32: guard rail
 				pendingWork:      make(map[string]pendingWorkStart),
 				approvalWait:     make(map[string]chan approvalOutcome),
 			}
@@ -1144,6 +1146,7 @@ func executeServe(args []string) {
 				reviewStore:      globalReviewStore,
 				memoryStoreLocal: memoryStore,
 				memInjector:      memInjector,
+				scopedMemory:     scopedMemory,
 				coreIdentity:     coreIdentity,
 				stateMgr:         stateMgr,
 				planMgr:          planMgr,
@@ -1212,6 +1215,7 @@ func executeServe(args []string) {
 				reviewStore:      globalReviewStore,
 				memoryStoreLocal: memoryStore,
 				memInjector:      memInjector,
+				scopedMemory:     scopedMemory,
 				coreIdentity:     coreIdentity,
 				stateMgr:         stateMgr,
 				planMgr:          planMgr,
@@ -1824,72 +1828,45 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 	channelRole := cc.cfg.ResolveChannelRoleConfig(msg.ChannelID)
 	promptSession := sess
 
-	// Step 7b: Inject Remembrance context (if available, with 60s TTL cache)
-	// V77: Memory injection — try Remembrance first, fall back to local memories.
-	// Fall back also when Remembrance is configured but fails at runtime.
-	// NOTE: buildPrompt is deferred until after memory injection to avoid
-	// building a prompt that will be immediately discarded.
+	// Step 7b: Inject memory only through a trusted, run-scoped boundary.
+	// The user message is search text, never authority for project/task/user scope.
 	memoriesInjected := false
-	if cc.remClient != nil {
-		cacheKey := fmt.Sprintf("%s:%s", agentCfg.ID, sess.ID)
-		remCtx := cc.remCache.Get(cacheKey)
-		if remCtx == nil {
-			var remCtxErr error
-			remCtx, remCtxErr = cc.remClient.BuildContextWithOptions(remembrance.BuildContextRequest{
-				Task:               sanitizedContent,
-				ProjectID:          "prizm",
-				AgentID:            agentCfg.ID,
-				OwnerID:            ownerID,
-				LocalRecentSummary: localRecentSummary(sess),
-				ChannelContext:     channelRoleContext(channelRole),
-				MaxTokens:          remembrance.DefaultContextMaxTokens,
-			})
-			if remCtxErr != nil {
-				log.Printf("[REMEMBRANCE] context build failed: %v", remCtxErr)
-			} else if remCtx != nil {
-				cc.remCache.Set(cacheKey, remCtx)
+	scope, scopeErr := cc.trustedPromptMemoryScope(agentCfg, run.ID, ownerID, sess)
+	if scopeErr != nil {
+		log.Printf("[MEMORY] prompt injection skipped: %v", scopeErr)
+	} else {
+		if cc.remClient != nil && cc.remCache != nil {
+			cacheKey := remembranceContextCacheKey(scope, sanitizedContent)
+			remCtx := cc.remCache.Get(cacheKey)
+			if remCtx == nil {
+				var remCtxErr error
+				remCtx, remCtxErr = cc.remClient.BuildContextWithOptions(remembrance.BuildContextRequest{
+					Task: sanitizedContent, ProjectID: scope.ProjectID, TaskID: scope.TaskID, SessionID: scope.SessionID,
+					AgentID: scope.AgentID, OwnerID: scope.UserID, LocalRecentSummary: localRecentSummary(sess),
+					ChannelContext: channelRoleContext(channelRole), MaxTokens: remembrance.DefaultContextMaxTokens,
+				})
+				if remCtxErr != nil {
+					log.Printf("[REMEMBRANCE] scoped context build failed: %v", remCtxErr)
+				} else if remembranceContextMatchesScope(remCtx, scope) {
+					cc.remCache.Set(cacheKey, remCtx)
+				} else {
+					log.Printf("[REMEMBRANCE] context response omitted or mismatched trusted scope; skipped")
+					remCtx = nil
+				}
+			}
+			if remembranceContextMatchesScope(remCtx, scope) {
+				if memoryBlock := remembranceMemoryBlock(remCtx); memoryBlock != "" {
+					promptSession = cloneSessionWithSystemMemory(sess, memoryBlock)
+					memoriesInjected = true
+				}
 			}
 		}
-		if remCtx != nil {
-			if memoryBlock := remembranceMemoryBlock(remCtx); memoryBlock != "" {
-				promptSession = cloneSessionWithSystemMemory(sess, memoryBlock)
-				log.Printf("[REMEMBRANCE] injected %d memory sources into shared prompt layer", len(remCtx.SelectedMemories))
+		if !memoriesInjected && cc.memInjector != nil && cc.scopedMemory != nil {
+			memBlock := cc.memInjector.InjectScopedMemories(ctxcontext.Background(), cc.scopedMemory, scope, sanitizedContent, len(sess.Messages), 800)
+			if memBlock != "" {
+				promptSession = cloneSessionWithSystemMemory(sess, memBlock)
 				memoriesInjected = true
 			}
-		}
-	}
-
-	// V79: Smart memory injection — search mode for fresh questions, recent mode for continuations
-	if !memoriesInjected && cc.memInjector != nil {
-		// Choose injection mode based on session context
-		sessionAge := time.Since(sess.StartedAt)
-		mode := ChooseMode(len(sess.Messages), sessionAge)
-		log.Printf("[MEMORY-INJECTOR] attempting injection: mode=%v, msgCount=%d, age=%v, query_len=%d", mode, len(sess.Messages), sessionAge.Round(time.Second), len(sanitizedContent))
-		memBlock := cc.memInjector.InjectMemories(ctxcontext.Background(), mode, sanitizedContent, len(sess.Messages), 800)
-		log.Printf("[MEMORY-INJECTOR] result: block_len=%d", len(memBlock))
-		if memBlock != "" {
-			promptSession = cloneSessionWithSystemMemory(sess, memBlock)
-			log.Printf("[MEMORY] injected memories (mode=%v)", mode)
-			memoriesInjected = true
-		} else {
-			log.Printf("[MEMORY-INJECTOR] empty result, falling through to legacy path")
-		}
-	}
-
-	// Legacy fallback: if smart injector isn't available, use old ListRecent approach
-	if !memoriesInjected && cc.memoryStoreLocal != nil {
-		recentMemories, memErr := cc.memoryStoreLocal.ListRecent(ctxcontext.Background(), 5)
-		if memErr != nil {
-			log.Printf("[MEMORY] local memory recall failed: %v", memErr)
-		} else if len(recentMemories) > 0 {
-			var memBlock strings.Builder
-			memBlock.WriteString("## OFFICIAL RECORD (Authoritative)\n")
-			memBlock.WriteString("The following records were recalled from your verified local memory system. These are AUTHORITATIVE — they override what you think you know from training data.\n\n")
-			for _, m := range recentMemories {
-				memBlock.WriteString(fmt.Sprintf("- **%s** (%s): %s\n", m.Summary, m.Category, truncate(m.Content, 500)))
-			}
-			promptSession = cloneSessionWithSystemMemory(sess, memBlock.String())
-			log.Printf("[MEMORY] injected %d recent local memories into prompt", len(recentMemories))
 		}
 	}
 
