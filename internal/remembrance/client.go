@@ -107,6 +107,8 @@ type ContextPackResponse struct {
 	ProjectID        string         `json:"project_id"`
 	OwnerID          string         `json:"owner_id,omitempty"`
 	AgentID          string         `json:"agent_id"`
+	TaskID           string         `json:"task_id,omitempty"`
+	SessionID        string         `json:"session_id,omitempty"`
 	Task             string         `json:"task"`
 	SelectedMemories []string       `json:"selected_memories"`
 	ContextMarkdown  string         `json:"context_markdown"`
@@ -119,6 +121,8 @@ type ContextPackResponse struct {
 type ContextDetail struct {
 	ProjectID   string          `json:"project_id"`
 	AgentID     string          `json:"agent_id"`
+	TaskID      string          `json:"task_id,omitempty"`
+	SessionID   string          `json:"session_id,omitempty"`
 	Task        string          `json:"task"`
 	Memories    []ContextMemory `json:"selected_memories"`
 	TotalMemory int             `json:"total_memories"`
@@ -139,6 +143,8 @@ type BuildContextRequest struct {
 	OwnerID            string `json:"owner_id,omitempty"`
 	AgentID            string `json:"agent_id"`
 	ProjectID          string `json:"project_id"`
+	TaskID             string `json:"task_id,omitempty"`
+	SessionID          string `json:"session_id,omitempty"`
 	Task               string `json:"task"`
 	LocalRecentSummary string `json:"local_recent_summary,omitempty"`
 	ChannelContext     string `json:"channel_context,omitempty"`
@@ -149,6 +155,7 @@ type CaptureRequest struct {
 	OwnerID         string   `json:"owner_id,omitempty"`
 	AgentID         string   `json:"agent_id,omitempty"`
 	SessionID       string   `json:"session_id,omitempty"`
+	TaskID          string   `json:"task_id,omitempty"`
 	MessageIDs      []string `json:"message_ids,omitempty"`
 	Scope           string   `json:"scope"`
 	Category        string   `json:"category"`
@@ -160,6 +167,16 @@ type CaptureRequest struct {
 	Content         string   `json:"content"`
 	SourceType      string   `json:"source_type"`
 	SourceAgent     string   `json:"source_agent,omitempty"`
+}
+
+// ScopedSearchRequest carries the exact authorization boundary to Recall.
+// It is deliberately separate from the legacy Search signature.
+type ScopedSearchRequest struct {
+	OwnerID   string
+	ProjectID string
+	TaskID    string
+	SessionID string
+	AgentID   string
 }
 
 // ── Client ───────────────────────────────────────────────────────
@@ -336,6 +353,32 @@ func (c *Client) Search(query, mode, category, tier string, limit int) (map[stri
 
 	reqURL := fmt.Sprintf("%s/search?%s", c.BaseURL, params.Encode())
 	return c.doGetMap(reqURL)
+}
+
+// SearchScoped asks Recall for results constrained to the exact task scope.
+// Callers must still validate returned metadata because an external service is
+// never an authorization boundary for Prizm.
+func (c *Client) SearchScoped(query, mode string, limit int, scope ScopedSearchRequest) (map[string]any, error) {
+	params := url.Values{}
+	params.Set("q", query)
+	if mode != "" {
+		params.Set("mode", mode)
+	}
+	if limit > 0 {
+		params.Set("limit", strconv.Itoa(limit))
+	}
+	params.Set("project_id", scope.ProjectID)
+	params.Set("task_id", scope.TaskID)
+	if scope.OwnerID != "" {
+		params.Set("owner_id", scope.OwnerID)
+	}
+	if scope.SessionID != "" {
+		params.Set("session_id", scope.SessionID)
+	}
+	if scope.AgentID != "" {
+		params.Set("agent_id", scope.AgentID)
+	}
+	return c.doGetMap(fmt.Sprintf("%s/search?%s", c.BaseURL, params.Encode()))
 }
 
 // EntityGet retrieves an entity by name (compiled truth + timeline).

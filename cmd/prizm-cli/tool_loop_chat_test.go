@@ -6,14 +6,61 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/provider"
 	"github.com/emaharmony/prizm/internal/provider/ollama"
 	"github.com/emaharmony/prizm/internal/session"
 	"github.com/emaharmony/prizm/internal/tool"
 )
+
+func TestTrustedScopedMemoryInputOverridesAndClearsModelScope(t *testing.T) {
+	workspace := t.TempDir()
+	cc := &conversationContext{cfg: &orchestrator.Config{Prizm: orchestrator.PrizmConfig{Workspace: workspace}}}
+	input := map[string]any{
+		"query": "memory", "project_id": "spoof-project", "task_id": "spoof-task", "user_id": "spoof-user",
+		"include_user_scope": true, "session_id": "spoof-session", "agent_id": "spoof-agent", "correlation_id": "spoof-correlation",
+	}
+	got, err := cc.trustedScopedMemoryInput(input, &orchestrator.AgentConfig{ID: "trusted-agent"}, "run-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID, err := filepath.Abs(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["project_id"] != filepath.Clean(projectID) || got["task_id"] != "run-123" || got["correlation_id"] != "run-123" || got["agent_id"] != "trusted-agent" {
+		t.Fatalf("trusted scope = %#v", got)
+	}
+	for _, key := range []string{"user_id", "include_user_scope", "session_id"} {
+		if _, ok := got[key]; ok {
+			t.Fatalf("model-supplied %s survived: %#v", key, got)
+		}
+	}
+	if input["project_id"] != "spoof-project" {
+		t.Fatal("input map was mutated")
+	}
+}
+
+func TestTrustedScopedMemoryInputFailsClosedWithoutTrustedIdentity(t *testing.T) {
+	cases := []struct{ name, workspace, run string }{
+		{"missing workspace", "", "run-123"},
+		{"missing run", "C:/trusted/project", ""},
+		{"missing workspace and run", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cc := &conversationContext{cfg: &orchestrator.Config{Prizm: orchestrator.PrizmConfig{Workspace: tc.workspace}}}
+			got, err := cc.trustedScopedMemoryInput(map[string]any{"project_id": "spoof", "task_id": "spoof", "user_id": "spoof", "include_user_scope": true}, &orchestrator.AgentConfig{ID: "agent"}, tc.run)
+			if err == nil || got != nil {
+				t.Fatalf("got=%#v err=%v", got, err)
+			}
+		})
+	}
+}
 
 // ── Chat Tool Loop E2E Tests ──────────────────────────────────────
 //

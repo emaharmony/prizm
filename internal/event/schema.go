@@ -84,9 +84,21 @@ var Schemas = map[string]Schema{
 	"prizm.memory.gate_passed":   {Required: []string{"memory_id"}, Optional: []string{"reasoning", "model"}},
 	"prizm.memory.gate_rejected": {Required: []string{}, Optional: []string{"reasoning", "model"}},
 	"prizm.memory.extracted":     {Required: []string{"memory_id"}, Optional: []string{"category", "tier", "model"}},
-	"prizm.memory.persisted":      {Required: []string{"memory_id"}, Optional: []string{"category", "tier", "source"}},
-	"prizm.memory.synced":         {Required: []string{"memory_id"}, Optional: []string{"recall_id"}},
+	"prizm.memory.persisted":     {Required: []string{"memory_id"}, Optional: []string{"category", "tier", "source"}},
+	"prizm.memory.synced":        {Required: []string{"memory_id"}, Optional: []string{"recall_id"}},
 	"prizm.memory.sync_failed":   {Required: []string{"memory_id"}, Optional: []string{"error"}},
+
+	// Scoped memory lifecycle (R2). SQLite remains the current source of truth;
+	// transport outbox delivery is an R1 follow-up.
+	"prizm.memory.capture.started":      {Required: []string{"memory_id", "capture_key", "project_id", "task_id"}, Optional: []string{"user_id"}},
+	"prizm.memory.capture.persisted":    {Required: []string{"memory_id", "capture_key", "project_id", "task_id"}, Optional: []string{"user_id", "duplicate"}},
+	"prizm.memory.capture.sync_pending": {Required: []string{"memory_id", "sync_key", "project_id", "task_id", "reason"}, Optional: []string{"user_id"}},
+	"prizm.memory.capture.synced":       {Required: []string{"memory_id", "primary_id", "project_id", "task_id"}, Optional: []string{"user_id"}},
+	"prizm.memory.capture.fallback":     {Required: []string{"memory_id", "reason", "project_id", "task_id"}, Optional: []string{"user_id"}},
+	"prizm.memory.superseded":           {Required: []string{"memory_id", "supersedes_id", "project_id", "task_id"}, Optional: []string{"user_id"}},
+	"prizm.memory.search.requested":     {Required: []string{"query", "limit", "project_id", "task_id"}, Optional: []string{"user_id"}},
+	"prizm.memory.search.completed":     {Required: []string{"query", "count", "fallback", "project_id", "task_id"}, Optional: []string{"user_id"}},
+	"prizm.memory.search.fallback":      {Required: []string{"reason", "project_id", "task_id"}, Optional: []string{"user_id"}},
 
 	// Adapter (V9)
 	"prizm.adapter.registered": {Required: []string{"adapter_id"}, Optional: []string{"capabilities"}},

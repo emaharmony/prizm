@@ -306,6 +306,15 @@ func (cc *conversationContext) executeChatTool(
 	if channelID != "" {
 		input["_channel_id"] = channelID
 	}
+	if tc.Function.Name == "memory_search" || tc.Function.Name == "memory_write" {
+		var scopeErr error
+		input, scopeErr = cc.trustedScopedMemoryInput(input, agentCfg, runID)
+		if scopeErr != nil {
+			return scopeErr.Error(), toolCallSummary{
+				Tool: tc.Function.Name, Input: tc.Function.Arguments, Status: "error", Error: scopeErr.Error(),
+			}
+		}
+	}
 
 	result, execErr := cc.toolExec.ExecuteWithPolicy(ctx, tc.Function.Name, agentCfg.ID, "prizm", runID, input)
 
@@ -401,6 +410,34 @@ func (cc *conversationContext) executeChatTool(
 	}
 
 	return resultStr, summary
+}
+
+// trustedScopedMemoryInput removes every model-controlled scope field before
+// deriving scope from serve-owned identity. Scoped memory never treats a tool
+// call argument as authority for a project, task, user, session, agent, or
+// correlation boundary.
+func (cc *conversationContext) trustedScopedMemoryInput(input map[string]any, agentCfg *orchestrator.AgentConfig, runID string) (map[string]any, error) {
+	trusted := make(map[string]any, len(input))
+	for key, value := range input {
+		trusted[key] = value
+	}
+	for _, key := range []string{"project_id", "task_id", "user_id", "include_user_scope", "session_id", "agent_id", "correlation_id"} {
+		delete(trusted, key)
+	}
+	if cc == nil || cc.cfg == nil || strings.TrimSpace(cc.cfg.Prizm.Workspace) == "" || strings.TrimSpace(runID) == "" {
+		return nil, fmt.Errorf("scoped memory requires a trusted serve workspace and run identity")
+	}
+	projectID, err := canonicalMemoryProjectID(cc.cfg.Prizm.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	trusted["project_id"] = projectID
+	trusted["task_id"] = runID
+	trusted["correlation_id"] = runID
+	if agentCfg != nil {
+		trusted["agent_id"] = agentCfg.ID
+	}
+	return trusted, nil
 }
 
 func formatApprovalOutput(output map[string]any) string {

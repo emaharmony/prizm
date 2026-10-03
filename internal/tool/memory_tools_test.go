@@ -124,3 +124,45 @@ func TestMemoryWriteTool_EmptyContent(t *testing.T) {
 		t.Error("expected failure for empty content")
 	}
 }
+
+func TestMemoryWriteTool_ScopedRequiresProjectAndTask(t *testing.T) {
+	store := memory.NewMarkdownStore(t.TempDir())
+	tool := &MemoryWriteTool{Scoped: &memory.Facade{Local: store}}
+	result, err := tool.Execute(context.Background(), map[string]any{"content": "remember this", "project_id": "project-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Success {
+		t.Fatal("scoped write without task must fail")
+	}
+	result, err = tool.Execute(context.Background(), map[string]any{"content": "remember this", "project_id": "project-a", "task_id": "task-a", "correlation_id": "corr-tool"})
+	if err != nil || !result.Success {
+		t.Fatalf("scoped write = %#v, %v", result, err)
+	}
+}
+
+func TestMemorySearchTool_ScopedFiltersExactScope(t *testing.T) {
+	store := memory.NewMarkdownStore(t.TempDir())
+	if _, err := store.Store(context.Background(), memory.Memory{ID: "visible", Content: "sqlite choice", Summary: "sqlite", ProjectID: "project-a", TaskID: "task-a"}); err != nil {
+		t.Fatal(err)
+	}
+	tool := &MemorySearchTool{Scoped: &memory.Facade{Local: store}}
+	result, err := tool.Execute(context.Background(), map[string]any{"query": "sqlite", "project_id": "project-a", "task_id": "task-a", "correlation_id": "corr-tool"})
+	if err != nil || !result.Success {
+		t.Fatalf("scoped search = %#v, %v", result, err)
+	}
+	if result.Output["count"] != 1 {
+		t.Fatalf("count = %#v", result.Output["count"])
+	}
+}
+
+func TestMemorySearchTool_ScopedFailsClosedWithoutCorrelation(t *testing.T) {
+	tool := &MemorySearchTool{Scoped: &memory.Facade{Local: memory.NewMarkdownStore(t.TempDir())}}
+	result, err := tool.Execute(context.Background(), map[string]any{"query": "sqlite", "project_id": "project-a", "task_id": "task-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Success {
+		t.Fatalf("scoped tool accepted an uncorrelated operation: %#v", result)
+	}
+}
