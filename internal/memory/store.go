@@ -19,19 +19,22 @@ import (
 
 // Memory is a single stored memory entry.
 type Memory struct {
-	ID         string            // ULID or derived from section title
-	Content    string            // The memory text
-	Category   string            // e.g., "decision", "preference", "fact"
-	Tier       string            // "ephemeral", "active", "persist"
-	Summary    string            // Short summary
-	KeyTopics  []string          // Tags/topics
-	Source     string            // e.g., "prizm:lumi", "recall"
-	AgentID    string            // Agent that created it
-	SessionID  string            // Session context
-	ProjectID  string            // Project context
-	Metadata   map[string]string // Extensible
-	CreatedAt  time.Time
-	AccessedAt time.Time
+	ID           string            // ULID or derived from section title
+	Content      string            // The memory text
+	Category     string            // e.g., "decision", "preference", "fact"
+	Tier         string            // "ephemeral", "active", "persist"
+	Summary      string            // Short summary
+	KeyTopics    []string          // Tags/topics
+	Source       string            // e.g., "prizm:lumi", "recall"
+	AgentID      string            // Agent that created it
+	SessionID    string            // Session context
+	ProjectID    string            // Project context
+	UserID       string            // Explicit user scope; never inferred globally
+	TaskID       string            // Exact task scope for autonomous memory operations
+	SupersedesID string            // Earlier memory replaced by this one, if any
+	Metadata     map[string]string // Extensible
+	CreatedAt    time.Time
+	AccessedAt   time.Time
 }
 
 // MemoryStore is the abstract interface for memory operations.
@@ -182,6 +185,15 @@ func (s *MarkdownStore) ListRecent(ctx context.Context, limit int) ([]Memory, er
 		all = append(all, memories...)
 	}
 
+	// A replacement records the ID it supersedes. The markdown format is
+	// append-only, so apply that relation while building the current view.
+	supersededIDs := make(map[string]struct{})
+	for _, m := range all {
+		if m.SupersedesID != "" {
+			supersededIDs[m.SupersedesID] = struct{}{}
+		}
+	}
+
 	// V84: Deduplicate by ID (keep first occurrence)
 	seen := make(map[string]bool)
 	deduped := make([]Memory, 0, len(all))
@@ -195,6 +207,9 @@ func (s *MarkdownStore) ListRecent(ctx context.Context, limit int) ([]Memory, er
 	// V84: Filter out junk entries and superseded memories
 	filtered := make([]Memory, 0, len(deduped))
 	for _, m := range deduped {
+		if _, replaced := supersededIDs[m.ID]; replaced {
+			continue
+		}
 		if isSuperseded(m) {
 			continue
 		}
@@ -658,6 +673,12 @@ func parseStructured(content string, date time.Time) []Memory {
 				current.SessionID = val
 			case "Project":
 				current.ProjectID = val
+			case "User":
+				current.UserID = val
+			case "Task":
+				current.TaskID = val
+			case "Supersedes":
+				current.SupersedesID = val
 			case "Key Topics":
 				current.KeyTopics = strings.Split(val, ", ")
 			}
@@ -899,6 +920,15 @@ func formatMemoryEntry(m Memory) string {
 	}
 	if m.ProjectID != "" {
 		fmt.Fprintf(&b, "\n- **Project:** %s", m.ProjectID)
+	}
+	if m.UserID != "" {
+		fmt.Fprintf(&b, "\n- **User:** %s", m.UserID)
+	}
+	if m.TaskID != "" {
+		fmt.Fprintf(&b, "\n- **Task:** %s", m.TaskID)
+	}
+	if m.SupersedesID != "" {
+		fmt.Fprintf(&b, "\n- **Supersedes:** %s", m.SupersedesID)
 	}
 	if len(m.KeyTopics) > 0 {
 		fmt.Fprintf(&b, "\n- **Key Topics:** %s", strings.Join(m.KeyTopics, ", "))

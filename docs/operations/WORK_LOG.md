@@ -7,6 +7,38 @@ the next contributor.
 > Prizm is source-available under an all-rights-reserved [license](../../LICENSE)
 > and is preview-stage.
 
+## 2026-10-02 — R2 Scoped Local Memory Foundation
+
+**Roadmap IDs:** R2, R6 (depends on R1 event-outbox follow-up)
+**Branch/commit:** `codex/r2-scoped-memory`; pending commit, stacked on R1 PR #84 head
+
+- Added an additive scoped-memory facade in the existing memory domain. New
+  autonomous captures and searches require exact project/task identities;
+  user memory requires a supplied user identity and explicit opt-in. Results
+  are filtered for scope before primary/local merging and de-duplication.
+- Stable capture keys make duplicate delivery return the existing local memory.
+  An append-only `supersedes` link makes replacement explicit and hides the
+  prior entry from the active local view without a new persistence engine.
+- Added a neutral primary-memory contract, a Remembrance boundary adapter, and
+  typed correlated lifecycle events in the existing event schema. SQLite is
+  still the event source of truth; durable outbox/NATS delivery remains R1
+  work and is not claimed here. Scoped tool and reflection entry points are
+  additive, preserving legacy callers while scoped callers can supply run scope.
+
+**Verification:** deterministic scope-isolation, explicit-user-opt-in,
+duplicate-capture, supersession, primary-outage fallback, merged de-duplication,
+and event-correlation tests pass. `go build ./...`, `go vet ./...`,
+`staticcheck ./...`, and `go test ./... -count=1` passed with host Go cache
+access after workspace-only cache execution could not access dependencies.
+
+**Open risks:** Current chat/serve composition does not yet supply a canonical
+task ID to every legacy memory call, so the scoped path is available to
+callers that provide it rather than silently inventing a scope. Real Recall
+outage/reconciliation and the 10-case memory gate remain unproven.
+
+**Next action:** thread task/user/project scope from canonical runs into chat
+and serve memory composition, then run the seeded real Recall acceptance set.
+
 ## 2026-10-02 — R1 Terminal Trial Handoff Recovery
 
 **Roadmap IDs:** R1

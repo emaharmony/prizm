@@ -149,6 +149,7 @@ type CaptureRequest struct {
 	OwnerID         string   `json:"owner_id,omitempty"`
 	AgentID         string   `json:"agent_id,omitempty"`
 	SessionID       string   `json:"session_id,omitempty"`
+	TaskID          string   `json:"task_id,omitempty"`
 	MessageIDs      []string `json:"message_ids,omitempty"`
 	Scope           string   `json:"scope"`
 	Category        string   `json:"category"`

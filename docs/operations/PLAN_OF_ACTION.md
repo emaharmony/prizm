@@ -7,18 +7,19 @@ items.
 > Prizm is source-available under an all-rights-reserved [license](../../LICENSE)
 > and is preview-stage. This plan does not change approval or policy requirements.
 
-## Current Focus: R1 Reliable Coding and Delegation Foundation
+## Current Focus: R2 Scoped Memory Contract
 
-The next slice closes the path from a developer proposal to verified code. It
-must be complete before adding broader autonomy triggers or remote delegation.
+The next slice makes memory retrieval and capture safe for autonomous agents:
+every new operation carries an exact project and task scope, user context is
+opt-in, and Recall failure falls back to local durable memory without leakage.
 
 | Order | Work | Done when |
 | --- | --- | --- |
-| 1 | Carry the exact proposal approval ID into durable waiting state and the approval decision. | Done in `2785552`: proposal and approval identities are checkpointed, and unrelated decisions cannot advance the run. |
-| 2 | Apply the granted proposal before continuing the graph. | Done in `2785552`: stable apply keys, reconciliation, bounded retry, denial, and duplicate delivery are durable and event-visible. |
-| 3 | Verify in an isolated worktree with a project-aware validation profile. | Done in `2785552`: new runs persist a detached worktree; validation evidence includes command, arguments, working directory, output, and diff. |
-| 4 | Complete the durable transition. | Done in `2785552`: the saved role result resumes without another model call, then continues to review/report or fails closed. |
-| 5 | Prove the slice. | Deterministic grant, deny, unrelated approval, restart, duplicate, reconciliation, retry, failure, event, worktree, corrective-turn, terminal-cleanup, canonical-artifact, post-apply-validation, scoped-provider, legacy-worker, and fail-closed-validator tests pass. The final bounded Codex run proved planner handoff, one exact durable proposal/approval pause, fresh-process recovery, isolated application reconciliation, and developer completion. The tester then supplied a contradictory failed result with only passing test entries; strict decoding stopped the run before validation/review. The durable resume path now removes only an identity-bearing stale pending-approval issue from the pre-approval handoff and adds the authoritative applied/validated lifecycle fact. No second provider run was made. Every Codex delegation path is read-only: the legacy local/Cross-Prizm worker forcibly disables native mutation, and graph subagents require a contained, owned run worktree before scoped native execution. |
+| 1 | Require exact project and task scope on new autonomous memory reads and writes. | Done in this slice: user scope requires an explicit opt-in and scope filtering happens before primary/local result merge. |
+| 2 | Make capture idempotent and replacements explicit. | Done in this slice: stable capture keys return the original local record; append-only replacement links suppress superseded memories. |
+| 3 | Make Recall primary with safe local fallback. | Done in this slice: the memory facade owns a neutral primary-backend contract, local persistence, fallback, and de-duplication; Remembrance stays at the integration edge. |
+| 4 | Emit inspectable memory lifecycle facts. | Done in this slice: correlated capture, fallback, supersession, and retrieval events use the existing SQLite event store schema. |
+| 5 | Prove the memory score gate. | Pending: seed and measure 10 scoped preference/task cases, exercise a real Recall outage and later reconciliation, and prove no denied or stale context crosses a boundary. |
 
 ## Follow-on R1 Work
 
@@ -32,12 +33,12 @@ task/review reports.
 
 | Field | Current value |
 | --- | --- |
-| Active roadmap IDs | R1 (primary); R2, R3, R4, R5, R6, and R8 have partial foundations; R7 is missing in Prizm. |
+| Active roadmap IDs | R2 (primary), with R6 integration dependency; R1 acceptance and event-outbox work remain open. |
 | Reviewed baseline | `codex/r1-approved-task` includes the current `origin/staging` integration through merge `94224bc`, based on merged PR #83 plus CI repair `8232f7e`; no 9/10 gate is met. |
-| Current state | Exact proposal approval, durable idempotent apply, crash reconciliation, isolated worktree execution, post-apply workspace-aware validation, diff evidence, correlated lifecycle events, proposal-required developer completion, and terminal worktree cleanup are integrated. The latest bounded real-provider run completed planner, developer, fresh-process recovery, and isolated application. Its tester returned an inconsistent failed result with only passing test entries, so strict decoding stopped before validation/review. The runtime now replaces only an exact, settled proposal's stale pending-approval issue in the outgoing handoff with the durable lifecycle fact; unrelated developer issues remain. Legacy local and Cross-Prizm Codex worker delegation is read-only and carries a no-mutation prompt. Graph subagents scope any resolved native-tool provider based on capability rather than provider label, reject providers without scoped execution, and verify the workspace is an extant child of the configured repository's owned worktree root. Mutation actions remain exclusively in Prizm's governed tool executor. Status-only approvals and `workflow/v2` remain compatible. |
-| PR handoff | Current R1 foundation, provider-boundary hardening, and the current staging integration are ready to push to `origin/codex/r1-approved-task`. They are not merged. |
-| Next implementation decision | A future explicitly authorized bounded provider run must prove validation, review/report, and its full correlated event trace. |
-| Evidence required before advancing | A complete real-provider/repository run through proposal, approval, restart recovery, apply, validation, review/report, and the full correlated event trace. |
+| Current state | Scoped memory now has an additive local facade: project/task are mandatory, user context is rejected without opt-in, capture keys are stable, replacements are explicit, and primary/local results are filtered and deduplicated before return. Typed correlated events are persisted to the current SQLite event store. The Remembrance adapter translates its HTTP contract at the integration edge; workflow need not know that protocol. Legacy memory APIs remain compatible. |
+| PR handoff | R1 is in PR #84. R2 work is on stacked branch `codex/r2-scoped-memory`; it is not pushed or merged. |
+| Next implementation decision | Wire scoped context from run/chat identity into the composition roots, then prove real Recall capture/search, outage fallback, and reconciliation. |
+| Evidence required before advancing | Ten seeded scoped-memory cases with 9/10 correct recall and no cross-scope return; one real Recall outage and recovery trace. |
 
 ## Update Format
 

@@ -37,6 +37,7 @@ type LocalMemoryStore interface {
 type MemorySearchTool struct {
 	Searcher   MemorySearcher   // Recall client (nil = disabled)
 	LocalStore LocalMemoryStore // Local fallback (nil = no fallback)
+	Scoped     *memory.Facade   // R2 scoped contract; nil preserves legacy behavior
 }
 
 func (t *MemorySearchTool) Name() string { return "memory_search" }
@@ -46,8 +47,12 @@ func (t *MemorySearchTool) Description() string {
 func (t *MemorySearchTool) Schema() ToolSchema {
 	return ToolSchema{
 		Input: map[string]ParamSpec{
-			"query": {Type: "string", Description: "What to search memory for", Required: true},
-			"limit": {Type: "number", Description: "Max results (default 5)", Required: false},
+			"query":              {Type: "string", Description: "What to search memory for", Required: true},
+			"limit":              {Type: "number", Description: "Max results (default 5)", Required: false},
+			"project_id":         {Type: "string", Description: "Exact project scope (required when scoped memory is enabled)", Required: false},
+			"task_id":            {Type: "string", Description: "Exact task scope (required when scoped memory is enabled)", Required: false},
+			"user_id":            {Type: "string", Description: "User scope; requires include_user_scope", Required: false},
+			"include_user_scope": {Type: "boolean", Description: "Explicitly authorize user-scoped recall", Required: false},
 		},
 		Output: ParamSpec{Type: "object", Description: "Matching memories with scores and snippets"},
 	}
@@ -60,6 +65,18 @@ func (t *MemorySearchTool) Execute(ctx context.Context, input map[string]any) (T
 	limit := 5
 	if l, ok := input["limit"].(float64); ok && l > 0 {
 		limit = int(l)
+	}
+	if t.Scoped != nil {
+		includeUser, _ := input["include_user_scope"].(bool)
+		results, fallback, err := t.Scoped.Search(ctx, memory.SearchRequest{Query: query, Limit: limit, Scope: memory.Scope{
+			ProjectID: strInput(input, "project_id"), TaskID: strInput(input, "task_id"),
+			UserID: strInput(input, "user_id"), IncludeUserScope: includeUser,
+			SessionID: strInput(input, "session_id"), AgentID: strInput(input, "agent_id"), CorrelationID: strInput(input, "correlation_id"),
+		}})
+		if err != nil {
+			return ToolResult{Success: false, Error: err.Error()}, nil
+		}
+		return ToolResult{Success: true, Output: map[string]any{"source": "scoped", "results": results, "count": len(results), "fallback": fallback}}, nil
 	}
 
 	log.Printf("[MEMORY-SEARCH] query=%q limit=%d searcher=%v localStore=%v", query, limit, t.Searcher != nil, t.LocalStore != nil)
@@ -100,6 +117,11 @@ func (t *MemorySearchTool) Execute(ctx context.Context, input map[string]any) (T
 	}
 
 	return ToolResult{Success: false, Error: "memory search is not configured (both Remembrance and local store are unavailable)"}, nil
+}
+
+func strInput(input map[string]any, key string) string {
+	v, _ := input[key].(string)
+	return v
 }
 
 // WebSearchConfig configures the web_search tool. It targets a generic JSON
