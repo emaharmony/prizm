@@ -792,6 +792,28 @@ func runSoulTransferTest(t *testing.T, test SoulTransferTest, sendFunc func(cont
 // Scoring and reporting
 // ---------------------------------------------------------------------------
 
+func computeCategoryScore(results []TestResult) float64 {
+	if len(results) == 0 {
+		return 0
+	}
+
+	var weightedScore float64
+	var totalWeight float64
+	for _, result := range results {
+		totalWeight += result.Weight
+		switch result.Verdict {
+		case Pass:
+			weightedScore += result.Weight * 100
+		case Uncertain:
+			weightedScore += result.Weight * 50
+		}
+	}
+	if totalWeight == 0 {
+		return 0
+	}
+	return weightedScore / totalWeight
+}
+
 func computeOverallScore(categories []CategoryScore) float64 {
 	var totalScore float64
 	for _, cat := range categories {

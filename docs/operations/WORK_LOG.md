@@ -407,6 +407,19 @@ blocked until an authorized GitHub credential is available.
 push `codex/adapter-driven-runtime`, create the prepared PR against `staging`,
 then complete the R1 approval-to-verified-resume slice.
 
+## 2026-10-02 — R1 Staging Integration for PR #84
+
+**Roadmap IDs:** R1
+**Branch/baseline:** `codex/r1-approved-task`; merged current `origin/staging` with merge commit `94224bc`
+
+- Integrated the staging changes required by PR #84 without rewriting the R1 branch. The sole textual conflict in `cmd/prizm-cli/memory_injector.go` preserves both the staging citation-memory fields and R1 memory formatting behavior.
+- Repaired merge-exposed build and lint defects: removed an unimplemented planner cache field, restored the category scoring function required by the Soul Transfer test, and removed four unreachable verification helpers retained after staging's conservative verification changes.
+- Verified `go build ./...`, `go vet ./...`, `staticcheck ./...`, `go test ./... -count=1`, and `git diff --check` after integration.
+
+**Open risks:** The real-provider R1 acceptance path still needs a terminal validation, review/report, and correlated event trace. This integration does not satisfy the 9/10 R1 gate.
+
+**Next action:** Push the conflict-resolved branch and recheck PR #84 mergeability and CI; then complete the explicitly authorized bounded real-provider acceptance run.
+
 ## See Also
 
 - [Prizm Roadmap](../architecture/PRIZM_ROADMAP.md)

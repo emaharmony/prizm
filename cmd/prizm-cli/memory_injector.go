@@ -23,7 +23,6 @@ type MemoryInjector struct {
 	store        *memory.MarkdownStore
 	planner      *memory.QueryPlanner
 	cache        *memorySearchCache
-	plannerCache *plannerResultCache
 	lastMemories []memory.Memory // V23: cached for citation verification
 	lastMu       sync.RWMutex    // protects lastMemories
 }

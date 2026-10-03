@@ -33,10 +33,10 @@ task/review reports.
 | Field | Current value |
 | --- | --- |
 | Active roadmap IDs | R1 (primary); R2, R3, R4, R5, R6, and R8 have partial foundations; R7 is missing in Prizm. |
-| Reviewed baseline | `codex/r1-approved-task` at the legacy-delegation safety commit, based on merged PR #83 plus CI repair `8232f7e`; no 9/10 gate is met. |
+| Reviewed baseline | `codex/r1-approved-task` includes the current `origin/staging` integration through merge `94224bc`, based on merged PR #83 plus CI repair `8232f7e`; no 9/10 gate is met. |
 | Current state | Exact proposal approval, durable idempotent apply, crash reconciliation, isolated worktree execution, post-apply workspace-aware validation, diff evidence, correlated lifecycle events, proposal-required developer completion, and terminal worktree cleanup are integrated. The latest bounded real-provider run completed planner, developer, fresh-process recovery, and isolated application. Its tester returned an inconsistent failed result with only passing test entries, so strict decoding stopped before validation/review. The runtime now replaces only an exact, settled proposal's stale pending-approval issue in the outgoing handoff with the durable lifecycle fact; unrelated developer issues remain. Legacy local and Cross-Prizm Codex worker delegation is read-only and carries a no-mutation prompt. Graph subagents scope any resolved native-tool provider based on capability rather than provider label, reject providers without scoped execution, and verify the workspace is an extant child of the configured repository's owned worktree root. Mutation actions remain exclusively in Prizm's governed tool executor. Status-only approvals and `workflow/v2` remain compatible. |
-| PR handoff | Current R1 foundation and provider-boundary hardening commits are pushed to `origin/codex/r1-approved-task`. They are not merged. |
-| Next implementation decision | Review and push the stale-handoff recovery fix. A future explicitly authorized bounded provider run must prove validation, review/report, and its full correlated event trace. |
+| PR handoff | Current R1 foundation, provider-boundary hardening, and the current staging integration are ready to push to `origin/codex/r1-approved-task`. They are not merged. |
+| Next implementation decision | A future explicitly authorized bounded provider run must prove validation, review/report, and its full correlated event trace. |
 | Evidence required before advancing | A complete real-provider/repository run through proposal, approval, restart recovery, apply, validation, review/report, and the full correlated event trace. |
 
 ## Update Format

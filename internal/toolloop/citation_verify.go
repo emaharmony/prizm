@@ -23,10 +23,10 @@ type MemoryEntry struct {
 type CorrectionTier int
 
 const (
-	TierNone              CorrectionTier = iota // Not flagged
-	TierContradictionPatch                      // Wrong number/version → replace with correct value
-	TierLowOverlapRewrite                       // Fabricated claim → strip and disclaim
-	TierFlagOnly                                // Borderline → flag for logging only
+	TierNone               CorrectionTier = iota // Not flagged
+	TierContradictionPatch                       // Wrong number/version → replace with correct value
+	TierLowOverlapRewrite                        // Fabricated claim → strip and disclaim
+	TierFlagOnly                                 // Borderline → flag for logging only
 )
 
 func (t CorrectionTier) String() string {
@@ -58,14 +58,14 @@ type CitationVerification struct {
 
 // CitationFlag represents a flagged citation mismatch.
 type CitationFlag struct {
-	CitationID   string         // e.g., "M3"
-	ClaimText    string         // The text attributed to this citation
-	MemoryText   string         // The actual memory content
-	Issue        string         // Description of the mismatch
-	Corrected    bool           // Whether the claim was corrected
-	Tier         CorrectionTier // Which correction tier was applied
-	WrongNum     string         // The number that was wrong (for TierContradictionPatch)
-	CorrectVal   string         // The correct value from memory (for TierContradictionPatch)
+	CitationID string         // e.g., "M3"
+	ClaimText  string         // The text attributed to this citation
+	MemoryText string         // The actual memory content
+	Issue      string         // Description of the mismatch
+	Corrected  bool           // Whether the claim was corrected
+	Tier       CorrectionTier // Which correction tier was applied
+	WrongNum   string         // The number that was wrong (for TierContradictionPatch)
+	CorrectVal string         // The correct value from memory (for TierContradictionPatch)
 }
 
 // citationPattern matches [M1], [M2], etc.
@@ -120,10 +120,10 @@ func VerifyCitations(response string, memories []MemoryEntry) *CitationVerificat
 	// Collect all corrections to apply, then apply in reverse order
 	// to preserve string indices
 	type correction struct {
-		start    int    // Start index in the original response
-		end      int    // End index in the original response
-		replace  string // Replacement text
-		tier     CorrectionTier
+		start   int    // Start index in the original response
+		end     int    // End index in the original response
+		replace string // Replacement text
+		tier    CorrectionTier
 	}
 
 	var corrections []correction
@@ -250,15 +250,6 @@ func findNumberCorrection(response string, citationStart, citationEnd int, flag 
 	}
 }
 
-// applyLowOverlapRewrite replaces the claim text after a citation with an honest disclaimer.
-// This is called for Tier 2 corrections where the claim has very low overlap with the memory.
-func applyLowOverlapRewrite(response string, citationEnd int, memID string, mem MemoryEntry) string {
-	// Find the end of the sentence containing the citation
-	sentenceEnd := findClaimEndIndex(response, citationEnd)
-	disclaimer := fmt.Sprintf(" [%s] I don't have specific memories about this.", memID)
-	return response[:sentenceEnd] + disclaimer + response[sentenceEnd:]
-}
-
 // extractClaimAfterCitation extracts text from after the citation to the next
 // sentence boundary, next citation, or end of response.
 func extractClaimAfterCitation(response string, citationEnd int) string {
@@ -301,11 +292,6 @@ func findClaimEndIndex(response string, citationEnd int) int {
 		}
 	}
 	return len(response)
-}
-
-// findClaimEnd finds the end of the sentence containing the citation for inserting corrections.
-func findClaimEnd(response string, citationEnd int) int {
-	return findClaimEndIndex(response, citationEnd)
 }
 
 // verifyClaimAgainstMemory checks if a claim attributed to a memory is consistent

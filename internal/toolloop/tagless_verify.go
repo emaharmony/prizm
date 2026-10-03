@@ -63,9 +63,6 @@ var (
 
 	// Identity claims: "I am X", "my name is X", "I'm X"
 	taglessIdentityPattern = regexp.MustCompile(`(?i)\b(?:I am|my name is|I'm|I was named|I chose the name)\b`)
-
-	// Superlatives/absolutes that often indicate fabrication
-	taglessAbsolutePattern = regexp.MustCompile(`(?i)\b(?:always|never|only|first|last|every|all|nothing|everything|entire|completely|totally|absolutely)\b`)
 )
 
 // VerifyTaglessClaims extracts ALL factual claims from a response (not just cited ones)
@@ -194,7 +191,7 @@ func extractTaglessClaims(response string) []TaglessClaim {
 		claims = append(claims, TaglessClaim{
 			Text:      response[sStart:sEnd],
 			Start:     sStart,
-			End:      sEnd,
+			End:       sEnd,
 			ClaimType: "number",
 		})
 	}
@@ -218,7 +215,7 @@ func extractTaglessClaims(response string) []TaglessClaim {
 		claims = append(claims, TaglessClaim{
 			Text:      response[sStart:sEnd],
 			Start:     sStart,
-			End:      sEnd,
+			End:       sEnd,
 			ClaimType: "number",
 		})
 	}
@@ -231,7 +228,7 @@ func extractTaglessClaims(response string) []TaglessClaim {
 		claims = append(claims, TaglessClaim{
 			Text:      response[sStart:sEnd],
 			Start:     sStart,
-			End:      sEnd,
+			End:       sEnd,
 			ClaimType: "version",
 		})
 	}
@@ -244,7 +241,7 @@ func extractTaglessClaims(response string) []TaglessClaim {
 		claims = append(claims, TaglessClaim{
 			Text:      response[sStart:sEnd],
 			Start:     sStart,
-			End:      sEnd,
+			End:       sEnd,
 			ClaimType: "date",
 		})
 	}
@@ -257,7 +254,7 @@ func extractTaglessClaims(response string) []TaglessClaim {
 		claims = append(claims, TaglessClaim{
 			Text:      response[sStart:sEnd],
 			Start:     sStart,
-			End:      sEnd,
+			End:       sEnd,
 			ClaimType: "identity",
 		})
 	}
@@ -270,7 +267,7 @@ func extractTaglessClaims(response string) []TaglessClaim {
 		claims = append(claims, TaglessClaim{
 			Text:      response[sStart:sEnd],
 			Start:     sStart,
-			End:      sEnd,
+			End:       sEnd,
 			ClaimType: "attribution",
 		})
 	}
@@ -484,62 +481,22 @@ func verifyTaglessClaimAgainstMemories(claim TaglessClaim, memTexts []string, me
 			// Very low overlap with any memory — likely fabrication
 			return &CitationFlag{
 				CitationID: "tagless",
-				ClaimText:   claim.Text,
-				MemoryText:  "(combined memories)",
-				Issue:        fmt.Sprintf("Very low overlap (%.0f%%) — claim likely fabricated from parametric knowledge", overlapRatio*100),
-				Tier:         TierLowOverlapRewrite,
+				ClaimText:  claim.Text,
+				MemoryText: "(combined memories)",
+				Issue:      fmt.Sprintf("Very low overlap (%.0f%%) — claim likely fabricated from parametric knowledge", overlapRatio*100),
+				Tier:       TierLowOverlapRewrite,
 			}
 		} else if overlapRatio < 0.20 {
 			// Borderline — flag but don't correct
 			return &CitationFlag{
 				CitationID: "tagless",
-				ClaimText:   claim.Text,
-				MemoryText:  "(combined memories)",
-				Issue:        fmt.Sprintf("Borderline overlap (%.0f%%) — claim may be partially fabricated", overlapRatio*100),
-				Tier:         TierFlagOnly,
+				ClaimText:  claim.Text,
+				MemoryText: "(combined memories)",
+				Issue:      fmt.Sprintf("Borderline overlap (%.0f%%) — claim may be partially fabricated", overlapRatio*100),
+				Tier:       TierFlagOnly,
 			}
 		}
 	}
 
 	return nil // Claim seems consistent with memories
-}
-
-// findTaglessNumberCorrection creates a correction for a wrong number in a tagless claim.
-func findTaglessNumberCorrection(claim TaglessClaim, flag *CitationFlag) *struct {
-	start   int
-	end     int
-	replace string
-	tier    CorrectionTier
-} {
-	if flag.WrongNum == "" {
-		return nil
-	}
-
-	// Find the wrong number in the claim text
-	idx := strings.Index(claim.Text, flag.WrongNum)
-	if idx == -1 {
-		return nil
-	}
-
-	// Map back to response indices
-	absStart := claim.Start + idx
-	absEnd := absStart + len(flag.WrongNum)
-
-	replace := flag.CorrectVal
-	if replace == "" {
-		// No correct value found — strip the number entirely and add disclaimer
-		replace = "a different value than what I'm stating"
-	}
-
-	return &struct {
-		start   int
-		end     int
-		replace string
-		tier    CorrectionTier
-	}{
-		start:   absStart,
-		end:     absEnd,
-		replace: replace,
-		tier:    TierContradictionPatch,
-	}
 }
