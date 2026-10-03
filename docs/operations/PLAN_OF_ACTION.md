@@ -36,7 +36,7 @@ task/review reports.
 | Active roadmap IDs | R2 (primary), with R6 integration dependency; R1 acceptance and event-outbox work remain open. |
 | Reviewed baseline | `origin/staging` at `a2a5622` includes merged R1 PR #84; no 9/10 gate is met. |
 | Current state | Autonomous prompt memory now uses a canonical workspace/run/session/agent/owner scope. Recall context packs that omit or mismatch that scope are skipped; scoped local search is the only fallback, with cache keys including the full scope. Capture conflicts fail closed unless they explicitly supersede the prior memory, and failed primary sync records an inspectable pending state without claiming reconciliation. Legacy APIs remain compatible outside the autonomous serve path. |
-| PR handoff | R2 work is on `codex/r2-scoped-memory`, rebased onto `a2a5622`; it is not pushed or merged. |
+| PR handoff | R2 work is on `codex/r2-scoped-memory`, based on `a2a5622` and ready for normal review against `staging`. Its scope is the R2 scoped-memory contract and deterministic isolation evidence; it does not claim R6 live reconciliation or full R2/R6 completion. |
 | Next implementation decision | Implement R6 durable local-to-Recall reconciliation with an idempotent delivery record, then run a live outage/recovery trace in an environment with a working Remembrance service and embedding provider. |
 | Evidence required before advancing | The seeded gate is 10/10 with no leakage. Still required: a live Recall outage/recovery trace and proof that deferred local captures reconcile once without duplicate remote writes. |
 

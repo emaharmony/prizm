@@ -545,3 +545,23 @@ environment. R1's event-outbox and delegation gates remain open.
 
 **Next action:** add the R6 reconciliation record and run the live service
 outage/recovery acceptance trace when Python and Ollama are available.
+
+## 2026-10-02 — R2 Scoped Memory Review Handoff
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r2-scoped-memory` based on `origin/staging` `a2a5622`
+
+- Prepared the R2 scoped-memory lifecycle and isolation slice for normal review.
+  The branch carries canonical autonomous scope injection, strict scoped capture
+  events, explicit supersession, scoped Recall-primary/local-fallback behavior,
+  and the deterministic 10/10 seeded retrieval gate with zero leakage.
+- Verification evidence for the branch includes `go build ./...`, `go vet
+  ./...`, `staticcheck ./...`, and `go test ./... -count=1`.
+
+**Open risks:** This slice does not provide a durable replay consumer for
+`sync_pending` captures and has no live Recall outage/recovery proof. Those are
+R6 follow-up work; the R2/R6 acceptance claims remain limited accordingly.
+
+**Next action:** publish the branch for review, then implement idempotent
+local-to-Recall reconciliation and perform the live outage/recovery trace when
+the required local services are available.
