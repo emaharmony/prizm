@@ -127,7 +127,7 @@ spec:
 	if parsed.Spec.Budgets.MaxTransitions != nil {
 		t.Errorf("Budgets.MaxTransitions = %v, want nil", parsed.Spec.Budgets.MaxTransitions)
 	}
-	if parsed.Spec.Edges != nil && len(parsed.Spec.Edges) != 0 {
+	if len(parsed.Spec.Edges) != 0 {
 		t.Errorf("Edges = %v, want empty", parsed.Spec.Edges)
 	}
 	if !reflect.DeepEqual(parsed.Spec.Defaults, WorkflowDefaults{}) {

@@ -86,12 +86,7 @@ func CompatAdaptDefinition(def Definition) (*CompiledGraph, error) {
 			Terminal: rule.Terminal,
 			Label:    humanizeIdentifier(string(rule.Outcome)),
 		}
-		outgoing[transitionKey{role: rule.From, outcome: rule.Outcome}] = ResolvedTransition{
-			From:     rule.From,
-			Outcome:  rule.Outcome,
-			To:       rule.To,
-			Terminal: rule.Terminal,
-		}
+		outgoing[transitionKey{role: rule.From, outcome: rule.Outcome}] = ResolvedTransition(rule)
 
 		if rule.Terminal != "" && !seenTerminal[rule.Terminal] {
 			seenTerminal[rule.Terminal] = true

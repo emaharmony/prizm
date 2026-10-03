@@ -22,6 +22,29 @@ type Provider interface {
 	Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error)
 }
 
+// RunScope confines a provider invocation to a durable run workspace. It is
+// used only by providers that can launch their own local tools.
+type RunScope struct {
+	Workspace string
+	ReadOnly  bool
+}
+
+// RunScopedProvider is an optional provider boundary for backends that can
+// execute native tools. Callers use it to prevent a delegated run from falling
+// back to a process-global workspace or a mutation-capable native sandbox.
+type RunScopedProvider interface {
+	Provider
+	GenerateInRunScope(context.Context, GenerateRequest, RunScope) (GenerateResponse, error)
+}
+
+// NativeToolProvider identifies a backend that can execute tools outside
+// Prizm's governed tool executor. Such a backend must be run-scoped whenever
+// it participates in delegated execution.
+type NativeToolProvider interface {
+	Provider
+	UsesNativeTools() bool
+}
+
 // ErrQuotaExhausted indicates a provider/model has hit an account-level
 // usage quota (e.g. "weekly usage limit reached"), as opposed to a
 // transient rate limit. Implementations should wrap their returned error

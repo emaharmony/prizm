@@ -234,12 +234,20 @@ type RoleRunResult struct {
 	LocalIterations int
 	Retries         int
 	Metadata        ExecutionMetadata
+	Proposals       []ProposalReference
 }
 
 // RoleRunner executes bounded local work for one configured role. It cannot
 // mutate global state or choose a destination role.
 type RoleRunner interface {
 	RunRole(context.Context, RoleRunRequest) (RoleRunResult, error)
+}
+
+// ApprovedRoleValidator is an optional extension for mutation-bearing roles.
+// The durable runtime calls it only after the exact approved proposals have
+// been applied in the run workspace and before it transitions the saved role.
+type ApprovedRoleValidator interface {
+	ValidateApprovedRole(context.Context, RoleRunRequest, RoleRunResult) (RoleRunResult, error)
 }
 
 // EventSink consumes canonical Prism events emitted by the supervisor.

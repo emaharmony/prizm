@@ -15,9 +15,11 @@ import (
 	"github.com/emaharmony/prizm/internal/agent"
 	"github.com/emaharmony/prizm/internal/approval"
 	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/emaharmony/prizm/internal/memory"
 	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/safety"
 	"github.com/emaharmony/prizm/internal/subagent"
 	"github.com/emaharmony/prizm/internal/tool"
 	"github.com/emaharmony/prizm/internal/validation"
@@ -26,7 +28,7 @@ import (
 	"runtime"
 )
 
-const referenceManifestSchemaVersion = 1
+const referenceManifestSchemaVersion = 2
 
 // referenceWorkflowManifest is the on-disk shape of every durable multiagent
 // run this package starts, whether via the legacy `prism workflow run`
@@ -46,15 +48,17 @@ const referenceManifestSchemaVersion = 1
 // the same discriminator applied to the RunLocator-based read paths
 // (ListRuns/OpenInspection).
 type referenceWorkflowManifest struct {
-	SchemaVersion    int                               `json:"schema_version"`
-	RunID            string                            `json:"run_id"`
-	WorkflowID       string                            `json:"workflow_id"`
-	Input            multiagent.ReferenceWorkflowInput `json:"input"`
-	Definition       multiagent.Definition             `json:"definition"`
-	WorkspaceID      string                            `json:"workspace_id"`
-	WorkspacePath    string                            `json:"workspace_path"`
-	WorkflowVersion  int64                             `json:"workflow_version,omitempty"`
-	DefinitionDBPath string                            `json:"definition_db_path,omitempty"`
+	SchemaVersion       int                               `json:"schema_version"`
+	RunID               string                            `json:"run_id"`
+	WorkflowID          string                            `json:"workflow_id"`
+	Input               multiagent.ReferenceWorkflowInput `json:"input"`
+	Definition          multiagent.Definition             `json:"definition"`
+	WorkspaceID         string                            `json:"workspace_id"`
+	WorkspacePath       string                            `json:"workspace_path"`
+	SourceWorkspacePath string                            `json:"source_workspace_path,omitempty"`
+	WorkspaceCleaned    bool                              `json:"workspace_cleaned,omitempty"`
+	WorkflowVersion     int64                             `json:"workflow_version,omitempty"`
+	DefinitionDBPath    string                            `json:"definition_db_path,omitempty"`
 }
 
 // registryBacked reports whether m describes a PR6 `graph run`-started run
@@ -78,22 +82,27 @@ func executeReferenceWorkflowRun(inputFile, runDir, configPath string) error {
 	if err != nil {
 		return err
 	}
+	cfg, err := orchestrator.LoadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("load Prizm config: %w", err)
+	}
 	definition, err := multiagent.ApplyReferenceOverrides(
 		multiagent.DefaultReferenceDefinition(), input,
 	)
 	if err != nil {
 		return err
 	}
-	workspacePath, workspaceID, err := referenceWorkspace(input.Workspace)
+	bindConfiguredReferenceProfiles(&definition, input.RoleProfiles, cfg.Agents)
+	runID := event.NewRunID()
+	workspacePath, workspaceID, sourceWorkspacePath, err := isolatedReferenceWorkspace(context.Background(), input.Workspace, runID)
 	if err != nil {
 		return err
 	}
-	runID := event.NewRunID()
 	manifest := referenceWorkflowManifest{
 		SchemaVersion: referenceManifestSchemaVersion,
 		RunID:         runID, WorkflowID: multiagent.ReferenceWorkflowID,
 		Input: input, Definition: definition,
-		WorkspaceID: workspaceID, WorkspacePath: workspacePath,
+		WorkspaceID: workspaceID, WorkspacePath: workspacePath, SourceWorkspacePath: sourceWorkspacePath,
 	}
 	if err := writeReferenceManifest(runDir, manifest); err != nil {
 		return err
@@ -116,12 +125,68 @@ func executeReferenceWorkflowRun(inputFile, runDir, configPath string) error {
 		},
 	})
 	if state.RunID != "" && state.Status.Terminal() {
-		if err := writeReferenceReport(context.Background(), runDir, manifest, runtime, state); err != nil {
+		if err := finalizeTerminalReferenceRun(context.Background(), runDir, &manifest, runtime, state); err != nil {
 			return errors.Join(runErr, err)
 		}
 	}
 	fmt.Printf("Status: %s\n", state.Status)
 	return runErr
+}
+
+// bindConfiguredReferenceProfiles adapts the fixed reference graph's
+// illustrative profile names to the configured local agent roster. Explicit
+// user role-profile overrides remain authoritative. This is composition, not a
+// workflow transition rule: the graph retains its bounded role capabilities.
+func bindConfiguredReferenceProfiles(definition *multiagent.Definition, explicit map[multiagent.Role]string, agents []orchestrator.AgentConfig) {
+	if definition == nil {
+		return
+	}
+	for index := range definition.Roles {
+		role := definition.Roles[index].Role
+		if _, overridden := explicit[role]; overridden {
+			continue
+		}
+		if profile := configuredProfileForRole(role, definition.Roles[index].Capabilities, agents); profile != "" {
+			definition.Roles[index].AgentRef = profile
+		}
+	}
+}
+
+func configuredProfileForRole(role multiagent.Role, required []string, agents []orchestrator.AgentConfig) string {
+	bestID, bestScore := "", -1
+	for _, candidate := range agents {
+		if strings.TrimSpace(candidate.ID) == "" || !agentHasCapabilities(candidate, required) {
+			continue
+		}
+		score := 0
+		candidateRole := strings.ToLower(strings.TrimSpace(candidate.Role))
+		if candidateRole == string(role) {
+			score += 100
+		}
+		if role == multiagent.RoleDeveloper && candidateRole == "coder" {
+			score += 90
+		}
+		if candidate.Primary {
+			score++
+		}
+		if score > bestScore {
+			bestID, bestScore = candidate.ID, score
+		}
+	}
+	return bestID
+}
+
+func agentHasCapabilities(candidate orchestrator.AgentConfig, required []string) bool {
+	available := make(map[string]struct{}, len(candidate.Capabilities))
+	for _, capability := range candidate.Capabilities {
+		available[capability] = struct{}{}
+	}
+	for _, capability := range required {
+		if _, ok := available[capability]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func executeReferenceWorkflowStatus(runID, runDir string, jsonOutput bool) error {
@@ -175,7 +240,7 @@ func executeReferenceWorkflowCancel(runID, runDir, reason string) error {
 		return err
 	}
 	if state.Status.Terminal() {
-		if err := writeReferenceReport(context.Background(), runDir, manifest, runtime, state); err != nil {
+		if err := finalizeTerminalReferenceRun(context.Background(), runDir, &manifest, runtime, state); err != nil {
 			return err
 		}
 		fmt.Printf("Run %s cancelled.\n", runID)
@@ -198,7 +263,7 @@ func executeReferenceWorkflowResume(runID, runDir, configPath string) error {
 	fmt.Printf("Run ID: %s\n", runID)
 	state, resumeErr := runtime.runtime.Resume(context.Background(), runID)
 	if state.RunID != "" && state.Status.Terminal() {
-		if err := writeReferenceReport(context.Background(), runDir, manifest, runtime, state); err != nil {
+		if err := finalizeTerminalReferenceRun(context.Background(), runDir, &manifest, runtime, state); err != nil {
 			return errors.Join(resumeErr, err)
 		}
 	}
@@ -228,7 +293,7 @@ func executeReferenceWorkflowReport(runID, runDir string, jsonOutput bool) error
 		return err
 	}
 	report := multiagent.BuildReferenceRunReport(manifest.Input, record.State, events)
-	if err := persistReferenceReport(runDir, runID, report); err != nil {
+	if err := finalizeTerminalReferenceRun(context.Background(), runDir, &manifest, runtime, record.State); err != nil {
 		return err
 	}
 	if jsonOutput {
@@ -270,31 +335,43 @@ func openLiveReferenceRuntime(runDir, configPath string, manifest referenceWorkf
 	policyConfig.WriteRoots = writeRoots
 	policyConfig.AllowedPaths = []string{manifest.WorkspacePath}
 	policyConfig.OrchestratorAgentID = configuredOrchestratorAgentID(cfg)
+	policyConfig.WriteAgents = make(map[string]bool)
+	for _, configuredAgent := range cfg.Agents {
+		for _, capability := range configuredAgent.Capabilities {
+			if capability == "code" {
+				policyConfig.WriteAgents[configuredAgent.ID] = true
+				break
+			}
+		}
+	}
 	toolExecutor := tool.NewExecutor(toolRegistry, &policyConfig)
-	toolExecutor.SetApprovalStore(approval.NewStore(runDir))
+	approvalStore := approval.NewStore(runDir)
+	toolExecutor.SetApprovalStore(approvalStore)
 	backend := &subAgentBackend{
 		providers: providerRegistry, exec: toolExecutor, toolReg: toolRegistry,
-		protectedBranch: cfg.ProtectedBranch(),
+		protectedBranch: cfg.ProtectedBranch(), approvalStore: approvalStore,
+		worktreeRoot: filepath.Join(manifest.SourceWorkspacePath, ".prizm", "worktrees"),
 	}
 	toolInfos := toolRegistry.ListWithDescriptions()
 	loop := subagent.NewLoopRunner(subagent.LoopRunnerConfig{
 		Backend: backend,
 		Scope:   subagent.DefaultToolScope(),
 		SystemPrompt: func(_ v2.TaskPacket, runtime subagent.AgentRuntime) string {
-			charter := fmt.Sprintf("You are the distinct %q authority in a bounded multi-agent software workflow. Follow the role contract in the task and return exactly one final JSON object.", runtime.AgentID)
+			charter := fmt.Sprintf("You are the distinct %q authority in a bounded multi-agent software workflow. Follow the role contract in the task. When it requires a tool, emit one tool_request JSON, wait for its result, then return exactly one final role JSON object.", runtime.AgentID)
 			return charter + agent.BuildToolPromptSuffix(toolInfos, manifest.WorkspacePath, manifest.WorkspacePath)
 		},
 	})
-	validationExecutor := validation.NewExecutor(
-		validation.NewRegistry(), manifest.WorkspacePath, filepath.Join(runDir, manifest.RunID),
-	)
+	validationRunner := workspaceValidationRunner{
+		registry: validation.NewRegistry(), fallbackRoot: manifest.WorkspacePath, artifactRoot: runDir,
+	}
 	roleRunner, err := multiagent.NewAgentRoleRunner(multiagent.AgentRoleRunnerOptions{
 		Profiles: multiagent.RegistryProfileResolver{Registry: agentRegistry},
 		Executor: multiagent.SubagentExecutor{Runner: loop},
 		Workspaces: multiagent.WorkspaceResolverFunc(func(context.Context, string) (multiagent.Workspace, error) {
 			return multiagent.Workspace{ID: manifest.WorkspaceID, Path: manifest.WorkspacePath}, nil
 		}),
-		Validation: multiagent.ValidationRunnerFunc(validationExecutor.Run),
+		Validation: validationRunner,
+		Proposals:  approvalProposalResolver{store: approvalStore, workspace: manifest.WorkspacePath},
 	})
 	if err != nil {
 		return nil, err
@@ -319,18 +396,15 @@ func openLiveReferenceRuntime(runDir, configPath string, manifest referenceWorkf
 			return nil, fmt.Errorf("configure interaction adapter %q: %w", adapterName, err)
 		}
 	}
-	return openReferenceRuntimeWithInteraction(runDir, manifest, roleRunner, interaction)
+	lifecycle := newApprovalProposalLifecycle(approvalStore, manifest.WorkspacePath, runDir)
+	return openReferenceRuntimeWithInteraction(runDir, manifest, roleRunner, interaction, lifecycle)
 }
 
 func openInspectionReferenceRuntime(runDir string, manifest referenceWorkflowManifest) (*referenceRuntime, error) {
-	return openReferenceRuntimeWithInteraction(runDir, manifest, unavailableRoleRunner{}, nil)
+	return openReferenceRuntimeWithInteraction(runDir, manifest, unavailableRoleRunner{}, nil, nil)
 }
 
-func openReferenceRuntime(runDir string, manifest referenceWorkflowManifest, runner multiagent.RoleRunner) (*referenceRuntime, error) {
-	return openReferenceRuntimeWithInteraction(runDir, manifest, runner, nil)
-}
-
-func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkflowManifest, runner multiagent.RoleRunner, interaction *multiagent.InteractionScheduler) (*referenceRuntime, error) {
+func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkflowManifest, runner multiagent.RoleRunner, interaction *multiagent.InteractionScheduler, proposals multiagent.ProposalLifecycle) (*referenceRuntime, error) {
 	dbPath := filepath.Join(runDir, manifest.RunID, "multiagent.db")
 	store, err := multiagent.NewSQLiteDurableRunStore(dbPath)
 	if err != nil {
@@ -398,7 +472,7 @@ func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkfl
 	runtime, err := multiagent.NewDurableRuntime(
 		graph, runner, store,
 		multiagent.FileRunClaimer{Root: runDir}, eventStore,
-		multiagent.DurableRuntimeOptions{Interaction: interaction, Reflection: reflection, Memory: reflectionMemory},
+		multiagent.DurableRuntimeOptions{Interaction: interaction, Reflection: reflection, Memory: reflectionMemory, Proposals: proposals},
 	)
 	if err != nil {
 		store.Close()
@@ -462,6 +536,26 @@ func referenceWorkspace(path string) (string, string, error) {
 	return canonical, "workspace_" + hex.EncodeToString(sum[:12]), nil
 }
 
+func isolatedReferenceWorkspace(ctx context.Context, source, runID string) (string, string, string, error) {
+	sourcePath, _, err := referenceWorkspace(source)
+	if err != nil {
+		return "", "", "", err
+	}
+	if err := gitx.EnsureExcluded(ctx, sourcePath, ".prizm/"); err != nil {
+		return "", "", "", fmt.Errorf("prepare isolated workspace: %w", err)
+	}
+	worktreePath := filepath.Join(sourcePath, ".prizm", "worktrees", gitx.SafeID(runID, "run"))
+	if err := gitx.CreateDetachedWorktree(ctx, sourcePath, worktreePath); err != nil {
+		return "", "", "", err
+	}
+	workspacePath, workspaceID, err := referenceWorkspace(worktreePath)
+	if err != nil {
+		gitx.RemoveWorktree(context.Background(), sourcePath, worktreePath)
+		return "", "", "", err
+	}
+	return workspacePath, workspaceID, sourcePath, nil
+}
+
 func referenceManifestPath(runDir, runID string) string {
 	return filepath.Join(runDir, runID, "multiagent_manifest.json")
 }
@@ -482,7 +576,7 @@ func loadReferenceManifest(runDir, runID string) (referenceWorkflowManifest, err
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return manifest, fmt.Errorf("decode multi-agent manifest: %w", err)
 	}
-	if manifest.SchemaVersion != referenceManifestSchemaVersion || manifest.RunID != runID {
+	if (manifest.SchemaVersion != 1 && manifest.SchemaVersion != referenceManifestSchemaVersion) || manifest.RunID != runID {
 		return manifest, fmt.Errorf("unsupported or inconsistent multi-agent manifest for run %s", runID)
 	}
 	// A PR6 registry-backed run (graph run) is not the fixed reference
@@ -500,12 +594,20 @@ func loadReferenceManifest(runDir, runID string) (referenceWorkflowManifest, err
 			return manifest, err
 		}
 	}
-	workspacePath, workspaceID, err := referenceWorkspace(manifest.WorkspacePath)
-	if err != nil {
-		return manifest, err
+	if !manifest.WorkspaceCleaned {
+		workspacePath, workspaceID, err := referenceWorkspace(manifest.WorkspacePath)
+		if err != nil {
+			return manifest, err
+		}
+		if workspacePath != manifest.WorkspacePath || workspaceID != manifest.WorkspaceID {
+			return manifest, errors.New("workspace continuity check failed: persisted workspace identity changed")
+		}
 	}
-	if workspacePath != manifest.WorkspacePath || workspaceID != manifest.WorkspaceID {
-		return manifest, errors.New("workspace continuity check failed: persisted workspace identity changed")
+	if manifest.SourceWorkspacePath != "" {
+		sourcePath, _, sourceErr := referenceWorkspace(manifest.SourceWorkspacePath)
+		if sourceErr != nil || sourcePath != manifest.SourceWorkspacePath {
+			return manifest, errors.New("source workspace continuity check failed")
+		}
 	}
 	return manifest, nil
 }
@@ -516,6 +618,37 @@ func writeReferenceReport(ctx context.Context, runDir string, manifest reference
 		return err
 	}
 	return persistReferenceReport(runDir, state.RunID, multiagent.BuildReferenceRunReport(manifest.Input, state, events))
+}
+
+// finalizeTerminalReferenceRun persists the complete report before reclaiming
+// the detached worktree. Diff artifacts already live under runDir, so cleanup
+// cannot erase the evidence needed for later inspection.
+func finalizeTerminalReferenceRun(ctx context.Context, runDir string, manifest *referenceWorkflowManifest, runtime *referenceRuntime, state multiagent.RunState) error {
+	if !state.Status.Terminal() {
+		return nil
+	}
+	if err := writeReferenceReport(ctx, runDir, *manifest, runtime, state); err != nil {
+		return err
+	}
+	return cleanupTerminalReferenceWorkspace(ctx, runDir, manifest)
+}
+
+func cleanupTerminalReferenceWorkspace(ctx context.Context, runDir string, manifest *referenceWorkflowManifest) error {
+	if manifest.WorkspaceCleaned || manifest.SourceWorkspacePath == "" || manifest.WorkspacePath == "" {
+		return nil
+	}
+	worktreeRoot := filepath.Join(manifest.SourceWorkspacePath, ".prizm", "worktrees")
+	if !safety.IsWithinRoot(manifest.WorkspacePath, worktreeRoot) {
+		return fmt.Errorf("refuse to clean unexpected run workspace %q", manifest.WorkspacePath)
+	}
+	if err := gitx.RemoveWorktreeChecked(ctx, manifest.SourceWorkspacePath, manifest.WorkspacePath); err != nil {
+		return err
+	}
+	if _, err := os.Stat(manifest.WorkspacePath); !os.IsNotExist(err) {
+		return fmt.Errorf("remove terminal run worktree: path still exists")
+	}
+	manifest.WorkspaceCleaned = true
+	return writeReferenceManifest(runDir, *manifest)
 }
 
 func persistReferenceReport(runDir, runID string, report multiagent.ReferenceRunReport) error {

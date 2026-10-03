@@ -223,6 +223,7 @@ func (e *Executor) Run(ctx context.Context, profileName, correlationID string) (
 			StdoutPath: stdoutPath,
 			StderrPath: stderrPath,
 			Error:      fmt.Sprintf("validation timed out after %s", timeout),
+			Command:    profile.Command, Args: append([]string(nil), profile.Args...), WorkingDir: workingDir,
 		}
 		e.writeResult(resultPath, result)
 		return result, nil
@@ -274,6 +275,7 @@ func (e *Executor) Run(ctx context.Context, profileName, correlationID string) (
 		DurationMs: durationMs,
 		StdoutPath: stdoutPath,
 		StderrPath: stderrPath,
+		Command:    profile.Command, Args: append([]string(nil), profile.Args...), WorkingDir: workingDir,
 	}
 
 	e.writeResult(resultPath, result)

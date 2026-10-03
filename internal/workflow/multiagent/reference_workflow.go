@@ -91,9 +91,9 @@ func DefaultReferenceDefinition() Definition {
 		"list_dir", "read_file", "read_project", "search_files",
 		"project_overview", "git_status", "git_log", "git_diff",
 	}
-	planner := role(RolePlanner, "planner", 3, 8_000, 10*time.Minute, "plan", readTools)
+	planner := role(RolePlanner, "planner", 5, 8_000, 10*time.Minute, "plan", readTools)
 	developerTools := append(append([]string(nil), readTools...),
-		"write_file_dry_run", "write_file_proposal", "create_directory_proposal")
+		"write_file_dry_run", "write_file_proposal")
 	developer := role(RoleDeveloper, "developer", 8, 30_000, 30*time.Minute, "code", developerTools)
 	developer.Retry.MaxRetries = 2
 	tester := role(RoleTester, "tester", 5, 12_000, 15*time.Minute, "test", readTools)

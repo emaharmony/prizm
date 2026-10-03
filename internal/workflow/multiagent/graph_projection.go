@@ -292,7 +292,7 @@ func buildEdge(
 		edge.IsLoopback = roleOrder(rule.To) <= roleOrder(rule.From)
 	}
 
-	resolved := ResolvedTransition{From: rule.From, Outcome: rule.Outcome, To: rule.To, Terminal: rule.Terminal}
+	resolved := ResolvedTransition(rule)
 	if loopKind, ok := correctionLoop(resolved); ok {
 		edge.TraversalCount = state.LoopTraversals.Get(loopKind)
 		edge.MaxTraversals = loopLimitPointer(definition, loopKind)

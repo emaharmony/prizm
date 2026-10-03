@@ -316,6 +316,11 @@ func (e *Executor) persistApproval(toolName, agent, project, correlationID, runI
 		approvalID = approval.NewApprovalID()
 		result.Output["approval_id"] = approvalID
 	}
+	proposalID, _ := result.Output["proposal_id"].(string)
+	if proposalID == "" {
+		proposalID = approval.NewProposalID()
+		result.Output["proposal_id"] = proposalID
+	}
 
 	// write_file_proposal/create_directory_proposal are safe, side-effect-free
 	// tools that already build their own preview and set mutation_type/
@@ -348,6 +353,7 @@ func (e *Executor) persistApproval(toolName, agent, project, correlationID, runI
 	}
 
 	a := &approval.Approval{
+		ProposalID:    proposalID,
 		ApprovalID:    approvalID,
 		RunID:         runID,
 		CorrelationID: correlationID,
@@ -377,6 +383,7 @@ func (e *Executor) persistApproval(toolName, agent, project, correlationID, runI
 
 	// Emit event for Discord notification (approval card with buttons)
 	e.emitEvent("prizm.approval.file_requested", map[string]any{
+		"proposal_id":    proposalID,
 		"approval_id":    approvalID,
 		"run_id":         runID,
 		"agent":          agent,

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
 
@@ -78,6 +79,63 @@ func TestReferenceManifestPersistsEffectiveDefinitionAndWorkspace(t *testing.T) 
 	}
 	if !isReferenceWorkflowRun(runDir, manifest.RunID) {
 		t.Fatal("reference run was not detected")
+	}
+}
+
+func TestLoadReferenceManifestAllowsCleanedTerminalWorkspace(t *testing.T) {
+	runDir := t.TempDir()
+	workspace := t.TempDir()
+	workspacePath, workspaceID, err := referenceWorkspace(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := multiagent.ReferenceWorkflowInput{Objective: "terminal recovery", Workspace: workspace}
+	definition, err := multiagent.ApplyReferenceOverrides(multiagent.DefaultReferenceDefinition(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := referenceWorkflowManifest{
+		SchemaVersion: referenceManifestSchemaVersion,
+		RunID: "run-cleaned-workspace", WorkflowID: multiagent.ReferenceWorkflowID,
+		Input: input, Definition: definition, WorkspaceID: workspaceID,
+		WorkspacePath: workspacePath, WorkspaceCleaned: true,
+	}
+	if err := writeReferenceManifest(runDir, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(workspace); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadReferenceManifest(runDir, manifest.RunID)
+	if err != nil || !loaded.WorkspaceCleaned {
+		t.Fatalf("loaded=%#v err=%v", loaded, err)
+	}
+}
+
+func TestBindConfiguredReferenceProfilesUsesCapabilitiesAndPreservesOverrides(t *testing.T) {
+	explicit := map[multiagent.Role]string{
+		multiagent.RoleReviewer: "explicit-reviewer",
+	}
+	definition, err := multiagent.ApplyReferenceOverrides(multiagent.DefaultReferenceDefinition(), multiagent.ReferenceWorkflowInput{
+		Objective: "profile composition", Workspace: ".", RoleProfiles: explicit,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindConfiguredReferenceProfiles(&definition, explicit, []orchestrator.AgentConfig{
+		{ID: "planner-profile", Role: "planner", Capabilities: []string{"plan"}},
+		{ID: "coder-profile", Role: "coder", Capabilities: []string{"code", "test"}},
+		{ID: "reviewer-profile", Role: "reviewer", Capabilities: []string{"review"}},
+	})
+	profiles := map[multiagent.Role]string{}
+	for _, role := range definition.Roles {
+		profiles[role.Role] = role.AgentRef
+	}
+	if profiles[multiagent.RolePlanner] != "planner-profile" ||
+		profiles[multiagent.RoleDeveloper] != "coder-profile" ||
+		profiles[multiagent.RoleTester] != "coder-profile" ||
+		profiles[multiagent.RoleReviewer] != "explicit-reviewer" {
+		t.Fatalf("profiles=%#v", profiles)
 	}
 }
 

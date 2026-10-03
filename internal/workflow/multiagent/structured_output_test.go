@@ -81,6 +81,18 @@ func TestDecodeRoleOutput(t *testing.T) {
 			wantOutcome: OutcomeReviewApproved,
 		},
 		{
+			name: "reviewer string finding evidence",
+			role: RoleReviewer,
+			raw: `{
+				"schema_version": 1,
+				"decision": "approved",
+				"findings": [{"severity": "info", "summary": "validated", "evidence": ["validation/go_test_all.stdout.txt"]}],
+				"required_corrections": [],
+				"evidence": []
+			}`,
+			wantOutcome: OutcomeReviewApproved,
+		},
+		{
 			name: "reviewer requests changes",
 			role: RoleReviewer,
 			raw: `{
@@ -164,6 +176,38 @@ func TestDecodeRoleOutputRejectsMalformedOrAmbiguousResults(t *testing.T) {
 				t.Fatalf("expected StructuredOutputError, got %T: %v", err, err)
 			}
 		})
+	}
+}
+
+func TestDecodeDeveloperOutputForProposalsDerivesMissingArtifact(t *testing.T) {
+	raw := `{"schema_version":1,"summary":"proposed","handoff":{"objective":"test","reason":"proposal recorded"}}`
+	proposals := []ProposalReference{{ProposalID: "proposal-1", ApprovalID: "approval-1", Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "feature.txt"}}}}
+	decoded, err := decodeDeveloperOutputForProposals(raw, proposals)
+	if err != nil || decoded.Handoff == nil || len(decoded.Handoff.Artifacts) != 1 || decoded.Handoff.Artifacts[0].URI != "feature.txt" {
+		t.Fatalf("decoded=%#v err=%v", decoded, err)
+	}
+}
+
+func TestDecodeDeveloperOutputForProposalsRequiresProposalAndUsesCanonicalSource(t *testing.T) {
+	missing := `{"schema_version":1,"summary":"proposed","handoff":{"objective":"test","reason":"proposal recorded"}}`
+	if _, err := decodeDeveloperOutputForProposals(missing, nil); err == nil {
+		t.Fatal("missing proposal source was accepted")
+	}
+	conflict := `{"schema_version":1,"summary":"proposed","changed_artifacts":[{"kind":"file","uri":"model-claim.txt"}],"handoff":{"objective":"test","reason":"proposal recorded"}}`
+	proposals := []ProposalReference{{ProposalID: "proposal-1", ApprovalID: "approval-1", Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "canonical.txt"}}}}
+	decoded, err := decodeDeveloperOutputForProposals(conflict, proposals)
+	if err != nil || decoded.Handoff == nil || len(decoded.Handoff.Artifacts) != 1 || decoded.Handoff.Artifacts[0].URI != "canonical.txt" {
+		t.Fatalf("decoded=%#v err=%v", decoded, err)
+	}
+}
+
+func TestDecodeDeveloperOutputForProposalsIsRecoveryStable(t *testing.T) {
+	raw := `{"schema_version":1,"summary":"proposed","handoff":{"objective":"test","reason":"proposal recorded"}}`
+	proposals := []ProposalReference{{ProposalID: "proposal-1", ApprovalID: "approval-1", Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "feature.txt"}}}}
+	first, firstErr := decodeDeveloperOutputForProposals(raw, proposals)
+	second, secondErr := decodeDeveloperOutputForProposals(raw, proposals)
+	if firstErr != nil || secondErr != nil || first.Handoff == nil || second.Handoff == nil || !sameArtifactRefs(first.Handoff.Artifacts, second.Handoff.Artifacts) {
+		t.Fatalf("first=%#v firstErr=%v second=%#v secondErr=%v", first, firstErr, second, secondErr)
 	}
 }
 

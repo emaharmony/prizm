@@ -29,6 +29,16 @@ func (f agentExecutorFunc) ExecuteAgent(
 	return f(ctx, request)
 }
 
+type workspaceValidationRunnerFunc func(context.Context, string, string, Workspace) (*validation.Result, error)
+
+func (f workspaceValidationRunnerFunc) RunValidation(context.Context, string, string) (*validation.Result, error) {
+	return nil, errors.New("workspace validation was not invoked in its workspace")
+}
+
+func (f workspaceValidationRunnerFunc) RunValidationInWorkspace(ctx context.Context, profile, runID string, workspace Workspace) (*validation.Result, error) {
+	return f(ctx, profile, runID, workspace)
+}
+
 func TestAgentRoleRunnerBuildsGovernedExecutionRequest(t *testing.T) {
 	var captured AgentExecutionRequest
 	runner := newAdapterForTest(t, agentExecutorFunc(func(
@@ -297,6 +307,153 @@ func TestAgentRoleRunnerEnforcesRoleTimeBudget(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("role deadline was not enforced promptly: %s", elapsed)
+	}
+}
+
+func TestAgentRoleRunnerRequiresDeveloperProposalWithOneCorrectiveTurn(t *testing.T) {
+	calls := 0
+	executor := agentExecutorFunc(func(_ context.Context, request AgentExecutionRequest) (AgentExecutionResult, error) {
+		calls++
+		if calls == 2 {
+			if !strings.Contains(request.Prompt, "only corrective turn") || !strings.Contains(request.Prompt, `"summary":"done"`) || !strings.Contains(request.Prompt, "NEXT response must be ONLY one JSON tool_request") {
+				t.Fatal("corrective prompt does not carry bounded provider state")
+			}
+			if request.MaxIterations != 2 || request.MaxTokens != 990 {
+				t.Fatalf("corrective budget iterations=%d tokens=%d", request.MaxIterations, request.MaxTokens)
+			}
+		}
+		return AgentExecutionResult{Output: `{"schema_version":1,"summary":"done","changed_artifacts":[{"kind":"file","uri":"feature.txt"}],"handoff":{"objective":"test","reason":"implemented"}}`, Usage: cost.TokenUsage{TotalTokens: 10}, LocalIterations: 1}, nil
+	})
+	profiles := profileResolverFunc(func(ref string) (AgentProfile, error) {
+		return AgentProfile{ID: ref, Provider: "mock", Model: "fake", Capabilities: []string{"developer", "code"}}, nil
+	})
+	runner, err := NewAgentRoleRunner(AgentRoleRunnerOptions{
+		Profiles: profiles, Executor: executor,
+		Workspaces: WorkspaceResolverFunc(func(context.Context, string) (Workspace, error) {
+			return Workspace{ID: "workspace", Path: "/workspace"}, nil
+		}),
+		Proposals: ProposalResolverFunc(func(context.Context, ProposalQuery) ([]ProposalReference, error) {
+			if calls < 2 {
+				return nil, nil
+			}
+			return []ProposalReference{{ProposalID: "proposal-1", ApprovalID: "approval-1", Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "feature.txt"}}}}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := adapterRoleRequest(RoleDeveloper)
+	request.Run.WorkspaceID = "workspace"
+	result, err := runner.RunRole(context.Background(), request)
+	if err != nil || calls != 2 || len(result.Proposals) != 1 || result.Retries != 1 {
+		t.Fatalf("calls=%d result=%#v err=%v", calls, result, err)
+	}
+}
+
+func TestBuildRolePromptRequiresDeveloperProposalBeforeFinalJSON(t *testing.T) {
+	prompt, err := BuildRolePrompt(adapterRoleRequest(RoleDeveloper))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "DEVELOPER TOOL PROTOCOL") ||
+		!strings.Contains(prompt, "Do not combine the tool request") {
+		t.Fatalf("developer prompt missing proposal protocol: %s", prompt)
+	}
+}
+
+func TestAgentRoleRunnerFailsClosedWhenProposalCorrectionHasNoBudget(t *testing.T) {
+	calls := 0
+	runner := newAdapterForTest(t, agentExecutorFunc(func(context.Context, AgentExecutionRequest) (AgentExecutionResult, error) {
+		calls++
+		return AgentExecutionResult{Output: `{"schema_version":1,"summary":"done","changed_artifacts":[],"handoff":{"objective":"test","reason":"implemented"}}`, LocalIterations: 3}, nil
+	}), nil, nil)
+	runner.proposals = ProposalResolverFunc(func(context.Context, ProposalQuery) ([]ProposalReference, error) { return nil, nil })
+	request := adapterRoleRequest(RoleDeveloper)
+	_, err := runner.RunRole(context.Background(), request)
+	var governanceErr *GovernanceError
+	if !errors.As(err, &governanceErr) || governanceErr.Kind != "proposal" || calls != 1 {
+		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+}
+
+func TestAgentRoleRunnerReservesToolAndFinalIterationsForProposalCorrection(t *testing.T) {
+	calls := 0
+	runner := newAdapterForTest(t, agentExecutorFunc(func(context.Context, AgentExecutionRequest) (AgentExecutionResult, error) {
+		calls++
+		return AgentExecutionResult{Output: `{"schema_version":1,"summary":"done","changed_artifacts":[],"handoff":{"objective":"test","reason":"implemented"}}`, LocalIterations: 1}, nil
+	}), nil, nil)
+	runner.proposals = ProposalResolverFunc(func(context.Context, ProposalQuery) ([]ProposalReference, error) { return nil, nil })
+	request := adapterRoleRequest(RoleDeveloper)
+	request.RoleConfig.MaxLocalIterations = 2
+	_, err := runner.RunRole(context.Background(), request)
+	var governanceErr *GovernanceError
+	if !errors.As(err, &governanceErr) || governanceErr.Kind != "proposal" || calls != 1 {
+		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+}
+
+func TestAgentRoleRunnerEmitsValidationLifecycleEvents(t *testing.T) {
+	runner := newAdapterForTest(t, agentExecutorFunc(func(context.Context, AgentExecutionRequest) (AgentExecutionResult, error) {
+		return AgentExecutionResult{Output: testerPassedJSON(), LocalIterations: 1}, nil
+	}), ValidationRunnerFunc(func(context.Context, string, string) (*validation.Result, error) {
+		return &validation.Result{Profile: "go_test_all", Status: "passed"}, nil
+	}), nil)
+	sink := &captureEventSink{}
+	runner.SetEventSink(sink)
+	request := adapterRoleRequest(RoleTester)
+	request.RoleConfig.ValidationProfiles = []string{"go_test_all"}
+	if _, err := runner.RunRole(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	events := sink.snapshot()
+	if len(events) != 2 || events[0].Type != event.EventValidationStarted || events[1].Type != event.EventValidationCompleted {
+		t.Fatalf("validation events = %#v", events)
+	}
+	for _, evt := range events {
+		if evt.CorrelationID != request.Run.RunID || evt.Payload["profile"] != "go_test_all" {
+			t.Fatalf("uncorrelated validation event: %#v", evt)
+		}
+	}
+}
+
+func TestAgentRoleRunnerDefersDeveloperValidationUntilProposalApplied(t *testing.T) {
+	validationCalls := 0
+	runner := newAdapterForTest(t, agentExecutorFunc(func(context.Context, AgentExecutionRequest) (AgentExecutionResult, error) {
+		return AgentExecutionResult{Output: `{"schema_version":1,"summary":"done","changed_artifacts":[{"kind":"file","uri":"feature.txt"}],"handoff":{"objective":"test","reason":"implemented"}}`, LocalIterations: 1}, nil
+	}), workspaceValidationRunnerFunc(func(context.Context, string, string, Workspace) (*validation.Result, error) {
+		validationCalls++
+		return &validation.Result{Profile: "go_test_all", Status: "passed"}, nil
+	}), nil)
+	runner.proposals = ProposalResolverFunc(func(context.Context, ProposalQuery) ([]ProposalReference, error) {
+		return []ProposalReference{{ProposalID: "proposal-1", ApprovalID: "approval-1", Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "feature.txt"}}}}, nil
+	})
+	request := adapterRoleRequest(RoleDeveloper)
+	request.RoleConfig.ValidationProfiles = []string{"go_test_all"}
+	result, err := runner.RunRole(context.Background(), request)
+	if err != nil || validationCalls != 0 || result.Metadata.ValidationStatus != "deferred_until_applied" {
+		t.Fatalf("pre-apply result=%#v calls=%d err=%v", result, validationCalls, err)
+	}
+	result, err = runner.ValidateApprovedRole(context.Background(), request, result)
+	if err != nil || validationCalls != 1 || result.Metadata.ValidationStatus != "passed" || len(result.OutgoingHandoff.ValidationResults) != 1 {
+		t.Fatalf("post-apply result=%#v calls=%d err=%v", result, validationCalls, err)
+	}
+}
+
+func TestAgentRoleRunnerRejectsNonWorkspacePostApplyValidator(t *testing.T) {
+	runner := newAdapterForTest(t, agentExecutorFunc(func(context.Context, AgentExecutionRequest) (AgentExecutionResult, error) {
+		return AgentExecutionResult{Output: `{"schema_version":1,"summary":"done","changed_artifacts":[{"kind":"file","uri":"feature.txt"}],"handoff":{"objective":"test","reason":"implemented"}}`, LocalIterations: 1}, nil
+	}), ValidationRunnerFunc(func(context.Context, string, string) (*validation.Result, error) {
+		return &validation.Result{Profile: "go_test_all", Status: "passed"}, nil
+	}), nil)
+	runner.proposals = ProposalResolverFunc(func(context.Context, ProposalQuery) ([]ProposalReference, error) {
+		return []ProposalReference{{ProposalID: "proposal-1", ApprovalID: "approval-1", Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "feature.txt"}}}}, nil
+	})
+	request := adapterRoleRequest(RoleDeveloper)
+	request.RoleConfig.ValidationProfiles = []string{"go_test_all"}
+	_, err := runner.RunRole(context.Background(), request)
+	var governance *GovernanceError
+	if !errors.As(err, &governance) || governance.Kind != "validation" {
+		t.Fatalf("err=%v", err)
 	}
 }
 

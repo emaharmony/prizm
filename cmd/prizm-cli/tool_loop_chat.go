@@ -159,7 +159,8 @@ func (cc *conversationContext) runToolLoopChat(
 			}
 		}
 
-		// V73: Re-inject plan state after plan-changing tool calls
+		// V73: Re-inject plan state after the first plan-changing tool call.
+	planState:
 		for _, tc := range response.ToolCalls {
 			switch tc.Function.Name {
 			case "plan_create", "plan_update", "plan_reopen", "plan_abandon":
@@ -176,7 +177,7 @@ func (cc *conversationContext) runToolLoopChat(
 						}
 					}
 				}
-				break // only inject once per iteration
+				break planState
 			}
 		}
 	}

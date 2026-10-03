@@ -5,12 +5,11 @@ package memory
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
-	"math"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,9 +45,9 @@ type MemoryStore interface {
 
 // MarkdownStore implements MemoryStore using memory/*.md files.
 type MarkdownStore struct {
-	root    string          // workspace root (contains memory/ subdir)
-	mu      sync.Map        // per-date mutex for concurrent writes
-	embIdx  *EmbeddingIndex // V80: embedding index for semantic search
+	root   string          // workspace root (contains memory/ subdir)
+	mu     sync.Map        // per-date mutex for concurrent writes
+	embIdx *EmbeddingIndex // V80: embedding index for semantic search
 }
 
 // NewMarkdownStore creates a MarkdownStore rooted at the given path.
@@ -270,10 +269,10 @@ const recencyHalfLifeDays = 14.0
 // idfCache holds precomputed IDF values for terms across all memories.
 // Updated when the memory store is rebuilt.
 type idfCache struct {
-	idf    map[string]float64 // term -> IDF value
-	dl     map[string]int     // memory ID -> document length (in terms)
-	avgDl  float64            // average document length across all memories
-	valid  bool               // whether cache is populated
+	idf   map[string]float64 // term -> IDF value
+	dl    map[string]int     // memory ID -> document length (in terms)
+	avgDl float64            // average document length across all memories
+	valid bool               // whether cache is populated
 }
 
 // computeIDF builds IDF values from all memories.
@@ -542,58 +541,6 @@ func (s *MarkdownStore) EmbeddingSearch(ctx context.Context, query string, limit
 // Close is a no-op for MarkdownStore.
 func (s *MarkdownStore) Close() error { return nil }
 
-// --- Scoring ---
-
-// scoreMemory is the V80 legacy scoring function, kept for reference.
-// V85 uses scoreBM25 + RRF fusion instead.
-func scoreMemory(m Memory, terms []string) float64 {
-	text := strings.ToLower(m.Content + " " + m.Summary + " " + strings.Join(m.KeyTopics, " "))
-	var score float64
-	for _, term := range terms {
-		count := strings.Count(text, term)
-		if count > 0 {
-			score += float64(count) * 2.0 // term frequency
-		}
-	}
-	// Category/title match bonus
-	lowerCat := strings.ToLower(m.Category)
-	for _, term := range terms {
-		if strings.Contains(lowerCat, term) {
-			score += 3.0
-		}
-	}
-	// V80: KeyTopics match bonus — if the memory has explicit keywords that match the query
-	for _, topic := range m.KeyTopics {
-		lowerTopic := strings.ToLower(topic)
-		for _, term := range terms {
-			if strings.Contains(lowerTopic, term) || strings.Contains(term, lowerTopic) {
-				score += 2.0
-			}
-		}
-	}
-	// V80: Confidence boost — higher confidence memories rank higher
-	if m.Metadata != nil {
-		if conf, ok := m.Metadata["confidence"]; ok {
-			if confFloat, err := parseFloat(conf); err == nil {
-				score *= (0.5 + confFloat*0.5) // confidence scales from 0.5x to 1.0x
-			}
-		}
-	}
-	// Recency boost: newer memories score higher (max +5 for today, decaying over 30 days)
-	daysSince := time.Since(m.CreatedAt).Hours() / 24
-	if daysSince < 0 {
-		daysSince = 0
-	}
-	recencyBoost := 5.0 * (1.0 / (1.0 + daysSince/7.0))
-	score += recencyBoost
-	return score
-}
-
-// parseFloat parses a float64 from a string, returning 0 on failure.
-func parseFloat(s string) (float64, error) {
-	return strconv.ParseFloat(strings.TrimSpace(s), 64)
-}
-
 // --- Parsing ---
 //
 // parseMemoryFile uses a multi-strategy approach:
@@ -822,10 +769,10 @@ func parseByParagraphs(content string, filename string, date time.Time) []Memory
 		}
 
 		mem := Memory{
-			ID:        slugify(summary),
-			Summary:   summary,
-			Content:   body,
-			CreatedAt: date,
+			ID:         slugify(summary),
+			Summary:    summary,
+			Content:    body,
+			CreatedAt:  date,
 			AccessedAt: date,
 		}
 		memories = append(memories, mem)
@@ -836,10 +783,10 @@ func parseByParagraphs(content string, filename string, date time.Time) []Memory
 
 // sectionBuilder helps construct a Memory from a header-based section.
 type sectionBuilder struct {
-	id       string
-	summary  string
-	lines    []string
-	meta     map[string]string // key-value metadata from - **Key:** Value lines
+	id      string
+	summary string
+	lines   []string
+	meta    map[string]string // key-value metadata from - **Key:** Value lines
 }
 
 func newSectionBuilder(id, summary string) *sectionBuilder {
@@ -862,10 +809,10 @@ func (sb *sectionBuilder) addLine(line string) {
 func (sb *sectionBuilder) build(date time.Time) Memory {
 	content := strings.TrimSpace(strings.Join(sb.lines, "\n"))
 	mem := Memory{
-		ID:        sb.id,
-		Summary:   sb.summary,
-		Content:   content,
-		CreatedAt: date,
+		ID:         sb.id,
+		Summary:    sb.summary,
+		Content:    content,
+		CreatedAt:  date,
 		AccessedAt: date,
 	}
 	// Extract metadata

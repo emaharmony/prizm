@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/emaharmony/prizm/internal/agent"
 	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/safety"
 	"github.com/emaharmony/prizm/internal/subagent"
 	"github.com/emaharmony/prizm/internal/tool"
 	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
@@ -71,6 +73,8 @@ type subAgentBackend struct {
 	exec            *tool.Executor // shared executor (no worktree isolation)
 	toolReg         *tool.Registry // shared registry, source for non-root tools
 	protectedBranch string         // branch git_commit/git_push in worktree executors must refuse to write to
+	approvalStore   tool.ApprovalStorer
+	worktreeRoot    string // canonical <repo>/.prizm/worktrees root for native-tool providers
 }
 
 // subAgentWorktreeMaxFileSize matches serve's builtin file-size cap.
@@ -108,7 +112,11 @@ func (b *subAgentBackend) executorFor(workDir string) *tool.Executor {
 			_ = reg.Register(t)
 		}
 	}
-	return tool.NewExecutor(reg, b.exec.Policy) // b.exec.Policy is already *PolicyConfig
+	executor := tool.NewExecutor(reg, b.exec.Policy) // b.exec.Policy is already *PolicyConfig
+	if b.approvalStore != nil {
+		executor.SetApprovalStore(b.approvalStore)
+	}
+	return executor
 }
 
 func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, subagent.Parser, subagent.ToolExec, error) {
@@ -127,10 +135,23 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 			sb.WriteString(m.Content)
 			sb.WriteString("\n\n")
 		}
-		resp, gerr := prov.Generate(ctx, provider.GenerateRequest{
+		request := provider.GenerateRequest{
 			Agent: rt.AgentID, Model: rt.Model, Prompt: sb.String(),
 			Temperature: 0.7, MaxTokens: 4096,
-		})
+		}
+		var resp provider.GenerateResponse
+		var gerr error
+		if scoped, ok := prov.(provider.RunScopedProvider); ok {
+			workspace, scopeErr := b.validateScopedWorkspace(rt.WorkDir)
+			if scopeErr != nil {
+				return subagent.Turn{}, scopeErr
+			}
+			resp, gerr = scoped.GenerateInRunScope(ctx, request, provider.RunScope{Workspace: workspace, ReadOnly: true})
+		} else if native, ok := prov.(provider.NativeToolProvider); ok && native.UsesNativeTools() {
+			return subagent.Turn{}, fmt.Errorf("native-tool provider cannot guarantee an isolated read-only run scope")
+		} else {
+			resp, gerr = prov.Generate(ctx, request)
+		}
 		if gerr != nil {
 			return subagent.Turn{}, gerr
 		}
@@ -138,13 +159,7 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 	}
 
 	parse := func(text string) subagent.Action {
-		if content, ok := v2.ParseFinalText(text); ok {
-			return subagent.Action{Final: true, Content: content}
-		}
-		if toolName, input, ok := v2.ParseToolRequestText(text); ok {
-			return subagent.Action{Tool: toolName, Input: input}
-		}
-		return subagent.Action{}
+		return parseSubAgentAction(text)
 	}
 
 	execFn := func(ctx stdcontext.Context, toolName string, input map[string]any) (string, error) {
@@ -182,6 +197,45 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 	return llm, parse, execFn, nil
 }
 
+func (b *subAgentBackend) validateScopedWorkspace(workDir string) (string, error) {
+	if strings.TrimSpace(workDir) == "" || strings.TrimSpace(b.worktreeRoot) == "" {
+		return "", fmt.Errorf("scoped provider requires an owned run worktree")
+	}
+	workspace, err := filepath.Abs(workDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve scoped provider workspace: %w", err)
+	}
+	root, err := filepath.Abs(b.worktreeRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve owned worktree root: %w", err)
+	}
+	if !safety.IsWithinRoot(workspace, root) || filepath.Clean(workspace) == filepath.Clean(root) {
+		return "", fmt.Errorf("scoped provider workspace is outside the owned run worktree root")
+	}
+	info, err := os.Stat(workspace)
+	if err != nil || !info.IsDir() {
+		return "", fmt.Errorf("scoped provider workspace is unavailable")
+	}
+	return workspace, nil
+}
+
+func parseSubAgentAction(text string) subagent.Action {
+	if toolName, input, ok := v2.ParseToolRequestText(text); ok {
+		return subagent.Action{Tool: toolName, Input: input}
+	}
+	if content, ok := v2.ParseFinalText(text); ok {
+		return subagent.Action{Final: true, Content: content}
+	}
+	// Multi-agent role prompts require the role schema itself as the final
+	// JSON object. Accept that strict object directly after ruling out the
+	// tool/final envelopes used by the generic delegated loop.
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "{") && json.Valid([]byte(trimmed)) {
+		return subagent.Action{Final: true, Content: trimmed}
+	}
+	return subagent.Action{}
+}
+
 // subAgentPublisher publishes completions back onto the completion subject.
 type subAgentPublisher struct {
 	nc      *nats.Conn
@@ -214,7 +268,12 @@ func startSubAgentWorker(nc *nats.Conn, providers *provider.ProviderRegistry, ex
 	}
 
 	resolver := newSubAgentResolver(cfg)
-	backend := &subAgentBackend{providers: providers, exec: exec, toolReg: toolReg, protectedBranch: cfg.ProtectedBranch()}
+	root := subAgentRepoRoot(cfg)
+	worktreeRoot := ""
+	if root != "" {
+		worktreeRoot = filepath.Join(root, ".prizm", "worktrees")
+	}
+	backend := &subAgentBackend{providers: providers, exec: exec, toolReg: toolReg, protectedBranch: cfg.ProtectedBranch(), worktreeRoot: worktreeRoot}
 	runner := subagent.NewLoopRunner(subagent.LoopRunnerConfig{
 		Backend: backend,
 		// Per-agent tool scoping: keep each sub-agent in its role lane (only
@@ -234,7 +293,7 @@ func startSubAgentWorker(nc *nats.Conn, providers *provider.ProviderRegistry, ex
 	worker := subagent.NewWorker(resolver, runner, 0)
 	// Per-task worktree isolation for code-capable agents, rooted at the default
 	// project repo (falls back to the workspace). Non-mutating agents skip it.
-	if root := subAgentRepoRoot(cfg); root != "" {
+	if root != "" {
 		worker.SetWorktrees(subagent.GitWorktreeProvider{Root: root})
 	}
 	pub := &subAgentPublisher{nc: nc, subject: subAgentCompletionSubject}

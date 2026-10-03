@@ -37,6 +37,18 @@ func TestBuildButtonBlocks(t *testing.T) {
 	}
 }
 
+func TestBotAdapterDispatchesRegisteredHandler(t *testing.T) {
+	b := NewBotAdapter("test-token", nil)
+	got := make(chan *InboundMessage, 1)
+	b.OnMessage(func(msg *InboundMessage) { got <- msg })
+	want := &InboundMessage{ChannelID: "C123", Content: "hello"}
+	b.dispatch(want)
+
+	if received := <-got; received != want {
+		t.Fatalf("dispatched message = %#v, want %#v", received, want)
+	}
+}
+
 func TestSplitMessage_LongMessage(t *testing.T) {
 	var sb strings.Builder
 	for i := 0; i < 5000; i++ {

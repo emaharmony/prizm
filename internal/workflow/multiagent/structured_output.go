@@ -66,6 +66,40 @@ type ReviewFinding struct {
 	Evidence []ArtifactRef `json:"evidence,omitempty"`
 }
 
+// UnmarshalJSON accepts the documented artifact objects and the string-only
+// evidence form emitted by some text providers. Reviewer evidence is
+// descriptive rather than an execution or mutation authority; normalizing a
+// string to a file reference keeps the review record inspectable without
+// weakening the strict contract for unknown fields or governed artifacts.
+func (f *ReviewFinding) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Severity string          `json:"severity"`
+		Summary  string          `json:"summary"`
+		Evidence json.RawMessage `json:"evidence"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&wire); err != nil {
+		return err
+	}
+	*f = ReviewFinding{Severity: wire.Severity, Summary: wire.Summary}
+	if len(wire.Evidence) == 0 || string(wire.Evidence) == "null" {
+		return nil
+	}
+	if err := json.Unmarshal(wire.Evidence, &f.Evidence); err == nil {
+		return nil
+	}
+	var uris []string
+	if err := json.Unmarshal(wire.Evidence, &uris); err != nil {
+		return fmt.Errorf("evidence must be artifact objects or strings: %w", err)
+	}
+	f.Evidence = make([]ArtifactRef, 0, len(uris))
+	for _, uri := range uris {
+		f.Evidence = append(f.Evidence, ArtifactRef{Kind: ArtifactFile, URI: uri})
+	}
+	return nil
+}
+
 // ReviewerOutput is the strict reviewer result contract.
 type ReviewerOutput struct {
 	SchemaVersion       int             `json:"schema_version"`
@@ -164,6 +198,54 @@ func decodeRoleOutput(role Role, raw string) (decodedRoleOutput, error) {
 	default:
 		return decodedRoleOutput{}, structuredError(role, errors.New("unsupported role"))
 	}
+}
+
+// decodeDeveloperOutputForProposals preserves the strict developer schema but
+// replaces changed_artifacts with exactly one persisted proposal artifact.
+// The proposal artifact is a durable workspace fact, so model-provided claims
+// are advisory output only and never become a second source of mutation truth.
+func decodeDeveloperOutputForProposals(raw string, proposals []ProposalReference) (decodedRoleOutput, error) {
+	var output DeveloperOutput
+	if err := decodeStrictJSON(raw, &output); err != nil {
+		return decodedRoleOutput{}, structuredError(RoleDeveloper, err)
+	}
+	artifacts, err := canonicalProposalArtifacts(proposals)
+	if err != nil {
+		return decodedRoleOutput{}, structuredError(RoleDeveloper, err)
+	}
+	output.ChangedArtifacts = artifacts
+	if err := validateDeveloperOutput(output); err != nil {
+		return decodedRoleOutput{}, structuredError(RoleDeveloper, err)
+	}
+	return decodedRoleOutput{
+		Outcome: OutcomeImplementationReady,
+		Handoff: handoffFromOutput(output.Handoff, output.ChangedArtifacts),
+	}, nil
+}
+
+func canonicalProposalArtifacts(proposals []ProposalReference) ([]ArtifactRef, error) {
+	if len(proposals) != 1 {
+		return nil, errors.New("exactly one persisted proposal is required to derive changed_artifacts")
+	}
+	if len(proposals[0].Artifacts) == 0 {
+		return nil, errors.New("persisted proposal has no canonical workspace artifact")
+	}
+	if err := validateOutputArtifacts(proposals[0].Artifacts); err != nil {
+		return nil, fmt.Errorf("persisted proposal artifact: %w", err)
+	}
+	return cloneArtifactRefs(proposals[0].Artifacts), nil
+}
+
+func sameArtifactRefs(left, right []ArtifactRef) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].Kind != right[index].Kind || left[index].URI != right[index].URI || left[index].Digest != right[index].Digest {
+			return false
+		}
+	}
+	return true
 }
 
 func decodeReflectionOutput(raw string) (ReflectionResult, error) {

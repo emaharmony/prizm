@@ -60,6 +60,19 @@ func RemoveWorktree(ctx context.Context, root, path string) {
 	_ = os.RemoveAll(path)
 }
 
+// RemoveWorktreeChecked removes a registered worktree and reports failures so
+// durable run cleanup can be retried after a process restart. Callers must
+// perform their own containment checks before supplying path.
+func RemoveWorktreeChecked(ctx context.Context, root, path string) error {
+	if _, err := RunCommand(ctx, root, "", "git", "worktree", "remove", "--force", path); err != nil {
+		return fmt.Errorf("git worktree remove: %w", err)
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("remove worktree directory: %w", err)
+	}
+	return nil
+}
+
 // EnsureClean returns an ErrDirtyWorktree-wrapped error when the repository
 // has uncommitted changes.
 func EnsureClean(ctx context.Context, root string) error {

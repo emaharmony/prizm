@@ -19,8 +19,10 @@ import (
 )
 
 const (
-	DefaultSandbox        = "workspace-write"
-	DefaultApprovalPolicy = "on-request"
+	// Legacy Codex worker delegation is report-only. Mutating delivery belongs
+	// to the durable graph's proposal/approval/worktree path.
+	DefaultSandbox        = "read-only"
+	DefaultApprovalPolicy = "never"
 	DefaultTimeoutMinutes = 30
 	DefaultMaxConcurrency = 1
 )
@@ -70,6 +72,12 @@ func New(cfg Config) (*Worker, error) {
 // NewWithRunner creates a worker with an injected command runner.
 func NewWithRunner(cfg Config, runner Runner) (*Worker, error) {
 	cfg = NormalizeConfig(cfg)
+	// This worker is also used by local and Cross-Prizm delegation. Never let
+	// either bypass the canonical graph mutation boundary through Codex native
+	// tools, even when an older configuration requests workspace-write.
+	cfg.Sandbox = DefaultSandbox
+	cfg.ApprovalPolicy = DefaultApprovalPolicy
+	cfg.CaptureDiff = false
 	if err := ValidateConfig(cfg); err != nil {
 		return nil, err
 	}
@@ -258,7 +266,6 @@ func (w *Worker) execArgs(lastMessagePath string) []string {
 		"exec",
 		"--cd", w.cfg.Workspace,
 		"--sandbox", w.cfg.Sandbox,
-		"--ask-for-approval", w.cfg.ApprovalPolicy,
 		"--output-last-message", lastMessagePath,
 		"--color", "never",
 	}
@@ -303,6 +310,7 @@ func buildPrompt(taskID, description string, contextData map[string]any) string 
 	b.WriteString(taskID)
 	b.WriteString("\n\n")
 	b.WriteString(strings.TrimSpace(description))
+	b.WriteString("\n\nThis is a read-only delegated task. Do not edit files, run mutation-capable tools, commit, push, or open a pull request. Report research, analysis, or recommendations only. Mutations must be proposed through Prizm's durable approval workflow.\n")
 	if len(contextData) > 0 {
 		data, _ := json.MarshalIndent(contextData, "", "  ")
 		b.WriteString("\n\n## Context\n\n```json\n")

@@ -168,6 +168,13 @@ func executeApprovalApprove(approvalID, approvedBy, runID, workspace, runsDir, c
 	}
 
 	writeRoots := approvalWriteRoots(configPath)
+	// Durable multi-agent runs persist their isolated worktree in the run
+	// manifest. Apply the exact approval there even when the CLI's global
+	// workspace flag points at the source checkout.
+	if manifest, manifestErr := loadReferenceManifest(runsDir, runID); manifestErr == nil {
+		workspace = manifest.WorkspacePath
+		writeRoots = append(writeRoots, manifest.WorkspacePath)
+	}
 	executor := mutation.NewExecutor(workspace, store, writeRoots...)
 	// V62: enables applying MutationToolCall approvals — the human has
 	// already explicitly approved this exact command/action, so tier_3 is

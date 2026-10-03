@@ -40,6 +40,12 @@ func (r *scriptedRunner) RunRole(_ context.Context, request RoleRunRequest) (Rol
 	return step.result, step.err
 }
 
+// ValidateApprovedRole keeps scripted durable-runtime scenarios on the safe
+// post-apply path without adding a second execution step to each fixture.
+func (r *scriptedRunner) ValidateApprovedRole(_ context.Context, _ RoleRunRequest, result RoleRunResult) (RoleRunResult, error) {
+	return result, nil
+}
+
 type captureEventSink struct {
 	mu     sync.Mutex
 	events []event.Event

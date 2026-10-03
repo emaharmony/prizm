@@ -401,7 +401,8 @@ func (t *WriteFileProposal) Execute(ctx context.Context, input map[string]any) (
 		return ToolResult{Success: false, Error: fmt.Sprintf("content size %d exceeds 1MB limit", len(content))}, nil
 	}
 
-	// Generate approval ID and create artifact
+	// Generate distinct proposal and approval identities.
+	proposalID := fmt.Sprintf("prop_%d", time.Now().UnixNano())
 	approvalID := fmt.Sprintf("appr_%d", time.Now().UnixNano())
 
 	// Build preview
@@ -417,6 +418,7 @@ func (t *WriteFileProposal) Execute(ctx context.Context, input map[string]any) (
 	// Emit mutation.proposed and approval.requested events
 	if t.Emit != nil {
 		t.Emit("prizm.mutation.proposed", "prizm-tool-executor", map[string]any{
+			"proposal_id":     proposalID,
 			"approval_id":     approvalID,
 			"mutation_type":   "write_file",
 			"target_path":     pathVal,
@@ -425,6 +427,7 @@ func (t *WriteFileProposal) Execute(ctx context.Context, input map[string]any) (
 			"policy_reason":   "file writes require explicit approval",
 		})
 		t.Emit("prizm.approval.requested", "prizm-tool-executor", map[string]any{
+			"proposal_id":     proposalID,
 			"approval_id":     approvalID,
 			"mutation_type":   "write_file",
 			"target_path":     pathVal,
@@ -436,6 +439,7 @@ func (t *WriteFileProposal) Execute(ctx context.Context, input map[string]any) (
 	return ToolResult{
 		Success: true,
 		Output: map[string]any{
+			"proposal_id":    proposalID,
 			"approval_id":    approvalID,
 			"mutation_type":  "write_file",
 			"target_path":    pathVal,

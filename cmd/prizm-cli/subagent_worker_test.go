@@ -9,8 +9,32 @@ import (
 	"testing"
 
 	"github.com/emaharmony/prizm/internal/orchestrator"
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/subagent"
 	"github.com/emaharmony/prizm/internal/tool"
+	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 )
+
+type scopedProbeProvider struct {
+	scope provider.RunScope
+}
+
+type unscopedProbeProvider struct{}
+
+func (unscopedProbeProvider) Generate(context.Context, provider.GenerateRequest) (provider.GenerateResponse, error) {
+	return provider.GenerateResponse{}, nil
+}
+
+func (unscopedProbeProvider) UsesNativeTools() bool { return true }
+
+func (p *scopedProbeProvider) Generate(context.Context, provider.GenerateRequest) (provider.GenerateResponse, error) {
+	return provider.GenerateResponse{}, fmt.Errorf("unscoped generation must not be used")
+}
+
+func (p *scopedProbeProvider) GenerateInRunScope(_ context.Context, _ provider.GenerateRequest, scope provider.RunScope) (provider.GenerateResponse, error) {
+	p.scope = scope
+	return provider.GenerateResponse{Text: `{"type":"final","content":"done"}`}, nil
+}
 
 func TestSubAgentResolver_MapsAgents(t *testing.T) {
 	cfg := &orchestrator.Config{
@@ -79,5 +103,82 @@ func TestSubAgentBackend_ExecutorRootedAtWorktree(t *testing.T) {
 	// Empty workDir → shared executor (no isolation).
 	if b.executorFor("") != sharedExec {
 		t.Error("empty workDir should return the shared executor")
+	}
+}
+
+func TestSubAgentBackendCodexUsesReadOnlyRunScope(t *testing.T) {
+	repo := t.TempDir()
+	worktreeRoot := filepath.Join(repo, ".prizm", "worktrees")
+	workDir := filepath.Join(worktreeRoot, "run-1")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	probe := &scopedProbeProvider{}
+	registry := provider.NewProviderRegistry()
+	registry.Register("codex", probe, provider.ModelInfo{ProviderName: "codex"})
+	backend := &subAgentBackend{providers: registry, worktreeRoot: worktreeRoot}
+	llm, _, _, err := backend.Bind(subagent.AgentRuntime{AgentID: "developer", Provider: "codex", Model: "codex", WorkDir: workDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = llm(context.Background(), []v2.Message{{Content: "bounded task"}}); err != nil {
+		t.Fatal(err)
+	}
+	if probe.scope.Workspace != workDir || !probe.scope.ReadOnly {
+		t.Fatalf("codex scope=%#v", probe.scope)
+	}
+}
+
+func TestSubAgentBackendRejectsUnscopedCodexProvider(t *testing.T) {
+	registry := provider.NewProviderRegistry()
+	registry.Register("codex", &scopedProbeProvider{}, provider.ModelInfo{ProviderName: "codex"})
+	// Register a provider that satisfies only the base interface.
+	registry.Register("unscoped", unscopedProbeProvider{}, provider.ModelInfo{ProviderName: "codex"})
+	repo := t.TempDir()
+	worktreeRoot := filepath.Join(repo, ".prizm", "worktrees")
+	workDir := filepath.Join(worktreeRoot, "run-1")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	backend := &subAgentBackend{providers: registry, worktreeRoot: worktreeRoot}
+	llm, _, _, err := backend.Bind(subagent.AgentRuntime{AgentID: "developer", Provider: "alias", Model: "unscoped", WorkDir: workDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = llm(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "cannot guarantee") {
+		t.Fatalf("unscoped codex err=%v", err)
+	}
+}
+
+func TestSubAgentBackendRejectsScopedProviderOutsideOwnedWorktree(t *testing.T) {
+	registry := provider.NewProviderRegistry()
+	registry.Register("scoped", &scopedProbeProvider{}, provider.ModelInfo{ProviderName: "alias"})
+	backend := &subAgentBackend{providers: registry, worktreeRoot: filepath.Join(t.TempDir(), ".prizm", "worktrees")}
+	llm, _, _, err := backend.Bind(subagent.AgentRuntime{AgentID: "developer", Provider: "alias", Model: "scoped", WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = llm(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "outside") {
+		t.Fatalf("outside worktree err=%v", err)
+	}
+}
+
+func TestParseSubAgentActionAcceptsStrictRoleJSON(t *testing.T) {
+	input := `{"schema_version":1,"understanding":"task","implementation_plan":["change"]}`
+	action := parseSubAgentAction(input)
+	if !action.Final || action.Content != input || action.Tool != "" {
+		t.Fatalf("action = %#v", action)
+	}
+	toolAction := parseSubAgentAction(`{"type":"tool_request","tool":"read_file","input":{"path":"README.md"}}`)
+	if toolAction.Final || toolAction.Tool != "read_file" {
+		t.Fatalf("tool action = %#v", toolAction)
+	}
+}
+
+func TestParseSubAgentActionPrioritizesToolRequestOverFinal(t *testing.T) {
+	input := `{"type":"final","content":"premature"}\n{"type":"tool_request","tool":"write_file_proposal","input":{"path":"feature.txt","content":"approved"}}`
+	action := parseSubAgentAction(input)
+	if action.Final || action.Tool != "write_file_proposal" || action.Input["path"] != "feature.txt" {
+		t.Fatalf("action = %#v", action)
 	}
 }

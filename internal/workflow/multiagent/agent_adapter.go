@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/validation"
 )
 
@@ -18,8 +19,14 @@ type AgentRoleRunner struct {
 	workspaces WorkspaceResolver
 	approvals  ApprovalChecker
 	validation ValidationRunner
+	proposals  ProposalResolver
+	events     EventSink
 	now        func() time.Time
 }
+
+// SetEventSink connects validation lifecycle events to the durable runtime's
+// canonical outbox. It is called during runtime composition.
+func (r *AgentRoleRunner) SetEventSink(sink EventSink) { r.events = sink }
 
 // AgentRoleRunnerOptions supplies the existing governance and workspace
 // authorities used by the adapter.
@@ -29,6 +36,7 @@ type AgentRoleRunnerOptions struct {
 	Workspaces WorkspaceResolver
 	Approvals  ApprovalChecker
 	Validation ValidationRunner
+	Proposals  ProposalResolver
 	Clock      func() time.Time
 }
 
@@ -53,6 +61,7 @@ func NewAgentRoleRunner(options AgentRoleRunnerOptions) (*AgentRoleRunner, error
 		workspaces: options.Workspaces,
 		approvals:  options.Approvals,
 		validation: options.Validation,
+		proposals:  options.Proposals,
 		now:        now,
 	}, nil
 }
@@ -108,7 +117,7 @@ func (r *AgentRoleRunner) RunRole(
 		executionContext, cancelExecution = context.WithTimeout(ctx, request.RoleConfig.TimeBudget)
 	}
 	defer cancelExecution()
-	execution, err := r.executor.ExecuteAgent(executionContext, AgentExecutionRequest{
+	executionRequest := AgentExecutionRequest{
 		RunID:                request.Run.RunID,
 		TaskID:               request.Run.Task.ID,
 		ExecutionKey:         request.Run.ExecutionKey,
@@ -122,36 +131,113 @@ func (r *AgentRoleRunner) RunRole(
 		MaxIterations:        request.RoleConfig.MaxLocalIterations,
 		MaxTokens:            request.RoleConfig.TokenBudget,
 		Deadline:             deadline(startedAt, request.RoleConfig.TimeBudget),
-	})
-	finishedAt := r.now().UTC()
+	}
+	execution, err := r.executor.ExecuteAgent(executionContext, executionRequest)
 	if err != nil {
 		return RoleRunResult{}, err
+	}
+	var proposals []ProposalReference
+	correctiveRetries := 0
+	if r.proposals != nil {
+		proposals, err = r.proposals.ResolveProposals(ctx, ProposalQuery{
+			RunID: request.Run.RunID, ExecutionKey: request.Run.ExecutionKey, AgentID: profile.ID,
+		})
+		if err != nil {
+			return RoleRunResult{}, fmt.Errorf("resolve execution proposals: %w", err)
+		}
+	}
+	if request.Run.CurrentRole == RoleDeveloper && r.proposals != nil && len(proposals) == 0 {
+		// A mutation-bearing developer may not complete with prose/structured
+		// output alone. Give the provider one bounded correction opportunity to
+		// create the proposal through the authorized tool boundary. The second
+		// turn receives the first turn's output and shares its deadline; its
+		// iteration and token ceilings are the remaining role budget.
+		if err := executionContext.Err(); err != nil {
+			return RoleRunResult{}, fmt.Errorf("proposal corrective turn: %w", err)
+		}
+		remainingIterations, ok := remainingLimit(request.RoleConfig.MaxLocalIterations, execution.LocalIterations)
+		if !ok {
+			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "developer exhausted local iteration budget without persisting a mutation proposal"}
+		}
+		if remainingIterations != Unlimited && remainingIterations < 2 {
+			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "developer lacks the two remaining iterations required for proposal tool result and final role JSON"}
+		}
+		remainingTokens, ok := remainingLimit(request.RoleConfig.TokenBudget, execution.Usage.TotalTokens)
+		if !ok {
+			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "developer exhausted token budget without persisting a mutation proposal"}
+		}
+		executionRequest.MaxIterations = remainingIterations
+		executionRequest.MaxTokens = remainingTokens
+		executionRequest.Prompt += fmt.Sprintf("\n\nCORRECTION: Your previous response did not persist a mutation proposal. Previous output follows:\n%s\n\nYour NEXT response must be ONLY one JSON tool_request for write_file_proposal. Do not include the developer role JSON in that response. After the tool result, return ONLY the required developer role JSON. This is your only corrective turn.", execution.Output)
+		correctiveRetries = 1
+		corrected, correctErr := r.executor.ExecuteAgent(executionContext, executionRequest)
+		if correctErr != nil {
+			return RoleRunResult{}, fmt.Errorf("proposal corrective turn: %w", correctErr)
+		}
+		execution.Usage.PromptTokens += corrected.Usage.PromptTokens
+		execution.Usage.CompletionTokens += corrected.Usage.CompletionTokens
+		execution.Usage.TotalTokens += corrected.Usage.TotalTokens
+		execution.Usage.EstimatedCostUsd += corrected.Usage.EstimatedCostUsd
+		execution.LocalIterations += corrected.LocalIterations
+		execution.ToolCalls += corrected.ToolCalls
+		execution.DeniedToolCalls += corrected.DeniedToolCalls
+		execution.Output = corrected.Output
+		execution.Artifacts = append(execution.Artifacts, corrected.Artifacts...)
+		proposals, err = r.proposals.ResolveProposals(ctx, ProposalQuery{
+			RunID: request.Run.RunID, ExecutionKey: request.Run.ExecutionKey, AgentID: profile.ID,
+		})
+		if err != nil {
+			return RoleRunResult{}, fmt.Errorf("resolve corrected execution proposals: %w", err)
+		}
+		if len(proposals) == 0 {
+			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "developer completed without persisting a mutation proposal after one corrective turn"}
+		}
 	}
 
-	decoded, err := decodeRoleOutput(request.Run.CurrentRole, execution.Output)
+	var decoded decodedRoleOutput
+	if request.Run.CurrentRole == RoleDeveloper && len(proposals) > 0 {
+		decoded, err = decodeDeveloperOutputForProposals(execution.Output, proposals)
+	} else {
+		decoded, err = decodeRoleOutput(request.Run.CurrentRole, execution.Output)
+	}
 	if err != nil {
 		return RoleRunResult{}, err
 	}
-	validationResults, validationStatus, err := r.runValidations(ctx, request)
-	if err != nil {
-		return RoleRunResult{}, err
+	finishedAt := r.now().UTC()
+	validationStatus := "not_required"
+	// A developer proposal has not changed the workspace yet. Validation must
+	// run after the durable approval/application transition, never against the
+	// pre-change worktree.
+	deferValidation := request.Run.CurrentRole == RoleDeveloper && len(proposals) > 0 && len(request.RoleConfig.ValidationProfiles) > 0
+	if deferValidation {
+		if r.validation == nil {
+			return RoleRunResult{}, &GovernanceError{Kind: "validation", Reason: "mutation-bearing developer requires workspace-aware post-apply validation"}
+		}
+		if _, ok := r.validation.(WorkspaceValidationRunner); !ok {
+			return RoleRunResult{}, &GovernanceError{Kind: "validation", Reason: "mutation-bearing developer requires a workspace-aware validation runner"}
+		}
+	}
+	if !deferValidation {
+		validationResults, status, validationErr := r.runValidations(ctx, request)
+		if validationErr != nil {
+			return RoleRunResult{}, validationErr
+		}
+		validationStatus = status
+		if decoded.Handoff != nil {
+			decoded.Handoff.ValidationResults = append([]validation.Result(nil), validationResults...)
+		}
+		if validationStatus == "failed" && request.Run.CurrentRole == RoleTester {
+			decoded.Outcome = OutcomeTestsFailed
+			if decoded.Handoff == nil {
+				return RoleRunResult{}, &StructuredOutputError{Role: RoleTester, Cause: errors.New("validation failure requires a tester handoff")}
+			}
+			decoded.Handoff.Reason = "allowlisted validation failed"
+		}
+	} else {
+		validationStatus = "deferred_until_applied"
 	}
 	if decoded.Handoff != nil {
 		decoded.Handoff.Artifacts = mergeArtifacts(decoded.Handoff.Artifacts, execution.Artifacts)
-		decoded.Handoff.ValidationResults = append(
-			[]validation.Result(nil),
-			validationResults...,
-		)
-	}
-	if validationStatus == "failed" && request.Run.CurrentRole == RoleTester {
-		decoded.Outcome = OutcomeTestsFailed
-		if decoded.Handoff == nil {
-			return RoleRunResult{}, &StructuredOutputError{
-				Role:  RoleTester,
-				Cause: errors.New("validation failure requires a tester handoff"),
-			}
-		}
-		decoded.Handoff.Reason = "allowlisted validation failed"
 	}
 
 	localIterations := execution.LocalIterations
@@ -163,6 +249,7 @@ func (r *AgentRoleRunner) RunRole(
 		OutgoingHandoff: decoded.Handoff,
 		TokenUsage:      execution.Usage,
 		LocalIterations: localIterations,
+		Retries:         correctiveRetries,
 		Metadata: ExecutionMetadata{
 			AgentRef:         profile.ID,
 			Provider:         profile.Provider,
@@ -176,7 +263,26 @@ func (r *AgentRoleRunner) RunRole(
 			StartedAt:        startedAt,
 			FinishedAt:       finishedAt,
 		},
+		Proposals: proposals,
 	}, nil
+}
+
+// ValidateApprovedRole validates a saved developer result after its exact
+// approved proposal is applied. It is intentionally separate from RunRole so
+// the durable runtime can checkpoint the pre-apply result before pausing.
+func (r *AgentRoleRunner) ValidateApprovedRole(ctx context.Context, request RoleRunRequest, result RoleRunResult) (RoleRunResult, error) {
+	if request.Run.CurrentRole != RoleDeveloper || len(result.Proposals) == 0 || len(request.RoleConfig.ValidationProfiles) == 0 {
+		return result, nil
+	}
+	validationResults, validationStatus, err := r.runValidations(ctx, request)
+	if result.OutgoingHandoff != nil {
+		result.OutgoingHandoff.ValidationResults = append([]validation.Result(nil), validationResults...)
+	}
+	result.Metadata.ValidationStatus = validationStatus
+	if err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 // Reflect runs the dedicated reflector role through the same profile,
@@ -256,7 +362,7 @@ func BuildRolePrompt(request RoleRunRequest) (string, error) {
 		return "", err
 	}
 
-	return fmt.Sprintf(
+	prompt := fmt.Sprintf(
 		"ROLE: %s\nTASK ID: %s\nTASK: %s\nVISIT: %d\nTRANSITIONS USED: %d\n"+
 			"INCOMING HANDOFF JSON: %s\nLATEST REFLECTION JSON: %s\n\n%s\n"+
 			"Return exactly one JSON object. Do not wrap it in Markdown and do not add prose.",
@@ -268,7 +374,11 @@ func BuildRolePrompt(request RoleRunRequest) (string, error) {
 		handoffJSON,
 		reflectionJSON,
 		schema,
-	), nil
+	)
+	if request.Run.CurrentRole == RoleDeveloper {
+		prompt += "\n\nDEVELOPER TOOL PROTOCOL: Before returning the developer role-schema JSON, emit exactly one separate JSON tool_request for write_file_proposal. Do not combine the tool request with the role-schema JSON. After Prizm returns the tool result, return only the developer role-schema JSON."
+	}
+	return prompt, nil
 }
 
 func BuildReflectionPrompt(request ReflectionRequest) (string, error) {
@@ -330,7 +440,18 @@ func (r *AgentRoleRunner) runValidations(
 	results := make([]validation.Result, 0, len(request.RoleConfig.ValidationProfiles))
 	status := "passed"
 	for _, profile := range request.RoleConfig.ValidationProfiles {
-		result, err := r.validation.RunValidation(ctx, profile, request.Run.RunID)
+		r.emitValidationEvent(event.EventValidationStarted, request, profile, "started", "")
+		var result *validation.Result
+		var err error
+		if workspaceRunner, ok := r.validation.(WorkspaceValidationRunner); ok {
+			workspace, resolveErr := r.workspaces.ResolveWorkspace(ctx, request.Run.RunID)
+			if resolveErr != nil {
+				return results, "failed", fmt.Errorf("resolve validation workspace: %w", resolveErr)
+			}
+			result, err = workspaceRunner.RunValidationInWorkspace(ctx, profile, request.Run.RunID, workspace)
+		} else {
+			result, err = r.validation.RunValidation(ctx, profile, request.Run.RunID)
+		}
 		if result != nil {
 			results = append(results, *result)
 			if result.Status != "passed" {
@@ -338,10 +459,16 @@ func (r *AgentRoleRunner) runValidations(
 			}
 		}
 		if err != nil && request.Run.CurrentRole != RoleTester {
+			r.emitValidationEvent(event.EventValidationFailed, request, profile, "failed", err.Error())
 			return results, "failed", fmt.Errorf("validation profile %q: %w", profile, err)
 		}
 		if err != nil {
 			status = "failed"
+			r.emitValidationEvent(event.EventValidationFailed, request, profile, "failed", err.Error())
+		} else if result != nil && result.Status != "passed" {
+			r.emitValidationEvent(event.EventValidationFailed, request, profile, result.Status, "validation result did not pass")
+		} else {
+			r.emitValidationEvent(event.EventValidationCompleted, request, profile, "passed", "")
 		}
 	}
 	if status == "failed" && request.Run.CurrentRole != RoleTester {
@@ -351,6 +478,18 @@ func (r *AgentRoleRunner) runValidations(
 		}
 	}
 	return results, status, nil
+}
+
+func (r *AgentRoleRunner) emitValidationEvent(typ string, request RoleRunRequest, profile, status, message string) {
+	if r.events == nil {
+		return
+	}
+	payload := map[string]any{"run_id": request.Run.RunID, "workflow_id": request.Run.WorkflowID,
+		"role": request.Run.CurrentRole, "profile": profile, "status": status}
+	if message != "" {
+		payload["error"] = message
+	}
+	r.events.Emit(event.NewEvent(typ, "prizm-multi-agent-validation", payload).WithCorrelationID(request.Run.RunID))
 }
 
 func requireCapabilities(profile AgentProfile, required []string) error {
@@ -376,14 +515,27 @@ func deadline(start time.Time, limit time.Duration) time.Time {
 	return start.Add(limit)
 }
 
+// remainingLimit derives the allocation for the one permitted corrective
+// provider turn. A correction never expands a configured role budget.
+func remainingLimit(limit Limit, used int) (Limit, bool) {
+	if limit == Unlimited {
+		return Unlimited, true
+	}
+	remaining := int(limit) - used
+	if remaining <= 0 {
+		return 0, false
+	}
+	return Limit(remaining), true
+}
+
 func roleSchemaInstruction(role Role) (string, error) {
 	switch role {
 	case RolePlanner:
-		return `JSON schema: {"schema_version":1,"understanding":"...","implementation_plan":["..."],"task_breakdown":["..."],"acceptance_criteria":["..."],"risks":["..."],"assumptions":["..."],"handoff":{"objective":"...","reason":"...","evidence":[],"unresolved_issues":[],"notes":"..."}}`, nil
+		return `JSON schema: {"schema_version":1,"understanding":"...","implementation_plan":["..."],"task_breakdown":["..."],"acceptance_criteria":["..."],"risks":["..."],"assumptions":["..."],"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"file","uri":"path"}],"unresolved_issues":[{"id":"issue-1","summary":"...","blocking":false}],"notes":"..."}}. Use [] when there is no evidence or unresolved issue.`, nil
 	case RoleDeveloper:
-		return `JSON schema: {"schema_version":1,"summary":"...","changed_artifacts":[{"kind":"file","uri":"..."}],"commands_executed":["..."],"known_limitations":["..."],"handoff":{"objective":"...","reason":"...","evidence":[],"unresolved_issues":[],"notes":"..."}}`, nil
+		return `JSON schema: {"schema_version":1,"summary":"...","commands_executed":["..."],"known_limitations":["..."],"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"file","uri":"path"}],"unresolved_issues":[{"id":"issue-1","summary":"...","blocking":false}],"notes":"..."}}. After a write proposal, omit changed_artifacts: Prizm derives that field from the persisted proposal. Use [] when there is no evidence or unresolved issue.`, nil
 	case RoleTester:
-		return `JSON schema: {"schema_version":1,"result":"passed|failed","tests_executed":[{"name":"...","status":"passed|failed|timeout|error","evidence":[]}],"failure_evidence":[],"reproduction":["..."],"handoff":{"objective":"...","reason":"...","evidence":[],"unresolved_issues":[],"notes":"..."}}`, nil
+		return `JSON schema: {"schema_version":1,"result":"passed|failed","tests_executed":[{"name":"...","status":"passed|failed|timeout|error","evidence":[{"kind":"validation","uri":"path"}]}],"failure_evidence":[],"reproduction":["..."],"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"validation","uri":"path"}],"unresolved_issues":[{"id":"issue-1","summary":"...","blocking":false}],"notes":"..."}}. You must execute at least one allowed validation and include it in the non-empty tests_executed array. If validation cannot run, report it as an error or timeout; never omit tests_executed. Use [] when there is no evidence or unresolved issue.`, nil
 	case RoleReviewer:
 		return `JSON schema: {"schema_version":1,"decision":"approved|changes_requested","findings":[{"severity":"info|low|medium|high|critical","summary":"...","evidence":[]}],"required_corrections":["..."],"evidence":[],"handoff":{"objective":"...","reason":"...","evidence":[],"unresolved_issues":[],"notes":"..."}}. Omit handoff when approved.`, nil
 	case RoleReflector:

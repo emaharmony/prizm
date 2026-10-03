@@ -117,6 +117,35 @@ func TestGeneratePrefersLastMessageAndModel(t *testing.T) {
 	}
 }
 
+func TestGenerateInRunScopeUsesExplicitReadOnlyWorkspace(t *testing.T) {
+	global := t.TempDir()
+	runWorkspace := t.TempDir()
+	fr := &fakeRunner{result: RunResult{Stdout: "scoped"}}
+	p := NewWithRunner(Config{Workspace: global, Sandbox: "workspace-write"}, fr)
+	if _, err := p.GenerateInRunScope(context.Background(), provider.GenerateRequest{Prompt: "bounded"}, provider.RunScope{Workspace: runWorkspace, ReadOnly: true}); err != nil {
+		t.Fatalf("GenerateInRunScope: %v", err)
+	}
+	if got := argVal(fr.gotArgs, "--cd"); got != runWorkspace || fr.gotCwd != runWorkspace {
+		t.Fatalf("workspace arg=%q cwd=%q, want run workspace %q", got, fr.gotCwd, runWorkspace)
+	}
+	if argVal(fr.gotArgs, "--sandbox") != "read-only" {
+		t.Fatalf("scoped sandbox=%q", argVal(fr.gotArgs, "--sandbox"))
+	}
+	if strings.Contains(strings.Join(fr.gotArgs, " "), global) {
+		t.Fatalf("scoped command fell back to global workspace: %v", fr.gotArgs)
+	}
+}
+
+func TestGenerateInRunScopeRejectsMutationOrMissingWorkspace(t *testing.T) {
+	p := NewWithRunner(Config{Workspace: t.TempDir(), Sandbox: "workspace-write"}, &fakeRunner{})
+	if _, err := p.GenerateInRunScope(context.Background(), provider.GenerateRequest{}, provider.RunScope{Workspace: t.TempDir(), ReadOnly: false}); err == nil {
+		t.Fatal("mutation-capable scoped Codex call was accepted")
+	}
+	if _, err := p.GenerateInRunScope(context.Background(), provider.GenerateRequest{}, provider.RunScope{Workspace: "", ReadOnly: true}); err == nil {
+		t.Fatal("missing scoped workspace was accepted")
+	}
+}
+
 func TestGenerateFallsBackWhenCodexDefaultIsTooNew(t *testing.T) {
 	fr := &fakeRunner{
 		results: []RunResult{

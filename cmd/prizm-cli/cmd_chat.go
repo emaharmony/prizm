@@ -1137,43 +1137,6 @@ func (cc *chatContext) runChatToolLoop(
 	return result.Content, result.Summaries, nil
 }
 
-// executeChatToolCLI executes a tool call and returns the result (CLI version).
-func (cc *chatContext) executeChatToolCLI(
-	ctx ctxcontext.Context,
-	tc provider.ToolCall,
-	agentCfg *orchestrator.AgentConfig,
-) (string, toolCallSummary) {
-	// tc.Function.Arguments is already map[string]any from the ChatProvider
-	input := tc.Function.Arguments
-
-	result, err := cc.toolExec.ExecuteWithPolicy(ctx, tc.Function.Name, agentCfg.ID, "prizm", "cli-chat", input)
-	if err != nil {
-		summary := toolCallSummary{
-			Tool:   tc.Function.Name,
-			Status: "error",
-			Error:  err.Error(),
-		}
-		return fmt.Sprintf("Error executing tool: %v", err), summary
-	}
-
-	if !result.Success {
-		summary := toolCallSummary{
-			Tool:   tc.Function.Name,
-			Status: "error",
-			Error:  result.Error,
-		}
-		return fmt.Sprintf("Tool error: %s", result.Error), summary
-	}
-
-	resultJSON, _ := json.Marshal(result.Output)
-	summary := toolCallSummary{
-		Tool:   tc.Function.Name,
-		Status: "success",
-		Result: string(resultJSON),
-	}
-	return string(resultJSON), summary
-}
-
 // runTextToolLoop is the CLI version of runToolLoop for text-based providers.
 func (cc *chatContext) runTextToolLoop(
 	parentCtx ctxcontext.Context,

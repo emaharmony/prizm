@@ -39,11 +39,14 @@ func (p Profile) Validate() error {
 
 // Result holds the outcome of a validation run.
 type Result struct {
-	Profile    string `json:"profile"`
-	Status     string `json:"status"` // "passed", "failed", "timeout", "error"
-	ExitCode   int    `json:"exit_code"`
-	DurationMs int64  `json:"duration_ms"`
-	StdoutPath string `json:"stdout_path,omitempty"`
-	StderrPath string `json:"stderr_path,omitempty"`
-	Error      string `json:"error,omitempty"`
+	Profile    string   `json:"profile"`
+	Status     string   `json:"status"` // "passed", "failed", "timeout", "error"
+	ExitCode   int      `json:"exit_code"`
+	DurationMs int64    `json:"duration_ms"`
+	StdoutPath string   `json:"stdout_path,omitempty"`
+	StderrPath string   `json:"stderr_path,omitempty"`
+	Error      string   `json:"error,omitempty"`
+	Command    string   `json:"command,omitempty"`
+	Args       []string `json:"args,omitempty"`
+	WorkingDir string   `json:"working_dir,omitempty"`
 }

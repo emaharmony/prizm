@@ -46,15 +46,6 @@ func findDiagnostic(diags Diagnostics, rule, nodeID, edgeID string) (Diagnostic,
 	return Diagnostic{}, false
 }
 
-func severityOf(diags Diagnostics, rule string) (DiagnosticSeverity, bool) {
-	for _, d := range diags {
-		if d.Rule == rule {
-			return d.Severity, true
-		}
-	}
-	return "", false
-}
-
 // node/edge construction shorthands used throughout this file.
 
 func roleNode(id string, outcomes ...string) SchemaNode {
