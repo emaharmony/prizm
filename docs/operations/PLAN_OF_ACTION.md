@@ -37,9 +37,9 @@ task/review reports.
 | --- | --- |
 | Active roadmap IDs | R1 (event contract and delegation); R2/R6 Recall work is parked. |
 | Reviewed baseline | `origin/staging` at `dca2156` includes merged R1 PR #84 and R2 PR #85; no 9/10 gate is met. |
-| Current state | R1 now has a canonical typed command/outcome envelope and a SQLite outbox with accept-once idempotency, leases, bounded retry, restart replay, deadline failure, and correlated reports. `workflow/v2` delegation commands and worker outcomes use this durable path. Outcomes are bound to the stored command, replayed until handed to the workflow, and carry stable delegation/delivery identity through accepted, progress, and one terminal result. The graph retains its atomic run/event outbox. |
+| Current state | R1 now has a canonical typed command/outcome envelope and a SQLite outbox with accept-once idempotency, leases, bounded retry, restart replay, deadline failure, and correlated reports. `workflow/v2` delegation commands and worker outcomes use this durable path. Outcomes are bound to the stored command, replayed until workflow state is persisted, and carry stable delegation/delivery identity through accepted, progress, and one terminal result. Paused v2 parents process and persist delegation facts without leaving their approval/review pause. The graph retains its separate atomic run/event outbox. |
 | PR handoff | Draft PR #86 on `codex/r6-memory-reconciliation` is parked without further Recall implementation, review, merge, or claims of live Recall reconciliation. |
-| Next implementation decision | Add deterministic parallel research/code/review fan-out/fan-in, then connect the canonical graph's parent delegation pause/resume to the same outcome intake. |
+| Next implementation decision | Define the canonical graph's child/delegation state contract, then connect a bounded delegation waiting checkpoint to this outcome intake before parallel research/code/review fan-out/fan-in. |
 | Evidence required before advancing | A real-provider task and an embedded-NATS failure matrix must prove one execution and one terminal outcome across duplicate delivery, worker loss, deadline, retry, and restart. Then prove parallel research/code/review fan-in with a complete event-derived report. R3 and R4 follow that R1 gate. |
 
 ## Update Format

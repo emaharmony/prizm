@@ -657,3 +657,34 @@ open.
 **Next action:** implement deterministic parallel research/code/review
 fan-out/fan-in and bind the graph parent wait/resume seam to canonical terminal
 delegation outcomes.
+
+## 2026-10-08 — R1 Outcome Acknowledgement Ordering
+
+**Roadmap IDs:** R1; R2/R6 parked
+**Branch/baseline:** `codex/r1-event-outbox` at `f521d03`
+
+- Moved durable outcome acknowledgement from the wake intake to the workflow
+  engine. `workflow/v2` now saves the run-specific and current state files after
+  applying an external event and only then marks its outcome consumed.
+- `WaitForResume` routes accepted, progress, and terminal delegation facts
+  through the same handler while a parent is paused, persists and acknowledges
+  them, and keeps waiting until an approval or review decision actually resumes
+  the parent.
+- Duplicate outcome event IDs are now content-addressed in practice: exact
+  redelivery is idempotent, while changed status, sequence, payload, or identity
+  under the same event ID fails closed.
+- Tests cover crash after wake enqueue but before acknowledgement, replay after
+  reopen, paused-parent delegation handling, persistence-before-acknowledgement,
+  and changed duplicate rejection.
+
+**Open risks:** this proves durable parent advancement for `workflow/v2`. The
+canonical multiagent graph has no child/delegation identity in its durable run
+schema and no delegation waiting checkpoint, so adding an outcome source alone
+would create an unowned partial authority path. Its graph-owned child state,
+waiting transition, checkpoint-before-dispatch, and checkpoint-before-ack
+contract remain a separate coherent R1 slice. Parallel fan-out/fan-in and the
+real-provider gate remain open.
+
+**Next action:** add the bounded canonical-graph delegation state and waiting
+checkpoint contract, adapt `event.Outcome` at the composition edge, and prove
+restart, mismatch, deadline, terminal transition, and acknowledgement ordering.
