@@ -48,12 +48,19 @@ type PendingTransition struct {
 
 // WaitingState records an external condition that pauses safe advancement.
 type WaitingState struct {
-	Kind        string    `json:"kind"`
-	Reason      string    `json:"reason"`
-	SafeToRetry bool      `json:"safe_to_retry"`
-	Since       time.Time `json:"since"`
-	ProposalID  string    `json:"proposal_id,omitempty"`
-	ApprovalID  string    `json:"approval_id,omitempty"`
+	Kind                string    `json:"kind"`
+	Reason              string    `json:"reason"`
+	SafeToRetry         bool      `json:"safe_to_retry"`
+	Since               time.Time `json:"since"`
+	ProposalID          string    `json:"proposal_id,omitempty"`
+	ApprovalID          string    `json:"approval_id,omitempty"`
+	ChildID             string    `json:"child_id,omitempty"`
+	DelegationID        string    `json:"delegation_id,omitempty"`
+	DeliveryKey         string    `json:"delivery_key,omitempty"`
+	CommandEventID      string    `json:"command_event_id,omitempty"`
+	CorrelationID       string    `json:"correlation_id,omitempty"`
+	LastOutcomeSequence int64     `json:"last_outcome_sequence,omitempty"`
+	StartedAt           time.Time `json:"started_at,omitempty"`
 }
 
 // ProposalDecision is the approval authority's decision for one exact
@@ -134,19 +141,20 @@ type PersistedFailure struct {
 
 // DurableRun is the atomic persistence envelope around canonical RunState.
 type DurableRun struct {
-	SchemaVersion             int                `json:"schema_version"`
-	Revision                  int64              `json:"revision"`
-	State                     RunState           `json:"state"`
-	Phase                     CheckpointPhase    `json:"phase"`
-	PendingTransition         *PendingTransition `json:"pending_transition,omitempty"`
-	ActiveExecutionKey        string             `json:"active_execution_key,omitempty"`
-	LastCompletedExecutionKey string             `json:"last_completed_execution_key,omitempty"`
-	Waiting                   *WaitingState      `json:"waiting,omitempty"`
-	ApprovedTask              *ApprovedTaskState `json:"approved_task,omitempty"`
-	ProposalResults           []ProposalProgress `json:"proposal_results,omitempty"`
-	Failure                   *PersistedFailure  `json:"failure,omitempty"`
-	Reflections               []ReflectionRecord `json:"reflections,omitempty"`
-	ReplanCount               int                `json:"replan_count,omitempty"`
+	SchemaVersion               int                `json:"schema_version"`
+	Revision                    int64              `json:"revision"`
+	State                       RunState           `json:"state"`
+	Phase                       CheckpointPhase    `json:"phase"`
+	PendingTransition           *PendingTransition `json:"pending_transition,omitempty"`
+	ActiveExecutionKey          string             `json:"active_execution_key,omitempty"`
+	LastCompletedExecutionKey   string             `json:"last_completed_execution_key,omitempty"`
+	Waiting                     *WaitingState      `json:"waiting,omitempty"`
+	ApprovedTask                *ApprovedTaskState `json:"approved_task,omitempty"`
+	ProposalResults             []ProposalProgress `json:"proposal_results,omitempty"`
+	Failure                     *PersistedFailure  `json:"failure,omitempty"`
+	Reflections                 []ReflectionRecord `json:"reflections,omitempty"`
+	ReplanCount                 int                `json:"replan_count,omitempty"`
+	PendingDelegationOutcomeAck string             `json:"pending_delegation_outcome_ack,omitempty"`
 }
 
 // Validate rejects corrupt, internally contradictory, or future state.
@@ -194,6 +202,13 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 		}
 		if r.Waiting != nil && r.Waiting.Kind == "proposal_approval" && r.ApprovedTask == nil {
 			problems = append(problems, "proposal approval wait requires approved_task state")
+		}
+		if r.Waiting != nil && r.Waiting.Kind == "delegation_outcome" {
+			if strings.TrimSpace(r.Waiting.ChildID) == "" || strings.TrimSpace(r.Waiting.DelegationID) == "" ||
+				strings.TrimSpace(r.Waiting.DeliveryKey) == "" || strings.TrimSpace(r.Waiting.CommandEventID) == "" ||
+				strings.TrimSpace(r.Waiting.CorrelationID) == "" || r.Waiting.StartedAt.IsZero() {
+				problems = append(problems, "delegation outcome wait requires exact child, delegation, delivery, command, correlation, and start identity")
+			}
 		}
 		if r.ApprovedTask != nil {
 			if r.ApprovedTask.Role != r.State.CurrentRole || len(r.ApprovedTask.Proposals) == 0 {
@@ -250,6 +265,28 @@ type DurableRunStore interface {
 // reconciliation.
 type EventPublisher interface {
 	Store(context.Context, event.Event) error
+}
+
+// DelegationDispatcher publishes one already-checkpointed graph delegation.
+// Implementations must make Dispatch idempotent by Command.IdempotencyKey.
+type DelegationDispatcher interface {
+	Dispatch(context.Context, string, event.Command) error
+}
+
+// DelegationOutcomeSource exposes durable, explicitly acknowledged outcomes.
+// The graph runtime acknowledges an outcome only after its state and events are
+// checkpointed. MarkOutcomeConsumed must be idempotent for an already-consumed
+// event because recovery may repeat the call after an interrupted checkpoint.
+type DelegationOutcomeSource interface {
+	PendingOutcomes(context.Context, string) ([]event.Outcome, error)
+	MarkOutcomeConsumed(context.Context, string) error
+}
+
+// DurableDelegationOptions enables graph-owned delegated role execution.
+type DurableDelegationOptions struct {
+	Subject    string
+	Dispatcher DelegationDispatcher
+	Outcomes   DelegationOutcomeSource
 }
 
 // ExecutionClaim is exclusive ownership of one run.

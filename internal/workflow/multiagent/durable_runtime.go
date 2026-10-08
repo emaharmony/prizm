@@ -29,6 +29,7 @@ type DurableRuntimeOptions struct {
 	Reflection  ReflectionRunner
 	Memory      ReflectionMemorySink
 	Proposals   ProposalLifecycle
+	Delegation  *DurableDelegationOptions
 }
 
 // DurableRuntime advances a run only through atomically persisted checkpoints.
@@ -43,6 +44,7 @@ type DurableRuntime struct {
 	reflection  ReflectionRunner
 	memory      ReflectionMemorySink
 	proposals   ProposalLifecycle
+	delegation  *DurableDelegationOptions
 }
 
 // NewDurableRuntime creates the Phase 1 persistence and recovery boundary
@@ -64,6 +66,10 @@ func NewDurableRuntime(
 	}
 	if publisher == nil {
 		return nil, errors.New("multiagent: canonical event publisher is required")
+	}
+	if options.Delegation != nil && (strings.TrimSpace(options.Delegation.Subject) == "" ||
+		options.Delegation.Dispatcher == nil || options.Delegation.Outcomes == nil) {
+		return nil, errors.New("multiagent: delegated role execution requires subject, dispatcher, and outcome source")
 	}
 	buffer := &durableEventBuffer{}
 	supervisor, err := NewSupervisor(
@@ -96,6 +102,7 @@ func NewDurableRuntime(
 		reflection:  options.Reflection,
 		memory:      options.Memory,
 		proposals:   options.Proposals,
+		delegation:  options.Delegation,
 	}, nil
 }
 
@@ -158,12 +165,27 @@ func (r *DurableRuntime) Resume(
 		r.publishRecoveryFailure(ctx, runID, err)
 		return record.State, &RecoveryFailedError{RunID: runID, Cause: err}
 	}
+	if record.PendingDelegationOutcomeAck != "" {
+		record, err = r.ackDelegationOutcome(ctx, record, record.PendingDelegationOutcomeAck)
+		if err != nil {
+			return record.State, err
+		}
+	}
 	if err := r.dispatchOutbox(ctx, runID); err != nil {
 		return record.State, err
 	}
 	if record.Phase == CheckpointTerminal {
 		r.publishRecoveryCompleted(ctx, record.State, "terminal run unchanged")
 		return record.State, nil
+	}
+	if record.Phase == CheckpointWaiting && record.Waiting != nil && record.Waiting.Kind == "delegation_outcome" {
+		record, err = r.resumeDelegation(ctx, record)
+		if err != nil {
+			return record.State, err
+		}
+		if record.Phase == CheckpointWaiting {
+			return record.State, waitingError(record)
+		}
 	}
 
 	// An operator pause is a special CheckpointWaiting exit: it was taken
@@ -511,6 +533,9 @@ func (r *DurableRuntime) executePreparedRole(
 	ctx context.Context,
 	record DurableRun,
 ) (DurableRun, error) {
+	if r.delegation != nil {
+		return r.dispatchDelegatedRole(ctx, record)
+	}
 	role := record.State.CurrentRole
 	roleConfig, _ := r.supervisor.graph.RoleConfig(role)
 	startedAt := r.now().UTC()
