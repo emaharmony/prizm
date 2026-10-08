@@ -7,19 +7,21 @@ items.
 > Prizm is source-available under an all-rights-reserved [license](../../LICENSE)
 > and is preview-stage. This plan does not change approval or policy requirements.
 
-## Current Focus: R2 Scoped Memory Contract
+## Current Focus: R1 Durable Event Outbox and Delegation Acknowledgements
 
-The next slice makes memory retrieval and capture safe for autonomous agents:
-every new operation carries an exact project and task scope, user context is
-opt-in, and Recall failure falls back to local durable memory without leakage.
+Recall and R6 reconciliation are intentionally parked for a later stage. The
+next slice consolidates graph and NATS action delivery behind one typed command
+intake and a durable SQLite outbox. It makes delegation acceptance, progress,
+deadlines, and terminal outcomes recoverable and inspectable without changing
+the compatibility `workflow/v2` path.
 
 | Order | Work | Done when |
 | --- | --- | --- |
-| 1 | Require exact project and task scope on new autonomous memory reads and writes. | Done for serve chat: model-supplied scope fields are cleared; prompt injection derives canonical workspace, run, session, agent, and owner scope, rejects Recall context packs that do not echo it, and falls back only through scoped local retrieval. |
-| 2 | Make capture idempotent and replacements explicit. | Done: delivery keys are namespaced by scope; conflicting content or metadata is rejected, while an explicit superseding replacement receives a distinct stable ID. |
-| 3 | Make Recall primary with safe local fallback. | Partial: scoped Recall requests and local fallback pass. Primary capture failure now persists a `sync_pending` event with an idempotent retry key; durable replay/reconciliation remains R6 work. |
-| 4 | Emit inspectable memory lifecycle facts. | Done: lifecycle event persistence is strict for scoped operations; event-store failure surfaces and an idempotent retry retains the original local record. |
-| 5 | Prove the memory score gate. | Done: deterministic seeded retrieval gate scores 10/10 with zero cross-scope leakage. |
+| 1 | Define one typed command and outcome contract. | Commands carry correlation, causation, idempotency key, deadline, run, and delegation identity; facts distinguish accepted, progress, succeeded, failed, timed out, and rejected outcomes. |
+| 2 | Persist delivery through a SQLite outbox. | A graph transition records its command and state atomically before publish; restart and duplicate delivery preserve one effect and one terminal outcome. |
+| 3 | Add delegation acknowledgements and deadline recovery. | A worker accepts or rejects explicitly, emits progress and one terminal result, and an expired or lost worker produces a correlated terminal failure. |
+| 4 | Preserve compatibility and compose one report. | `workflow/v2` remains supported; graph and NATS actions use the same intake, and an event-derived report explains each command's disposition. |
+| 5 | Prove deterministic delivery behavior. | Embedded NATS and fake-worker tests cover acceptance, duplicate delivery, restart, deadline expiry, lost worker, terminal failure, and correlation continuity. |
 
 ## Follow-on R1 Work
 
@@ -33,12 +35,12 @@ task/review reports.
 
 | Field | Current value |
 | --- | --- |
-| Active roadmap IDs | R2 (primary), with R6 integration dependency; R1 acceptance and event-outbox work remain open. |
-| Reviewed baseline | `origin/staging` at `a2a5622` includes merged R1 PR #84; no 9/10 gate is met. |
-| Current state | Autonomous prompt memory now uses a canonical workspace/run/session/agent/owner scope. Recall context packs that omit or mismatch that scope are skipped; scoped local search is the only fallback, with cache keys including the full scope. Capture conflicts fail closed unless they explicitly supersede the prior memory, and failed primary sync records an inspectable pending state without claiming reconciliation. Legacy APIs remain compatible outside the autonomous serve path. |
-| PR handoff | R2 work is on `codex/r2-scoped-memory`, based on `a2a5622` and ready for normal review against `staging`. Its scope is the R2 scoped-memory contract and deterministic isolation evidence; it does not claim R6 live reconciliation or full R2/R6 completion. |
-| Next implementation decision | Implement R6 durable local-to-Recall reconciliation with an idempotent delivery record, then run a live outage/recovery trace in an environment with a working Remembrance service and embedding provider. |
-| Evidence required before advancing | The seeded gate is 10/10 with no leakage. Still required: a live Recall outage/recovery trace and proof that deferred local captures reconcile once without duplicate remote writes. |
+| Active roadmap IDs | R1 (event contract and delegation); R2/R6 Recall work is parked. |
+| Reviewed baseline | `origin/staging` at `dca2156` includes merged R1 PR #84 and R2 PR #85; no 9/10 gate is met. |
+| Current state | R1 has durable approval → apply → verify → resume in isolated worktrees. Graph and NATS action delivery remain split, and delegated work lacks a unified durable acknowledgement, deadline, and terminal-outcome lifecycle. |
+| PR handoff | Draft PR #86 on `codex/r6-memory-reconciliation` is parked without further Recall implementation, review, merge, or claims of live Recall reconciliation. |
+| Next implementation decision | Implement the R1 typed event contract and SQLite outbox, then add delegation accepted/progress/terminal acknowledgements with idempotency, correlation, and deadlines. |
+| Evidence required before advancing | Embedded NATS and fake-worker scenarios prove atomic outbox recovery, duplicate-safe consumers, acknowledgements, progress, deadline/lost-worker terminal failures, and an event-derived report while `workflow/v2` compatibility remains green. Fan-out/fan-in follows this slice; R3 and R4 follow the R1 delegation gate. |
 
 ## Update Format
 

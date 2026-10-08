@@ -565,3 +565,28 @@ R6 follow-up work; the R2/R6 acceptance claims remain limited accordingly.
 **Next action:** publish the branch for review, then implement idempotent
 local-to-Recall reconciliation and perform the live outage/recovery trace when
 the required local services are available.
+
+## 2026-10-08 — R1 Event-Outbox Planning Handoff
+
+**Roadmap IDs:** R1; R2/R6 parked
+**Branch/baseline:** `codex/r1-event-outbox` from refreshed `origin/staging`
+`dca2156`
+
+- Parked draft PR #86 and `codex/r6-memory-reconciliation` without further
+  Recall implementation, review, merge, or a claim of live Recall recovery.
+- Reprioritized the next implementation slice to the roadmap's R1 event
+  contract: one typed command intake and durable SQLite outbox shared by graph
+  and NATS action delivery.
+- Defined the required delegation lifecycle evidence: correlated idempotency
+  keys, explicit accepted/progress/terminal acknowledgements, deadlines, and
+  terminal failure for lost workers, while preserving `workflow/v2`.
+- The slice is planned only. No event-outbox, delegation, or Recall code has
+  been implemented or tested in this session.
+
+**Open risks:** graph and NATS actions still have split delivery paths;
+delegation remains short of durable acknowledgement and recovery. Parallel
+fan-out/fan-in and R3/R4 remain dependent on this foundation.
+
+**Next action:** implement the typed event contract and SQLite outbox, with
+embedded NATS and fake-worker tests for duplicate delivery, restart, deadline,
+lost-worker, and terminal-report behavior.
