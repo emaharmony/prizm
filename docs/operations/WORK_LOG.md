@@ -7,6 +7,38 @@ the next contributor.
 > Prizm is source-available under an all-rights-reserved [license](../../LICENSE)
 > and is preview-stage.
 
+## 2026-10-08 — R6 Durable Reconciliation Contract
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r6-memory-reconciliation`, based on merged staging `dca2156`
+
+- Added an `internal/memory` reconciliation consumer that startup-scans durable
+  `sync_pending` facts and receives notifications when new pending captures are
+  persisted. It reconstructs and revalidates the trusted scope against the
+  local record, uses bounded retry/backoff, and records retry or terminal facts
+  in the existing SQLite event store.
+- Terminal sync and failure facts use stable IDs derived from the sync key, so
+  duplicate consumers cannot duplicate the local terminal evidence. A remote
+  success followed by a process failure before local confirmation is safely
+  replayed only through the explicit idempotent-primary contract.
+- Serve now starts the consumer, exposes pending/error state through health,
+  and cancels it before closing its event store. Deterministic coverage proves
+  restart recovery, outage/recovery, concurrent workers, crash recovery,
+  scope mismatch rejection, two-project isolation, unsupported primary failure,
+  and retry exhaustion.
+- Inspected the current Remembrance capture API: `source_ref` is persisted but
+  has no idempotency key, lookup, uniqueness constraint, or atomic dedupe.
+  The Remembrance adapter therefore does not opt into replay; Prizm fails
+  closed instead of risking duplicate remote writes. `localhost:18790` was not
+  available for a bounded live trace.
+
+**Open risks:** R6 cannot complete a live local-to-Recall reconciliation until
+Recall exposes an atomic idempotency-key contract returning the original remote
+identifier. R1's durable event outbox and delegation gates remain open.
+
+**Next action:** add and verify Recall's idempotent ingest contract, implement
+the adapter capability, then run a live outage/recovery trace.
+
 ## 2026-10-02 — R2 Scope Isolation and Serve Wiring
 
 **Roadmap IDs:** R2, R6

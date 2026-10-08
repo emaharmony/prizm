@@ -604,6 +604,8 @@ func executeServe(args []string) {
 	// V79: Smart memory injector — query planner + search + recent modes
 	var memInjector *MemoryInjector
 	var scopedMemory *memory.Facade
+	var memoryReconciler *memory.Reconciler
+	var memoryReconcilerDone chan struct{}
 	if memoryStore != nil {
 		memoryEventStore, eventErr := event.NewSQLiteEventStore(filepath.Join(cfg.Prizm.DataDir, "memory-events.db"))
 		if eventErr != nil {
@@ -615,6 +617,14 @@ func executeServe(args []string) {
 				primary = remembrance.ScopedMemoryBackend{Client: remClient}
 			}
 			scopedMemory = &memory.Facade{Local: memoryStore, Primary: primary, Events: memoryEventStore, Source: "prizm:serve"}
+			memoryReconciler = memory.NewReconciler(memoryStore, primary, memoryEventStore, "prizm:serve")
+			scopedMemory.Reconciler = memoryReconciler
+			memoryReconcilerDone = make(chan struct{})
+			go func() {
+				memoryReconciler.Run(ctx)
+				close(memoryReconcilerDone)
+			}()
+			log.Printf("[MEMORY] reconciliation consumer started")
 		}
 	}
 	if memoryStore != nil {
@@ -1345,7 +1355,7 @@ func executeServe(args []string) {
 	}
 
 	// 11. Start health check server
-	go startHealthServer(servePort, cfg, agentReg, sessMgr, discordBots)
+	go startHealthServer(servePort, cfg, agentReg, sessMgr, discordBots, memoryReconciler)
 	fmt.Printf("  Health: http://%s:%d/health\n", displayHost, servePort)
 
 	if cfg.FactoryMonitor.Enabled {
@@ -1472,6 +1482,14 @@ func executeServe(args []string) {
 	<-sigCh
 
 	fmt.Println("\n🛑 Shutting down Prizm...")
+	cancel()
+	if memoryReconcilerDone != nil {
+		select {
+		case <-memoryReconcilerDone:
+		case <-time.After(5 * time.Second):
+			log.Printf("[MEMORY] reconciliation consumer did not stop before shutdown deadline")
+		}
+	}
 
 	// V78: Graceful teardown — unsubscribe NATS, stop reviewers, stop bots, cleanup
 	for _, sub := range infraSubs {
@@ -2935,7 +2953,7 @@ func providerModelIDs(reg *provider.ProviderRegistry) []string {
 }
 
 // startHealthServer starts a simple HTTP server for health checks.
-func startHealthServer(port int, cfg *orchestrator.Config, agentReg *agent.Registry, sessMgr *session.Manager, discordBots []*discordbot.BotAdapter) {
+func startHealthServer(port int, cfg *orchestrator.Config, agentReg *agent.Registry, sessMgr *session.Manager, discordBots []*discordbot.BotAdapter, memoryReconciler *memory.Reconciler) {
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		discordReady := false
@@ -2945,7 +2963,14 @@ func startHealthServer(port int, cfg *orchestrator.Config, agentReg *agent.Regis
 				break
 			}
 		}
-		fmt.Fprintf(w, `{"status":"ok","agents":%d,"discord_ready":%v}`, len(cfg.Agents), discordReady)
+		memoryPending := 0
+		memoryError := ""
+		if memoryReconciler != nil {
+			status := memoryReconciler.Status()
+			memoryPending = status.Pending
+			memoryError = status.LastErr
+		}
+		fmt.Fprintf(w, `{"status":"ok","agents":%d,"discord_ready":%v,"memory_sync_pending":%d,"memory_sync_error":%q}`, len(cfg.Agents), discordReady, memoryPending, memoryError)
 	})
 
 	if err := http.ListenAndServe(cfg.BindAddr(port), nil); err != nil {

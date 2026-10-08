@@ -70,14 +70,23 @@ type PrimaryBackend interface {
 	Search(context.Context, SearchRequest) ([]Memory, error)
 }
 
+// IdempotentPrimaryBackend proves that a capture can be retried with the same
+// delivery key without creating another primary record. Reconciliation only
+// uses this narrower contract: source_ref alone is not an idempotency promise.
+type IdempotentPrimaryBackend interface {
+	PrimaryBackend
+	CaptureIdempotent(context.Context, Memory, string) (string, error)
+}
+
 // Facade composes the primary memory backend with local durable fallback.
 // The local store remains the recovery source while the primary backend is
 // unavailable or returns incomplete results.
 type Facade struct {
-	Local   MemoryStore
-	Primary PrimaryBackend
-	Events  event.EventStore
-	Source  string
+	Local      MemoryStore
+	Primary    PrimaryBackend
+	Events     event.EventStore
+	Source     string
+	Reconciler *Reconciler
 }
 
 const (
@@ -89,6 +98,8 @@ const (
 	EventScopedCaptureSyncPending = "prizm.memory.capture.sync_pending"
 	EventScopedCaptureSynced      = "prizm.memory.capture.synced"
 	EventScopedCaptureFallback    = "prizm.memory.capture.fallback"
+	EventScopedCaptureSyncRetry   = "prizm.memory.capture.sync_retry"
+	EventScopedCaptureSyncFailed  = "prizm.memory.capture.sync_failed"
 	EventScopedSuperseded         = "prizm.memory.superseded"
 	EventScopedSearchRequested    = "prizm.memory.search.requested"
 	EventScopedSearchCompleted    = "prizm.memory.search.completed"
@@ -191,6 +202,7 @@ func (f *Facade) syncPrimary(ctx context.Context, scope Scope, mem Memory) (Memo
 		if err := f.emit(ctx, scope, EventScopedCaptureSyncPending, map[string]any{"memory_id": mem.ID, "sync_key": mem.ID, "reason": "primary_not_configured"}); err != nil {
 			return Memory{}, true, err
 		}
+		f.notifyReconciler()
 		return mem, false, nil
 	}
 	remoteID, err := f.Primary.Capture(ctx, mem)
@@ -201,12 +213,19 @@ func (f *Facade) syncPrimary(ctx context.Context, scope Scope, mem Memory) (Memo
 		if eventErr := f.emit(ctx, scope, EventScopedCaptureFallback, map[string]any{"memory_id": mem.ID, "reason": "primary_unavailable"}); eventErr != nil {
 			return Memory{}, true, eventErr
 		}
+		f.notifyReconciler()
 		return mem, true, nil
 	}
 	if err := f.emit(ctx, scope, EventScopedCaptureSynced, map[string]any{"memory_id": mem.ID, "primary_id": remoteID, "sync_key": mem.ID}); err != nil {
 		return Memory{}, false, err
 	}
 	return mem, false, nil
+}
+
+func (f *Facade) notifyReconciler() {
+	if f.Reconciler != nil {
+		f.Reconciler.Notify()
+	}
 }
 
 func (f *Facade) Search(ctx context.Context, req SearchRequest) ([]Memory, bool, error) {
