@@ -195,25 +195,37 @@ func (f *Facade) Capture(ctx context.Context, req CaptureRequest) (Memory, bool,
 	return f.syncPrimary(ctx, req.Scope, mem)
 }
 
-// syncPrimary records a durable pending fact before returning local fallback.
-// It intentionally has no replay worker: durable reconciliation belongs to R6.
+// syncPrimary records a durable pending fact before attempting remote delivery.
+// The same idempotent primary contract is required for the initial delivery and
+// reconciliation: after a crash between remote success and local confirmation,
+// replaying the stable sync key must not create a second primary record.
 func (f *Facade) syncPrimary(ctx context.Context, scope Scope, mem Memory) (Memory, bool, error) {
+	primary, idempotent := f.Primary.(IdempotentPrimaryBackend)
+	reason := "primary_delivery_pending"
 	if f.Primary == nil {
-		if err := f.emit(ctx, scope, EventScopedCaptureSyncPending, map[string]any{"memory_id": mem.ID, "sync_key": mem.ID, "reason": "primary_not_configured"}); err != nil {
-			return Memory{}, true, err
-		}
-		f.notifyReconciler()
+		reason = "primary_not_configured"
+	} else if !idempotent {
+		reason = "primary_not_idempotent"
+	}
+	if err := f.emit(ctx, scope, EventScopedCaptureSyncPending, map[string]any{"memory_id": mem.ID, "sync_key": mem.ID, "reason": reason}); err != nil {
+		return Memory{}, true, err
+	}
+	f.notifyReconciler()
+	if f.Primary == nil {
+		// Preserve the local-only contract while retaining intent for a later
+		// process configured with an eligible primary backend.
 		return mem, false, nil
 	}
-	remoteID, err := f.Primary.Capture(ctx, mem)
+	if !idempotent {
+		// A future configured idempotent backend can safely drain this intent.
+		// Do not perform an unprovable remote write in the meantime.
+		return mem, true, nil
+	}
+	remoteID, err := primary.CaptureIdempotent(ctx, mem, mem.ID)
 	if err != nil {
-		if eventErr := f.emit(ctx, scope, EventScopedCaptureSyncPending, map[string]any{"memory_id": mem.ID, "sync_key": mem.ID, "reason": "primary_unavailable"}); eventErr != nil {
-			return Memory{}, true, eventErr
-		}
 		if eventErr := f.emit(ctx, scope, EventScopedCaptureFallback, map[string]any{"memory_id": mem.ID, "reason": "primary_unavailable"}); eventErr != nil {
 			return Memory{}, true, eventErr
 		}
-		f.notifyReconciler()
 		return mem, true, nil
 	}
 	if err := f.emit(ctx, scope, EventScopedCaptureSynced, map[string]any{"memory_id": mem.ID, "primary_id": remoteID, "sync_key": mem.ID}); err != nil {

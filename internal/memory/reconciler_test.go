@@ -121,6 +121,28 @@ func TestReconcilerRetriesRemoteSuccessAfterLocalSyncWriteFailure(t *testing.T) 
 	}
 }
 
+func TestCaptureReplaysRemoteSuccessAfterSyncedEventWriteFailure(t *testing.T) {
+	local := tempStore(t)
+	base := newReconcileStore(t)
+	primary := &idempotentPrimary{deliveries: map[string]string{}}
+	flaky := &syncWriteFailureStore{EventStore: base, failSync: true}
+	f := &Facade{Local: local, Primary: primary, Events: flaky, Source: "test"}
+	_, _, err := f.Capture(context.Background(), CaptureRequest{Scope: scopedTestScope(), CaptureKey: "initial-sync-crash", Content: "replay exact key"})
+	if err == nil {
+		t.Fatal("expected local synced event write failure")
+	}
+	if primary.remoteCalls != 1 {
+		t.Fatalf("initial remote deliveries = %d", primary.remoteCalls)
+	}
+	NewReconciler(local, primary, base, "test").RunOnce(context.Background())
+	if got := primary.remoteCalls; got != 1 {
+		t.Fatalf("replay duplicated remote delivery: %d", got)
+	}
+	if got := len(syncEvents(t, base, EventScopedCaptureSynced)); got != 1 {
+		t.Fatalf("synced events = %d", got)
+	}
+}
+
 func TestReconcilerFailsClosedForScopeMismatchAndNonIdempotentPrimary(t *testing.T) {
 	local := tempStore(t)
 	events := newReconcileStore(t)
@@ -140,16 +162,59 @@ func TestReconcilerFailsClosedForScopeMismatchAndNonIdempotentPrimary(t *testing
 	}
 }
 
-func TestReconcilerFailsClosedWhenPrimaryCannotProveIdempotency(t *testing.T) {
+func TestReconcilerKeepsPendingWhenPrimaryCannotProveIdempotency(t *testing.T) {
 	local := tempStore(t)
 	events := newReconcileStore(t)
 	primary := &scopedPrimary{err: errors.New("offline")}
 	createPendingCapture(t, local, events, primary, scopedTestScope())
 	primary.err = nil
-	NewReconciler(local, primary, events, "test").RunOnce(context.Background())
-	failed := syncEvents(t, events, EventScopedCaptureSyncFailed)
-	if len(failed) != 1 || failed[0].Payload["reason"] != "primary_not_idempotent" {
-		t.Fatalf("failed=%#v", failed)
+	r := NewReconciler(local, primary, events, "test")
+	r.RunOnce(context.Background())
+	if failed := syncEvents(t, events, EventScopedCaptureSyncFailed); len(failed) != 0 {
+		t.Fatalf("pending delivery was dead-lettered: %#v", failed)
+	}
+	if status := r.Status(); status.Pending != 1 || status.LastErr == "" {
+		t.Fatalf("status = %#v, want one pending capture and availability error", status)
+	}
+}
+
+func TestReconcilerKeepsPendingWhenPrimaryIsUnconfiguredAtStartup(t *testing.T) {
+	local := tempStore(t)
+	events := newReconcileStore(t)
+	f := &Facade{Local: local, Events: events, Source: "serve"}
+	if _, fallback, err := f.Capture(context.Background(), CaptureRequest{Scope: scopedTestScope(), CaptureKey: "serve-startup", Content: "wait for configured primary"}); err != nil || fallback {
+		t.Fatalf("local-only capture = fallback=%v err=%v", fallback, err)
+	}
+	r := NewReconciler(local, nil, events, "serve")
+	r.RunOnce(context.Background())
+	if failed := syncEvents(t, events, EventScopedCaptureSyncFailed); len(failed) != 0 {
+		t.Fatalf("unconfigured startup dead-lettered valid memory: %#v", failed)
+	}
+	if status := r.Status(); status.Pending != 1 || status.LastErr == "" {
+		t.Fatalf("status = %#v, want one retained pending capture", status)
+	}
+}
+
+func TestReconcilerStatusCountsOnlyUnresolvedPendingFacts(t *testing.T) {
+	local := tempStore(t)
+	events := newReconcileStore(t)
+	scope := scopedTestScope()
+	mem := Memory{ID: "already-synced", Content: "durable", ProjectID: scope.ProjectID, TaskID: scope.TaskID, UserID: scope.UserID}
+	if _, err := local.Store(context.Background(), mem); err != nil {
+		t.Fatal(err)
+	}
+	pending := event.NewEvent(EventScopedCaptureSyncPending, "test", map[string]any{"memory_id": mem.ID, "sync_key": mem.ID, "project_id": scope.ProjectID, "task_id": scope.TaskID, "user_id": scope.UserID}).WithCorrelationID(scope.CorrelationID)
+	synced := event.NewEvent(EventScopedCaptureSynced, "test", map[string]any{"memory_id": mem.ID, "sync_key": mem.ID, "project_id": scope.ProjectID, "task_id": scope.TaskID, "user_id": scope.UserID}).WithCorrelationID(scope.CorrelationID)
+	if err := events.Store(context.Background(), pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := events.Store(context.Background(), synced); err != nil {
+		t.Fatal(err)
+	}
+	r := NewReconciler(local, nil, events, "test")
+	r.RunOnce(context.Background())
+	if status := r.Status(); status.Pending != 0 {
+		t.Fatalf("status pending = %d, want 0 after terminal sync", status.Pending)
 	}
 }
 
@@ -194,6 +259,17 @@ func TestReconcilerRecordsRetryThenTerminalFailure(t *testing.T) {
 	failed := syncEvents(t, events, EventScopedCaptureSyncFailed)
 	if len(failed) != 1 || failed[0].Payload["reason"] != "retry_exhausted" {
 		t.Fatalf("terminal failure=%#v", failed)
+	}
+}
+
+func TestReconcileFactsTreatsLaterPendingAsNewUnresolvedDelivery(t *testing.T) {
+	scope := scopedTestScope()
+	pending := event.NewEvent(EventScopedCaptureSyncPending, "test", map[string]any{"memory_id": "mem-1", "sync_key": "key-1", "project_id": scope.ProjectID, "task_id": scope.TaskID, "user_id": scope.UserID}).WithCorrelationID(scope.CorrelationID)
+	synced := event.NewEvent(EventScopedCaptureSynced, "test", map[string]any{"memory_id": "mem-1", "sync_key": "key-1", "project_id": scope.ProjectID, "task_id": scope.TaskID, "user_id": scope.UserID}).WithCorrelationID(scope.CorrelationID)
+	repending := event.NewEvent(EventScopedCaptureSyncPending, "test", map[string]any{"memory_id": "mem-1", "sync_key": "key-1", "project_id": scope.ProjectID, "task_id": scope.TaskID, "user_id": scope.UserID}).WithCorrelationID(scope.CorrelationID)
+	unresolved, terminal, _ := reconcileFacts([]event.Event{pending, synced, repending})
+	if len(unresolved) != 1 || terminal["key-1"] {
+		t.Fatalf("unresolved=%#v terminal=%#v", unresolved, terminal)
 	}
 }
 

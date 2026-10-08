@@ -597,3 +597,17 @@ R6 follow-up work; the R2/R6 acceptance claims remain limited accordingly.
 **Next action:** publish the branch for review, then implement idempotent
 local-to-Recall reconciliation and perform the live outage/recovery trace when
 the required local services are available.
+
+## 2026-10-08 — R6 Durable Pending-Intent Hardening
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r6-memory-reconciliation` at `b80d96a`
+
+- Moved `sync_pending` persistence ahead of every primary-memory delivery. Initial delivery now uses the same `IdempotentPrimaryBackend` contract and stable sync key as replay, so a crash or synced-event failure after remote success replays without creating another remote record.
+- Changed reconciliation health to count only unresolved pending facts. A terminal synced or failed fact no longer leaves health reporting stale pending work, while a later pending event correctly opens a new delivery attempt.
+- Kept valid local captures pending when the primary is absent or cannot prove idempotency at serve startup. The reconciler records the availability issue but does not dead-letter memory that a later eligible backend can deliver.
+- Added deterministic coverage for pending-event failure before remote delivery, crash after remote success before synced evidence, absent-primary startup retention, non-idempotent primary retention, and terminal-aware health accounting. `go test ./internal/memory -count=1` passed.
+
+**Open risks:** The existing Recall integration still lacks an atomic idempotency-key operation. Live Recall outage/recovery and process-level startup verification remain unproven until Recall exposes that capability.
+
+**Next action:** run the full validation suite, then add the committed R6 hardening to the review branch; implement the Recall idempotency-key contract when the external API is available.

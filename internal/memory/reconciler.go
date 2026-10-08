@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"sync"
 	"time"
 
@@ -84,17 +85,30 @@ func (r *Reconciler) RunOnce(ctx context.Context) {
 		r.record(0, err)
 		return
 	}
-	pending, terminal, retries := reconcileFacts(all)
+	pending, _, retries := reconcileFacts(all)
+	var runErr error
 	for _, fact := range pending {
-		if terminal[fact.syncKey] {
-			continue
-		}
 		if !r.readyForRetry(fact, retries[fact.syncKey]) {
 			continue
 		}
-		r.reconcileOne(ctx, fact, retries[fact.syncKey])
+		if err := r.reconcileOne(ctx, fact, retries[fact.syncKey]); err != nil && runErr == nil {
+			runErr = err
+		}
 	}
-	r.record(len(pending), nil)
+	// Refresh after delivery because this pass may have appended terminal facts.
+	// Pending is the number of unresolved durable intents, not the raw number
+	// of historical pending events.
+	remaining := len(pending)
+	refreshed, refreshErr := r.Events.Query(ctx, event.EventFilter{Type: "prizm.memory.capture.", Limit: 10000})
+	if refreshErr != nil {
+		if runErr == nil {
+			runErr = refreshErr
+		}
+	} else {
+		unresolved, _, _ := reconcileFacts(refreshed)
+		remaining = len(unresolved)
+	}
+	r.record(remaining, runErr)
 }
 
 type pendingCapture struct {
@@ -119,8 +133,12 @@ func reconcileFacts(events []event.Event) ([]pendingCapture, map[string]bool, ma
 		}
 		switch e.Type {
 		case EventScopedCaptureSyncPending:
+			// A later pending fact begins a new delivery attempt for the same
+			// durable memory. It must not be hidden by an older terminal fact.
+			delete(terminal, syncKey)
 			pendingByKey[syncKey] = pendingCapture{memoryID: memoryID, syncKey: syncKey, scope: scopeFromEvent(e), event: e}
 		case EventScopedCaptureSynced, EventScopedCaptureSyncFailed:
+			delete(pendingByKey, syncKey)
 			terminal[syncKey] = true
 		case EventScopedCaptureSyncRetry:
 			retries[syncKey] = append(retries[syncKey], e)
@@ -140,32 +158,35 @@ func scopeFromEvent(e event.Event) Scope {
 	return Scope{UserID: userID, IncludeUserScope: userID != "", ProjectID: projectID, TaskID: taskID, SessionID: e.Metadata.SessionID, AgentID: e.Metadata.Agent, CorrelationID: e.CorrelationID}
 }
 
-func (r *Reconciler) reconcileOne(ctx context.Context, fact pendingCapture, retries []event.Event) {
+func (r *Reconciler) reconcileOne(ctx context.Context, fact pendingCapture, retries []event.Event) error {
 	mem, err := r.Local.Get(ctx, fact.memoryID)
 	if err != nil || mem == nil {
 		r.terminal(ctx, fact, "local_memory_missing")
-		return
+		return nil
 	}
 	if err := fact.scope.Validate(); err != nil || !scopeMatches(*mem, fact.scope) {
 		r.terminal(ctx, fact, "scope_mismatch")
-		return
+		return nil
 	}
 	primary, ok := r.Primary.(IdempotentPrimaryBackend)
 	if !ok {
-		r.terminal(ctx, fact, "primary_not_idempotent")
-		return
+		// Configuration and availability can change after startup. Retain the
+		// durable intent until an eligible backend is present rather than
+		// dead-lettering an otherwise valid local memory record.
+		return fmt.Errorf("memory primary is not configured for idempotent delivery")
 	}
 	primaryID, err := primary.CaptureIdempotent(ctx, *mem, fact.syncKey)
 	if err != nil {
 		attempt := len(retries) + 1
 		if attempt >= r.maxAttempts() {
 			r.terminal(ctx, fact, "retry_exhausted")
-			return
+			return nil
 		}
 		r.retry(ctx, fact, attempt, err)
-		return
+		return err
 	}
 	r.synced(ctx, fact, primaryID)
+	return nil
 }
 
 func (r *Reconciler) readyForRetry(fact pendingCapture, retries []event.Event) bool {
