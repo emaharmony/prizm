@@ -590,3 +590,36 @@ fan-out/fan-in and R3/R4 remain dependent on this foundation.
 **Next action:** implement the typed event contract and SQLite outbox, with
 embedded NATS and fake-worker tests for duplicate delivery, restart, deadline,
 lost-worker, and terminal-report behavior.
+
+## 2026-10-08 — R1 Durable Event-Outbox Vertical Slice
+
+**Roadmap IDs:** R1; R2/R6 parked
+**Branch/baseline:** `codex/r1-event-outbox` from `origin/staging` `dca2156`
+
+- Added the canonical typed command and outcome envelope in the event domain,
+  including run/task/delegation, correlation/causation, idempotency, deadline,
+  schema, and payload identity.
+- Added a SQLite outbox with accept-once conflict detection, atomic claim and
+  lease, bounded retry, terminal failure, expired-claim replay, deadline
+  enforcement, one terminal outcome per delivery, and correlated reports.
+- Routed `workflow/v2` delegation commands through the outbox in the serve wake
+  path, including startup replay. The legacy TaskPacket remains the NATS wire
+  payload. The canonical graph continues to use its existing atomic run/event
+  outbox, so compatibility paths remain green.
+- Added delegation and per-attempt delivery IDs, explicit accepted/progress
+  transitions, retry identity, and rejection of late completion from an older
+  attempt. Embedded-NATS tests prove the durable path preserves the legacy wire
+  contract; deterministic tests cover publish failure, restart replay,
+  duplicate intake, leases, retry bounds, deadline failure, terminal outcome,
+  stale retry rejection, and correlated reporting.
+- Verified `go build ./...`, `go vet ./...`, `staticcheck ./...`, `go test ./...
+  -count=1`, and `git diff --check`.
+
+**Open risks:** worker outcome intake is not yet composed end to end with the
+outbox report, and graph parent pause/resume has not yet been driven by these
+accepted/terminal outcome facts. Parallel fan-out/fan-in and the real-provider
+R1 score gate remain open.
+
+**Next action:** compose durable worker outcome intake and parent resume, then
+prove duplicate delivery, worker loss, retry, restart, and parallel fan-in with
+one terminal event-derived report.

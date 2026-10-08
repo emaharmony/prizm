@@ -37,10 +37,10 @@ task/review reports.
 | --- | --- |
 | Active roadmap IDs | R1 (event contract and delegation); R2/R6 Recall work is parked. |
 | Reviewed baseline | `origin/staging` at `dca2156` includes merged R1 PR #84 and R2 PR #85; no 9/10 gate is met. |
-| Current state | R1 has durable approval → apply → verify → resume in isolated worktrees. Graph and NATS action delivery remain split, and delegated work lacks a unified durable acknowledgement, deadline, and terminal-outcome lifecycle. |
+| Current state | R1 now has a canonical typed command/outcome envelope and a SQLite outbox with accept-once idempotency, leases, bounded retry, restart replay, deadline failure, and correlated reports. The canonical graph retains its atomic run/event outbox; `workflow/v2` delegation commands use the shared outbox at the wake-handler composition root while preserving the existing TaskPacket wire shape. Delegations carry stable IDs and per-attempt delivery keys, accept progress acknowledgements, and reject stale retry completions. |
 | PR handoff | Draft PR #86 on `codex/r6-memory-reconciliation` is parked without further Recall implementation, review, merge, or claims of live Recall reconciliation. |
-| Next implementation decision | Implement the R1 typed event contract and SQLite outbox, then add delegation accepted/progress/terminal acknowledgements with idempotency, correlation, and deadlines. |
-| Evidence required before advancing | Embedded NATS and fake-worker scenarios prove atomic outbox recovery, duplicate-safe consumers, acknowledgements, progress, deadline/lost-worker terminal failures, and an event-derived report while `workflow/v2` compatibility remains green. Fan-out/fan-in follows this slice; R3 and R4 follow the R1 delegation gate. |
+| Next implementation decision | Complete the consumer side: persist accepted/progress/terminal outcomes from real workers, resume paused parents from accepted or terminal facts, and add deterministic parallel fan-out/fan-in. |
+| Evidence required before advancing | A real-provider task and an embedded-NATS failure matrix must prove one execution and one terminal outcome across duplicate delivery, worker loss, deadline, retry, and restart. Then prove parallel research/code/review fan-in with a complete event-derived report. R3 and R4 follow that R1 gate. |
 
 ## Update Format
 
