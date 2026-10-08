@@ -2664,6 +2664,8 @@ func forwardDurableDelegationOutcomes(ctx stdcontext.Context, outbox *prizmevent
 	}
 	for _, out := range outcomes {
 		evt := v2.ExternalEvent{CorrelationID: out.CorrelationID, Source: "durable_outcome", Data: map[string]any{"task_id": out.TaskID, "delegation_id": out.DelegationID, "delivery_key": out.DeliveryKey}}
+		eventID := out.EventID
+		evt.Acknowledge = func() error { return outbox.MarkOutcomeConsumed(ctx, eventID) }
 		switch out.Status {
 		case prizmevent.OutcomeAccepted:
 			evt.Type = "task_accepted"
@@ -2695,9 +2697,6 @@ func forwardDurableDelegationOutcomes(ctx stdcontext.Context, outbox *prizmevent
 		}
 		select {
 		case eventCh <- evt:
-			if err := outbox.MarkOutcomeConsumed(ctx, out.EventID); err != nil {
-				return err
-			}
 		case <-ctx.Done():
 			return ctx.Err()
 		}

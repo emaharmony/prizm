@@ -107,6 +107,7 @@ type ExternalEvent struct {
 	CorrelationID string
 	Source        string // "discord", "nats"
 	Data          map[string]any
+	Acknowledge   func() error `json:"-"`
 }
 
 // NewEngineWithState creates an engine with an existing workflow state (for resumption).
@@ -301,15 +302,20 @@ func (e *Engine) Run(ctx context.Context) (*WorkflowState, error) {
 
 // WaitForResume blocks until an external event resumes the workflow.
 // This is used during feedback gates that pause for approval.
-func (e *Engine) WaitForResume(ctx context.Context) {
+func (e *Engine) WaitForResume(ctx context.Context, stateDir ...string) {
 	for {
 		select {
 		case evt := <-e.externalEvent:
-			if evt.Type == "approval" || evt.Type == "review" {
-				e.handleExternalEvent(evt, e.state.CurrentPhase())
-				if e.state.Status == StatusInProgress {
-					return // resumed
-				}
+			e.handleExternalEvent(evt, e.state.CurrentPhase())
+			dir := ""
+			if len(stateDir) > 0 {
+				dir = stateDir[0]
+			}
+			if err := e.persistAndAcknowledge(evt, dir); err != nil {
+				log.Printf("[V2] external event persistence/ack failed: %v", err)
+			}
+			if (evt.Type == "approval" || evt.Type == "review") && e.state.Status == StatusInProgress {
+				return // resumed
 			}
 		case <-ctx.Done():
 			return // context cancelled
@@ -320,6 +326,22 @@ func (e *Engine) WaitForResume(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (e *Engine) persistAndAcknowledge(evt ExternalEvent, stateDir string) error {
+	if evt.Acknowledge == nil {
+		return nil
+	}
+	if stateDir == "" {
+		return fmt.Errorf("workflow state directory is required before acknowledging durable external event")
+	}
+	if err := SaveWorkflowState(e.state, stateDir); err != nil {
+		return err
+	}
+	if err := SaveCurrentWorkflowState(e.state, stateDir); err != nil {
+		return err
+	}
+	return evt.Acknowledge()
 }
 
 // handleExternalEvent processes an external event (approval, review, task completion).

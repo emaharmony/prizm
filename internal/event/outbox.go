@@ -287,6 +287,15 @@ func recordOutcomeTx(ctx context.Context, tx *sql.Tx, cmd Command, outcome Outco
 	if err != nil {
 		return false, err
 	}
+	var existing []byte
+	if err := tx.QueryRowContext(ctx, `SELECT outcome_json FROM command_outcomes WHERE event_id=?`, outcome.EventID).Scan(&existing); err == nil {
+		if string(existing) != string(b) {
+			return false, errors.New("event outbox: outcome event id reused with different content")
+		}
+		return false, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
 	terminal := 0
 	if outcome.Status.Terminal() {
 		terminal = 1
@@ -296,7 +305,16 @@ func recordOutcomeTx(ctx context.Context, tx *sql.Tx, cmd Command, outcome Outco
 		return false, fmt.Errorf("event outbox: outcome: %w", err)
 	}
 	n, _ := res.RowsAffected()
-	return n == 1, nil
+	if n == 1 {
+		return true, nil
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT outcome_json FROM command_outcomes WHERE event_id=?`, outcome.EventID).Scan(&existing); err != nil {
+		return false, err
+	}
+	if string(existing) != string(b) {
+		return false, errors.New("event outbox: outcome event id reused with different content")
+	}
+	return false, nil
 }
 
 func outcomeEventID(key string, status OutcomeStatus) string {

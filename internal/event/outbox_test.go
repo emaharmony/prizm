@@ -193,3 +193,23 @@ func TestRecordOutcomeRejectsMismatchedIdentityAndProgressBeforeAccepted(t *test
 		})
 	}
 }
+
+func TestRecordOutcomeDuplicateEventIDMustMatchCanonicalContent(t *testing.T) {
+	box, _ := NewSQLiteOutbox(filepath.Join(t.TempDir(), "outbox.db"))
+	defer box.Close()
+	cmd := testCommand("dup-outcome")
+	box.Accept(t.Context(), "s", cmd)
+	out := Outcome{EventID: "same", CommandEventID: cmd.EventID, RunID: cmd.RunID, TaskID: cmd.TaskID, DelegationID: cmd.DelegationID, CorrelationID: cmd.CorrelationID, CausationID: cmd.EventID, DeliveryKey: cmd.IdempotencyKey, Status: OutcomeAccepted, Sequence: 1, OccurredAt: time.Now().UTC()}
+	if ok, err := box.RecordOutcome(t.Context(), out); err != nil || !ok {
+		t.Fatalf("first=%v %v", ok, err)
+	}
+	if ok, err := box.RecordOutcome(t.Context(), out); err != nil || ok {
+		t.Fatalf("same duplicate=%v %v", ok, err)
+	}
+	changed := out
+	changed.Status = OutcomeProgress
+	changed.Sequence = 2
+	if _, err := box.RecordOutcome(t.Context(), changed); err == nil {
+		t.Fatal("changed duplicate accepted")
+	}
+}

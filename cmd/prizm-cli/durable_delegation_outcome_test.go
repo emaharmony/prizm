@@ -43,6 +43,12 @@ func TestDurableDelegationOutcomeRestartAndFullForward(t *testing.T) {
 	if got.DelegationID != "del" || got.DeliveryKey != "del:0" || len(got.Artifacts.FilePaths) != 1 {
 		t.Fatalf("completion=%+v", got)
 	}
+	if err := a.Acknowledge(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Acknowledge(); err != nil {
+		t.Fatal(err)
+	}
 	pending, _ := box.PendingOutcomes(t.Context(), "run")
 	if len(pending) != 0 {
 		t.Fatalf("pending=%d", len(pending))
@@ -64,12 +70,47 @@ func TestDurableDelegationOutcomeBackpressureDoesNotDrop(t *testing.T) {
 	if len(pending) != 1 {
 		t.Fatalf("outcome dropped under backpressure")
 	}
-	<-ch
+	evt := <-ch
+	pending, _ = box.PendingOutcomes(t.Context(), "run")
+	if len(pending) != 1 {
+		t.Fatalf("outcome consumed before engine persistence")
+	}
+	if err := evt.Acknowledge(); err != nil {
+		t.Fatal(err)
+	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
 	pending, _ = box.PendingOutcomes(t.Context(), "run")
 	if len(pending) != 0 {
 		t.Fatalf("outcome not consumed")
+	}
+}
+
+func TestDurableDelegationOutcomeCrashAfterEnqueueReplays(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.db")
+	box, _ := event.NewSQLiteOutbox(path)
+	cmd := event.Command{EventID: event.CommandEventID("d:0"), Type: "x", RunID: "run", TaskID: "T", DelegationID: "d", CorrelationID: "c", IdempotencyKey: "d:0", SchemaVersion: event.CommandSchemaVersion, Payload: json.RawMessage(`{}`)}
+	box.Accept(t.Context(), "s", cmd)
+	out := event.Outcome{EventID: "a", CommandEventID: cmd.EventID, RunID: "run", TaskID: "T", DelegationID: "d", CorrelationID: "c", CausationID: cmd.EventID, DeliveryKey: "d:0", Status: event.OutcomeAccepted, Sequence: 1, OccurredAt: time.Now().UTC()}
+	box.RecordOutcome(t.Context(), out)
+	ch := make(chan v2.ExternalEvent, 1)
+	if err := forwardDurableDelegationOutcomes(t.Context(), box, "run", ch); err != nil {
+		t.Fatal(err)
+	}
+	<-ch
+	box.Close()
+	box, _ = event.NewSQLiteOutbox(path)
+	defer box.Close()
+	ch = make(chan v2.ExternalEvent, 1)
+	if err := forwardDurableDelegationOutcomes(t.Context(), box, "run", ch); err != nil {
+		t.Fatal(err)
+	}
+	replayed := <-ch
+	if replayed.Type != "task_accepted" {
+		t.Fatalf("type=%s", replayed.Type)
+	}
+	if err := replayed.Acknowledge(); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -1,6 +1,10 @@
 package v2
 
-import "testing"
+import (
+	"context"
+	"testing"
+	"time"
+)
 
 func TestDelegationAcknowledgementAndLateCompletion(t *testing.T) {
 	dm := NewDelegationManager("tasks", "complete")
@@ -33,6 +37,41 @@ func TestDelegationAcknowledgementAndLateCompletion(t *testing.T) {
 	dm.HandleTaskCompletion(TaskCompletion{TaskID: "T1", DelegationID: del.DelegationID, DeliveryKey: retry.DeliveryKey, Status: "completed", OutputSummary: "ok"}, st)
 	if st.Delegations[0].Status != "completed" {
 		t.Fatalf("status=%s", st.Delegations[0].Status)
+	}
+}
+
+func TestWaitForResumePersistsDelegationEventsButKeepsParentPaused(t *testing.T) {
+	dm := NewDelegationManager("tasks", "complete")
+	st := NewWorkflowState(&WorkflowConfig{Name: "test"})
+	st.RunID = "run"
+	st.CorrelationID = "corr"
+	st.Status = StatusPaused
+	st.Plan = &PlanGraph{Tasks: []PlanTask{{ID: "T1", Agent: "coder"}}}
+	del, pkt, _ := dm.DelegateTask(t.Context(), st.Plan.Tasks[0], st)
+	st.Status = StatusPaused
+	e := NewEngineWithState(&WorkflowConfig{Name: "test"}, st, &LogEmitter{}, dm)
+	stateDir := t.TempDir()
+	acked := make(chan struct{})
+	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() { e.WaitForResume(ctx, stateDir); close(done) }()
+	e.GetExternalEventChannel() <- ExternalEvent{Type: "task_accepted", Data: map[string]any{"task_id": "T1", "delegation_id": del.DelegationID, "delivery_key": pkt.DeliveryKey}, Acknowledge: func() error { close(acked); return nil }}
+	select {
+	case <-acked:
+	case <-time.After(time.Second):
+		t.Fatal("delegation event not persisted/acked")
+	}
+	select {
+	case <-done:
+		t.Fatal("delegation acceptance resumed approval pause")
+	default:
+	}
+	e.GetExternalEventChannel() <- ExternalEvent{Type: "approval", Source: "test", Data: map[string]any{"decision": "approved"}}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("approval did not resume parent")
 	}
 }
 
