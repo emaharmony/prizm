@@ -623,3 +623,37 @@ R1 score gate remain open.
 **Next action:** compose durable worker outcome intake and parent resume, then
 prove duplicate delivery, worker loss, retry, restart, and parallel fan-in with
 one terminal event-derived report.
+
+## 2026-10-08 — R1 Durable Delegation Outcome Intake
+
+**Roadmap IDs:** R1; R2/R6 parked
+**Branch/baseline:** `codex/r1-event-outbox` at `6381756`
+
+- Replaced the wake path's lossy generic completion forwarding with canonical
+  accepted/progress/terminal outcomes. Each fact is validated against the
+  stored command, persisted before forwarding, replayed after restart while
+  unconsumed, and handed to `workflow/v2` with blocking/context backpressure.
+- The sub-agent worker now publishes an accepted fact before execution and one
+  terminal fact with the full run, correlation, task, delegation, delivery,
+  artifact, and result identity. Delegation IDs use sortable unique IDs rather
+  than second-resolution timestamps.
+- Terminal publish exhaustion and command deadlines now atomically add failed
+  or timed-out facts to the correlated report. Forged identity, progress before
+  acceptance, duplicate terminal facts, and late results from older retries
+  fail closed.
+- Tests cover restart before intake, pending-outcome replay, backpressure without
+  loss, complete artifact forwarding, mismatch rejection, progress ordering,
+  stale retry rejection, deadline reporting, and `workflow/v2` parent task
+  advancement. `go build ./...`, `go vet ./...`, `staticcheck ./...`, and the
+  repeated full `go test ./... -count=1` pass. One first full-suite attempt hit
+  a pre-existing Windows temporary-directory cleanup race; the isolated test,
+  CLI package, and complete rerun passed.
+
+**Open risks:** the canonical multiagent graph still uses its own atomic event
+outbox and does not yet consume delegation outcomes to drive a parent waiting
+checkpoint. Parallel fan-out/fan-in and the real-provider R1 score gate remain
+open.
+
+**Next action:** implement deterministic parallel research/code/review
+fan-out/fan-in and bind the graph parent wait/resume seam to canonical terminal
+delegation outcomes.

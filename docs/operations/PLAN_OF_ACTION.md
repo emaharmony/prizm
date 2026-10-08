@@ -37,9 +37,9 @@ task/review reports.
 | --- | --- |
 | Active roadmap IDs | R1 (event contract and delegation); R2/R6 Recall work is parked. |
 | Reviewed baseline | `origin/staging` at `dca2156` includes merged R1 PR #84 and R2 PR #85; no 9/10 gate is met. |
-| Current state | R1 now has a canonical typed command/outcome envelope and a SQLite outbox with accept-once idempotency, leases, bounded retry, restart replay, deadline failure, and correlated reports. The canonical graph retains its atomic run/event outbox; `workflow/v2` delegation commands use the shared outbox at the wake-handler composition root while preserving the existing TaskPacket wire shape. Delegations carry stable IDs and per-attempt delivery keys, accept progress acknowledgements, and reject stale retry completions. |
+| Current state | R1 now has a canonical typed command/outcome envelope and a SQLite outbox with accept-once idempotency, leases, bounded retry, restart replay, deadline failure, and correlated reports. `workflow/v2` delegation commands and worker outcomes use this durable path. Outcomes are bound to the stored command, replayed until handed to the workflow, and carry stable delegation/delivery identity through accepted, progress, and one terminal result. The graph retains its atomic run/event outbox. |
 | PR handoff | Draft PR #86 on `codex/r6-memory-reconciliation` is parked without further Recall implementation, review, merge, or claims of live Recall reconciliation. |
-| Next implementation decision | Complete the consumer side: persist accepted/progress/terminal outcomes from real workers, resume paused parents from accepted or terminal facts, and add deterministic parallel fan-out/fan-in. |
+| Next implementation decision | Add deterministic parallel research/code/review fan-out/fan-in, then connect the canonical graph's parent delegation pause/resume to the same outcome intake. |
 | Evidence required before advancing | A real-provider task and an embedded-NATS failure matrix must prove one execution and one terminal outcome across duplicate delivery, worker loss, deadline, retry, and restart. Then prove parallel research/code/review fan-in with a complete event-derived report. R3 and R4 follow that R1 gate. |
 
 ## Update Format
