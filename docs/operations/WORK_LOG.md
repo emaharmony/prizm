@@ -688,3 +688,26 @@ real-provider gate remain open.
 **Next action:** add the bounded canonical-graph delegation state and waiting
 checkpoint contract, adapt `event.Outcome` at the composition edge, and prove
 restart, mismatch, deadline, terminal transition, and acknowledgement ordering.
+
+## 2026-10-08 — R1 Compatibility Listener Backpressure
+
+**Roadmap IDs:** R1
+**Branch/baseline:** `codex/r1-event-outbox` at `7102370`
+
+- Confirmed the standalone `workflow/v2` NATS listener has no production
+  composition caller; production delegation outcomes use the durable wake
+  intake and SQLite acknowledgement lifecycle.
+- Marked the standalone listener's canonical outcome source as compatibility
+  only and replaced its full-channel drop with blocking backpressure that is
+  released by listener shutdown. It does not claim durable delivery.
+- A focused embedded-NATS test fills the workflow event queue and proves the
+  canonical outcome is delivered after capacity becomes available.
+
+**Open risks:** legacy feedback, agent-status, and TaskCompletion messages in
+the compatibility listener retain their historical best-effort behavior. They
+are outside the canonical outcome path and are not used by production serve
+composition.
+
+**Next action:** continue the canonical graph delegation checkpoint work; keep
+the standalone listener compatibility-only unless a production caller adopts
+it with a durable intake.

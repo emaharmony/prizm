@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	prizmevent "github.com/emaharmony/prizm/internal/event"
@@ -195,8 +196,10 @@ func (p *NATSPublisher) PublishEvent(subject string, eventType string, payload m
 // the Natural Gates engine. It converts incoming NATS messages into
 // ExternalEvent structs and sends them to the engine's external event channel.
 type NATSListener struct {
-	conn *nats.Conn
-	subs []*nats.Subscription
+	conn      *nats.Conn
+	subs      []*nats.Subscription
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 // NewNATSListener connects to NATS and returns a listener.
@@ -205,12 +208,12 @@ func NewNATSListener(natsURL string) (*NATSListener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("nats connect for listener: %w", err)
 	}
-	return &NATSListener{conn: nc}, nil
+	return &NATSListener{conn: nc, done: make(chan struct{})}, nil
 }
 
 // NewNATSListenerFromConn creates a listener from an existing NATS connection.
 func NewNATSListenerFromConn(nc *nats.Conn) *NATSListener {
-	return &NATSListener{conn: nc}
+	return &NATSListener{conn: nc, done: make(chan struct{})}
 }
 
 // Conn returns the underlying NATS connection.
@@ -220,6 +223,7 @@ func (l *NATSListener) Conn() *nats.Conn {
 
 // Close unsubscribes all subscriptions and closes the NATS connection.
 func (l *NATSListener) Close() {
+	l.closeOnce.Do(func() { close(l.done) })
 	for _, sub := range l.subs {
 		if sub != nil {
 			sub.Unsubscribe()
@@ -243,6 +247,9 @@ func (l *NATSListener) Listen(engine *Engine) error {
 	}
 	if engine == nil {
 		return fmt.Errorf("engine is nil")
+	}
+	if l.done == nil {
+		l.done = make(chan struct{})
 	}
 
 	eventCh := engine.GetExternalEventChannel()
@@ -324,11 +331,15 @@ func (l *NATSListener) Listen(engine *Engine) error {
 				}
 				data["completion"] = completion
 			}
-			evt := ExternalEvent{Type: evtType, CorrelationID: outcome.CorrelationID, Source: "nats", Data: data}
+			evt := ExternalEvent{Type: evtType, CorrelationID: outcome.CorrelationID, Source: "nats_compatibility", Data: data}
+			// This standalone listener is a compatibility adapter and is not used by
+			// the production wake composition, which persists outcomes before
+			// forwarding. Apply backpressure here so canonical facts are never
+			// silently dropped; Close releases a blocked callback.
 			select {
 			case eventCh <- evt:
-			default:
-				log.Printf("[NATS-LISTEN] WARN event channel full, retaining outcome requires durable wake intake")
+			case <-l.done:
+				log.Printf("[NATS-LISTEN] listener closed before canonical outcome delivery")
 			}
 			return
 		}

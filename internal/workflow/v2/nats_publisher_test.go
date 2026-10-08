@@ -130,6 +130,52 @@ func TestDurableTaskPacketPreservesLegacyWireShape(t *testing.T) {
 	}
 }
 
+func TestCompatibilityListenerBackpressuresCanonicalOutcome(t *testing.T) {
+	url, cleanup, err := bus.StartEmbeddedBus(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	nc, err := nats.Connect(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	listener := NewNATSListenerFromConn(nc)
+	defer listener.Close()
+	engine := NewEngine(&WorkflowConfig{Name: "test"}, &LogEmitter{}, nil)
+	ch := engine.externalEvent
+	for i := 0; i < 100; i++ {
+		ch <- ExternalEvent{Type: "agent_status"}
+	}
+	if err := listener.Listen(engine); err != nil {
+		t.Fatal(err)
+	}
+	out := prizmevent.Outcome{EventID: "out", CommandEventID: "cmd", RunID: "run", TaskID: "T", DelegationID: "D", CorrelationID: "corr", CausationID: "cmd", DeliveryKey: "D:0", Status: prizmevent.OutcomeAccepted, Sequence: 1, OccurredAt: time.Now().UTC()}
+	data, _ := json.Marshal(out)
+	if err := nc.Publish("prizm.workflow.task.complete", data); err != nil {
+		t.Fatal(err)
+	}
+	nc.Flush()
+	time.Sleep(20 * time.Millisecond)
+	var delivered *ExternalEvent
+	deadline := time.After(time.Second)
+	for i := 0; i < 101 && delivered == nil; i++ {
+		select {
+		case evt := <-ch:
+			if evt.Source == "nats_compatibility" {
+				copy := evt
+				delivered = &copy
+			}
+		case <-deadline:
+			t.Fatal("canonical outcome was dropped while channel full")
+		}
+	}
+	if delivered == nil || delivered.Type != "task_accepted" {
+		t.Fatalf("event=%+v", delivered)
+	}
+}
+
 // TestTaskCompletionMarshaling verifies that TaskCompletion serializes correctly.
 func TestTaskCompletionMarshaling(t *testing.T) {
 	completion := TaskCompletion{
