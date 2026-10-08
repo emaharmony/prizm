@@ -123,6 +123,27 @@ func TestValidate_CostTracked(t *testing.T) {
 	}
 }
 
+func TestValidate_MemoryCaptureSyncPending(t *testing.T) {
+	valid := Event{
+		Type: "prizm.memory.capture.sync_pending",
+		Payload: map[string]any{
+			"memory_id":  "mem_123",
+			"sync_key":   "sync_123",
+			"project_id": "project",
+			"task_id":    "task",
+			"reason":     "primary unavailable",
+		},
+	}
+	if err := Validate(valid); err != nil {
+		t.Fatalf("expected valid sync-pending event, got: %v", err)
+	}
+
+	delete(valid.Payload, "sync_key")
+	if err := Validate(valid); err == nil {
+		t.Fatal("expected sync-pending event without sync_key to fail validation")
+	}
+}
+
 func TestValidationError_Error(t *testing.T) {
 	ve := &ValidationError{
 		EventType: "prizm.task.created",

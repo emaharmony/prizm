@@ -18,6 +18,7 @@ type MemoryWriteTool struct {
 	Gate   *memory.GateExtractor
 	Store  memory.MemoryStore
 	Events *memory.EventEmitter
+	Scoped *memory.Facade // R2 scoped contract; nil preserves legacy behavior
 }
 
 func (t *MemoryWriteTool) Name() string { return "memory_write" }
@@ -27,13 +28,18 @@ func (t *MemoryWriteTool) Description() string {
 func (t *MemoryWriteTool) Schema() ToolSchema {
 	return ToolSchema{
 		Input: map[string]ParamSpec{
-			"content":    {Type: "string", Description: "The conversation turn or fact to remember", Required: true},
-			"category":   {Type: "string", Description: "Memory category: decision, preference, fact, observation (auto-detected if empty)", Required: false},
-			"tier":       {Type: "string", Description: "Memory tier: ephemeral, active, persist (auto-detected if empty)", Required: false},
-			"source":     {Type: "string", Description: "Source agent (e.g., prizm:lumi)", Required: false},
-			"agent_id":   {Type: "string", Description: "Agent that created this memory", Required: false},
-			"session_id": {Type: "string", Description: "Session context", Required: false},
-			"project_id": {Type: "string", Description: "Project context", Required: false},
+			"content":            {Type: "string", Description: "The conversation turn or fact to remember", Required: true},
+			"category":           {Type: "string", Description: "Memory category: decision, preference, fact, observation (auto-detected if empty)", Required: false},
+			"tier":               {Type: "string", Description: "Memory tier: ephemeral, active, persist (auto-detected if empty)", Required: false},
+			"source":             {Type: "string", Description: "Source agent (e.g., prizm:lumi)", Required: false},
+			"agent_id":           {Type: "string", Description: "Agent that created this memory", Required: false},
+			"session_id":         {Type: "string", Description: "Session context", Required: false},
+			"correlation_id":     {Type: "string", Description: "Canonical run or request correlation ID required for scoped memory", Required: false},
+			"project_id":         {Type: "string", Description: "Project context", Required: false},
+			"task_id":            {Type: "string", Description: "Exact task scope when scoped memory is enabled", Required: false},
+			"user_id":            {Type: "string", Description: "User scope; requires include_user_scope", Required: false},
+			"include_user_scope": {Type: "boolean", Description: "Explicitly authorize user-scoped capture", Required: false},
+			"supersedes_id":      {Type: "string", Description: "Scoped memory replaced by this capture", Required: false},
 		},
 		Output: ParamSpec{Type: "object", Description: "The persisted memory with id, or rejection reason"},
 	}
@@ -119,6 +125,17 @@ func (t *MemoryWriteTool) Execute(ctx context.Context, input map[string]any) (To
 		} else {
 			mem.Summary = mem.Content
 		}
+	}
+	if t.Scoped != nil {
+		includeUser, _ := input["include_user_scope"].(bool)
+		stored, fallback, err := t.Scoped.Capture(ctx, memory.CaptureRequest{Content: mem.Content, Summary: mem.Summary, Category: mem.Category, Tier: mem.Tier, Topics: mem.KeyTopics, Source: mem.Source, SupersedesID: strVal(input, "supersedes_id"), Scope: memory.Scope{
+			ProjectID: mem.ProjectID, TaskID: strVal(input, "task_id"), UserID: strVal(input, "user_id"), IncludeUserScope: includeUser,
+			SessionID: mem.SessionID, AgentID: mem.AgentID, CorrelationID: strVal(input, "correlation_id"),
+		}})
+		if err != nil {
+			return ToolResult{Success: false, Error: fmt.Sprintf("failed to store scoped memory: %v", err)}, nil
+		}
+		return ToolResult{Success: true, Output: map[string]any{"gate": "passed", "memory_id": stored.ID, "category": stored.Category, "tier": stored.Tier, "summary": stored.Summary, "fallback": fallback}}, nil
 	}
 
 	// Step 3: Store

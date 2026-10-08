@@ -98,6 +98,52 @@ func (mi *MemoryInjector) InjectMemories(ctx context.Context, mode InjectMode, u
 	}
 }
 
+// InjectScopedMemories is the autonomous prompt path. It uses the R2 facade
+// exclusively, so every local and primary result is filtered by trusted scope.
+// The legacy InjectMemories API remains for isolated non-autonomous callers.
+func (mi *MemoryInjector) InjectScopedMemories(ctx context.Context, facade *memory.Facade, scope memory.Scope, userMessage string, sessionMsgCount int, maxTokens int) string {
+	if mi == nil || facade == nil || strings.TrimSpace(userMessage) == "" {
+		return ""
+	}
+	if err := scope.Validate(); err != nil {
+		log.Printf("[MEMORY-INJECTOR] scoped injection skipped: %v", err)
+		return ""
+	}
+	searchQuery := mi.plannedQuery(ctx, userMessage, sessionMsgCount)
+	if searchQuery == "" {
+		return ""
+	}
+	cacheKey := scopedQueryKey(scope, searchQuery)
+	if cached := mi.cache.get(cacheKey); cached != nil {
+		return mi.cacheAndFormat(cached, "Relevant Memories", maxTokens)
+	}
+	results, _, err := facade.Search(ctx, memory.SearchRequest{Scope: scope, Query: searchQuery, Limit: 20})
+	if err != nil {
+		log.Printf("[MEMORY-INJECTOR] scoped search failed: %v", err)
+		return ""
+	}
+	if len(results) == 0 {
+		return ""
+	}
+	mi.cache.set(cacheKey, results)
+	go mi.trackRecalls(results)
+	return mi.cacheAndFormat(results, "Relevant Memories", maxTokens)
+}
+
+func (mi *MemoryInjector) plannedQuery(ctx context.Context, userMessage string, sessionMsgCount int) string {
+	var plan *memory.QueryPlanResult
+	if mi.planner != nil {
+		plan = mi.planner.Plan(ctx, userMessage, sessionMsgCount, 0)
+	}
+	if plan != nil && len(plan.Keywords) > 0 {
+		return strings.Join(plan.Keywords, " ")
+	}
+	if keywords := memory.ExtractKeywords(userMessage); len(keywords) > 0 {
+		return strings.Join(keywords, " ")
+	}
+	return userMessage
+}
+
 // cacheAndFormat caches the memory list for citation verification and formats them.
 func (mi *MemoryInjector) cacheAndFormat(memories []memory.Memory, title string, maxTokens int) string {
 	mi.lastMu.Lock()
@@ -444,6 +490,14 @@ func queryKey(query string) string {
 		words = words[:5]
 	}
 	return strings.Join(words, "_")
+}
+
+func scopedQueryKey(scope memory.Scope, query string) string {
+	userID := ""
+	if scope.IncludeUserScope {
+		userID = scope.UserID
+	}
+	return queryKey(strings.Join([]string{scope.ProjectID, scope.TaskID, scope.SessionID, scope.AgentID, userID, query}, "\x00"))
 }
 
 // trackRecalls updates recall_count and last_recalled metadata for injected memories.

@@ -7,6 +7,67 @@ the next contributor.
 > Prizm is source-available under an all-rights-reserved [license](../../LICENSE)
 > and is preview-stage.
 
+## 2026-10-02 — R2 Scope Isolation and Serve Wiring
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r2-scoped-memory`, rebased onto `origin/staging` at `a2a5622`
+
+- Rebased the single R2 commit directly onto merged R1 staging; obsolete stacked
+  R1 history was not replayed. Explicit capture keys now derive a distinct
+  local identity from canonical user/project/task scope, preventing a producer
+  key from colliding across authorization boundaries.
+- Scoped capture and search require a correlation ID. `serve` injects trusted
+  workspace/run/agent identity for memory tools and overrides model input;
+  operations without those real identities fail closed. Scoped events persist
+  their correlated lifecycle facts in the existing SQLite event store.
+- Recall search now requests project/task/user/session/agent scope and rejects
+  every missing or mismatched result before local/primary merge. The adapter
+  maps available topics, timestamps, and supersession metadata.
+
+**Verification:** focused memory, Remembrance, tool, and CLI tests; `go build
+./...`, `go vet ./...`, `staticcheck ./...`, `go test ./... -count=1`, and
+`git diff --check` passed.
+
+**Open risks:** CLI chat remains on legacy memory composition and therefore
+does not invent a scoped task identity. Local fallback is immediate, but
+durable retry/reconciliation needs a local-store contract and is deferred to
+R6. The 10-case real Recall score gate remains unproven.
+
+**Next action:** run the seeded scoped-retrieval acceptance set and a real
+Recall outage/recovery trace, then design durable reconciliation from evidence.
+
+## 2026-10-02 — R2 Scoped Local Memory Foundation
+
+**Roadmap IDs:** R2, R6 (depends on R1 event-outbox follow-up)
+**Branch/commit:** `codex/r2-scoped-memory`; pending commit, stacked on R1 PR #84 head
+
+- Added an additive scoped-memory facade in the existing memory domain. New
+  autonomous captures and searches require exact project/task identities;
+  user memory requires a supplied user identity and explicit opt-in. Results
+  are filtered for scope before primary/local merging and de-duplication.
+- Stable capture keys make duplicate delivery return the existing local memory.
+  An append-only `supersedes` link makes replacement explicit and hides the
+  prior entry from the active local view without a new persistence engine.
+- Added a neutral primary-memory contract, a Remembrance boundary adapter, and
+  typed correlated lifecycle events in the existing event schema. SQLite is
+  still the event source of truth; durable outbox/NATS delivery remains R1
+  work and is not claimed here. Scoped tool and reflection entry points are
+  additive, preserving legacy callers while scoped callers can supply run scope.
+
+**Verification:** deterministic scope-isolation, explicit-user-opt-in,
+duplicate-capture, supersession, primary-outage fallback, merged de-duplication,
+and event-correlation tests pass. `go build ./...`, `go vet ./...`,
+`staticcheck ./...`, and `go test ./... -count=1` passed with host Go cache
+access after workspace-only cache execution could not access dependencies.
+
+**Open risks:** Current chat/serve composition does not yet supply a canonical
+task ID to every legacy memory call, so the scoped path is available to
+callers that provide it rather than silently inventing a scope. Real Recall
+outage/reconciliation and the 10-case memory gate remain unproven.
+
+**Next action:** thread task/user/project scope from canonical runs into chat
+and serve memory composition, then run the seeded real Recall acceptance set.
+
 ## 2026-10-02 — R1 Terminal Trial Handoff Recovery
 
 **Roadmap IDs:** R1
@@ -424,3 +485,83 @@ then complete the R1 approval-to-verified-resume slice.
 
 - [Prizm Roadmap](../architecture/PRIZM_ROADMAP.md)
 - [Current Plan of Action](PLAN_OF_ACTION.md)
+
+## 2026-10-02 — R2 Autonomous Prompt Scope and Sync-Pending Evidence
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r2-scoped-memory` based on merged staging `a2a5622`
+
+- Replaced autonomous serve prompt injection's unscoped local search and
+  `ListRecent` fallback. The prompt path derives canonical workspace project,
+  active run, session, agent, and authorized owner identity, and sends the same
+  identifiers to Recall context building.
+- Recall context is injected only when it echoes all trusted scope metadata.
+  Its cache key includes the complete scope and a task-text digest. A missing or
+  mismatched field fails closed and the scoped memory facade supplies the local
+  fallback.
+- Added a durable `prizm.memory.capture.sync_pending` lifecycle fact for primary
+  capture outage or absence. A duplicate delivery reuses the local memory ID and
+  retries the primary call; this is evidence for a future R6 reconciliation
+  worker, not a claim that reconciliation exists.
+- Focused scoped-memory, Remembrance, and serve prompt-scope tests pass.
+  Full `go test ./... -count=1`, build, vet, staticcheck, and diff checks pass
+  when Go uses its normal host cache; the restricted sandbox alone denies that
+  cache's metadata writes.
+
+**Open risks:** A live Recall service must implement and echo task/session scope
+metadata before its context packs can be used. R6 still needs a durable replay
+consumer that drains pending sync facts after recovery.
+
+**Next action:** implement the R6 idempotent reconciliation consumer and run a
+live outage/recovery trace against a scope-aware Recall service.
+
+## 2026-10-02 — R2 Scoped Memory Hardening and Score Gate
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r2-scoped-memory` at `6179a36`, based on merged staging `a2a5622`
+
+- Made serve-chat memory authority explicit: model-supplied project, task, user,
+  session, agent, correlation, and user-scope fields are removed before the
+  trusted workspace and run identity are applied. Missing either trusted value
+  fails closed.
+- Made scoped lifecycle events strict. An event-store failure returns an error;
+  a retry finds the existing local capture and does not duplicate it. Capture
+  keys now reject changed content or metadata unless an explicit superseding
+  relation identifies the prior memory.
+- Repaired Markdown persistence for project, session, and agent scope fields;
+  those fields now round-trip through the local fallback store.
+- The deterministic R2 seeded retrieval gate passed **10/10** with zero scope
+  leakage. Focused memory/remembrance/tool/serve tests, `go build ./...`,
+  `go vet ./...`, and `staticcheck ./...` passed.
+- A deterministic primary-outage/recovery trace confirms local fallback remains
+  readable after the primary returns. A real local Remembrance trace was not
+  possible: the available Python launcher could not start and Ollama could not
+  start because its local log rotation was denied. No remote reconciliation was
+  claimed or implemented.
+
+**Open risks:** local fallback captures still need an R6 idempotent
+reconciliation path to Recall. Live service recovery remains unproven in this
+environment. R1's event-outbox and delegation gates remain open.
+
+**Next action:** add the R6 reconciliation record and run the live service
+outage/recovery acceptance trace when Python and Ollama are available.
+
+## 2026-10-02 — R2 Scoped Memory Review Handoff
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r2-scoped-memory` based on `origin/staging` `a2a5622`
+
+- Prepared the R2 scoped-memory lifecycle and isolation slice for normal review.
+  The branch carries canonical autonomous scope injection, strict scoped capture
+  events, explicit supersession, scoped Recall-primary/local-fallback behavior,
+  and the deterministic 10/10 seeded retrieval gate with zero leakage.
+- Verification evidence for the branch includes `go build ./...`, `go vet
+  ./...`, `staticcheck ./...`, and `go test ./... -count=1`.
+
+**Open risks:** This slice does not provide a durable replay consumer for
+`sync_pending` captures and has no live Recall outage/recovery proof. Those are
+R6 follow-up work; the R2/R6 acceptance claims remain limited accordingly.
+
+**Next action:** publish the branch for review, then implement idempotent
+local-to-Recall reconciliation and perform the live outage/recovery trace when
+the required local services are available.

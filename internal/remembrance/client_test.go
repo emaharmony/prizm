@@ -35,7 +35,7 @@ func TestBuildContextWithOptionsSendsOwnerAndLocalHints(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"project_id":"prizm","owner_id":"owner-1","agent_id":"lumi","task":"hello","selected_memories":[],"context_markdown":"","token_count":0}`))
+		_, _ = w.Write([]byte(`{"project_id":"prizm","owner_id":"owner-1","agent_id":"lumi","task_id":"run-1","session_id":"sess-1","task":"hello","selected_memories":[],"context_markdown":"","token_count":0}`))
 	}))
 	defer server.Close()
 
@@ -44,6 +44,8 @@ func TestBuildContextWithOptionsSendsOwnerAndLocalHints(t *testing.T) {
 		OwnerID:            "owner-1",
 		AgentID:            "lumi",
 		ProjectID:          "prizm",
+		TaskID:             "run-1",
+		SessionID:          "sess-1",
 		Task:               "hello",
 		LocalRecentSummary: "recent exact context",
 		ChannelContext:     "discord channel",
@@ -59,6 +61,8 @@ func TestBuildContextWithOptionsSendsOwnerAndLocalHints(t *testing.T) {
 		"owner_id":             "owner-1",
 		"agent_id":             "lumi",
 		"project_id":           "prizm",
+		"task_id":              "run-1",
+		"session_id":           "sess-1",
 		"task":                 "hello",
 		"local_recent_summary": "recent exact context",
 		"channel_context":      "discord channel",
