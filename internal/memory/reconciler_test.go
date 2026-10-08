@@ -273,9 +273,122 @@ func TestReconcileFactsTreatsLaterPendingAsNewUnresolvedDelivery(t *testing.T) {
 	}
 }
 
+func TestReconcilerUsesSQLiteInsertionOrderForRePendingGeneration(t *testing.T) {
+	local := tempStore(t)
+	events := newReconcileStore(t)
+	scope := scopedTestScope()
+	bootstrap := newReconcileStore(t)
+	primary := &idempotentPrimary{err: errors.New("offline"), deliveries: map[string]string{}}
+	mem := createPendingCapture(t, local, bootstrap, primary, scope)
+	primary.err = nil
+	payload := map[string]any{"memory_id": mem.ID, "sync_key": "causal-key", "project_id": scope.ProjectID, "task_id": scope.TaskID, "user_id": scope.UserID}
+	oldPending := event.NewEvent(EventScopedCaptureSyncPending, "test", payload).WithCorrelationID(scope.CorrelationID)
+	oldPending.ID = "z-old-pending"
+	oldSynced := event.NewEvent(EventScopedCaptureSynced, "test", payload).WithCorrelationID(scope.CorrelationID)
+	oldSynced.ID = stableSyncEventID(EventScopedCaptureSynced, "causal-key", oldPending.ID)
+	newPending := event.NewEvent(EventScopedCaptureSyncPending, "test", payload).WithCorrelationID(scope.CorrelationID)
+	newPending.ID = "a-new-pending"
+	for _, fact := range []event.Event{oldPending, oldSynced, newPending} {
+		if err := events.Store(context.Background(), fact); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := NewReconciler(local, primary, events, "test")
+	r.RunOnce(context.Background())
+	if primary.remoteCalls != 1 {
+		t.Fatalf("remote calls = %d, want replay of the later pending generation", primary.remoteCalls)
+	}
+	if status := r.Status(); status.Pending != 0 {
+		t.Fatalf("status = %#v, want re-pending generation to receive terminal evidence", status)
+	}
+	if got := len(syncEvents(t, events, EventScopedCaptureSynced)); got != 2 {
+		t.Fatalf("synced events = %d, want one terminal fact per pending generation", got)
+	}
+}
+
+func TestReconcilerResetsRetryBackoffForNewPendingGeneration(t *testing.T) {
+	local := tempStore(t)
+	events := newReconcileStore(t)
+	scope := scopedTestScope()
+	bootstrap := newReconcileStore(t)
+	primary := &idempotentPrimary{err: errors.New("offline"), deliveries: map[string]string{}}
+	mem := createPendingCapture(t, local, bootstrap, primary, scope)
+	payload := map[string]any{"memory_id": mem.ID, "sync_key": "retry-generation-key", "project_id": scope.ProjectID, "task_id": scope.TaskID, "user_id": scope.UserID}
+	oldPending := event.NewEvent(EventScopedCaptureSyncPending, "test", payload).WithCorrelationID(scope.CorrelationID)
+	oldPending.ID = "old-pending"
+	oldRetryPayload := map[string]any{"memory_id": mem.ID, "sync_key": "retry-generation-key", "project_id": scope.ProjectID, "task_id": scope.TaskID, "user_id": scope.UserID, "attempt": 1, "reason": "primary_unavailable"}
+	oldRetry := event.NewEvent(EventScopedCaptureSyncRetry, "test", oldRetryPayload).WithCorrelationID(scope.CorrelationID)
+	oldFailed := event.NewEvent(EventScopedCaptureSyncFailed, "test", payload).WithCorrelationID(scope.CorrelationID)
+	oldFailed.ID = stableSyncEventID(EventScopedCaptureSyncFailed, "retry-generation-key", oldPending.ID)
+	newPending := event.NewEvent(EventScopedCaptureSyncPending, "test", payload).WithCorrelationID(scope.CorrelationID)
+	newPending.ID = "new-pending"
+	for _, fact := range []event.Event{oldPending, oldRetry, oldFailed, newPending} {
+		if err := events.Store(context.Background(), fact); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := NewReconciler(local, primary, events, "test")
+	r.MaxAttempts = 2
+	r.RetryBase = time.Hour
+	r.RunOnce(context.Background())
+	if primary.remoteCalls != 0 {
+		t.Fatalf("successful remote calls = %d, want failed attempted delivery", primary.remoteCalls)
+	}
+	if got := len(syncEvents(t, events, EventScopedCaptureSyncRetry)); got != 2 {
+		t.Fatalf("retry events = %d, want old retry plus immediate new-generation retry", got)
+	}
+}
+
+func TestReconcilerRetainsTerminalEventStoreFailureInStatus(t *testing.T) {
+	local := tempStore(t)
+	base := newReconcileStore(t)
+	primary := &idempotentPrimary{err: errors.New("offline"), deliveries: map[string]string{}}
+	createPendingCapture(t, local, base, primary, scopedTestScope())
+	primary.err = nil
+	failing := &terminalWriteFailureStore{EventStore: base, failType: EventScopedCaptureSynced}
+	r := NewReconciler(local, primary, failing, "test")
+	r.RunOnce(context.Background())
+	if status := r.Status(); status.LastErr == "" {
+		t.Fatalf("status = %#v, want terminal event persistence error", status)
+	}
+	if got := len(syncEvents(t, base, EventScopedCaptureSynced)); got != 0 {
+		t.Fatalf("synced events = %d, want failed terminal write to remain visible", got)
+	}
+}
+
+func TestReconcilerFailsClosedWithoutCausalEventOrder(t *testing.T) {
+	local := tempStore(t)
+	base := newReconcileStore(t)
+	r := NewReconciler(local, nil, &nonCausalEventStore{EventStore: base}, "test")
+	r.RunOnce(context.Background())
+	if status := r.Status(); status.LastErr == "" {
+		t.Fatalf("status = %#v, want causal-order capability error", status)
+	}
+}
+
 type syncWriteFailureStore struct {
 	event.EventStore
 	failSync bool
+}
+
+type terminalWriteFailureStore struct {
+	event.EventStore
+	failType string
+}
+
+type nonCausalEventStore struct {
+	event.EventStore
+}
+
+func (s *terminalWriteFailureStore) Store(ctx context.Context, e event.Event) error {
+	if e.Type == s.failType {
+		return errors.New("terminal event store unavailable")
+	}
+	return s.EventStore.Store(ctx, e)
+}
+
+func (s *terminalWriteFailureStore) QueryInInsertionOrder(ctx context.Context, filter event.EventFilter) ([]event.Event, error) {
+	return s.EventStore.(*event.SQLiteEventStore).QueryInInsertionOrder(ctx, filter)
 }
 
 func (s *syncWriteFailureStore) Store(ctx context.Context, e event.Event) error {
@@ -284,4 +397,8 @@ func (s *syncWriteFailureStore) Store(ctx context.Context, e event.Event) error 
 		return errors.New("crash before local synced")
 	}
 	return s.EventStore.Store(ctx, e)
+}
+
+func (s *syncWriteFailureStore) QueryInInsertionOrder(ctx context.Context, filter event.EventFilter) ([]event.Event, error) {
+	return s.EventStore.(*event.SQLiteEventStore).QueryInInsertionOrder(ctx, filter)
 }

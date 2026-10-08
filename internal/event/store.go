@@ -163,6 +163,22 @@ func (s *SQLiteEventStore) StoreBatch(ctx context.Context, events []Event) error
 
 // Query retrieves events matching the filter.
 func (s *SQLiteEventStore) Query(ctx context.Context, filter EventFilter) ([]Event, error) {
+	return s.query(ctx, filter, "id ASC")
+}
+
+// QueryInInsertionOrder returns matching events in the order SQLite accepted
+// them. It is for consumers that reconstruct a domain state machine from
+// event facts whose stable IDs are not chronological (for example, terminal
+// deduplication IDs). It must not be used with AfterID as a cursor because
+// that cursor is defined by Query's ID ordering.
+func (s *SQLiteEventStore) QueryInInsertionOrder(ctx context.Context, filter EventFilter) ([]Event, error) {
+	if filter.AfterID != "" {
+		return nil, fmt.Errorf("event store: insertion-order query does not support AfterID")
+	}
+	return s.query(ctx, filter, "rowid ASC")
+}
+
+func (s *SQLiteEventStore) query(ctx context.Context, filter EventFilter, orderBy string) ([]Event, error) {
 	query := "SELECT id, run_id, type, timestamp, correlation_id, parent_id, payload FROM events WHERE 1=1"
 	args := []any{}
 
@@ -187,11 +203,11 @@ func (s *SQLiteEventStore) Query(ctx context.Context, filter EventFilter) ([]Eve
 		args = append(args, filter.EndTime.Format(time.RFC3339Nano))
 	}
 
-	// ORDER BY id, not timestamp: event.Event.ID is a ULID (lexicographically
-	// sortable and unique), so this is the correct cursor field. Two events
-	// with colliding timestamps (same millisecond) still sort deterministically
-	// by ID; ordering by timestamp alone does not.
-	query += " ORDER BY id ASC"
+	// Query uses the ID cursor: event.Event.ID is a ULID (lexicographically
+	// sortable and unique), so it remains the correct pagination order. The
+	// only other caller supplies rowid ASC through QueryInInsertionOrder for a
+	// causal state-machine reconstruction, not a cursor.
+	query += " ORDER BY " + orderBy
 
 	limit := filter.Limit
 	if limit <= 0 {

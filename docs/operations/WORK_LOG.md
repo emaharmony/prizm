@@ -611,3 +611,17 @@ the required local services are available.
 **Open risks:** The existing Recall integration still lacks an atomic idempotency-key operation. Live Recall outage/recovery and process-level startup verification remain unproven until Recall exposes that capability.
 
 **Next action:** run the full validation suite, then add the committed R6 hardening to the review branch; implement the Recall idempotency-key contract when the external API is available.
+
+## 2026-10-08 — R6 Causal Replay and Retry-Generation Repair
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r6-memory-reconciliation`, following `b80d96a`
+
+- Reconciliation now requests SQLite facts in durable insertion order. The public event query keeps its ID-cursor ordering; stores that cannot prove causal ordering fail closed for reconciliation rather than replay potentially stale intent.
+- Terminal sync and failure facts remain deterministic and idempotent, now per pending generation. A later `sync_pending` opens a new generation, clears earlier retry/backoff history, and can write its own terminal evidence.
+- Propagated terminal event-store errors through `RunOnce`, so a failed synced/failed write remains visible in reconciler health instead of being cleared by the final status update.
+- Added SQLite-backed regression coverage for pending → terminal → re-pending causal order, retry-generation reset, terminal-write health reporting, and unsupported causal-order stores. Focused memory/event tests and the full Go suite, build, vet, staticcheck, and diff checks passed.
+
+**Open risks:** The current Recall adapter still lacks an atomic idempotency-key operation, so it remains ineligible for mutation replay. A live primary outage/recovery trace is still unproven.
+
+**Next action:** implement or adopt Recall's atomic idempotency-key contract, then run and retain a live outage/recovery trace with scoped replay evidence.

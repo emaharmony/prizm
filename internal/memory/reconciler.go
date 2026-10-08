@@ -80,7 +80,7 @@ func (r *Reconciler) RunOnce(ctx context.Context) {
 	if r == nil || r.Local == nil || r.Events == nil {
 		return
 	}
-	all, err := r.Events.Query(ctx, event.EventFilter{Type: "prizm.memory.capture.", Limit: 10000})
+	all, err := reconciliationEvents(ctx, r.Events)
 	if err != nil {
 		r.record(0, err)
 		return
@@ -99,7 +99,7 @@ func (r *Reconciler) RunOnce(ctx context.Context) {
 	// Pending is the number of unresolved durable intents, not the raw number
 	// of historical pending events.
 	remaining := len(pending)
-	refreshed, refreshErr := r.Events.Query(ctx, event.EventFilter{Type: "prizm.memory.capture.", Limit: 10000})
+	refreshed, refreshErr := reconciliationEvents(ctx, r.Events)
 	if refreshErr != nil {
 		if runErr == nil {
 			runErr = refreshErr
@@ -116,6 +116,24 @@ type pendingCapture struct {
 	syncKey  string
 	scope    Scope
 	event    event.Event
+}
+
+// causalEventStore is optional because EventStore remains the compatibility
+// seam. SQLite exposes this narrower ordering for replay consumers that need
+// insertion order rather than its public ID-cursor order.
+type causalEventStore interface {
+	QueryInInsertionOrder(context.Context, event.EventFilter) ([]event.Event, error)
+}
+
+func reconciliationEvents(ctx context.Context, store event.EventStore) ([]event.Event, error) {
+	filter := event.EventFilter{Type: "prizm.memory.capture.", Limit: 10000}
+	if causal, ok := store.(causalEventStore); ok {
+		return causal.QueryInInsertionOrder(ctx, filter)
+	}
+	// ID-sorted retrieval is not safe for replay: deterministic terminal IDs
+	// can sort before or after the pending fact they close. Refuse delivery
+	// until a store proves causal ordering rather than risking a stale replay.
+	return nil, fmt.Errorf("memory reconciliation requires insertion-ordered event queries")
 }
 
 func reconcileFacts(events []event.Event) ([]pendingCapture, map[string]bool, map[string][]event.Event) {
@@ -136,6 +154,9 @@ func reconcileFacts(events []event.Event) ([]pendingCapture, map[string]bool, ma
 			// A later pending fact begins a new delivery attempt for the same
 			// durable memory. It must not be hidden by an older terminal fact.
 			delete(terminal, syncKey)
+			// A new pending fact is a new delivery generation. Retry facts from
+			// the finished generation must not delay or exhaust this one.
+			delete(retries, syncKey)
 			pendingByKey[syncKey] = pendingCapture{memoryID: memoryID, syncKey: syncKey, scope: scopeFromEvent(e), event: e}
 		case EventScopedCaptureSynced, EventScopedCaptureSyncFailed:
 			delete(pendingByKey, syncKey)
@@ -161,12 +182,10 @@ func scopeFromEvent(e event.Event) Scope {
 func (r *Reconciler) reconcileOne(ctx context.Context, fact pendingCapture, retries []event.Event) error {
 	mem, err := r.Local.Get(ctx, fact.memoryID)
 	if err != nil || mem == nil {
-		r.terminal(ctx, fact, "local_memory_missing")
-		return nil
+		return r.terminal(ctx, fact, "local_memory_missing")
 	}
 	if err := fact.scope.Validate(); err != nil || !scopeMatches(*mem, fact.scope) {
-		r.terminal(ctx, fact, "scope_mismatch")
-		return nil
+		return r.terminal(ctx, fact, "scope_mismatch")
 	}
 	primary, ok := r.Primary.(IdempotentPrimaryBackend)
 	if !ok {
@@ -179,14 +198,14 @@ func (r *Reconciler) reconcileOne(ctx context.Context, fact pendingCapture, retr
 	if err != nil {
 		attempt := len(retries) + 1
 		if attempt >= r.maxAttempts() {
-			r.terminal(ctx, fact, "retry_exhausted")
-			return nil
+			return r.terminal(ctx, fact, "retry_exhausted")
 		}
-		r.retry(ctx, fact, attempt, err)
+		if retryErr := r.retry(ctx, fact, attempt, err); retryErr != nil {
+			return retryErr
+		}
 		return err
 	}
-	r.synced(ctx, fact, primaryID)
-	return nil
+	return r.synced(ctx, fact, primaryID)
 }
 
 func (r *Reconciler) readyForRetry(fact pendingCapture, retries []event.Event) bool {
@@ -205,19 +224,19 @@ func (r *Reconciler) readyForRetry(fact pendingCapture, retries []event.Event) b
 	return !time.Now().UTC().Before(when.Add(delay))
 }
 
-func (r *Reconciler) retry(ctx context.Context, fact pendingCapture, attempt int, err error) {
-	r.store(ctx, EventScopedCaptureSyncRetry, fact, map[string]any{"attempt": attempt, "reason": "primary_unavailable", "error": err.Error()}, false)
+func (r *Reconciler) retry(ctx context.Context, fact pendingCapture, attempt int, err error) error {
+	return r.store(ctx, EventScopedCaptureSyncRetry, fact, map[string]any{"attempt": attempt, "reason": "primary_unavailable", "error": err.Error()}, false)
 }
 
-func (r *Reconciler) terminal(ctx context.Context, fact pendingCapture, reason string) {
-	r.store(ctx, EventScopedCaptureSyncFailed, fact, map[string]any{"reason": reason}, true)
+func (r *Reconciler) terminal(ctx context.Context, fact pendingCapture, reason string) error {
+	return r.store(ctx, EventScopedCaptureSyncFailed, fact, map[string]any{"reason": reason}, true)
 }
 
-func (r *Reconciler) synced(ctx context.Context, fact pendingCapture, primaryID string) {
-	r.store(ctx, EventScopedCaptureSynced, fact, map[string]any{"primary_id": primaryID}, true)
+func (r *Reconciler) synced(ctx context.Context, fact pendingCapture, primaryID string) error {
+	return r.store(ctx, EventScopedCaptureSynced, fact, map[string]any{"primary_id": primaryID}, true)
 }
 
-func (r *Reconciler) store(ctx context.Context, typ string, fact pendingCapture, extra map[string]any, terminal bool) {
+func (r *Reconciler) store(ctx context.Context, typ string, fact pendingCapture, extra map[string]any, terminal bool) error {
 	payload := map[string]any{"memory_id": fact.memoryID, "sync_key": fact.syncKey, "project_id": fact.scope.ProjectID, "task_id": fact.scope.TaskID}
 	if fact.scope.IncludeUserScope {
 		payload["user_id"] = fact.scope.UserID
@@ -227,15 +246,19 @@ func (r *Reconciler) store(ctx context.Context, typ string, fact pendingCapture,
 	}
 	e := event.NewEvent(typ, r.Source, payload).WithCorrelationID(fact.scope.CorrelationID).WithParentID(fact.event.ID).WithMetadata(event.EventMetadata{Project: fact.scope.ProjectID, SessionID: fact.scope.SessionID, Agent: fact.scope.AgentID})
 	if terminal {
-		e.ID = stableSyncEventID(typ, fact.syncKey)
+		// Terminal evidence is deduplicated per durable pending generation.
+		// A later pending fact starts a new generation and needs its own
+		// terminal evidence without allowing duplicate delivery for that fact.
+		e.ID = stableSyncEventID(typ, fact.syncKey, fact.event.ID)
 	}
 	if err := r.Events.Store(ctx, e); err != nil {
-		r.record(0, err)
+		return err
 	}
+	return nil
 }
 
-func stableSyncEventID(typ, syncKey string) string {
-	sum := sha256.Sum256([]byte(typ + "\x00" + syncKey))
+func stableSyncEventID(typ, syncKey, pendingEventID string) string {
+	sum := sha256.Sum256([]byte(typ + "\x00" + syncKey + "\x00" + pendingEventID))
 	return "evt_memory_" + hex.EncodeToString(sum[:16])
 }
 
