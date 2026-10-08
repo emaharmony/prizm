@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	prismsqlite "github.com/emaharmony/prizm/internal/sqlite"
@@ -61,13 +62,17 @@ func NewSQLiteOutbox(path string) (*SQLiteOutbox, error) {
 		CREATE TABLE IF NOT EXISTS command_outcomes (
 			event_id TEXT PRIMARY KEY, delivery_key TEXT NOT NULL, command_event_id TEXT NOT NULL,
 			run_id TEXT NOT NULL, correlation_id TEXT NOT NULL, sequence INTEGER NOT NULL,
-			status TEXT NOT NULL, outcome_json BLOB NOT NULL, terminal INTEGER NOT NULL,
+			status TEXT NOT NULL, outcome_json BLOB NOT NULL, terminal INTEGER NOT NULL, consumed INTEGER NOT NULL DEFAULT 0,
 			UNIQUE(delivery_key,sequence));
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_command_one_terminal ON command_outcomes(delivery_key) WHERE terminal=1;
 		CREATE INDEX IF NOT EXISTS idx_command_report ON command_outcomes(run_id,correlation_id,sequence);`)
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("event outbox: schema: %w", err)
+	}
+	if _, alterErr := db.Exec(`ALTER TABLE command_outcomes ADD COLUMN consumed INTEGER NOT NULL DEFAULT 0`); alterErr != nil && !strings.Contains(strings.ToLower(alterErr.Error()), "duplicate column name") {
+		db.Close()
+		return nil, fmt.Errorf("event outbox: migrate outcomes: %w", alterErr)
 	}
 	return s, nil
 }
@@ -169,11 +174,45 @@ func (s *SQLiteOutbox) Fail(ctx context.Context, key string, cause error, maxAtt
 		}
 	}
 	if attempts >= maxAttempts {
-		return DeliveryTerminalFailed, s.transition(ctx, key, DeliveryTerminalFailed, msg)
+		return DeliveryTerminalFailed, s.terminalFailure(ctx, key, msg, OutcomeFailed)
 	}
 	next := s.now().UTC().Add(retryAfter).Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `UPDATE event_outbox SET state=?,last_error=?,next_attempt=?,lease_expires='',updated_at=? WHERE idempotency_key=? AND state=?`, DeliveryPending, msg, next, s.now().UTC().Format(time.RFC3339Nano), key, DeliveryClaimed)
 	return DeliveryPending, err
+}
+
+func (s *SQLiteOutbox) terminalFailure(ctx context.Context, key, msg string, status OutcomeStatus) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var b []byte
+	var state string
+	if err := tx.QueryRowContext(ctx, `SELECT command_json,state FROM event_outbox WHERE idempotency_key=?`, key).Scan(&b, &state); err != nil {
+		return err
+	}
+	if DeliveryState(state) != DeliveryClaimed {
+		return errors.New("event outbox: delivery is not claimed")
+	}
+	var cmd Command
+	if err := json.Unmarshal(b, &cmd); err != nil {
+		return err
+	}
+	now := s.now().UTC()
+	payload, _ := json.Marshal(map[string]string{"error": msg})
+	out := Outcome{EventID: outcomeEventID(key, status), CommandEventID: cmd.EventID, RunID: cmd.RunID, TaskID: cmd.TaskID, DelegationID: cmd.DelegationID, CorrelationID: cmd.CorrelationID, CausationID: cmd.EventID, DeliveryKey: key, Status: status, Sequence: 1, OccurredAt: now, Payload: payload}
+	if _, err := recordOutcomeTx(ctx, tx, cmd, out); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE event_outbox SET state=?,last_error=?,lease_expires='',updated_at=? WHERE idempotency_key=? AND state=?`, DeliveryTerminalFailed, msg, now.Format(time.RFC3339Nano), key, DeliveryClaimed)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return errors.New("event outbox: delivery is not claimed")
+	}
+	return tx.Commit()
 }
 
 func (s *SQLiteOutbox) transition(ctx context.Context, key string, to DeliveryState, msg string) error {
@@ -197,21 +236,55 @@ func (s *SQLiteOutbox) RecordOutcome(ctx context.Context, outcome Outcome) (bool
 	if err := outcome.Validate(); err != nil {
 		return false, err
 	}
-	b, err := json.Marshal(outcome)
-	if err != nil {
-		return false, err
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback()
-	var latestKey string
-	err = tx.QueryRowContext(ctx, `SELECT idempotency_key FROM event_outbox WHERE command_json->>'$.delegation_id'=? ORDER BY created_at DESC LIMIT 1`, outcome.DelegationID).Scan(&latestKey)
-	if err == nil && latestKey != outcome.DeliveryKey {
-		return false, errors.New("event outbox: stale delegation outcome")
+	var commandBytes []byte
+	err = tx.QueryRowContext(ctx, `SELECT command_json FROM event_outbox WHERE idempotency_key=?`, outcome.DeliveryKey).Scan(&commandBytes)
+	if err != nil {
+		return false, err
 	}
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	var cmd Command
+	if err := json.Unmarshal(commandBytes, &cmd); err != nil {
+		return false, err
+	}
+	if outcome.DelegationID != "" {
+		var latestKey string
+		err = tx.QueryRowContext(ctx, `SELECT idempotency_key FROM event_outbox WHERE command_json->>'$.delegation_id'=? ORDER BY created_at DESC LIMIT 1`, outcome.DelegationID).Scan(&latestKey)
+		if err == nil && latestKey != outcome.DeliveryKey {
+			return false, errors.New("event outbox: stale delegation outcome")
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return false, err
+		}
+	}
+	inserted, err := recordOutcomeTx(ctx, tx, cmd, outcome)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return inserted, nil
+}
+
+func recordOutcomeTx(ctx context.Context, tx *sql.Tx, cmd Command, outcome Outcome) (bool, error) {
+	if outcome.CommandEventID != cmd.EventID || outcome.RunID != cmd.RunID || outcome.TaskID != cmd.TaskID || outcome.DelegationID != cmd.DelegationID || outcome.CorrelationID != cmd.CorrelationID || outcome.DeliveryKey != cmd.IdempotencyKey || outcome.CausationID != cmd.EventID {
+		return false, errors.New("event outbox: outcome identity does not match command")
+	}
+	if outcome.Status == OutcomeProgress {
+		var accepted int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM command_outcomes WHERE delivery_key=? AND status=?`, outcome.DeliveryKey, OutcomeAccepted).Scan(&accepted); err != nil {
+			return false, err
+		}
+		if accepted == 0 {
+			return false, errors.New("event outbox: progress requires accepted outcome")
+		}
+	}
+	b, err := json.Marshal(outcome)
+	if err != nil {
 		return false, err
 	}
 	terminal := 0
@@ -222,11 +295,12 @@ func (s *SQLiteOutbox) RecordOutcome(ctx context.Context, outcome Outcome) (bool
 	if err != nil {
 		return false, fmt.Errorf("event outbox: outcome: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return false, err
-	}
 	n, _ := res.RowsAffected()
 	return n == 1, nil
+}
+
+func outcomeEventID(key string, status OutcomeStatus) string {
+	return CommandEventID(key + ":" + string(status))
 }
 
 type CommandTrace struct {
@@ -279,6 +353,39 @@ func (s *SQLiteOutbox) Report(ctx context.Context, runID string) ([]CommandTrace
 	return report, rows.Err()
 }
 
+// PendingOutcomes returns durable facts not yet handed to the workflow runtime.
+func (s *SQLiteOutbox) PendingOutcomes(ctx context.Context, runID string) ([]Outcome, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT outcome_json FROM command_outcomes WHERE run_id=? AND consumed=0 ORDER BY rowid`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var outcomes []Outcome
+	for rows.Next() {
+		var b []byte
+		var out Outcome
+		if err := rows.Scan(&b); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(b, &out); err != nil {
+			return nil, err
+		}
+		outcomes = append(outcomes, out)
+	}
+	return outcomes, rows.Err()
+}
+
+func (s *SQLiteOutbox) MarkOutcomeConsumed(ctx context.Context, eventID string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE command_outcomes SET consumed=1 WHERE event_id=?`, eventID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return errors.New("event outbox: outcome not found")
+	}
+	return nil
+}
+
 type rowScanner interface{ Scan(...any) error }
 
 func scanDelivery(r rowScanner) (*Delivery, error) {
@@ -314,7 +421,7 @@ func (d Dispatcher) DispatchOne(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	if !item.Command.Deadline.IsZero() && !d.Outbox.now().Before(item.Command.Deadline) {
-		_, failErr := d.Outbox.Fail(ctx, item.Command.IdempotencyKey, errors.New("command deadline exceeded"), 1, 0)
+		failErr := d.Outbox.terminalFailure(ctx, item.Command.IdempotencyKey, "command deadline exceeded", OutcomeTimedOut)
 		return true, failErr
 	}
 	if err := d.Publisher.Publish(ctx, item.Subject, item.Command.Payload); err != nil {

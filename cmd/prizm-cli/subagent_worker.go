@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/emaharmony/prizm/internal/agent"
+	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/provider"
 	"github.com/emaharmony/prizm/internal/safety"
@@ -240,14 +242,39 @@ func parseSubAgentAction(text string) subagent.Action {
 type subAgentPublisher struct {
 	nc      *nats.Conn
 	subject string
+	packet  v2.TaskPacket
 }
 
 func (p *subAgentPublisher) PublishCompletion(c v2.TaskCompletion) error {
-	data, err := json.Marshal(c)
+	c.DelegationID = p.packet.DelegationID
+	c.DeliveryKey = p.packet.DeliveryKey
+	payload, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	status := event.OutcomeSucceeded
+	if c.Status != "completed" {
+		status = event.OutcomeFailed
+	}
+	out := p.outcome(status, 2, payload)
+	data, err := json.Marshal(out)
 	if err != nil {
 		return err
 	}
 	return p.nc.Publish(p.subject, data)
+}
+
+func (p *subAgentPublisher) PublishAccepted() error {
+	out := p.outcome(event.OutcomeAccepted, 1, nil)
+	data, err := json.Marshal(out)
+	if err != nil {
+		return err
+	}
+	return p.nc.Publish(p.subject, data)
+}
+
+func (p *subAgentPublisher) outcome(status event.OutcomeStatus, sequence int64, payload []byte) event.Outcome {
+	return event.Outcome{EventID: event.CommandEventID(p.packet.DeliveryKey + ":" + string(status)), CommandEventID: event.CommandEventID(p.packet.DeliveryKey), RunID: p.packet.RunID, TaskID: p.packet.TaskID, DelegationID: p.packet.DelegationID, CorrelationID: p.packet.CorrelationID, CausationID: event.CommandEventID(p.packet.DeliveryKey), DeliveryKey: p.packet.DeliveryKey, Status: status, Sequence: sequence, OccurredAt: time.Now().UTC(), Payload: payload}
 }
 
 // startSubAgentWorker subscribes the generic sub-agent worker to the delegation
@@ -296,8 +323,6 @@ func startSubAgentWorker(nc *nats.Conn, providers *provider.ProviderRegistry, ex
 	if root != "" {
 		worker.SetWorktrees(subagent.GitWorktreeProvider{Root: root})
 	}
-	pub := &subAgentPublisher{nc: nc, subject: subAgentCompletionSubject}
-
 	// Bound concurrent sub-agent runs so a burst of delegations can't exhaust
 	// resources. Parallel runs stay isolated at the git layer via V56 worktrees
 	// when a task mutates files.
@@ -315,6 +340,11 @@ func startSubAgentWorker(nc *nats.Conn, providers *provider.ProviderRegistry, ex
 		go func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			pub := &subAgentPublisher{nc: nc, subject: subAgentCompletionSubject, packet: packet}
+			if err := pub.PublishAccepted(); err != nil {
+				log.Printf("[SUBAGENT] task %s acceptance publish error: %v", packet.TaskID, err)
+				return
+			}
 			completion, herr := worker.HandleAndPublish(stdcontext.Background(), packet, pub)
 			if herr != nil {
 				log.Printf("[SUBAGENT] task %s publish error: %v", packet.TaskID, herr)

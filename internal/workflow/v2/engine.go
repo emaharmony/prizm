@@ -103,7 +103,7 @@ type EventEmitter interface {
 
 // ExternalEvent is an event from Discord or NATS during feedback gates.
 type ExternalEvent struct {
-	Type          string // "approval", "review", "task_complete", "agent_status"
+	Type          string // approval, review, task_accepted, task_progress, task_complete, agent_status
 	CorrelationID string
 	Source        string // "discord", "nats"
 	Data          map[string]any
@@ -360,17 +360,33 @@ func (e *Engine) handleExternalEvent(evt ExternalEvent, phaseName string) {
 			e.state.PauseReason = ""
 		}
 	case "task_complete":
-		taskID, _ := evt.Data["task_id"].(string)
-		status, _ := evt.Data["status"].(string)
 		if e.delegation != nil {
-			// Route through the delegation manager so the matching delegation
-			// record is closed out alongside the task status.
-			summary, _ := evt.Data["output_summary"].(string)
-			e.delegation.HandleTaskCompletion(TaskCompletion{
-				TaskID: taskID, Status: status, OutputSummary: summary,
-			}, e.state)
+			if completion, ok := evt.Data["completion"].(TaskCompletion); ok {
+				e.delegation.HandleTaskCompletion(completion, e.state)
+			} else {
+				taskID, _ := evt.Data["task_id"].(string)
+				status, _ := evt.Data["status"].(string)
+				summary, _ := evt.Data["output_summary"].(string)
+				e.delegation.HandleTaskCompletion(TaskCompletion{TaskID: taskID, Status: status, OutputSummary: summary}, e.state)
+			}
 		} else {
+			taskID, _ := evt.Data["task_id"].(string)
+			status, _ := evt.Data["status"].(string)
 			e.state.UpdateTaskStatus(taskID, status, evt.Data)
+		}
+	case "task_accepted":
+		if e.delegation != nil {
+			taskID, _ := evt.Data["task_id"].(string)
+			delegationID, _ := evt.Data["delegation_id"].(string)
+			key, _ := evt.Data["delivery_key"].(string)
+			e.delegation.AcknowledgeTask(taskID, delegationID, key, e.state)
+		}
+	case "task_progress":
+		if e.delegation != nil {
+			taskID, _ := evt.Data["task_id"].(string)
+			delegationID, _ := evt.Data["delegation_id"].(string)
+			key, _ := evt.Data["delivery_key"].(string)
+			e.delegation.ProgressTask(taskID, delegationID, key, e.state)
 		}
 	case "agent_status":
 		agentName, _ := evt.Data["agent"].(string)

@@ -293,6 +293,45 @@ func (l *NATSListener) Listen(engine *Engine) error {
 
 	// Subscribe to task completion notifications
 	sub, err = l.conn.Subscribe("prizm.workflow.task.complete", func(msg *nats.Msg) {
+		var outcome prizmevent.Outcome
+		if json.Unmarshal(msg.Data, &outcome) == nil && outcome.EventID != "" {
+			evtType := "task_complete"
+			if outcome.Status == prizmevent.OutcomeAccepted {
+				evtType = "task_accepted"
+			} else if outcome.Status == prizmevent.OutcomeProgress {
+				evtType = "task_progress"
+			}
+			data := map[string]any{"task_id": outcome.TaskID, "delegation_id": outcome.DelegationID, "delivery_key": outcome.DeliveryKey}
+			if evtType == "task_complete" {
+				var completion TaskCompletion
+				if len(outcome.Payload) > 0 {
+					if err := json.Unmarshal(outcome.Payload, &completion); err != nil {
+						log.Printf("[NATS-LISTEN] failed to parse terminal outcome: %v", err)
+						return
+					}
+				}
+				if completion.TaskID == "" {
+					completion.TaskID = outcome.TaskID
+				}
+				completion.DelegationID = outcome.DelegationID
+				completion.DeliveryKey = outcome.DeliveryKey
+				if completion.Status == "" {
+					if outcome.Status == prizmevent.OutcomeSucceeded {
+						completion.Status = "completed"
+					} else {
+						completion.Status = "failed"
+					}
+				}
+				data["completion"] = completion
+			}
+			evt := ExternalEvent{Type: evtType, CorrelationID: outcome.CorrelationID, Source: "nats", Data: data}
+			select {
+			case eventCh <- evt:
+			default:
+				log.Printf("[NATS-LISTEN] WARN event channel full, retaining outcome requires durable wake intake")
+			}
+			return
+		}
 		var completion TaskCompletion
 		if err := json.Unmarshal(msg.Data, &completion); err != nil {
 			log.Printf("[NATS-LISTEN] failed to parse task completion: %v", err)

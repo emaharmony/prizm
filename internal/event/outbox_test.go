@@ -125,6 +125,10 @@ func TestDispatcherDeadlineFailsWithoutPublishing(t *testing.T) {
 	if item.State != DeliveryTerminalFailed || pub.calls != 0 {
 		t.Fatalf("item=%+v calls=%d", item, pub.calls)
 	}
+	report, err := box.Report(t.Context(), cmd.RunID)
+	if err != nil || len(report) != 1 || len(report[0].Outcomes) != 1 || report[0].Outcomes[0].Status != OutcomeTimedOut {
+		t.Fatalf("report=%+v err=%v", report, err)
+	}
 }
 
 func TestOutboxOutcomeTraceRejectsDuplicateTerminalAndStaleRetry(t *testing.T) {
@@ -164,5 +168,28 @@ func TestOutboxOutcomeTraceRejectsDuplicateTerminalAndStaleRetry(t *testing.T) {
 	late.Sequence = 4
 	if _, err := box.RecordOutcome(ctx, late); err == nil {
 		t.Fatal("expected stale retry rejection")
+	}
+}
+
+func TestRecordOutcomeRejectsMismatchedIdentityAndProgressBeforeAccepted(t *testing.T) {
+	box, _ := NewSQLiteOutbox(filepath.Join(t.TempDir(), "outbox.db"))
+	defer box.Close()
+	cmd := testCommand("bound")
+	box.Accept(t.Context(), "s", cmd)
+	base := Outcome{EventID: "out", CommandEventID: cmd.EventID, RunID: cmd.RunID, TaskID: cmd.TaskID, DelegationID: cmd.DelegationID, CorrelationID: cmd.CorrelationID, CausationID: cmd.EventID, DeliveryKey: cmd.IdempotencyKey, Status: OutcomeProgress, Sequence: 2, OccurredAt: time.Now().UTC()}
+	if _, err := box.RecordOutcome(t.Context(), base); err == nil {
+		t.Fatal("progress before accepted must fail")
+	}
+	for name, mutate := range map[string]func(*Outcome){"run": func(o *Outcome) { o.RunID = "forged" }, "task": func(o *Outcome) { o.TaskID = "forged" }, "command": func(o *Outcome) { o.CommandEventID = "forged" }, "correlation": func(o *Outcome) { o.CorrelationID = "forged" }} {
+		t.Run(name, func(t *testing.T) {
+			out := base
+			out.EventID = "out-" + name
+			out.Status = OutcomeAccepted
+			out.Sequence = 1
+			mutate(&out)
+			if _, err := box.RecordOutcome(t.Context(), out); err == nil {
+				t.Fatal("mismatch accepted")
+			}
+		})
 	}
 }

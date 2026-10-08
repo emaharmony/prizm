@@ -35,3 +35,24 @@ func TestDelegationAcknowledgementAndLateCompletion(t *testing.T) {
 		t.Fatalf("status=%s", st.Delegations[0].Status)
 	}
 }
+
+func TestDelegationProgressRequiresAcceptanceAndTerminalResumesTask(t *testing.T) {
+	dm := NewDelegationManager("tasks", "complete")
+	st := NewWorkflowState(&WorkflowConfig{Name: "test"})
+	st.RunID = "run"
+	st.CorrelationID = "corr"
+	st.Plan = &PlanGraph{Tasks: []PlanTask{{ID: "T1", Agent: "coder", Description: "work"}}}
+	del, pkt, _ := dm.DelegateTask(t.Context(), st.Plan.Tasks[0], st)
+	if dm.ProgressTask("T1", del.DelegationID, pkt.DeliveryKey, st) {
+		t.Fatal("progress before acceptance")
+	}
+	e := &Engine{state: st, delegation: dm}
+	e.handleExternalEvent(ExternalEvent{Type: "task_accepted", Data: map[string]any{"task_id": "T1", "delegation_id": del.DelegationID, "delivery_key": pkt.DeliveryKey}}, "")
+	if st.Delegations[0].Status != "acknowledged" {
+		t.Fatalf("status=%s", st.Delegations[0].Status)
+	}
+	e.handleExternalEvent(ExternalEvent{Type: "task_complete", Data: map[string]any{"completion": TaskCompletion{TaskID: "T1", DelegationID: del.DelegationID, DeliveryKey: pkt.DeliveryKey, Status: "completed", OutputSummary: "done"}}}, "")
+	if st.Delegations[0].Status != "completed" || st.Plan.Tasks[0].Status != "completed" {
+		t.Fatalf("delegation=%s task=%s", st.Delegations[0].Status, st.Plan.Tasks[0].Status)
+	}
+}

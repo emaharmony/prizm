@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // defaultDelegationTimeout is the fallback deadline for any agent without a
@@ -156,7 +158,7 @@ func (dm *DelegationManager) BuildTaskPacket(task PlanTask) TaskPacket {
 func (dm *DelegationManager) DelegateTask(ctx context.Context, task PlanTask, state *WorkflowState) (*DelegationState, TaskPacket, error) {
 	packet := dm.BuildTaskPacket(task)
 
-	delegationID := fmt.Sprintf("DEL-%s-%d", task.ID, time.Now().Unix())
+	delegationID := fmt.Sprintf("DEL-%s-%s", task.ID, event.NewID())
 	delegation := DelegationState{
 		DelegationID: delegationID,
 		TaskID:       task.ID,
@@ -244,7 +246,7 @@ func (dm *DelegationManager) ProgressTask(taskID, delegationID, key string, stat
 	defer state.mu.Unlock()
 	for i := range state.Delegations {
 		d := &state.Delegations[i]
-		if d.TaskID == taskID && d.DelegationID == delegationID && d.DeliveryKey == key && (d.Status == "sent" || d.Status == "acknowledged" || d.Status == "in_progress") {
+		if d.TaskID == taskID && d.DelegationID == delegationID && d.DeliveryKey == key && (d.Status == "acknowledged" || d.Status == "in_progress") {
 			d.Status = "in_progress"
 			return true
 		}
