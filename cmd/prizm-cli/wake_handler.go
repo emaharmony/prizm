@@ -26,6 +26,7 @@ import (
 	"github.com/emaharmony/prizm/internal/agent"
 	"github.com/emaharmony/prizm/internal/api"
 	contextpkg "github.com/emaharmony/prizm/internal/context"
+	prizmevent "github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/factorymonitor"
 	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/emaharmony/prizm/internal/improve"
@@ -2367,8 +2368,22 @@ func (wh *WakeHandler) RunGatedLoop(ctx stdcontext.Context, project *orchestrato
 	// Engine: NATS emitter for dashboard observability + delegation for optional
 	// sub-agent reviewers. Falls back to a no-op log emitter without NATS.
 	var emitter v2.EventEmitter = &v2.LogEmitter{}
+	var workflowPublisher *v2.NATSPublisher
+	var delegationPublisher *v2.NATSPublisher
 	if wh.natsConn != nil {
-		emitter = v2.NewNATSEmitter(v2.NewNATSPublisherFromConn(wh.natsConn), "prizm.workflow")
+		workflowPublisher = v2.NewNATSPublisherFromConn(wh.natsConn)
+		outbox, outboxErr := prizmevent.NewSQLiteOutbox(filepath.Join(stateDir, "event-outbox.db"))
+		if outboxErr != nil {
+			log.Printf("[GATED-LOOP] durable event outbox unavailable; refusing delegated dispatch: %v", outboxErr)
+		} else {
+			defer outbox.Close()
+			workflowPublisher.UseOutbox(outbox)
+			delegationPublisher = workflowPublisher
+			if replayErr := workflowPublisher.ReplayOutbox(ctx); replayErr != nil {
+				log.Printf("[GATED-LOOP] pending event replay paused after publish failure: %v", replayErr)
+			}
+		}
+		emitter = v2.NewNATSEmitter(workflowPublisher, "prizm.workflow")
 	}
 	delegation := v2.NewDelegationManager("prizm.agent.openclaw", "prizm.workflow.task.complete")
 	delegation.ApplyTimeoutConfig(config.Global.DelegationTimeouts)
@@ -2441,13 +2456,9 @@ func (wh *WakeHandler) RunGatedLoop(ctx stdcontext.Context, project *orchestrato
 	// Delegation transport: publish delegated task packets onto the agent subject so
 	// other agents/Prizms can pick them up. Without NATS, delegations are still
 	// recorded in state but not dispatched.
-	if wh.natsConn != nil {
+	if delegationPublisher != nil {
 		engine.SetTaskPublisher(func(packet v2.TaskPacket) error {
-			data, err := json.Marshal(packet)
-			if err != nil {
-				return err
-			}
-			return wh.natsConn.Publish(delegation.Subject(), data)
+			return delegationPublisher.PublishTaskPacket(delegation.Subject(), packet)
 		})
 	}
 

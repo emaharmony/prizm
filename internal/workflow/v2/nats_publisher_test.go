@@ -2,7 +2,13 @@ package v2
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/emaharmony/prizm/internal/bus"
+	prizmevent "github.com/emaharmony/prizm/internal/event"
+	"github.com/nats-io/nats.go"
 )
 
 // TestTaskPacketMarshaling verifies that TaskPacket serializes correctly
@@ -66,6 +72,61 @@ func TestTaskPacketMarshaling(t *testing.T) {
 	}
 	if len(decoded.ValidationChecklist) != 5 {
 		t.Errorf("ValidationChecklist length mismatch: got %d, want 5", len(decoded.ValidationChecklist))
+	}
+}
+
+func TestDurableTaskPacketPreservesLegacyWireShape(t *testing.T) {
+	url, cleanup, err := bus.StartEmbeddedBus(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	nc, err := nats.Connect(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	msgCh := make(chan *nats.Msg, 1)
+	sub, err := nc.ChanSubscribe("tasks", msgCh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Unsubscribe()
+	nc.Flush()
+	box, err := prizmevent.NewSQLiteOutbox(filepath.Join(t.TempDir(), "outbox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer box.Close()
+	pub := NewNATSPublisherFromConn(nc)
+	pub.UseOutbox(box)
+	packet := TaskPacket{Type: "task_delegation", TargetAgent: "coder", TaskID: "T1", RunID: "run-1", CorrelationID: "corr-1", DelegationID: "del-1", DeliveryKey: "del-1:0", Deadline: time.Now().Add(time.Minute).UTC().Format(time.RFC3339)}
+	if err := pub.PublishTaskPacket("tasks", packet); err != nil {
+		t.Fatal(err)
+	}
+	if err := pub.PublishTaskPacket("tasks", packet); err != nil {
+		t.Fatalf("duplicate publish: %v", err)
+	}
+	select {
+	case msg := <-msgCh:
+		var got TaskPacket
+		if err := json.Unmarshal(msg.Data, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.DeliveryKey != packet.DeliveryKey || got.TaskID != packet.TaskID {
+			t.Fatalf("wire packet=%+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no task packet")
+	}
+	select {
+	case msg := <-msgCh:
+		t.Fatalf("duplicate wire delivery: %s", string(msg.Data))
+	case <-time.After(100 * time.Millisecond):
+	}
+	report, err := box.Report(t.Context(), packet.RunID)
+	if err != nil || len(report) != 1 || report[0].State != prizmevent.DeliveryDelivered {
+		t.Fatalf("report=%+v err=%v", report, err)
 	}
 }
 

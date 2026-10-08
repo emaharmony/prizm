@@ -1,11 +1,13 @@
 package v2
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"time"
 
+	prizmevent "github.com/emaharmony/prizm/internal/event"
 	"github.com/nats-io/nats.go"
 )
 
@@ -14,7 +16,35 @@ import (
 // and publishing of task delegation packets, feedback/approval requests,
 // post-execution review requests, and generic events.
 type NATSPublisher struct {
-	conn *nats.Conn
+	conn   *nats.Conn
+	outbox *prizmevent.SQLiteOutbox
+}
+
+// UseOutbox routes task commands through the durable canonical intake.
+// Existing callers remain direct-publish compatible when it is unset.
+func (p *NATSPublisher) UseOutbox(outbox *prizmevent.SQLiteOutbox) { p.outbox = outbox }
+
+// ReplayOutbox dispatches pending or expired commands after process restart.
+func (p *NATSPublisher) ReplayOutbox(ctx context.Context) error {
+	if p.outbox == nil || p.conn == nil {
+		return nil
+	}
+	d := prizmevent.Dispatcher{Outbox: p.outbox, Publisher: natsCommandPublisher{p.conn}, Lease: 30 * time.Second, MaxAttempts: 3, RetryAfter: time.Second}
+	for {
+		handled, err := d.DispatchOne(ctx)
+		if err != nil {
+			return err
+		}
+		if !handled {
+			return nil
+		}
+	}
+}
+
+type natsCommandPublisher struct{ conn *nats.Conn }
+
+func (p natsCommandPublisher) Publish(_ context.Context, subject string, data []byte) error {
+	return p.conn.Publish(subject, data)
 }
 
 // NewNATSPublisher connects to NATS and returns a publisher.
@@ -54,6 +84,33 @@ func (p *NATSPublisher) PublishTaskPacket(subject string, packet TaskPacket) err
 	data, err := json.Marshal(packet)
 	if err != nil {
 		return fmt.Errorf("marshal task packet: %w", err)
+	}
+	if p.outbox != nil {
+		runID := packet.RunID
+		if runID == "" {
+			runID = packet.TaskID
+		}
+		corr := packet.CorrelationID
+		if corr == "" {
+			corr = runID
+		}
+		key := packet.DeliveryKey
+		if key == "" {
+			key = packet.TaskID
+		}
+		cmd := prizmevent.Command{EventID: prizmevent.CommandEventID(key), Type: "prizm.command.delegation", RunID: runID, TaskID: packet.TaskID, DelegationID: packet.DelegationID, CorrelationID: corr, IdempotencyKey: key, SchemaVersion: prizmevent.CommandSchemaVersion, Payload: data}
+		if deadline, parseErr := time.Parse(time.RFC3339, packet.Deadline); parseErr == nil {
+			cmd.Deadline = deadline
+		}
+		if _, err := p.outbox.Accept(context.Background(), subject, cmd); err != nil {
+			return fmt.Errorf("persist task packet: %w", err)
+		}
+		d := prizmevent.Dispatcher{Outbox: p.outbox, Publisher: natsCommandPublisher{p.conn}, Lease: 30 * time.Second, MaxAttempts: 3, RetryAfter: time.Second}
+		if _, err := d.DispatchOne(context.Background()); err != nil {
+			return fmt.Errorf("dispatch task packet: %w", err)
+		}
+		log.Printf("[NATS-PUB] durably published task packet %s to %s (agent: %s)", packet.TaskID, subject, packet.TargetAgent)
+		return nil
 	}
 	if err := p.conn.Publish(subject, data); err != nil {
 		return fmt.Errorf("publish task packet to %s: %w", subject, err)
