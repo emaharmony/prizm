@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -16,6 +17,35 @@ type idempotentPrimary struct {
 	err         error
 	deliveries  map[string]string
 	remoteCalls int
+}
+
+// barrierFailingPrimary holds concurrent deliveries until both workers have
+// observed the same unresolved generation. It models the race that retry
+// event IDs must collapse without serializing independent workers.
+type barrierFailingPrimary struct {
+	mu         sync.Mutex
+	entered    int
+	release    chan struct{}
+	deliveries map[string]string
+}
+
+func (p *barrierFailingPrimary) Capture(context.Context, Memory) (string, error) {
+	return "", errors.New("offline")
+}
+
+func (p *barrierFailingPrimary) CaptureIdempotent(context.Context, Memory, string) (string, error) {
+	p.mu.Lock()
+	p.entered++
+	if p.entered == 2 {
+		close(p.release)
+	}
+	p.mu.Unlock()
+	<-p.release
+	return "", errors.New("offline")
+}
+
+func (p *barrierFailingPrimary) Search(context.Context, SearchRequest) ([]Memory, error) {
+	return nil, nil
 }
 
 func (p *idempotentPrimary) Capture(_ context.Context, mem Memory) (string, error) {
@@ -262,6 +292,92 @@ func TestReconcilerRecordsRetryThenTerminalFailure(t *testing.T) {
 	}
 }
 
+func TestReconcilerConcurrentFailuresWriteOneRetryPerAttempt(t *testing.T) {
+	local := tempStore(t)
+	events := newReconcileStore(t)
+	setupPrimary := &idempotentPrimary{err: errors.New("offline"), deliveries: map[string]string{}}
+	createPendingCapture(t, local, events, setupPrimary, scopedTestScope())
+	barrier := &barrierFailingPrimary{release: make(chan struct{}), deliveries: map[string]string{}}
+
+	runConcurrent := func(primary PrimaryBackend) {
+		left := NewReconciler(local, primary, events, "left")
+		right := NewReconciler(local, primary, events, "right")
+		left.MaxAttempts, right.MaxAttempts = 3, 3
+		left.RetryBase, right.RetryBase = time.Nanosecond, time.Nanosecond
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); left.RunOnce(context.Background()) }()
+		go func() { defer wg.Done(); right.RunOnce(context.Background()) }()
+		wg.Wait()
+	}
+
+	runConcurrent(barrier)
+	if retries := syncEvents(t, events, EventScopedCaptureSyncRetry); len(retries) != 1 || retries[0].Payload["attempt"] != float64(1) {
+		t.Fatalf("first concurrent failure retries=%#v, want one attempt 1", retries)
+	}
+	if failed := syncEvents(t, events, EventScopedCaptureSyncFailed); len(failed) != 0 {
+		t.Fatalf("first concurrent failure prematurely exhausted retries: %#v", failed)
+	}
+
+	primary := &idempotentPrimary{err: errors.New("offline"), deliveries: map[string]string{}}
+	time.Sleep(time.Millisecond)
+	next := NewReconciler(local, primary, events, "next")
+	next.MaxAttempts = 3
+	next.RetryBase = time.Nanosecond
+	next.RunOnce(context.Background())
+	if retries := syncEvents(t, events, EventScopedCaptureSyncRetry); len(retries) != 2 {
+		t.Fatalf("second concurrent failure retries=%#v, want one fact per distinct attempt", retries)
+	}
+	if failed := syncEvents(t, events, EventScopedCaptureSyncFailed); len(failed) != 0 {
+		t.Fatalf("second delivery prematurely exhausted retries: %#v", failed)
+	}
+
+	time.Sleep(time.Millisecond)
+	terminal := NewReconciler(local, primary, events, "terminal")
+	terminal.MaxAttempts = 3
+	terminal.RetryBase = time.Nanosecond
+	terminal.RunOnce(context.Background())
+	if failed := syncEvents(t, events, EventScopedCaptureSyncFailed); len(failed) != 1 || failed[0].Payload["reason"] != "retry_exhausted" {
+		t.Fatalf("terminal failure=%#v, want one exhausted terminal fact", failed)
+	}
+}
+
+func TestReconcilerPaginatesCausalFactsPastOnePage(t *testing.T) {
+	local := tempStore(t)
+	events := newReconcileStore(t)
+	scope := scopedTestScope()
+	mem := Memory{ID: "paged-memory", Content: "already delivered", ProjectID: scope.ProjectID, TaskID: scope.TaskID, UserID: scope.UserID}
+	if _, err := local.Store(context.Background(), mem); err != nil {
+		t.Fatal(err)
+	}
+	payload := map[string]any{"memory_id": mem.ID, "sync_key": mem.ID, "project_id": scope.ProjectID, "task_id": scope.TaskID, "user_id": scope.UserID}
+	pending := event.NewEvent(EventScopedCaptureSyncPending, "test", payload).WithCorrelationID(scope.CorrelationID)
+	if err := events.Store(context.Background(), pending); err != nil {
+		t.Fatal(err)
+	}
+	noise := make([]event.Event, reconciliationPageSize)
+	for i := range noise {
+		noise[i] = event.NewEvent("prizm.memory.capture.noise", "test", map[string]any{"memory_id": fmt.Sprintf("noise-%d", i), "sync_key": fmt.Sprintf("noise-%d", i)})
+	}
+	if err := events.StoreBatch(context.Background(), noise); err != nil {
+		t.Fatal(err)
+	}
+	synced := event.NewEvent(EventScopedCaptureSynced, "test", payload).WithCorrelationID(scope.CorrelationID)
+	synced.ID = stableSyncEventID(EventScopedCaptureSynced, mem.ID, pending.ID)
+	if err := events.Store(context.Background(), synced); err != nil {
+		t.Fatal(err)
+	}
+	primary := &idempotentPrimary{deliveries: map[string]string{}}
+	r := NewReconciler(local, primary, events, "test")
+	r.RunOnce(context.Background())
+	if primary.remoteCalls != 0 {
+		t.Fatalf("remote calls = %d, terminal fact on later causal page was ignored", primary.remoteCalls)
+	}
+	if status := r.Status(); status.Pending != 0 {
+		t.Fatalf("status=%#v, want terminal delivery to leave no pending work", status)
+	}
+}
+
 func TestReconcileFactsTreatsLaterPendingAsNewUnresolvedDelivery(t *testing.T) {
 	scope := scopedTestScope()
 	pending := event.NewEvent(EventScopedCaptureSyncPending, "test", map[string]any{"memory_id": "mem-1", "sync_key": "key-1", "project_id": scope.ProjectID, "task_id": scope.TaskID, "user_id": scope.UserID}).WithCorrelationID(scope.CorrelationID)
@@ -387,8 +503,8 @@ func (s *terminalWriteFailureStore) Store(ctx context.Context, e event.Event) er
 	return s.EventStore.Store(ctx, e)
 }
 
-func (s *terminalWriteFailureStore) QueryInInsertionOrder(ctx context.Context, filter event.EventFilter) ([]event.Event, error) {
-	return s.EventStore.(*event.SQLiteEventStore).QueryInInsertionOrder(ctx, filter)
+func (s *terminalWriteFailureStore) QueryInInsertionOrderPage(ctx context.Context, filter event.EventFilter, afterRowID int64) ([]event.Event, int64, error) {
+	return s.EventStore.(*event.SQLiteEventStore).QueryInInsertionOrderPage(ctx, filter, afterRowID)
 }
 
 func (s *syncWriteFailureStore) Store(ctx context.Context, e event.Event) error {
@@ -399,6 +515,6 @@ func (s *syncWriteFailureStore) Store(ctx context.Context, e event.Event) error 
 	return s.EventStore.Store(ctx, e)
 }
 
-func (s *syncWriteFailureStore) QueryInInsertionOrder(ctx context.Context, filter event.EventFilter) ([]event.Event, error) {
-	return s.EventStore.(*event.SQLiteEventStore).QueryInInsertionOrder(ctx, filter)
+func (s *syncWriteFailureStore) QueryInInsertionOrderPage(ctx context.Context, filter event.EventFilter, afterRowID int64) ([]event.Event, int64, error) {
+	return s.EventStore.(*event.SQLiteEventStore).QueryInInsertionOrderPage(ctx, filter, afterRowID)
 }

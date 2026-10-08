@@ -118,22 +118,40 @@ type pendingCapture struct {
 	event    event.Event
 }
 
-// causalEventStore is optional because EventStore remains the compatibility
-// seam. SQLite exposes this narrower ordering for replay consumers that need
-// insertion order rather than its public ID-cursor order.
-type causalEventStore interface {
-	QueryInInsertionOrder(context.Context, event.EventFilter) ([]event.Event, error)
+// causalEventPageStore is optional because EventStore remains the compatibility
+// seam. Replay needs bounded insertion-ordered pages rather than the public
+// event ID cursor, whose deterministic terminal IDs are not chronological.
+type causalEventPageStore interface {
+	QueryInInsertionOrderPage(context.Context, event.EventFilter, int64) ([]event.Event, int64, error)
 }
 
+const reconciliationPageSize = 500
+
 func reconciliationEvents(ctx context.Context, store event.EventStore) ([]event.Event, error) {
-	filter := event.EventFilter{Type: "prizm.memory.capture.", Limit: 10000}
-	if causal, ok := store.(causalEventStore); ok {
-		return causal.QueryInInsertionOrder(ctx, filter)
+	causal, ok := store.(causalEventPageStore)
+	if !ok {
+		// ID-sorted retrieval is not safe for replay: deterministic terminal IDs
+		// can sort before or after the pending fact they close. Refuse delivery
+		// until a store proves causal ordering rather than risking a stale replay.
+		return nil, fmt.Errorf("memory reconciliation requires insertion-ordered event pagination")
 	}
-	// ID-sorted retrieval is not safe for replay: deterministic terminal IDs
-	// can sort before or after the pending fact they close. Refuse delivery
-	// until a store proves causal ordering rather than risking a stale replay.
-	return nil, fmt.Errorf("memory reconciliation requires insertion-ordered event queries")
+	filter := event.EventFilter{Type: "prizm.memory.capture.", Limit: reconciliationPageSize}
+	var all []event.Event
+	var cursor int64
+	for {
+		page, next, err := causal.QueryInInsertionOrderPage(ctx, filter, cursor)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, page...)
+		if len(page) < filter.Limit {
+			return all, nil
+		}
+		if next <= cursor {
+			return nil, fmt.Errorf("memory reconciliation received a non-advancing insertion cursor")
+		}
+		cursor = next
+	}
 }
 
 func reconcileFacts(events []event.Event) ([]pendingCapture, map[string]bool, map[string][]event.Event) {
@@ -162,6 +180,17 @@ func reconcileFacts(events []event.Event) ([]pendingCapture, map[string]bool, ma
 			delete(pendingByKey, syncKey)
 			terminal[syncKey] = true
 		case EventScopedCaptureSyncRetry:
+			// Retry evidence belongs to the pending generation that parented it.
+			// Keep one fact per attempt so concurrent workers that replay the same
+			// failed delivery cannot consume the retry budget twice.
+			current, ok := pendingByKey[syncKey]
+			if !ok || (e.ParentID != "" && e.ParentID != current.event.ID) {
+				continue
+			}
+			attempt, ok := retryAttempt(e)
+			if !ok || hasRetryAttempt(retries[syncKey], attempt) {
+				continue
+			}
 			retries[syncKey] = append(retries[syncKey], e)
 		}
 	}
@@ -250,6 +279,12 @@ func (r *Reconciler) store(ctx context.Context, typ string, fact pendingCapture,
 		// A later pending fact starts a new generation and needs its own
 		// terminal evidence without allowing duplicate delivery for that fact.
 		e.ID = stableSyncEventID(typ, fact.syncKey, fact.event.ID)
+	} else if typ == EventScopedCaptureSyncRetry {
+		attempt, _ := extra["attempt"].(int)
+		// Concurrent consumers can observe one pending generation before either
+		// writes retry evidence. The stable ID makes that race an idempotent
+		// duplicate store rather than two consumed retry attempts.
+		e.ID = stableRetryEventID(fact.syncKey, fact.event.ID, attempt)
 	}
 	if err := r.Events.Store(ctx, e); err != nil {
 		return err
@@ -260,6 +295,31 @@ func (r *Reconciler) store(ctx context.Context, typ string, fact pendingCapture,
 func stableSyncEventID(typ, syncKey, pendingEventID string) string {
 	sum := sha256.Sum256([]byte(typ + "\x00" + syncKey + "\x00" + pendingEventID))
 	return "evt_memory_" + hex.EncodeToString(sum[:16])
+}
+
+func stableRetryEventID(syncKey, pendingEventID string, attempt int) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d", syncKey, pendingEventID, attempt)))
+	return "evt_memory_retry_" + hex.EncodeToString(sum[:16])
+}
+
+func retryAttempt(e event.Event) (int, bool) {
+	attempt, ok := e.Payload["attempt"].(float64)
+	if ok && attempt >= 1 && attempt == float64(int(attempt)) {
+		return int(attempt), true
+	}
+	if attempt, ok := e.Payload["attempt"].(int); ok && attempt >= 1 {
+		return attempt, true
+	}
+	return 0, false
+}
+
+func hasRetryAttempt(retries []event.Event, attempt int) bool {
+	for _, retry := range retries {
+		if existing, ok := retryAttempt(retry); ok && existing == attempt {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Reconciler) retryBase() time.Duration {

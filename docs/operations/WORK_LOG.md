@@ -625,3 +625,28 @@ the required local services are available.
 **Open risks:** The current Recall adapter still lacks an atomic idempotency-key operation, so it remains ineligible for mutation replay. A live primary outage/recovery trace is still unproven.
 
 **Next action:** implement or adopt Recall's atomic idempotency-key contract, then run and retain a live outage/recovery trace with scoped replay evidence.
+
+## 2026-10-08 — R6 Reconciliation Scale and Concurrent Retry Repair
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r6-memory-reconciliation`, following `b40fae0`
+
+- Made retry evidence deterministic per `(sync_key, pending generation, attempt)`.
+  Concurrent workers that observe the same failed delivery now write one durable
+  retry fact, and replay counts distinct attempt values rather than raw retry
+  rows before applying the bounded retry budget.
+- Added bounded SQLite insertion-order pagination using a durable rowid cursor.
+  The public `EventStore.Query` API continues to use its documented event-ID
+  cursor. Reconciliation and health reconstruction consume all causal pages,
+  while stores unable to prove causal pagination fail closed.
+- Added regression coverage for two simultaneous failed workers and for a
+  terminal fact beyond one reconciliation page. `go build ./...`, `go vet
+  ./...`, `staticcheck ./...`, focused memory/event tests, and the full Go
+  suite pass.
+
+**Open risks:** Recall still lacks an atomic idempotency-key capture operation,
+so its current adapter cannot safely participate in remote replay. A live
+outage/recovery trace remains required.
+
+**Next action:** implement or adopt Recall's atomic idempotency contract, then
+run and retain a live outage/recovery trace with scoped replay evidence.
