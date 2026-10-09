@@ -22,11 +22,11 @@ func (b ScopedMemoryBackend) Capture(_ context.Context, mem memory.Memory) (stri
 
 // CaptureIdempotent binds the durable Prizm delivery key to Recall's atomic,
 // scope-aware capture API. Replays return the original remote memory ID.
-func (b ScopedMemoryBackend) CaptureIdempotent(_ context.Context, mem memory.Memory, key string) (string, error) {
+func (b ScopedMemoryBackend) CaptureIdempotent(ctx context.Context, mem memory.Memory, key string) (string, error) {
 	if b.Client == nil {
 		return "", fmt.Errorf("remembrance client is not configured")
 	}
-	result, err := b.Client.CaptureWithMetadata(CaptureRequest{
+	result, err := b.Client.CaptureWithMetadataContext(ctx, CaptureRequest{
 		OwnerID: mem.UserID, AgentID: mem.AgentID, SessionID: mem.SessionID, TaskID: mem.TaskID,
 		Scope: "task", Category: mem.Category, Summary: mem.Summary,
 		SourceRef: mem.ID, ImportanceScore: 0.5, ProjectID: mem.ProjectID,
