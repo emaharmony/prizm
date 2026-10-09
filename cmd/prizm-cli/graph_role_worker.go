@@ -185,6 +185,26 @@ func (w *graphRoleWorker) recoverExpiredOutcome(ctx context.Context, runID, key 
 	var accepted, terminal []byte
 	err = db.QueryRowContext(ctx, `SELECT accepted_json,outcome_json FROM graph_role_executions WHERE delivery_key=?`, key).Scan(&accepted, &terminal)
 	closeErr = db.Close()
+	if err != nil && (errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "no such table: graph_role_executions")) {
+		// No worker ever claimed this canonical command. The deadline scanner
+		// becomes the sole ledger owner and records a sequence-one timeout, so
+		// parent recovery still has an inspectable terminal fact.
+		action, _, claimErr := w.claimExecution(ctx, ledgerPath, command)
+		if claimErr != nil {
+			return claimErr
+		}
+		if action != "execute" {
+			return nil
+		}
+		outcome, encoded, buildErr := w.buildOutcome(command, event.OutcomeTimedOut, 1, map[string]string{"message": "command expired before worker acceptance"})
+		if buildErr != nil {
+			return buildErr
+		}
+		if storeErr := w.storeTerminalOutcome(ctx, ledgerPath, key, outcome, encoded); storeErr != nil {
+			return storeErr
+		}
+		return w.recordTrustedOutcome(ctx, ledgerPath, encoded)
+	}
 	if err != nil {
 		return err
 	}

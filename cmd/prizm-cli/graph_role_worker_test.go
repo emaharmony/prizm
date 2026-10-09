@@ -132,6 +132,20 @@ func TestGraphRoleWorkerFanoutExpiryClosesAcceptedChildrenWithoutDuplicates(t *t
 	}
 }
 
+func TestGraphRoleWorkerExpiryClosesUnclaimedCommand(t *testing.T) {
+	runDir := t.TempDir()
+	command := graphWorkerTestCommand("run-unclaimed-expiry", time.Now().Add(-time.Second))
+	prepareGraphWorkerRun(t, runDir, command)
+	worker := &graphRoleWorker{runDir: runDir, workerID: "deadline-scanner"}
+	if err := worker.recoverExpiredOutcome(t.Context(), command.RunID, command.DeliveryKey); err != nil {
+		t.Fatal(err)
+	}
+	trace := waitForGraphTerminal(t, runDir, command.RunID, command.DeliveryKey)
+	if len(trace.Outcomes) != 1 || trace.Outcomes[0].Status != event.OutcomeTimedOut || trace.Outcomes[0].Sequence != 1 {
+		t.Fatalf("unclaimed expiry trace=%+v", trace)
+	}
+}
+
 func waitForGraphLedgerTerminal(t *testing.T, runDir string, command multiagent.GraphRoleCommand) event.Outcome {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
