@@ -398,12 +398,15 @@ func (r *DurableRuntime) expireDelegationJoin(ctx context.Context, record Durabl
 		return record, nil
 	}
 	if record.DelegationJoin != nil {
+		joinID := record.DelegationJoin.JoinID
 		for i := range record.DelegationJoin.Children {
 			if !record.DelegationJoin.Children[i].Status.Terminal() {
 				record.DelegationJoin.Children[i].Status = event.OutcomeTimedOut
 				record.DelegationJoin.Children[i].Error = "fan-out deadline exceeded"
+				r.supervisor.emit(event.EventMultiAgentFanoutChildCompleted, record.State, map[string]any{"run_id": record.State.RunID, "join_id": joinID, "lane": string(record.DelegationJoin.Children[i].Lane), "role": string(record.DelegationJoin.Children[i].Role), "child_id": record.DelegationJoin.Children[i].ChildID, "status": string(event.OutcomeTimedOut)})
 			}
 		}
+		r.supervisor.emit(event.EventMultiAgentFanoutJoined, record.State, map[string]any{"run_id": record.State.RunID, "join_id": joinID, "status": string(event.OutcomeTimedOut), "reason": "deadline exceeded"})
 		record.DelegationJoin = nil
 	}
 	return r.failDelegation(ctx, record, "delegation_timeout", errors.New("fan-out deadline exceeded"))

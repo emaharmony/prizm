@@ -324,17 +324,6 @@ func (w *graphRoleWorker) execute(command multiagent.GraphRoleCommand) {
 	}
 }
 
-func (w *graphRoleWorker) publishWithRetry(command multiagent.GraphRoleCommand, status event.OutcomeStatus, sequence int64, payload any) error {
-	var err error
-	for attempt := 0; attempt < 3; attempt++ {
-		if err = w.publishOutcome(command, status, sequence, payload); err == nil {
-			return nil
-		}
-		time.Sleep(time.Duration(attempt+1) * 50 * time.Millisecond)
-	}
-	return err
-}
-
 func (w *graphRoleWorker) persistAcceptedAndPublish(ctx context.Context, ledgerPath string, command multiagent.GraphRoleCommand) error {
 	_, encoded, err := w.buildOutcome(command, event.OutcomeAccepted, 1, nil)
 	if err != nil {
@@ -373,14 +362,6 @@ func (w *graphRoleWorker) persistAndPublishTerminal(ctx context.Context, ledgerP
 		return err
 	}
 	return w.publishMessage(ctx, graphRoleOutcomeSubject, encoded)
-}
-
-func (w *graphRoleWorker) publishOutcome(command multiagent.GraphRoleCommand, status event.OutcomeStatus, sequence int64, payload any) error {
-	_, data, err := w.buildOutcome(command, status, sequence, payload)
-	if err != nil {
-		return err
-	}
-	return w.publishMessage(context.Background(), graphRoleOutcomeSubject, data)
 }
 
 func (w *graphRoleWorker) publishMessage(ctx context.Context, subject string, payload []byte) error {

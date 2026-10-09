@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/emaharmony/prizm/internal/event"
 )
@@ -171,5 +172,48 @@ func TestDelegationJoinRecoversPendingDispatchAfterRestart(t *testing.T) {
 		if child.DispatchPending {
 			t.Errorf("child %s still pending", child.Lane)
 		}
+	}
+}
+
+func TestDelegationJoinDeadlineEmitsTimedOutChildrenAndReport(t *testing.T) {
+	now := time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
+	clock := now
+	env := newDurableTestEnvironment(t)
+	dispatch := &recordingDelegationDispatcher{store: env.store}
+	source := &recordingOutcomeSource{store: env.store}
+	runtime := newGraphDelegationRuntimeWithClock(t, env, dispatch, source, func() time.Time { return clock })
+	_, err := runtime.Run(t.Context(), RunRequest{RunID: "run-graph-delegation", Task: TaskReference{ID: "parent-task", Description: "delegate"}})
+	if err == nil {
+		t.Fatal("Run unexpectedly completed")
+	}
+	payload, _ := json.Marshal(GraphRoleOutcome{Result: RoleRunResult{Outcome: OutcomePlanReady, LocalIterations: 1, FanOut: validFanOutPlan()}})
+	source.outcomes = append(source.outcomes, matchingOutcome(dispatch.command, "parent-fanout", event.OutcomeSucceeded, 1, payload))
+	if _, err = runtime.Resume(t.Context(), "run-graph-delegation"); err == nil {
+		t.Fatal("expected join wait")
+	}
+	source.outcomes = nil
+	clock = clock.Add(2 * time.Minute)
+	if _, err = runtime.Resume(t.Context(), "run-graph-delegation"); err == nil {
+		t.Fatal("expected timeout terminal error")
+	}
+	events, err := env.events.Query(t.Context(), event.EventFilter{RunID: "run-graph-delegation", Type: event.EventMultiAgentFanoutChildCompleted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("timed-out child events=%d want 3", len(events))
+	}
+	for _, evt := range events {
+		if payloadString(evt.Payload, "status") != string(event.OutcomeTimedOut) {
+			t.Fatalf("child status=%v", evt.Payload)
+		}
+	}
+	joined, err := env.events.Query(t.Context(), event.EventFilter{RunID: "run-graph-delegation", Type: event.EventMultiAgentFanoutJoined})
+	if err != nil || len(joined) != 1 || payloadString(joined[0].Payload, "status") != string(event.OutcomeTimedOut) {
+		t.Fatalf("joined=%#v err=%v", joined, err)
+	}
+	report := BuildReferenceRunReport(ReferenceWorkflowInput{Objective: "delegate"}, RunState{RunID: "run-graph-delegation", Status: RunStatusFailed}, events)
+	if len(report.FanOut) != 3 {
+		t.Fatalf("report fanout=%#v", report.FanOut)
 	}
 }

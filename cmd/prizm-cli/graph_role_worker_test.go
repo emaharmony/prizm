@@ -15,6 +15,100 @@ import (
 	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
 
+func TestGraphRoleWorkerEmbeddedNATSExecutesThreeFanoutLanesConcurrently(t *testing.T) {
+	runDir := t.TempDir()
+	base := graphWorkerTestCommand("run-fanout-nats", time.Now().Add(time.Minute))
+	commands := []multiagent.GraphRoleCommand{
+		fanoutWorkerCommand(base, multiagent.FanOutResearch, multiagent.RolePlanner),
+		fanoutWorkerCommand(base, multiagent.FanOutImplementation, multiagent.RoleDeveloper),
+		fanoutWorkerCommand(base, multiagent.FanOutReview, multiagent.RoleReviewer),
+	}
+	for _, command := range commands {
+		prepareGraphWorkerRun(t, runDir, command)
+	}
+	url, cleanup, err := bus.StartEmbeddedBus(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	nc, err := bus.ConnectToBus(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	entered := make(chan struct{}, 3)
+	release := make(chan struct{})
+	var active, maxActive atomic.Int32
+	runner := func(ctx context.Context, command multiagent.GraphRoleCommand) (multiagent.RoleRunResult, error) {
+		current := active.Add(1)
+		for {
+			old := maxActive.Load()
+			if current <= old || maxActive.CompareAndSwap(old, current) {
+				break
+			}
+		}
+		entered <- struct{}{}
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return multiagent.RoleRunResult{}, ctx.Err()
+		}
+		active.Add(-1)
+		return multiagent.RoleRunResult{Outcome: multiagent.OutcomeImplementationReady, LocalIterations: 1}, nil
+	}
+	worker, err := startGraphRoleWorkerWithRunner(nc, runDir, "", nil, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	for _, command := range commands {
+		payload, _ := json.Marshal(command)
+		if err := nc.Publish(graphRoleDelegationSubject, payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		select {
+		case <-entered:
+		case <-time.After(3 * time.Second):
+			t.Fatal("fanout lane did not start")
+		}
+	}
+	if maxActive.Load() < 2 {
+		t.Fatalf("fanout lanes did not overlap; max active=%d", maxActive.Load())
+	}
+	close(release)
+	for _, command := range commands {
+		outcome := waitForGraphLedgerTerminal(t, runDir, command)
+		if outcome.JoinID != string(command.JoinID) || outcome.Lane != string(command.Lane) {
+			t.Fatalf("trusted outcome identity mismatch: %#v", outcome)
+		}
+	}
+}
+
+func waitForGraphLedgerTerminal(t *testing.T, runDir string, command multiagent.GraphRoleCommand) event.Outcome {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		db, err := openGraphRoleLedger(t.Context(), filepath.Join(runDir, command.RunID, "multiagent.db"))
+		if err == nil {
+			var state string
+			var encoded []byte
+			err = db.QueryRowContext(t.Context(), `SELECT state,outcome_json FROM graph_role_executions WHERE delivery_key=?`, command.DeliveryKey).Scan(&state, &encoded)
+			_ = db.Close()
+			if err == nil && state == "terminal" {
+				var outcome event.Outcome
+				if json.Unmarshal(encoded, &outcome) == nil && outcome.Status.Terminal() {
+					return outcome
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for graph ledger terminal outcome")
+	return event.Outcome{}
+}
+
 func TestGraphRoleWorkerEmbeddedNATSDeduplicatesAndReplaysAfterRestart(t *testing.T) {
 	runDir := t.TempDir()
 	runID := "run-graph-worker"
@@ -413,6 +507,22 @@ func graphWorkerTestCommand(runID string, deadline time.Time) multiagent.GraphRo
 		DeliveryKey: key, CorrelationID: runID + ":exec", CommandEventID: event.CommandEventID(key), Deadline: deadline, Request: request}
 }
 
+func fanoutWorkerCommand(base multiagent.GraphRoleCommand, lane multiagent.FanOutLane, role multiagent.Role) multiagent.GraphRoleCommand {
+	command := base
+	command.Lane, command.JoinID, command.Role = lane, "join:"+base.RunID, role
+	command.ChildID = "parent-task:" + string(lane)
+	command.Task = multiagent.TaskReference{ID: command.ChildID, Description: string(lane)}
+	command.ExecutionKey = base.ExecutionKey + ":fanout:" + string(lane)
+	command.DelegationID = "graph:join:" + base.RunID + ":" + string(lane)
+	command.DeliveryKey = command.DelegationID + ":0"
+	command.CorrelationID = base.RunID + ":" + command.ExecutionKey
+	command.CommandEventID = event.CommandEventID(command.DeliveryKey)
+	command.Request.Run.CurrentRole = role
+	command.Request.Run.Task = command.Task
+	command.Request.Run.ExecutionKey = command.ExecutionKey
+	return command
+}
+
 func prepareGraphWorkerRun(t *testing.T, runDir string, command multiagent.GraphRoleCommand) {
 	t.Helper()
 	manifest := referenceWorkflowManifest{SchemaVersion: referenceManifestSchemaVersion, RunID: command.RunID,
@@ -426,7 +536,7 @@ func prepareGraphWorkerRun(t *testing.T, runDir string, command multiagent.Graph
 	}
 	payload, _ := json.Marshal(command)
 	cmd := event.Command{EventID: command.CommandEventID, Type: multiagent.GraphRoleDelegationCommandType,
-		RunID: command.RunID, TaskID: command.ChildID, DelegationID: command.DelegationID,
+		RunID: command.RunID, TaskID: command.ChildID, DelegationID: command.DelegationID, JoinID: command.JoinID, Lane: string(command.Lane),
 		CorrelationID: command.CorrelationID, IdempotencyKey: command.DeliveryKey,
 		Deadline: command.Deadline, SchemaVersion: event.CommandSchemaVersion, Payload: payload}
 	if _, err := box.Accept(t.Context(), graphRoleDelegationSubject, cmd); err != nil {
