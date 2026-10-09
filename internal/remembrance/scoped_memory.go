@@ -16,8 +16,8 @@ type ScopedMemoryBackend struct {
 	Client *Client
 }
 
-func (b ScopedMemoryBackend) Capture(_ context.Context, mem memory.Memory) (string, error) {
-	return b.CaptureIdempotent(context.Background(), mem, mem.ID)
+func (b ScopedMemoryBackend) Capture(ctx context.Context, mem memory.Memory) (string, error) {
+	return b.CaptureIdempotent(ctx, mem, mem.ID)
 }
 
 // CaptureIdempotent binds the durable Prizm delivery key to Recall's atomic,

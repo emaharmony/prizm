@@ -12,7 +12,7 @@ import (
 	"github.com/emaharmony/prizm/internal/memory"
 )
 
-func TestScopedMemoryBackendCaptureHonorsCancellation(t *testing.T) {
+func TestScopedMemoryBackendCaptureIdempotentHonorsCancellation(t *testing.T) {
 	entered := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(entered)
@@ -28,6 +28,36 @@ func TestScopedMemoryBackendCaptureHonorsCancellation(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		_, err := backend.CaptureIdempotent(ctx, memory.Memory{ID: "local", Content: "x", Summary: "x", ProjectID: "p", TaskID: "t"}, "key")
+		errCh <- err
+	}()
+	<-entered
+	cancel()
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected cancellation error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("capture did not honor cancellation")
+	}
+}
+
+func TestScopedMemoryBackendCaptureHonorsCancellation(t *testing.T) {
+	entered := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		select {
+		case <-r.Context().Done():
+		case <-time.After(200 * time.Millisecond):
+		}
+	}))
+	defer server.Close()
+	backend := ScopedMemoryBackend{Client: NewClient(server.URL)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := backend.Capture(ctx, memory.Memory{ID: "local", Content: "x", Summary: "x", ProjectID: "p", TaskID: "t"})
 		errCh <- err
 	}()
 	<-entered
