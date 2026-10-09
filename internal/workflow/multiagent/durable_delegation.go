@@ -292,7 +292,7 @@ func (r *DurableRuntime) dispatchPendingDelegationJoin(ctx context.Context, reco
 		view.ExecutionKey = child.ExecutionKey
 		payload, err := json.Marshal(GraphRoleCommand{ChildID: child.ChildID, Role: child.Role, Task: child.Task,
 			ExecutionKey: child.ExecutionKey, RunID: record.State.RunID, WorkspaceID: record.State.WorkspaceID,
-			DelegationID: child.DelegationID, DeliveryKey: child.DeliveryKey, CorrelationID: child.CorrelationID,
+			DelegationID: child.DelegationID, JoinID: child.JoinID, Lane: child.Lane, DeliveryKey: child.DeliveryKey, CorrelationID: child.CorrelationID,
 			CommandEventID: child.CommandEventID, Deadline: child.Deadline, Request: RoleRunRequest{Run: view, RoleConfig: cloneRoleConfig(cfg)}})
 		if err != nil {
 			return record, err
