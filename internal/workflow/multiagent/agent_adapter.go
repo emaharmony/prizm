@@ -264,6 +264,7 @@ func (r *AgentRoleRunner) RunRole(
 			FinishedAt:       finishedAt,
 		},
 		Proposals: proposals,
+		FanOut:    cloneFanOutPlan(decoded.FanOut),
 	}, nil
 }
 

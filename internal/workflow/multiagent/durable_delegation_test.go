@@ -24,9 +24,15 @@ func (d *recordingDelegationDispatcher) Dispatch(ctx context.Context, _ string, 
 	if err != nil {
 		return err
 	}
-	if record.Phase != CheckpointWaiting || record.Waiting == nil ||
-		record.Waiting.CommandEventID != cmd.EventID || record.Waiting.DeliveryKey != cmd.IdempotencyKey {
+	if record.Phase != CheckpointWaiting || record.Waiting == nil {
 		return errors.New("delegation dispatched before exact identity checkpoint")
+	}
+	if record.Waiting.Kind == "delegation_outcome" &&
+		(record.Waiting.CommandEventID != cmd.EventID || record.Waiting.DeliveryKey != cmd.IdempotencyKey) {
+		return errors.New("delegation dispatched before exact identity checkpoint")
+	}
+	if record.Waiting.Kind == "delegation_join" && record.DelegationJoin == nil {
+		return errors.New("delegation join dispatched before join checkpoint")
 	}
 	d.called = true
 	d.command = cmd

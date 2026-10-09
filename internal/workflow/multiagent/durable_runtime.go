@@ -182,6 +182,23 @@ func (r *DurableRuntime) Resume(
 			return record.State, err
 		}
 	}
+	if record.Phase == CheckpointWaiting && record.Waiting != nil &&
+		record.Waiting.Kind == "delegation_join" && record.DelegationJoin != nil {
+		pending := false
+		for _, child := range record.DelegationJoin.Children {
+			pending = pending || child.DispatchPending
+		}
+		if pending {
+			if !r.now().UTC().Before(record.Waiting.Deadline) {
+				record, err = r.expireDelegationJoin(ctx, record)
+				return record.State, err
+			}
+			record, err = r.dispatchPendingDelegationJoin(ctx, record)
+			if err != nil {
+				return record.State, err
+			}
+		}
+	}
 	if err := r.dispatchOutbox(ctx, runID); err != nil {
 		return record.State, err
 	}
@@ -191,6 +208,15 @@ func (r *DurableRuntime) Resume(
 	}
 	if record.Phase == CheckpointWaiting && record.Waiting != nil && record.Waiting.Kind == "delegation_outcome" {
 		record, err = r.resumeDelegation(ctx, record)
+		if err != nil {
+			return record.State, err
+		}
+		if record.Phase == CheckpointWaiting {
+			return record.State, waitingError(record)
+		}
+	}
+	if record.Phase == CheckpointWaiting && record.Waiting != nil && record.Waiting.Kind == "delegation_join" {
+		record, err = r.resumeDelegationJoin(ctx, record)
 		if err != nil {
 			return record.State, err
 		}

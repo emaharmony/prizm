@@ -903,6 +903,14 @@ func cloneRoleConfig(config RoleConfig) RoleConfig {
 	return config
 }
 
+func cloneFanOutPlan(plan *FanOutPlan) *FanOutPlan {
+	if plan == nil {
+		return nil
+	}
+	cloned := &FanOutPlan{Tasks: append([]FanOutTask(nil), plan.Tasks...)}
+	return cloned
+}
+
 func cloneHandoff(handoff *Handoff) *Handoff {
 	if handoff == nil {
 		return nil

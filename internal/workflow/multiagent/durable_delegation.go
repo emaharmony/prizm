@@ -67,7 +67,7 @@ func (r *DurableRuntime) dispatchDelegatedRole(ctx context.Context, record Durab
 	if err != nil {
 		return record, err
 	}
-	return record, waitingError(record)
+	return record, nil
 }
 
 func (r *DurableRuntime) dispatchPendingDelegation(ctx context.Context, record DurableRun) (DurableRun, error) {
@@ -120,6 +120,9 @@ func (r *DurableRuntime) resumeDelegation(ctx context.Context, record DurableRun
 		}
 		if outcome.OccurredAt.After(waiting.Deadline) {
 			return r.timeoutDelegation(ctx, record, "delegated role outcome arrived after deadline")
+		}
+		if decoded, ok := decodeDelegationOutcome(outcome); ok && decoded.Result.FanOut != nil {
+			return r.startDelegationJoin(ctx, record, decoded.Result, waiting.StartedAt, outcome.OccurredAt.UTC(), outcome.EventID)
 		}
 		if outcome.Sequence <= waiting.LastOutcomeSequence {
 			return record, &RecoveryFailedError{RunID: record.State.RunID, Cause: fmt.Errorf("stale or duplicate delegation outcome sequence %d", outcome.Sequence)}
@@ -202,6 +205,258 @@ func (r *DurableRuntime) resumeDelegation(ctx context.Context, record DurableRun
 		return r.ackDelegationOutcome(ctx, record, outcome.EventID)
 	}
 	return r.expireDelegation(ctx, record)
+}
+
+func decodeDelegationOutcome(outcome event.Outcome) (GraphRoleOutcome, bool) {
+	if outcome.Status != event.OutcomeSucceeded || len(outcome.Payload) == 0 {
+		return GraphRoleOutcome{}, false
+	}
+	var decoded GraphRoleOutcome
+	if json.Unmarshal(outcome.Payload, &decoded) != nil || decoded.Result.FanOut == nil {
+		return GraphRoleOutcome{}, false
+	}
+	return decoded, true
+}
+
+func (r *DurableRuntime) startDelegationJoin(ctx context.Context, record DurableRun, parent RoleRunResult, startedAt, finishedAt time.Time, parentEventID string) (DurableRun, error) {
+	if parent.FanOut == nil {
+		return record, errors.New("multiagent: fan-out plan is missing")
+	}
+	if err := parent.FanOut.Validate(); err != nil {
+		return record, &RecoveryFailedError{RunID: record.State.RunID, Cause: err}
+	}
+	now := r.now().UTC()
+	deadline := now.Add(r.delegation.Deadline)
+	children := make([]DelegationJoinChild, 0, len(parent.FanOut.Tasks))
+	lanes := []FanOutLane{FanOutResearch, FanOutImplementation, FanOutReview}
+	byLane := make(map[FanOutLane]FanOutTask, len(parent.FanOut.Tasks))
+	for _, task := range parent.FanOut.Tasks {
+		byLane[task.Lane] = task
+	}
+	for _, lane := range lanes {
+		task := byLane[lane]
+		childID := fmt.Sprintf("%s:%s", record.State.CurrentTask.ID, lane)
+		executionKey := record.ActiveExecutionKey + ":fanout:" + string(lane)
+		delegationID := "graph:join:" + record.ActiveExecutionKey + ":" + string(lane)
+		deliveryKey := delegationID + ":0"
+		children = append(children, DelegationJoinChild{ChildID: childID, Lane: lane, Role: task.Role,
+			Task: TaskReference{ID: childID, Description: task.Description}, ExecutionKey: executionKey,
+			DelegationID: delegationID, DeliveryKey: deliveryKey, CommandEventID: event.CommandEventID(deliveryKey),
+			CorrelationID: record.State.RunID + ":" + executionKey, Deadline: deadline, DispatchPending: true})
+	}
+	record.DelegationJoin = &DelegationJoinState{JoinID: "join:" + record.ActiveExecutionKey,
+		ParentExecutionKey: record.ActiveExecutionKey, ParentRole: record.State.CurrentRole,
+		ParentResult: cloneRoleRunResult(parent), ParentStartedAt: startedAt, ParentFinishedAt: finishedAt,
+		StartedAt: now, Deadline: deadline, FailurePolicy: "wait_for_all_then_fail", Children: children}
+	role := record.State.CurrentRole
+	roleState := record.State.RoleStates[role]
+	roleState.Status = RoleStatusWaiting
+	roleState.UpdatedAt = now
+	record.State.RoleStates[role] = roleState
+	record.State.Status = RunStatusPaused
+	record.State.UpdatedAt = now
+	record.Phase = CheckpointWaiting
+	record.Waiting = &WaitingState{Kind: "delegation_join", Reason: "waiting for parallel delegated roles", SafeToRetry: false,
+		Since: now, JoinID: record.DelegationJoin.JoinID, StartedAt: now, Deadline: deadline}
+	record.PendingDelegationOutcomeAck = parentEventID
+	r.supervisor.emitRun(event.EventMultiAgentRunPaused, record.State, record.Waiting.Reason)
+	var err error
+	if record, err = r.checkpoint(ctx, record); err != nil {
+		return record, err
+	}
+	if record, err = r.ackDelegationOutcome(ctx, record, parentEventID); err != nil {
+		return record, err
+	}
+	if record, err = r.dispatchPendingDelegationJoin(ctx, record); err != nil {
+		return record, err
+	}
+	return record, waitingError(record)
+}
+
+func (r *DurableRuntime) dispatchPendingDelegationJoin(ctx context.Context, record DurableRun) (DurableRun, error) {
+	if record.Waiting == nil || record.Waiting.Kind != "delegation_join" || record.DelegationJoin == nil {
+		return record, errors.New("multiagent: no pending delegation join")
+	}
+	for i := range record.DelegationJoin.Children {
+		child := &record.DelegationJoin.Children[i]
+		if !child.DispatchPending {
+			continue
+		}
+		cfg, _ := r.supervisor.graph.RoleConfig(child.Role)
+		view := r.supervisor.runView(record.State)
+		view.CurrentRole = child.Role
+		view.Task = child.Task
+		view.ExecutionKey = child.ExecutionKey
+		payload, err := json.Marshal(GraphRoleCommand{ChildID: child.ChildID, Role: child.Role, Task: child.Task,
+			ExecutionKey: child.ExecutionKey, RunID: record.State.RunID, WorkspaceID: record.State.WorkspaceID,
+			DelegationID: child.DelegationID, DeliveryKey: child.DeliveryKey, CorrelationID: child.CorrelationID,
+			CommandEventID: child.CommandEventID, Deadline: child.Deadline, Request: RoleRunRequest{Run: view, RoleConfig: cloneRoleConfig(cfg)}})
+		if err != nil {
+			return record, err
+		}
+		cmd := event.Command{EventID: child.CommandEventID, Type: GraphRoleDelegationCommandType, RunID: record.State.RunID,
+			TaskID: child.ChildID, DelegationID: child.DelegationID, CorrelationID: child.CorrelationID,
+			IdempotencyKey: child.DeliveryKey, Deadline: child.Deadline, SchemaVersion: event.CommandSchemaVersion, Payload: payload}
+		if err := r.delegation.Dispatcher.Dispatch(ctx, r.delegation.Subject, cmd); err != nil {
+			return record, fmt.Errorf("multiagent: dispatch fan-out lane %s: %w", child.Lane, err)
+		}
+		child.DispatchPending = false
+		if record, err = r.checkpoint(ctx, record); err != nil {
+			return record, err
+		}
+	}
+	return record, nil
+}
+
+func (r *DurableRuntime) resumeDelegationJoin(ctx context.Context, record DurableRun) (DurableRun, error) {
+	if r.delegation == nil || r.delegation.Outcomes == nil || record.DelegationJoin == nil {
+		return record, errors.New("multiagent: delegation join source is unavailable")
+	}
+	outcomes, err := r.delegation.Outcomes.PendingOutcomes(ctx, record.State.RunID)
+	if err != nil {
+		return record, err
+	}
+	if len(outcomes) == 0 {
+		return r.expireDelegationJoin(ctx, record)
+	}
+	for _, outcome := range outcomes {
+		idx := -1
+		for i := range record.DelegationJoin.Children {
+			if record.DelegationJoin.Children[i].DeliveryKey == outcome.DeliveryKey {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return record, &RecoveryFailedError{RunID: record.State.RunID, Cause: errors.New("fan-out outcome delivery key does not match join")}
+		}
+		child := &record.DelegationJoin.Children[idx]
+		if err := matchDelegationJoinOutcome(record.State.RunID, child, outcome); err != nil {
+			return record, &RecoveryFailedError{RunID: record.State.RunID, Cause: err}
+		}
+		if outcome.OccurredAt.After(child.Deadline) {
+			return r.expireDelegationJoin(ctx, record)
+		}
+		if outcome.Sequence <= child.LastSequence {
+			return record, &RecoveryFailedError{RunID: record.State.RunID, Cause: fmt.Errorf("stale fan-out outcome sequence %d", outcome.Sequence)}
+		}
+		child.LastSequence = outcome.Sequence
+		if outcome.Status.Terminal() {
+			child.Status = outcome.Status
+			if outcome.Status == event.OutcomeSucceeded {
+				var decoded GraphRoleOutcome
+				if json.Unmarshal(outcome.Payload, &decoded) != nil || decoded.Result.FanOut != nil {
+					return record, &RecoveryFailedError{RunID: record.State.RunID, Cause: errors.New("fan-out child result is invalid or nested")}
+				}
+				if err := validateRoleRunResult(r.supervisor.graph, decoded.Result); err != nil {
+					return record, &RecoveryFailedError{RunID: record.State.RunID, Cause: err}
+				}
+				cloned := cloneRoleRunResult(decoded.Result)
+				child.Result = &cloned
+			} else {
+				child.Error = "child outcome " + string(outcome.Status)
+			}
+		} else if outcome.Status != event.OutcomeAccepted && outcome.Status != event.OutcomeProgress {
+			return record, &RecoveryFailedError{RunID: record.State.RunID, Cause: fmt.Errorf("unsupported fan-out outcome status %q", outcome.Status)}
+		}
+		record.PendingDelegationOutcomeAck = outcome.EventID
+		if record, err = r.checkpoint(ctx, record); err != nil {
+			return record, err
+		}
+		if record, err = r.ackDelegationOutcome(ctx, record, outcome.EventID); err != nil {
+			return record, err
+		}
+	}
+	allTerminal := true
+	failed := false
+	for _, child := range record.DelegationJoin.Children {
+		if !child.Status.Terminal() {
+			allTerminal = false
+		}
+		if child.Status.Terminal() && child.Status != event.OutcomeSucceeded {
+			failed = true
+		}
+	}
+	if allTerminal {
+		if failed {
+			record.DelegationJoin = nil
+			return r.failDelegation(ctx, record, "delegation_join_failed", errors.New("one or more fan-out lanes failed"))
+		}
+		return r.completeDelegationJoin(ctx, record)
+	}
+	return r.expireDelegationJoin(ctx, record)
+}
+
+func (r *DurableRuntime) expireDelegationJoin(ctx context.Context, record DurableRun) (DurableRun, error) {
+	if record.Waiting != nil && r.now().UTC().Before(record.Waiting.Deadline) {
+		return record, nil
+	}
+	if record.DelegationJoin != nil {
+		for i := range record.DelegationJoin.Children {
+			if !record.DelegationJoin.Children[i].Status.Terminal() {
+				record.DelegationJoin.Children[i].Status = event.OutcomeTimedOut
+				record.DelegationJoin.Children[i].Error = "fan-out deadline exceeded"
+			}
+		}
+		record.DelegationJoin = nil
+	}
+	return r.failDelegation(ctx, record, "delegation_timeout", errors.New("fan-out deadline exceeded"))
+}
+
+func (r *DurableRuntime) completeDelegationJoin(ctx context.Context, record DurableRun) (DurableRun, error) {
+	join := record.DelegationJoin
+	if join == nil {
+		return record, errors.New("multiagent: missing delegation join")
+	}
+	merged := cloneRoleRunResult(join.ParentResult)
+	merged.FanOut = nil
+	for _, child := range join.Children {
+		if child.Result == nil {
+			return record, errors.New("multiagent: incomplete delegation join")
+		}
+		merged.Proposals = append(merged.Proposals, child.Result.Proposals...)
+		if child.Result.OutgoingHandoff != nil {
+			if merged.OutgoingHandoff == nil {
+				merged.OutgoingHandoff = &HandoffDraft{}
+			}
+			h := child.Result.OutgoingHandoff
+			merged.OutgoingHandoff.Artifacts = append(merged.OutgoingHandoff.Artifacts, h.Artifacts...)
+			merged.OutgoingHandoff.Evidence = append(merged.OutgoingHandoff.Evidence, h.Evidence...)
+			merged.OutgoingHandoff.UnresolvedIssues = append(merged.OutgoingHandoff.UnresolvedIssues, h.UnresolvedIssues...)
+			merged.OutgoingHandoff.Notes += "\n" + string(child.Lane) + ": " + h.Notes
+		}
+	}
+	role := join.ParentRole
+	cfg, _ := r.supervisor.graph.RoleConfig(role)
+	record.DelegationJoin = nil
+	record.Waiting = nil
+	record.State.Status = RunStatusRunning
+	rs := record.State.RoleStates[role]
+	rs.Status = RoleStatusRunning
+	record.State.RoleStates[role] = rs
+	record.Phase = CheckpointRoleRunning
+	if len(merged.Proposals) > 0 {
+		return r.pauseForProposals(ctx, record, role, merged, join.ParentStartedAt, join.ParentFinishedAt)
+	}
+	return r.finishPreparedRole(ctx, record, role, cfg, merged, join.ParentStartedAt, join.ParentFinishedAt)
+}
+
+func matchDelegationJoinOutcome(runID string, child *DelegationJoinChild, outcome event.Outcome) error {
+	if err := outcome.Validate(); err != nil {
+		return err
+	}
+	if child == nil || outcome.RunID != runID || outcome.TaskID != child.ChildID || outcome.DelegationID != child.DelegationID || outcome.DeliveryKey != child.DeliveryKey || outcome.CommandEventID != child.CommandEventID || outcome.CorrelationID != child.CorrelationID || outcome.CausationID != child.CommandEventID {
+		return errors.New("fan-out outcome identity does not match checkpoint")
+	}
+	return nil
+}
+
+func cloneRoleRunResult(result RoleRunResult) RoleRunResult {
+	cloned := result
+	cloned.OutgoingHandoff = cloneHandoffDraft(result.OutgoingHandoff)
+	cloned.Proposals = append([]ProposalReference(nil), result.Proposals...)
+	cloned.FanOut = cloneFanOutPlan(result.FanOut)
+	return cloned
 }
 
 func (r *DurableRuntime) expireDelegation(ctx context.Context, record DurableRun) (DurableRun, error) {

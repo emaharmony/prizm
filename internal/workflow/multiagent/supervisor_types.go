@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/emaharmony/prizm/internal/cost"
@@ -235,6 +236,64 @@ type RoleRunResult struct {
 	Retries         int
 	Metadata        ExecutionMetadata
 	Proposals       []ProposalReference
+	FanOut          *FanOutPlan
+}
+
+// FanOutLane is one bounded specialist lane in the reference fan-out slice.
+type FanOutLane string
+
+const (
+	FanOutResearch       FanOutLane = "research"
+	FanOutImplementation FanOutLane = "implementation"
+	FanOutReview         FanOutLane = "review"
+)
+
+// FanOutTask is a strictly typed child request. The first slice deliberately
+// fixes the three lanes and their graph roles.
+type FanOutTask struct {
+	Lane        FanOutLane `json:"lane"`
+	Role        Role       `json:"role"`
+	Description string     `json:"description"`
+}
+
+// FanOutPlan is the bounded three-lane parallel delegation plan.
+type FanOutPlan struct {
+	Tasks []FanOutTask `json:"tasks"`
+}
+
+// Validate enforces the reference fan-out shape and deterministic lane set.
+func (p FanOutPlan) Validate() error {
+	if len(p.Tasks) != 3 {
+		return fmt.Errorf("fan-out plan requires exactly 3 tasks")
+	}
+	want := map[FanOutLane]Role{
+		FanOutResearch:       RolePlanner,
+		FanOutImplementation: RoleDeveloper,
+		FanOutReview:         RoleReviewer,
+	}
+	seen := make(map[FanOutLane]struct{}, len(p.Tasks))
+	for _, task := range p.Tasks {
+		role, ok := want[task.Lane]
+		if !ok {
+			return fmt.Errorf("fan-out task has unsupported lane %q", task.Lane)
+		}
+		if _, ok := seen[task.Lane]; ok {
+			return fmt.Errorf("fan-out task lane %q is duplicated", task.Lane)
+		}
+		seen[task.Lane] = struct{}{}
+		if task.Role != role {
+			return fmt.Errorf("fan-out lane %q must use role %q", task.Lane, role)
+		}
+		if strings.TrimSpace(task.Description) == "" {
+			return fmt.Errorf("fan-out lane %q requires a description", task.Lane)
+		}
+	}
+	for lane := range want {
+		if _, ok := seen[lane]; !ok {
+			return fmt.Errorf("fan-out plan is missing lane %q", lane)
+		}
+	}
+	return nil
 }
 
 // RoleRunner executes bounded local work for one configured role. It cannot
