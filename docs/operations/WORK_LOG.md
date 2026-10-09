@@ -933,3 +933,18 @@ the runtime lifecycle regressions are committed separately as `016a3b6`.
 
 **Next action:** preserve the provider default for the next live graph run and
 inspect the durable outbox and snapshot as part of the R1 acceptance record.
+
+## 2026-10-09 — R1 Fan-Out Expiry Fact-First Closure
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Expired fan-out recovery persists every trusted child terminal fact before
+  waking the parent; NATS notification cannot interleave a partial recovery.
+- Join expiry consumes all durable child outcomes first, then marks only
+  missing siblings timed out in the same recovery pass.
+
+**Evidence:** focused join deadline and terminal-before-expiry tests pass;
+full build, vet, and test passed on combined head before this narrow repair.
+
+**Next action:** add the live three-child accepted-worker-crash acceptance
+trace before starting another paid provider run.

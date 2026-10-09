@@ -195,7 +195,7 @@ func (w *graphRoleWorker) recoverExpiredOutcome(ctx context.Context, runID, key 
 		if err := w.recordTrustedOutcome(ctx, ledgerPath, terminal); err != nil {
 			return err
 		}
-		return w.publishMessage(ctx, graphRoleOutcomeSubject, terminal)
+		return nil
 	}
 	if len(accepted) == 0 {
 		return nil
@@ -210,7 +210,7 @@ func (w *graphRoleWorker) recoverExpiredOutcome(ctx context.Context, runID, key 
 	if err := w.recordTrustedOutcome(ctx, ledgerPath, encoded); err != nil {
 		return err
 	}
-	return w.publishMessage(ctx, graphRoleOutcomeSubject, encoded)
+	return nil
 }
 
 func (w *graphRoleWorker) resumeRun(runID, reason string) {

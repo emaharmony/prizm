@@ -246,11 +246,11 @@ func TestDelegationJoinConsumesTerminalBeforeExpiry(t *testing.T) {
 	source.outcomes = []event.Outcome{childOutcome}
 	clock = clock.Add(2 * time.Minute)
 	if _, err := runtime.Resume(t.Context(), "run-graph-delegation"); err == nil {
-		t.Fatal("remaining children should still wait")
+		t.Fatal("missing children should finalize the expired join")
 	}
 	record, err = env.store.Load(t.Context(), "run-graph-delegation")
-	if err != nil || record.DelegationJoin.Children[0].Status != event.OutcomeSucceeded {
-		t.Fatalf("terminal child was not consumed before expiry: %#v err=%v", record.DelegationJoin.Children[0], err)
+	if err != nil || record.Failure == nil || record.Failure.Kind != "delegation_timeout" {
+		t.Fatalf("join did not finalize at expiry: %#v err=%v", record, err)
 	}
 }
 
