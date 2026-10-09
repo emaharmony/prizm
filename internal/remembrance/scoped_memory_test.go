@@ -3,6 +3,7 @@ package remembrance
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -107,6 +108,40 @@ func TestScopedMemoryBackendCaptureIdempotentRejectsFailedDecision(t *testing.T)
 	}, "sync-key")
 	if err == nil || !strings.Contains(err.Error(), `decision="FAILED"`) {
 		t.Fatalf("failed decision error = %v, want rejected FAILED decision", err)
+	}
+}
+
+func TestScopedMemoryBackendCaptureIdempotentRejectsSkipDecision(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"remote-skipped","decision":"SKIP"}`))
+	}))
+	defer server.Close()
+
+	backend := ScopedMemoryBackend{Client: NewClient(server.URL)}
+	_, err := backend.CaptureIdempotent(context.Background(), memory.Memory{
+		ID: "local-id", Content: "durable", Summary: "durable", ProjectID: "project-a", TaskID: "task-a",
+	}, "sync-key")
+	if err == nil || !strings.Contains(err.Error(), `decision="SKIP"`) {
+		t.Fatalf("skip decision error = %v, want rejected SKIP decision", err)
+	}
+}
+
+func TestScopedMemoryBackendCaptureIdempotentRejectsBlankRemoteID(t *testing.T) {
+	for _, remoteID := range []string{"", "   \t\n"} {
+		t.Run(fmt.Sprintf("id_%q", remoteID), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(fmt.Sprintf(`{"id":%q,"decision":"PERSIST"}`, remoteID)))
+			}))
+			defer server.Close()
+
+			backend := ScopedMemoryBackend{Client: NewClient(server.URL)}
+			_, err := backend.CaptureIdempotent(context.Background(), memory.Memory{
+				ID: "local-id", Content: "durable", Summary: "durable", ProjectID: "project-a", TaskID: "task-a",
+			}, "sync-key")
+			if err == nil || !strings.Contains(err.Error(), "no remote ID") {
+				t.Fatalf("blank remote ID error = %v, want missing-ID rejection", err)
+			}
+		})
 	}
 }
 

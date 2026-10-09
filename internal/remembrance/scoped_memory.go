@@ -45,7 +45,7 @@ func (b ScopedMemoryBackend) CaptureIdempotent(ctx context.Context, mem memory.M
 	default:
 		return "", fmt.Errorf("recall rejected idempotent capture: decision=%q", decision)
 	}
-	if id, ok := result["id"].(string); ok {
+	if id, ok := result["id"].(string); ok && strings.TrimSpace(id) != "" {
 		return id, nil
 	}
 	return "", fmt.Errorf("recall idempotent capture returned no remote ID")
