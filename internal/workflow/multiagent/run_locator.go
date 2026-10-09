@@ -20,6 +20,9 @@ const (
 	runManifestFileName      = "multiagent_manifest.json"
 	runDatabaseFileName      = "multiagent.db"
 	runManifestSchemaVersion = 1
+	// cliReferenceManifestSchemaVersion is the current schema emitted by
+	// cmd/prizm-cli. Keep the locator compatible with v1 historical runs.
+	cliReferenceManifestSchemaVersion = 2
 )
 
 // RunSummary is the minimal listing view of one durable multi-agent run.
@@ -281,7 +284,7 @@ func (l RunLocator) readManifest(runID string) (runManifest, error) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return runManifest{}, fmt.Errorf("multiagent: decode manifest for run %q: %w", runID, err)
 	}
-	if manifest.SchemaVersion != runManifestSchemaVersion || manifest.RunID != runID {
+	if (manifest.SchemaVersion != runManifestSchemaVersion && manifest.SchemaVersion != cliReferenceManifestSchemaVersion) || manifest.RunID != runID {
 		return runManifest{}, fmt.Errorf("multiagent: unsupported or inconsistent manifest for run %q", runID)
 	}
 	// A PR6 registry-backed run's manifest carries a zero-value Definition by

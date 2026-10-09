@@ -172,6 +172,29 @@ func TestRunLocatorOpenInspectionSucceedsForSeededRun(t *testing.T) {
 	}
 }
 
+func TestRunLocatorReadManifestAcceptsCurrentCLIRegistrySchema(t *testing.T) {
+	root := t.TempDir()
+	runID := "run-locator-cli-v2"
+	if err := os.MkdirAll(filepath.Join(root, runID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := runManifest{SchemaVersion: cliReferenceManifestSchemaVersion, RunID: runID, WorkflowID: "graph-workflow", WorkflowVersion: 1, DefinitionDBPath: "definitions.db"}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, runID, runManifestFileName), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := (RunLocator{Root: root}).readManifest(runID)
+	if err != nil {
+		t.Fatalf("read current CLI manifest: %v", err)
+	}
+	if !got.registryBacked() || got.WorkflowVersion != manifest.WorkflowVersion {
+		t.Fatalf("manifest = %+v, want registry-backed v2 manifest", got)
+	}
+}
+
 func TestRunLocatorOpenInspectionMissingManifestReturnsClearError(t *testing.T) {
 	root := t.TempDir()
 	locator := RunLocator{Root: root}

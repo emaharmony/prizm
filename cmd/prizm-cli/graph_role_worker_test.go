@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -370,6 +372,52 @@ func TestGraphRoleWorkerPublishExhaustionStillClosesAndReplays(t *testing.T) {
 	state, outcome := graphWorkerLedgerOutcome(t, runDir, command)
 	if state != "terminal" || outcome.Status != event.OutcomeSucceeded {
 		t.Fatalf("ledger state=%q outcome=%#v", state, outcome)
+	}
+}
+
+func TestGraphRoleWorkerAcceptanceReplayUsesPersistedBytes(t *testing.T) {
+	runDir := t.TempDir()
+	command := graphWorkerTestCommand("run-acceptance-replay", time.Now().Add(time.Minute))
+	prepareGraphWorkerRun(t, runDir, command)
+	var published [][]byte
+	worker := &graphRoleWorker{runDir: runDir, workerID: "worker-acceptance", publish: func(_ context.Context, _ string, payload []byte) error {
+		published = append(published, append([]byte(nil), payload...))
+		return nil
+	}}
+	ledgerPath := filepath.Join(runDir, command.RunID, "multiagent.db")
+	claim, _, err := worker.claimExecution(t.Context(), ledgerPath, command)
+	if err != nil || claim != "execute" {
+		t.Fatalf("claim=%q err=%v", claim, err)
+	}
+	if err := worker.persistAcceptedAndPublish(t.Context(), ledgerPath, command); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.persistAcceptedAndPublish(t.Context(), ledgerPath, command); err != nil {
+		t.Fatal(err)
+	}
+	if len(published) != 2 || !bytes.Equal(published[0], published[1]) {
+		t.Fatalf("acceptance replay must use immutable ledger bytes: %q / %q", published[0], published[1])
+	}
+}
+
+func TestGraphRoleWorkerRetriesResumeAfterDurableClaimRelease(t *testing.T) {
+	var calls atomic.Int32
+	resumed := make(chan struct{}, 1)
+	worker := &graphRoleWorker{running: make(map[string]struct{}), resume: func(context.Context, string) error {
+		if calls.Add(1) == 1 {
+			return fmt.Errorf("%w: run", multiagent.ErrRunClaimed)
+		}
+		resumed <- struct{}{}
+		return nil
+	}}
+	worker.resumeRun("run-resume-retry", "outcome resume")
+	select {
+	case <-resumed:
+	case <-time.After(time.Second):
+		t.Fatal("resume was not retried after the durable claim released")
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("resume calls=%d want 2", got)
 	}
 }
 

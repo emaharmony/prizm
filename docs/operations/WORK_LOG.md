@@ -781,3 +781,33 @@ workers remain R3 scope.
 **Next action:** run one opt-in serve task with a configured provider, review
 its command/outcome/proposal trace, then implement and prove bounded parallel
 fan-out/fan-in.
+
+## 2026-10-09 — R1 Live-Provider Outcome and Resume Recovery
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Diagnosed the disposable configured-provider failure as two independent
+  compatibility/recovery defects. The accepted outcome event ID is stable by
+  delivery key and status, but acceptance reconstruction could replace its
+  timestamped bytes before transport replay; the dashboard `RunLocator` also
+  rejected the CLI's current schema-v2 registry-backed manifest.
+- Made acceptance replay publish the first ledger-persisted bytes. The event
+  outbox keeps its strict conflicting-content rejection: a changed body for a
+  stable event ID still fails closed.
+- When an outcome reaches the worker before the originating `Run` releases
+  its durable claim, resume is retried through the existing per-run guard.
+  The durable claim remains the sole cross-process execution arbiter.
+- Added regression coverage for immutable acceptance replay, temporary claim
+  contention retry, and current CLI v2 manifest inspection.
+- Evidence: focused `go test ./cmd/prizm-cli ./internal/workflow/multiagent -count=1`
+  and `go test ./... -count=1` passed with workspace-local `TMP`, `TEMP`, and
+  `GOCACHE`; `git diff --check` passed.
+
+**Open risks:** the disposable real-provider run was executed against the
+baseline before this repair. The complete configured-provider acceptance rerun
+and the bounded parallel fan-out/fan-in report remain required before claiming
+the R1 score gate. Authenticated remote workers remain R3 scope.
+
+**Next action:** rebuild the CLI and rerun the isolated opt-in provider task;
+verify one immutable accepted fact, one terminal fact, successful dashboard
+snapshot, and eventual resume after an initial claim conflict.

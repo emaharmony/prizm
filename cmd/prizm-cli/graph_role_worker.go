@@ -21,6 +21,8 @@ import (
 
 const graphRoleOutcomeSubject = graphRoleDelegationSubject + ".outcome"
 
+const graphRoleResumeRetryAfter = 50 * time.Millisecond
+
 type natsCommandPublisher struct{ nc *nats.Conn }
 
 func (p natsCommandPublisher) Publish(ctx context.Context, subject string, payload []byte) error {
@@ -152,10 +154,29 @@ func (w *graphRoleWorker) resumeRun(runID, reason string) {
 	}()
 	if err := w.resume(context.Background(), runID); err != nil {
 		var waiting *multiagent.RunWaitingError
-		if !errors.As(err, &waiting) {
+		if errors.Is(err, multiagent.ErrRunClaimed) {
+			// A worker outcome can arrive before the Run call that dispatched it
+			// has released its durable claim. Preserve the outcome in the outbox
+			// and retry through the same per-run guard once that owner has had a
+			// chance to checkpoint its waiting state.
+			w.retryResume(runID, reason)
+		} else if !errors.As(err, &waiting) {
 			log.Printf("[GRAPH-WORKER] %s %s: %v", reason, runID, err)
 		}
 	}
+}
+
+func (w *graphRoleWorker) retryResume(runID, reason string) {
+	time.AfterFunc(graphRoleResumeRetryAfter, func() {
+		if w.done != nil {
+			select {
+			case <-w.done:
+				return
+			default:
+			}
+		}
+		w.resumeRun(runID, reason)
+	})
 }
 
 func (w *graphRoleWorker) handleCommand(msg *nats.Msg) {
@@ -325,22 +346,30 @@ func (w *graphRoleWorker) execute(command multiagent.GraphRoleCommand) {
 }
 
 func (w *graphRoleWorker) persistAcceptedAndPublish(ctx context.Context, ledgerPath string, command multiagent.GraphRoleCommand) error {
-	_, encoded, err := w.buildOutcome(command, event.OutcomeAccepted, 1, nil)
-	if err != nil {
-		return err
-	}
 	db, err := openGraphRoleLedger(ctx, ledgerPath)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
-	res, err := db.ExecContext(ctx, `UPDATE graph_role_executions SET accepted_json=?,updated_at=? WHERE delivery_key=? AND state='running' AND owner=?`,
-		encoded, time.Now().UTC().Format(time.RFC3339Nano), command.DeliveryKey, w.workerID)
-	if err != nil {
+	var encoded []byte
+	if err := db.QueryRowContext(ctx, `SELECT accepted_json FROM graph_role_executions WHERE delivery_key=? AND state='running' AND owner=?`, command.DeliveryKey, w.workerID).Scan(&encoded); err != nil {
 		return err
 	}
-	if count, _ := res.RowsAffected(); count != 1 {
-		return errors.New("graph role acceptance was not bound to the active execution claim")
+	if len(encoded) == 0 {
+		_, encoded, err = w.buildOutcome(command, event.OutcomeAccepted, 1, nil)
+		if err != nil {
+			return err
+		}
+		res, updateErr := db.ExecContext(ctx, `UPDATE graph_role_executions SET accepted_json=?,updated_at=? WHERE delivery_key=? AND state='running' AND owner=? AND accepted_json IS NULL`,
+			encoded, time.Now().UTC().Format(time.RFC3339Nano), command.DeliveryKey, w.workerID)
+		if updateErr != nil {
+			return updateErr
+		}
+		if count, _ := res.RowsAffected(); count != 1 {
+			if err := db.QueryRowContext(ctx, `SELECT accepted_json FROM graph_role_executions WHERE delivery_key=? AND state='running' AND owner=?`, command.DeliveryKey, w.workerID).Scan(&encoded); err != nil || len(encoded) == 0 {
+				return errors.New("graph role acceptance was not bound to the active execution claim")
+			}
+		}
 	}
 	var publishErr error
 	for attempt := 0; attempt < 3; attempt++ {
