@@ -196,12 +196,27 @@ func (s *SQLiteOutbox) terminalFailure(ctx context.Context, key, msg string, sta
 		return errors.New("event outbox: delivery is not claimed")
 	}
 	// A publisher can report an uncertain delivery after the worker has
-	// already durably emitted an acceptance or terminal fact. Either fact
-	// proves receipt, so do not synthesize a competing terminal event.
+	// already durably emitted a terminal fact. That fact proves completion,
+	// so do not synthesize a competing terminal event.
 	var workerEventID string
-	err = tx.QueryRowContext(ctx, `SELECT event_id FROM command_outcomes WHERE delivery_key=? AND (status=? OR terminal=1) ORDER BY sequence LIMIT 1`, key, OutcomeAccepted).Scan(&workerEventID)
+	err = tx.QueryRowContext(ctx, `SELECT event_id FROM command_outcomes WHERE delivery_key=? AND terminal=1`, key).Scan(&workerEventID)
 	if err == nil {
 		if _, err := tx.ExecContext(ctx, `UPDATE event_outbox SET state=?,last_error='',lease_expires='',updated_at=? WHERE idempotency_key=? AND state=?`, DeliveryDelivered, s.now().UTC().Format(time.RFC3339Nano), key, DeliveryClaimed); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	// Acceptance proves only that a worker started. It is not a terminal
+	// acknowledgement: leave the command pending so expiry/redelivery can
+	// recover a crashed worker and produce one trusted terminal outcome.
+	var acceptedEventID string
+	err = tx.QueryRowContext(ctx, `SELECT event_id FROM command_outcomes WHERE delivery_key=? AND status=?`, key, OutcomeAccepted).Scan(&acceptedEventID)
+	if err == nil {
+		now := s.now().UTC().Format(time.RFC3339Nano)
+		if _, err := tx.ExecContext(ctx, `UPDATE event_outbox SET state=?,last_error=?,next_attempt=?,lease_expires='',updated_at=? WHERE idempotency_key=? AND state=?`, DeliveryPending, msg, now, now, key, DeliveryClaimed); err != nil {
 			return err
 		}
 		return tx.Commit()

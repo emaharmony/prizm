@@ -868,3 +868,24 @@ from this repair before R1 acceptance is claimed.
 **Next action:** rebuild the isolated binary and rerun one opt-in provider
 task. Confirm the snapshot, command workspace fields, and one accepted plus
 one terminal outbox fact before investigating any provider-environment error.
+
+## 2026-10-09 — R1 Accepted-Worker Recovery Arbitration
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Tightened publisher-failure arbitration: a terminal worker fact completes
+  delivery, while an accepted-only worker fact returns the command to pending
+  delivery for redelivery or deadline recovery. Acceptance is no longer
+  mistaken for a terminal acknowledgement.
+- Fallback terminal outcomes allocate the next persisted sequence, preserving
+  `UNIQUE(delivery_key, sequence)` without relaxing it.
+- Moved manifest workspace verification into the durable rejection path, so a
+  mismatch is rejected before acceptance while still producing a trusted
+  terminal rejection. Added bounded SQLite-busy retry around exact-byte worker
+  outcome insertion for concurrent fan-out writers.
+
+**Evidence:** focused CLI and event tests passed with workspace-local cache
+paths. Full-suite validation remains the next execution step.
+
+**Next action:** run the full Go suite, then rerun the isolated provider task
+only after this recovery path is committed.

@@ -190,7 +190,7 @@ func (w *graphRoleWorker) handleCommand(msg *nats.Msg) {
 		log.Printf("[GRAPH-WORKER] rejected untrusted command %s: %v", command.DeliveryKey, err)
 		return
 	}
-	if err := w.validateCommand(command); err != nil {
+	if err := errors.Join(w.validateCommand(command), w.validatePersistedWorkspace(command)); err != nil {
 		if claim, _, claimErr := w.claimExecution(context.Background(), ledgerPath, command); claimErr == nil && claim == "execute" {
 			if publishErr := w.persistAndPublishTerminal(context.Background(), ledgerPath, command, event.OutcomeRejected, map[string]string{"message": err.Error()}); publishErr != nil {
 				log.Printf("[GRAPH-WORKER] reject terminal %s: %v", command.DeliveryKey, publishErr)
@@ -248,7 +248,7 @@ func (w *graphRoleWorker) verifyDurableCommand(ctx context.Context, command mult
 func (w *graphRoleWorker) validateCommand(command multiagent.GraphRoleCommand) error {
 	if strings.TrimSpace(command.RunID) == "" || strings.TrimSpace(command.ChildID) == "" ||
 		strings.TrimSpace(command.DelegationID) == "" || strings.TrimSpace(command.DeliveryKey) == "" ||
-		strings.TrimSpace(command.CommandEventID) == "" || strings.TrimSpace(command.ExecutionKey) == "" ||
+		strings.TrimSpace(command.CommandEventID) == "" || strings.TrimSpace(command.ExecutionKey) == "" || strings.TrimSpace(command.WorkspaceID) == "" ||
 		command.Deadline.IsZero() {
 		return errors.New("graph role command identity is incomplete")
 	}
@@ -265,6 +265,17 @@ func (w *graphRoleWorker) validateCommand(command multiagent.GraphRoleCommand) e
 		if want == "" || command.Role != want {
 			return errors.New("graph role fan-out lane is not bound to its role")
 		}
+	}
+	return nil
+}
+
+func (w *graphRoleWorker) validatePersistedWorkspace(command multiagent.GraphRoleCommand) error {
+	manifest, err := loadReferenceManifest(w.runDir, command.RunID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(manifest.WorkspaceID) == "" || command.WorkspaceID != manifest.WorkspaceID || command.Request.Run.WorkspaceID != manifest.WorkspaceID {
+		return errors.New("command workspace does not match persisted workspace identity")
 	}
 	return nil
 }
@@ -413,13 +424,23 @@ func (w *graphRoleWorker) recordTrustedOutcome(ctx context.Context, ledgerPath s
 	if err := json.Unmarshal(encoded, &outcome); err != nil {
 		return err
 	}
-	box, err := event.NewSQLiteOutbox(ledgerPath)
-	if err != nil {
-		return err
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		box, err := event.NewSQLiteOutbox(ledgerPath)
+		if err == nil {
+			_, err = box.RecordOutcome(ctx, outcome)
+			closeErr := box.Close()
+			if err == nil {
+				err = closeErr
+			}
+		}
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		time.Sleep(time.Duration(attempt+1) * 25 * time.Millisecond)
 	}
-	defer box.Close()
-	_, err = box.RecordOutcome(ctx, outcome)
-	return err
+	return lastErr
 }
 
 func (w *graphRoleWorker) publishMessage(ctx context.Context, subject string, payload []byte) error {

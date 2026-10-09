@@ -271,7 +271,7 @@ func TestTerminalFailureUsesExistingWorkerTerminalOutcome(t *testing.T) {
 	}
 }
 
-func TestTerminalFailureUsesWorkerAcceptanceAsDeliveryProof(t *testing.T) {
+func TestTerminalFailureKeepsWorkerAcceptanceRecoverable(t *testing.T) {
 	box, err := NewSQLiteOutbox(filepath.Join(t.TempDir(), "outbox.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -289,13 +289,16 @@ func TestTerminalFailureUsesWorkerAcceptanceAsDeliveryProof(t *testing.T) {
 		t.Fatalf("worker acceptance inserted=%v err=%v", inserted, err)
 	}
 	if err := box.terminalFailure(t.Context(), cmd.IdempotencyKey, "publisher flush failed", OutcomeFailed); err != nil {
-		t.Fatalf("publisher failure must preserve worker acceptance: %v", err)
+		t.Fatalf("publisher failure must preserve worker recovery path: %v", err)
 	}
 	trace, err := box.Report(t.Context(), cmd.RunID)
 	if err != nil || len(trace) != 1 || len(trace[0].Outcomes) != 1 || trace[0].Outcomes[0].Status != OutcomeAccepted {
 		t.Fatalf("trace=%+v err=%v", trace, err)
 	}
-	if trace[0].State != DeliveryDelivered {
-		t.Fatalf("delivery state=%s want %s", trace[0].State, DeliveryDelivered)
+	if trace[0].State != DeliveryPending {
+		t.Fatalf("delivery state=%s want %s", trace[0].State, DeliveryPending)
+	}
+	if retry, err := box.Claim(t.Context(), time.Minute); err != nil || retry == nil || retry.Command.IdempotencyKey != cmd.IdempotencyKey {
+		t.Fatalf("accepted command must be redeliverable after publisher failure: retry=%+v err=%v", retry, err)
 	}
 }
