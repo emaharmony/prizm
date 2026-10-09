@@ -689,3 +689,18 @@ run and retain a live outage/recovery trace with scoped replay evidence.
 **Open risks:** no production data or credentials were used. The temporary harness and SQLite artifacts remain under `.tmp` and are not tracked. The FTS health warning in embedding-disabled mode should not be interpreted as a production Recall health result.
 
 **Next action:** review the paired Recall API commit and attach this trace to the PR86 handoff; do not claim the broader R6 score gate beyond the evidence recorded here.
+
+## 2026-10-09 — R6 Production Serve Composition Preflight
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/pr86-recall-idempotency`, paired with Recall `codex/prizm-r6-capture-idempotency`
+
+- Built and started the actual PR86 `prizm serve` binary in a disposable run directory with embedded NATS, a loopback health port, and a loopback API port. With Recall intentionally unavailable, startup returned healthy and logs confirmed the reconciliation consumer, local Markdown fallback, memory extraction subscription, and API all initialized.
+- The serve API exposes `GET /api/v1/memories` for retrieval, but no scoped capture endpoint or HTTP tool dispatcher. `POST /api/v1/memories` and `POST /api/v1/memories/capture` return 405, while `/api/v1/memory/capture` returns 404. The registered `MemoryWriteTool` is an internal composition object and is not reachable through the serve API.
+- The NATS extraction subscription routes to local `AutoExtractor` behavior and requires a model provider; it does not invoke the scoped `memory.Facade` reconciliation path. The retrieval endpoint also does not accept owner/project/task scope fields and its Remembrance branch uses the fixed project name `prizm`, so a serve-driven scoped search proof cannot be made from the current public route.
+
+**Verification:** serve startup and health/API status checks completed on disposable loopback ports; all route probes were sanitized and emitted status codes and schema keys only. The process was stopped after the checks. No provider task, production data, credentials, Recall code, or PR87 files were used.
+
+**Open risks:** the existing process-level harness proves outage, restart, duplicate replay, scope isolation, and crash-after-remote-success recovery through real Prizm memory/reconciliation components, but it does not prove an HTTP or tool invocation through the running serve process. FTS remained intentionally disabled in the deterministic Recall acceptance environment.
+
+**Next action:** add or expose a scoped capture/tool route in a follow-up change, then rerun the same disposable serve composition with Recall down/up and scoped search assertions before treating the API-level acceptance as complete.
