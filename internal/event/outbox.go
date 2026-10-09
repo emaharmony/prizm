@@ -471,6 +471,10 @@ type Dispatcher struct {
 	Lease       time.Duration
 	MaxAttempts int
 	RetryAfter  time.Duration
+	// DeferTerminalOnPublishFailure keeps an uncertain transport delivery
+	// recoverable until its deadline. Use it when a trusted worker can have
+	// received the command even though the publisher returned an error.
+	DeferTerminalOnPublishFailure bool
 }
 
 func (d Dispatcher) DispatchOne(ctx context.Context) (bool, error) {
@@ -486,7 +490,11 @@ func (d Dispatcher) DispatchOne(ctx context.Context) (bool, error) {
 		return true, failErr
 	}
 	if err := d.Publisher.Publish(ctx, item.Subject, item.Command.Payload); err != nil {
-		_, ferr := d.Outbox.Fail(ctx, item.Command.IdempotencyKey, err, d.MaxAttempts, d.RetryAfter)
+		maxAttempts := d.MaxAttempts
+		if d.DeferTerminalOnPublishFailure {
+			maxAttempts = int(^uint(0) >> 1)
+		}
+		_, ferr := d.Outbox.Fail(ctx, item.Command.IdempotencyKey, err, maxAttempts, d.RetryAfter)
 		if ferr != nil {
 			return true, ferr
 		}

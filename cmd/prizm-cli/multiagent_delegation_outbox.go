@@ -64,7 +64,7 @@ func (o graphDelegationOutbox) Dispatch(ctx context.Context, subject string, com
 		return fmt.Errorf("graph role delegation publisher is unavailable")
 	}
 	dispatcher := event.Dispatcher{Outbox: o.SQLiteOutbox, Publisher: o.publisher,
-		Lease: 30 * time.Second, MaxAttempts: 3, RetryAfter: 250 * time.Millisecond}
+		Lease: 30 * time.Second, MaxAttempts: 3, RetryAfter: 250 * time.Millisecond, DeferTerminalOnPublishFailure: true}
 	var lastErr error
 	for attempt := 0; attempt < dispatcher.MaxAttempts; attempt++ {
 		processed, err := dispatcher.DispatchOne(ctx)
