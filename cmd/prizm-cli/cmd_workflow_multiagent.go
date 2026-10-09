@@ -68,10 +68,11 @@ func (m referenceWorkflowManifest) registryBacked() bool {
 }
 
 type referenceRuntime struct {
-	runtime    *multiagent.DurableRuntime
-	store      *multiagent.SQLiteDurableRunStore
-	events     *event.SQLiteEventStore
-	delegation graphDelegationOutbox
+	runtime     *multiagent.DurableRuntime
+	store       *multiagent.SQLiteDurableRunStore
+	events      *event.SQLiteEventStore
+	delegation  graphDelegationOutbox
+	workspaceID string
 }
 
 func (r *referenceRuntime) close() error {
@@ -120,7 +121,8 @@ func executeReferenceWorkflowRun(inputFile, runDir, configPath string) error {
 	}
 	defer runtime.close()
 	state, runErr := runtime.runtime.Run(context.Background(), multiagent.RunRequest{
-		RunID: runID,
+		RunID:       runID,
+		WorkspaceID: runtime.workspaceID,
 		Task: multiagent.TaskReference{
 			ID: "task_" + runID, Description: multiagent.ReferenceTaskDescription(input),
 		},
@@ -520,7 +522,7 @@ func openReferenceRuntimeWithInteractionForComposition(runDir string, manifest r
 		delegation.Close()
 		return nil, err
 	}
-	return &referenceRuntime{runtime: runtime, store: store, events: eventStore, delegation: delegation}, nil
+	return &referenceRuntime{runtime: runtime, store: store, events: eventStore, delegation: delegation, workspaceID: manifest.WorkspaceID}, nil
 }
 
 type unavailableRoleRunner struct{}

@@ -169,6 +169,59 @@ func TestGraphRoleWorkerEmbeddedNATSDeduplicatesAndReplaysAfterRestart(t *testin
 	}
 }
 
+func TestGraphRoleWorkerEmbeddedNATSPreservesWorkerTerminalDuringPublisherFailure(t *testing.T) {
+	runDir := t.TempDir()
+	command := graphWorkerTestCommand("run-terminal-before-publisher-failure", time.Now().Add(time.Minute))
+	prepareGraphWorkerRun(t, runDir, command)
+	url, cleanup, err := bus.StartEmbeddedBus(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	nc, err := bus.ConnectToBus(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	worker, err := startGraphRoleWorkerWithRunner(nc, runDir, "", nil, func(context.Context, multiagent.GraphRoleCommand) (multiagent.RoleRunResult, error) {
+		return multiagent.RoleRunResult{}, errors.New("worker terminal evidence")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	box, err := event.NewSQLiteOutbox(filepath.Join(runDir, command.RunID, "multiagent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer box.Close()
+	publisher := graphWorkerPublisherFunc(func(_ context.Context, subject string, payload []byte) error {
+		if err := nc.Publish(subject, payload); err != nil {
+			return err
+		}
+		if err := nc.Flush(); err != nil {
+			return err
+		}
+		trace := waitForGraphTerminal(t, runDir, command.RunID, command.DeliveryKey)
+		if got := trace.Outcomes[len(trace.Outcomes)-1].Status; got != event.OutcomeFailed {
+			return fmt.Errorf("worker terminal status=%s want failed", got)
+		}
+		time.Sleep(25 * time.Millisecond)
+		return errors.New("publisher flush failed after worker terminal")
+	})
+	dispatcher := event.Dispatcher{Outbox: box, Publisher: publisher, Lease: time.Minute, MaxAttempts: 1}
+	if processed, err := dispatcher.DispatchOne(t.Context()); !processed || err == nil {
+		t.Fatalf("dispatch processed=%v err=%v", processed, err)
+	}
+	traces, err := box.Report(t.Context(), command.RunID)
+	if err != nil || len(traces) != 1 || len(traces[0].Outcomes) != 2 || traces[0].Outcomes[1].Status != event.OutcomeFailed {
+		t.Fatalf("trace=%+v err=%v", traces, err)
+	}
+	if traces[0].State != event.DeliveryDelivered {
+		t.Fatalf("delivery state=%s want %s", traces[0].State, event.DeliveryDelivered)
+	}
+}
+
 func TestGraphRoleWorkerRestartDuringExecutionFailsClosed(t *testing.T) {
 	runDir := t.TempDir()
 	command := graphWorkerTestCommand("run-ambiguous", time.Now().Add(time.Minute))

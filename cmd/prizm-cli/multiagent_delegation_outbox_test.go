@@ -123,13 +123,13 @@ func TestCLIGraphRunDelegatesAndResumesThroughDurableOutboxAfterRestart(t *testi
 	manifest := referenceWorkflowManifest{
 		SchemaVersion: referenceManifestSchemaVersion,
 		RunID:         runID, WorkflowID: registered.WorkflowID, WorkflowVersion: registered.Version,
-		DefinitionDBPath: definitionDB,
+		DefinitionDBPath: definitionDB, WorkspaceID: "workspace-bound-before-dispatch",
 	}
 	first, err := openReferenceRuntimeWithInteractionForDelegationTest(runDir, manifest, graphDelegationTestRunner{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, runErr := first.runtime.Run(ctx, multiagent.RunRequest{RunID: runID, Task: multiagent.TaskReference{ID: "parent", Description: "delegate once"}})
+	state, runErr := first.runtime.Run(ctx, multiagent.RunRequest{RunID: runID, Task: multiagent.TaskReference{ID: "parent", Description: "delegate once"}, WorkspaceID: first.workspaceID})
 	var waiting *multiagent.RunWaitingError
 	if !errors.As(runErr, &waiting) || state.Status != multiagent.RunStatusPaused {
 		t.Fatalf("run state=%s err=%v", state.Status, runErr)
@@ -142,6 +142,13 @@ func TestCLIGraphRunDelegatesAndResumesThroughDurableOutboxAfterRestart(t *testi
 		t.Fatalf("delegation command=%+v subject=%q", trace[0].Command, trace[0].Subject)
 	}
 	command := trace[0].Command
+	var dispatched multiagent.GraphRoleCommand
+	if err := json.Unmarshal(command.Payload, &dispatched); err != nil {
+		t.Fatal(err)
+	}
+	if dispatched.WorkspaceID != first.workspaceID || dispatched.Request.Run.WorkspaceID != first.workspaceID {
+		t.Fatalf("delegated command workspace=%q run workspace=%q want %q", dispatched.WorkspaceID, dispatched.Request.Run.WorkspaceID, first.workspaceID)
+	}
 	if err := first.close(); err != nil {
 		t.Fatal(err)
 	}

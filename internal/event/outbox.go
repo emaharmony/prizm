@@ -195,6 +195,22 @@ func (s *SQLiteOutbox) terminalFailure(ctx context.Context, key, msg string, sta
 	if DeliveryState(state) != DeliveryClaimed {
 		return errors.New("event outbox: delivery is not claimed")
 	}
+	// A publisher can report an uncertain delivery after the worker has
+	// already durably emitted its terminal fact. That fact is authoritative:
+	// do not synthesize another terminal event with the same stable delivery
+	// identity and a different body. Mark the notification delivered because
+	// the terminal outcome proves the worker received the command.
+	var terminalEventID string
+	err = tx.QueryRowContext(ctx, `SELECT event_id FROM command_outcomes WHERE delivery_key=? AND terminal=1`, key).Scan(&terminalEventID)
+	if err == nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE event_outbox SET state=?,last_error='',lease_expires='',updated_at=? WHERE idempotency_key=? AND state=?`, DeliveryDelivered, s.now().UTC().Format(time.RFC3339Nano), key, DeliveryClaimed); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	var cmd Command
 	if err := json.Unmarshal(b, &cmd); err != nil {
 		return err

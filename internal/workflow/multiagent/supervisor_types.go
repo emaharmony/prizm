@@ -326,8 +326,9 @@ func (f EventSinkFunc) Emit(evt event.Event) {
 
 // RunRequest supplies identity and task context for a new in-memory run.
 type RunRequest struct {
-	RunID string
-	Task  TaskReference
+	RunID       string
+	Task        TaskReference
+	WorkspaceID string
 }
 
 // ResolvedTransition is a supervisor-selected edge or terminal result.

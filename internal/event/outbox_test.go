@@ -241,3 +241,32 @@ func TestRecordOutcomeDuplicateEventIDMustMatchCanonicalContent(t *testing.T) {
 		t.Fatal("changed duplicate accepted")
 	}
 }
+
+func TestTerminalFailureUsesExistingWorkerTerminalOutcome(t *testing.T) {
+	box, err := NewSQLiteOutbox(filepath.Join(t.TempDir(), "outbox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer box.Close()
+	cmd := testCommand("terminal-worker-won")
+	if _, err := box.Accept(t.Context(), "s", cmd); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := box.Claim(t.Context(), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	workerTerminal := Outcome{EventID: outcomeEventID(cmd.IdempotencyKey, OutcomeFailed), CommandEventID: cmd.EventID, RunID: cmd.RunID, TaskID: cmd.TaskID, DelegationID: cmd.DelegationID, CorrelationID: cmd.CorrelationID, CausationID: cmd.EventID, DeliveryKey: cmd.IdempotencyKey, Status: OutcomeFailed, Sequence: 2, OccurredAt: time.Now().UTC(), Payload: json.RawMessage(`{"message":"worker failed"}`)}
+	if inserted, err := box.RecordOutcome(t.Context(), workerTerminal); err != nil || !inserted {
+		t.Fatalf("worker terminal inserted=%v err=%v", inserted, err)
+	}
+	if err := box.terminalFailure(t.Context(), cmd.IdempotencyKey, "publisher flush failed", OutcomeFailed); err != nil {
+		t.Fatalf("terminal failure must preserve existing worker fact: %v", err)
+	}
+	trace, err := box.Report(t.Context(), cmd.RunID)
+	if err != nil || len(trace) != 1 || len(trace[0].Outcomes) != 1 || trace[0].Outcomes[0].EventID != workerTerminal.EventID {
+		t.Fatalf("trace=%+v err=%v", trace, err)
+	}
+	if trace[0].State != DeliveryDelivered {
+		t.Fatalf("delivery state=%s want %s", trace[0].State, DeliveryDelivered)
+	}
+}

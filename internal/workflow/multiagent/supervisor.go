@@ -246,6 +246,10 @@ func (s *Supervisor) newRunState(request RunRequest) RunState {
 		// failing at the very first RoleConfig lookup.
 		CurrentRole: s.entryRole,
 		CurrentTask: request.Task,
+		// The composition root resolves this immutable identity before the
+		// first role is dispatched. Delegated commands must bind it before a
+		// role result exists to populate metadata.
+		WorkspaceID: request.WorkspaceID,
 		Status:      RunStatusRunning,
 		RoleStates:  roleStates,
 		CreatedAt:   now,

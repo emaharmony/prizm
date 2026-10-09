@@ -811,3 +811,31 @@ the R1 score gate. Authenticated remote workers remain R3 scope.
 **Next action:** rebuild the CLI and rerun the isolated opt-in provider task;
 verify one immutable accepted fact, one terminal fact, successful dashboard
 snapshot, and eventual resume after an initial claim conflict.
+
+## 2026-10-09 — R1 Graph Workspace Binding and Terminal-Fact Convergence
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Seeded `RunState.WorkspaceID` from the trusted reference-runtime manifest at
+  run creation. Graph commands now carry that immutable workspace identity in
+  both their envelope and prepared role request before the first delegated
+  role runs; worker-side identity validation remains unchanged.
+- Identified the remaining event-ID conflict as an uncertain publisher result
+  racing a terminal fact already persisted by the worker. The dispatcher had
+  attempted to create a second terminal failure for the same delivery key,
+  with a different diagnostic body. It now preserves the worker terminal fact
+  and marks transport delivery complete when that fact proves receipt.
+- Added deterministic coverage for workspace-bound command construction and
+  an embedded-NATS worker terminal followed by a simulated publisher failure.
+  The strict outbox conflicting-content rejection remains covered separately.
+
+**Evidence:** focused CLI, event, and multiagent package tests passed with
+workspace-local `TMP`, `TEMP`, and `GOCACHE`.
+
+**Open risks:** the live provider must still be rerun from this commit. The
+parallel fan-out/fan-in acceptance report remains required before the R1 score
+gate can be claimed.
+
+**Next action:** rebuild the isolated acceptance binary, run one opt-in graph
+task, then inspect the outbox trace for a workspace-bound command, exactly one
+accepted fact, one terminal fact, and a successful snapshot.
