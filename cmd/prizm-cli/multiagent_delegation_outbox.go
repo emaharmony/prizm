@@ -4,11 +4,35 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
+
+var graphRoleTransport struct {
+	sync.RWMutex
+	publisher event.CommandPublisher
+}
+
+func configureGraphRolePublisher(publisher event.CommandPublisher) func() {
+	graphRoleTransport.Lock()
+	previous := graphRoleTransport.publisher
+	graphRoleTransport.publisher = publisher
+	graphRoleTransport.Unlock()
+	return func() {
+		graphRoleTransport.Lock()
+		graphRoleTransport.publisher = previous
+		graphRoleTransport.Unlock()
+	}
+}
+
+func currentGraphRolePublisher() event.CommandPublisher {
+	graphRoleTransport.RLock()
+	defer graphRoleTransport.RUnlock()
+	return graphRoleTransport.publisher
+}
 
 const (
 	graphRoleDelegationSubject  = "prizm.graph.role.delegation"
@@ -25,11 +49,40 @@ const (
 // dispatch after restart is safe.
 type graphDelegationOutbox struct {
 	*event.SQLiteOutbox
+	publisher    event.CommandPublisher
+	injectedOnly bool
 }
 
 func (o graphDelegationOutbox) Dispatch(ctx context.Context, subject string, command event.Command) error {
-	_, err := o.Accept(ctx, subject, command)
-	return err
+	if _, err := o.Accept(ctx, subject, command); err != nil {
+		return err
+	}
+	if o.publisher == nil {
+		if o.injectedOnly {
+			return nil
+		}
+		return fmt.Errorf("graph role delegation publisher is unavailable")
+	}
+	dispatcher := event.Dispatcher{Outbox: o.SQLiteOutbox, Publisher: o.publisher,
+		Lease: 30 * time.Second, MaxAttempts: 3, RetryAfter: 250 * time.Millisecond}
+	var lastErr error
+	for attempt := 0; attempt < dispatcher.MaxAttempts; attempt++ {
+		processed, err := dispatcher.DispatchOne(ctx)
+		if err == nil && processed {
+			return nil
+		}
+		if err != nil {
+			lastErr = err
+		}
+		timer := time.NewTimer(dispatcher.RetryAfter)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return lastErr
 }
 
 func newGraphDelegationOutbox(path string) (graphDelegationOutbox, *multiagent.DurableDelegationOptions, error) {
@@ -44,15 +97,17 @@ func newGraphDelegationOutboxForTest(path string) (graphDelegationOutbox, *multi
 }
 
 func newGraphDelegationOutboxForComposition(path string, enableDelegation bool) (graphDelegationOutbox, *multiagent.DurableDelegationOptions, error) {
-	if os.Getenv(graphRoleDelegationRequestedEnv) == "1" {
+	requested := os.Getenv(graphRoleDelegationRequestedEnv) == "1"
+	publisher := currentGraphRolePublisher()
+	if requested && publisher == nil {
 		return graphDelegationOutbox{}, nil, fmt.Errorf("graph role delegation is unavailable: no durable graph-role worker is composed")
 	}
 	outbox, err := event.NewSQLiteOutbox(path)
 	if err != nil {
 		return graphDelegationOutbox{}, nil, err
 	}
-	adapter := graphDelegationOutbox{SQLiteOutbox: outbox}
-	if !enableDelegation {
+	adapter := graphDelegationOutbox{SQLiteOutbox: outbox, publisher: publisher, injectedOnly: enableDelegation && !requested}
+	if !enableDelegation && !requested {
 		return adapter, nil, nil
 	}
 	return adapter, &multiagent.DurableDelegationOptions{

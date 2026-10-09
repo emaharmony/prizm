@@ -742,3 +742,42 @@ R4 adapters remain blocked on that verified command-consumer contract.
 **Next action:** compose a graph-owned worker and durable publisher/outcome
 intake, then prove the R1 failure matrix and parallel fan-in with an
 event-derived report.
+
+## 2026-10-09 — R1 Production Graph-Role Worker and Recovery
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Added the typed graph-role command/result contract. Commands bind the exact
+  prepared role request to trusted run, role, task, execution, workspace,
+  delegation, delivery, correlation, command-event, and deadline identity.
+- Composed an opt-in `prizm serve` NATS publisher/worker. The worker validates
+  the command against its persisted manifest and the immutable SQLite outbox
+  row, including exact payload bytes. NATS carries notifications only. Outcome
+  intake likewise requires exact bytes already persisted by the trusted worker
+  ledger before it can resume the parent.
+- Added a SQLite execution ledger. Concurrent duplicates do not re-execute,
+  terminal results replay after restart, and a new worker that finds an
+  interrupted in-flight owner records an ambiguous terminal failure instead of
+  blindly repeating role execution.
+- Routed delegated mutation proposals into the parent runtime's existing exact
+  approval, application, and post-apply validation lifecycle. The worker never
+  applies a proposal or supplies approval authority; the parent checkpoints the
+  proposal identities before acknowledging the terminal worker fact.
+- Added autonomous deadline scanning and embedded-NATS coverage for duplicate
+  delivery, forged outcome rejection, malformed-command terminal rejection,
+  bounded publisher retry, terminal replay after restart, interrupted worker
+  failure, and wall-clock deadline wake. Local wake serialization and the
+  durable run claimer arbitrate scanner races.
+- Evidence: focused failure-matrix tests passed; `go test ./... -count=1`
+  passed with workspace-local `TMP`, `TEMP`, and `GOCACHE`; `git diff --check`
+  passed.
+
+**Open risks:** no configured real-provider graph task was run in this session.
+The separate bounded parallel research/code/review fan-out/fan-in acceptance
+and its complete event-derived report remain open, so the full R1 score gate is
+not claimed. The worker requires a shared run database; authenticated remote
+workers remain R3 scope.
+
+**Next action:** run one opt-in serve task with a configured provider, review
+its command/outcome/proposal trace, then implement and prove bounded parallel
+fan-out/fan-in.

@@ -81,7 +81,7 @@ func (s *recordingOutcomeSource) MarkOutcomeConsumed(ctx context.Context, eventI
 	if err != nil {
 		return err
 	}
-	if record.Phase == CheckpointWaiting && record.Waiting.LastOutcomeSequence == 0 {
+	if record.PendingDelegationOutcomeAck != eventID {
 		return errors.New("outcome acknowledged before graph checkpoint")
 	}
 	s.acked = append(s.acked, eventID)
@@ -266,19 +266,22 @@ func TestDurableGraphDelegationRetriesPendingDispatchWithSameCommand(t *testing.
 	}
 }
 
-func TestDurableGraphDelegationRejectsChildProposalsAsGovernanceFailure(t *testing.T) {
+func TestDurableGraphDelegationRoutesChildProposalsToParentApprovalLifecycle(t *testing.T) {
 	runtime, env, dispatch, source := newWaitingDelegationRuntime(t, "run-graph-delegation")
 	payload, _ := json.Marshal(delegatedRoleOutcome{Result: RoleRunResult{Outcome: TransitionOutcome("ok"), LocalIterations: 1,
 		Proposals: []ProposalReference{{ProposalID: "proposal-child", ApprovalID: "approval-child"}}}})
 	source.outcomes = []event.Outcome{matchingOutcome(dispatch.command, "terminal-proposal", event.OutcomeSucceeded, 1, payload)}
 
 	state, err := runtime.Resume(t.Context(), "run-graph-delegation")
-	if err == nil || state.Status != RunStatusFailed || len(source.acked) != 1 {
+	var waitingErr *RunWaitingError
+	if !errors.As(err, &waitingErr) || state.Status != RunStatusPaused || len(source.acked) != 1 {
 		t.Fatalf("Resume() state=%#v err=%v acknowledged=%v", state, err, source.acked)
 	}
 	stored, loadErr := env.store.Load(t.Context(), "run-graph-delegation")
-	if loadErr != nil || stored.Phase != CheckpointTerminal || stored.Failure == nil || stored.Failure.Kind != "delegation_governance" {
-		t.Fatalf("governance checkpoint=%#v loadErr=%v", stored, loadErr)
+	if loadErr != nil || stored.Phase != CheckpointWaiting || stored.Waiting == nil || stored.Waiting.Kind != "proposal_approval" ||
+		stored.ApprovedTask == nil || len(stored.ApprovedTask.Proposals) != 1 ||
+		stored.ApprovedTask.Proposals[0].ProposalID != "proposal-child" || stored.ApprovedTask.Proposals[0].ApprovalID != "approval-child" {
+		t.Fatalf("parent approval checkpoint=%#v loadErr=%v", stored, loadErr)
 	}
 }
 

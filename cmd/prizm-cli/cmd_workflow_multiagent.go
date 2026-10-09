@@ -306,7 +306,21 @@ func executeReferenceWorkflowReport(runID, runDir string, jsonOutput bool) error
 	return nil
 }
 
+type liveReferenceComponents struct {
+	runner      multiagent.RoleRunner
+	interaction *multiagent.InteractionScheduler
+	lifecycle   multiagent.ProposalLifecycle
+}
+
 func openLiveReferenceRuntime(runDir, configPath string, manifest referenceWorkflowManifest) (*referenceRuntime, error) {
+	components, err := buildLiveReferenceComponents(runDir, configPath, manifest)
+	if err != nil {
+		return nil, err
+	}
+	return openReferenceRuntimeWithInteraction(runDir, manifest, components.runner, components.interaction, components.lifecycle)
+}
+
+func buildLiveReferenceComponents(runDir, configPath string, manifest referenceWorkflowManifest) (*liveReferenceComponents, error) {
 	cfg, err := orchestrator.LoadConfig(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("load Prizm config: %w", err)
@@ -398,7 +412,7 @@ func openLiveReferenceRuntime(runDir, configPath string, manifest referenceWorkf
 		}
 	}
 	lifecycle := newApprovalProposalLifecycle(approvalStore, manifest.WorkspacePath, runDir)
-	return openReferenceRuntimeWithInteraction(runDir, manifest, roleRunner, interaction, lifecycle)
+	return &liveReferenceComponents{runner: roleRunner, interaction: interaction, lifecycle: lifecycle}, nil
 }
 
 func openInspectionReferenceRuntime(runDir string, manifest referenceWorkflowManifest) (*referenceRuntime, error) {

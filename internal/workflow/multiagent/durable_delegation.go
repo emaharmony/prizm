@@ -5,22 +5,40 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/emaharmony/prizm/internal/event"
 )
 
-const delegatedRoleCommandType = "prizm.command.graph_role_delegation"
+// GraphRoleDelegationCommandType identifies the canonical graph-role command.
+const GraphRoleDelegationCommandType = "prizm.command.graph_role_delegation"
 
-type delegatedRolePayload struct {
-	ChildID      string        `json:"child_id"`
-	Role         Role          `json:"role"`
-	Task         TaskReference `json:"task"`
-	ExecutionKey string        `json:"execution_key"`
+// GraphRoleCommand is the complete read-only execution context for one prepared
+// role visit. Identity is repeated inside the payload because transports publish
+// payload bytes; workers must bind it back to the durable envelope identities.
+type GraphRoleCommand struct {
+	ChildID        string         `json:"child_id"`
+	Role           Role           `json:"role"`
+	Task           TaskReference  `json:"task"`
+	ExecutionKey   string         `json:"execution_key"`
+	RunID          string         `json:"run_id"`
+	WorkspaceID    string         `json:"workspace_id"`
+	DelegationID   string         `json:"delegation_id"`
+	DeliveryKey    string         `json:"delivery_key"`
+	CorrelationID  string         `json:"correlation_id"`
+	CommandEventID string         `json:"command_event_id"`
+	Deadline       time.Time      `json:"deadline"`
+	Request        RoleRunRequest `json:"request"`
 }
 
-type delegatedRoleOutcome struct {
+// GraphRoleOutcome is the typed terminal payload returned by a graph worker.
+type GraphRoleOutcome struct {
 	Result RoleRunResult `json:"result"`
 }
+
+// Retain the package-local name used by the existing deterministic tests.
+type delegatedRoleOutcome = GraphRoleOutcome
 
 func (r *DurableRuntime) dispatchDelegatedRole(ctx context.Context, record DurableRun) (DurableRun, error) {
 	role := record.State.CurrentRole
@@ -57,12 +75,19 @@ func (r *DurableRuntime) dispatchPendingDelegation(ctx context.Context, record D
 	if waiting == nil || waiting.Kind != "delegation_outcome" || !waiting.DispatchPending {
 		return record, errors.New("multiagent: no pending graph delegation dispatch")
 	}
-	payload, err := json.Marshal(delegatedRolePayload{ChildID: waiting.ChildID, Role: record.State.CurrentRole,
-		Task: record.State.CurrentTask, ExecutionKey: record.ActiveExecutionKey})
+	role := record.State.CurrentRole
+	roleConfig, _ := r.supervisor.graph.RoleConfig(role)
+	request := RoleRunRequest{Run: r.supervisor.runView(record.State), RoleConfig: cloneRoleConfig(roleConfig)}
+	payload, err := json.Marshal(GraphRoleCommand{ChildID: waiting.ChildID, Role: role,
+		Task: record.State.CurrentTask, ExecutionKey: record.ActiveExecutionKey,
+		RunID: record.State.RunID, WorkspaceID: record.State.WorkspaceID,
+		DelegationID: waiting.DelegationID, DeliveryKey: waiting.DeliveryKey,
+		CorrelationID: waiting.CorrelationID, CommandEventID: waiting.CommandEventID,
+		Deadline: waiting.Deadline, Request: request})
 	if err != nil {
 		return record, fmt.Errorf("multiagent: marshal delegated role: %w", err)
 	}
-	cmd := event.Command{EventID: waiting.CommandEventID, Type: delegatedRoleCommandType,
+	cmd := event.Command{EventID: waiting.CommandEventID, Type: GraphRoleDelegationCommandType,
 		RunID: record.State.RunID, TaskID: waiting.ChildID, DelegationID: waiting.DelegationID,
 		CorrelationID: waiting.CorrelationID, IdempotencyKey: waiting.DeliveryKey, Deadline: waiting.Deadline,
 		SchemaVersion: event.CommandSchemaVersion, Payload: payload}
@@ -116,33 +141,34 @@ func (r *DurableRuntime) resumeDelegation(ctx context.Context, record DurableRun
 			}
 			continue
 		}
+		if outcome.Status != event.OutcomeSucceeded {
+			record.PendingDelegationOutcomeAck = outcome.EventID
+			reason := "delegated role " + string(outcome.Status)
+			if len(outcome.Payload) != 0 {
+				var failure struct {
+					Message string `json:"message"`
+				}
+				if json.Unmarshal(outcome.Payload, &failure) == nil && strings.TrimSpace(failure.Message) != "" {
+					reason += ": " + boundedDiagnostic(errors.New(failure.Message))
+				}
+			}
+			record, terminalErr := r.failDelegation(ctx, record, "delegation_"+string(outcome.Status), errors.New(reason))
+			if record.PendingDelegationOutcomeAck == outcome.EventID {
+				if acked, ackErr := r.ackDelegationOutcome(ctx, record, outcome.EventID); ackErr == nil {
+					record = acked
+				} else {
+					return record, ackErr
+				}
+			}
+			return record, terminalErr
+		}
 
-		var decoded delegatedRoleOutcome
+		var decoded GraphRoleOutcome
 		if len(outcome.Payload) == 0 || json.Unmarshal(outcome.Payload, &decoded) != nil {
 			return record, &RecoveryFailedError{RunID: record.State.RunID, Cause: errors.New("terminal delegation outcome requires a valid graph role result")}
 		}
 		if err := validateRoleRunResult(r.supervisor.graph, decoded.Result); err != nil {
 			return record, &RecoveryFailedError{RunID: record.State.RunID, Cause: fmt.Errorf("invalid delegated role result: %w", err)}
-		}
-		if len(decoded.Result.Proposals) != 0 {
-			role := record.State.CurrentRole
-			cause := errors.New("delegated role result contains mutation proposals that require parent-owned approval")
-			state, terminalErr := r.supervisor.failRole(record.State, role, cause)
-			record.State = state
-			record.Phase = CheckpointTerminal
-			record.Failure = persistedFailure("delegation_governance", terminalErr, r.now())
-			record.PendingTransition = nil
-			record.Waiting = nil
-			record.PendingDelegationOutcomeAck = outcome.EventID
-			record, err = r.checkpoint(ctx, record)
-			if err != nil {
-				return record, err
-			}
-			record, err = r.ackDelegationOutcome(ctx, record, outcome.EventID)
-			if err != nil {
-				return record, err
-			}
-			return record, terminalErr
 		}
 		role := record.State.CurrentRole
 		roleConfig, _ := r.supervisor.graph.RoleConfig(role)
@@ -153,6 +179,22 @@ func (r *DurableRuntime) resumeDelegation(ctx context.Context, record DurableRun
 		record.Waiting = nil
 		record.Phase = CheckpointRoleRunning
 		record.PendingDelegationOutcomeAck = outcome.EventID
+		if len(decoded.Result.Proposals) != 0 {
+			record, err = r.pauseForProposals(ctx, record, role, decoded.Result, waiting.StartedAt, outcome.OccurredAt.UTC())
+			if err != nil {
+				// Waiting is an expected result. The role result and exact proposal
+				// identities are durable before the worker fact is acknowledged.
+				var waitingErr *RunWaitingError
+				if !errors.As(err, &waitingErr) {
+					return record, err
+				}
+			}
+			record, err = r.ackDelegationOutcome(ctx, record, outcome.EventID)
+			if err != nil {
+				return record, err
+			}
+			return record, waitingError(record)
+		}
 		record, err = r.finishPreparedRole(ctx, record, role, roleConfig, decoded.Result, waiting.StartedAt, outcome.OccurredAt.UTC())
 		if err != nil {
 			return record, err
