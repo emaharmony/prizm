@@ -144,7 +144,7 @@ func TestCoreIdentityBlock_Build(t *testing.T) {
 	if !strings.Contains(result, "Your name is Lumi") {
 		t.Error("CoreIdentityBlock should state the agent's name")
 	}
-	if !strings.Contains(result, "glm-5.1:cloud") {
+	if !strings.Contains(result, "glm-5.3:cloud") {
 		t.Error("CoreIdentityBlock should include current model")
 	}
 	if !strings.Contains(result, "SUPERSDED") && !strings.Contains(result, "SUPERSeded") {

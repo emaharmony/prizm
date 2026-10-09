@@ -229,6 +229,7 @@ func (cb *contextBudget) checkAndCompress(messages []provider.ChatMessage, itera
 // modelContextTokens maps known model names to their maximum context window size.
 func getModelContextTokens(model string) (int, bool) {
 	known := map[string]int{
+		"glm-5.3:cloud":           1048576,
 		"glm-5.1:cloud":           202752,
 		"glm-5.2:cloud":           202752,
 		"glm-4:cloud":             131072,
