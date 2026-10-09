@@ -132,6 +132,219 @@ func TestGraphRoleWorkerFanoutExpiryClosesAcceptedChildrenWithoutDuplicates(t *t
 	}
 }
 
+func TestGraphRoleWorkerEmbeddedNATSRecoversPersistedFanoutJoin(t *testing.T) {
+	runDir := t.TempDir()
+	runID := "run-integrated-fanout-expiry"
+	workspaceID := "workspace-integrated-fanout"
+	dir := filepath.Join(runDir, runID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeReferenceManifest(runDir, referenceWorkflowManifest{
+		SchemaVersion:    referenceManifestSchemaVersion,
+		RunID:            runID,
+		WorkflowID:       "test",
+		WorkflowVersion:  1,
+		WorkspaceID:      workspaceID,
+		WorkspaceCleaned: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dir, "multiagent.db")
+	store, err := multiagent.NewSQLiteDurableRunStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	events, err := event.NewSQLiteEventStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer events.Close()
+	box, err := event.NewSQLiteOutbox(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer box.Close()
+	url, cleanup, err := bus.StartEmbeddedBus(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	nc, err := bus.ConnectToBus(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+
+	graph, err := multiagent.CompatAdaptDefinition(multiagent.DefaultReferenceDefinition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now().UTC()
+	var clock atomic.Value
+	clock.Store(start)
+	dispatcher := graphDelegationOutbox{SQLiteOutbox: box, publisher: graphWorkerPublisherFunc(func(_ context.Context, subject string, payload []byte) error {
+		if err := nc.Publish(subject, payload); err != nil {
+			return err
+		}
+		return nc.Flush()
+	})}
+	runtime, err := multiagent.NewDurableRuntime(graph, graphWorkerRoleRunner(func(context.Context, multiagent.RoleRunRequest) (multiagent.RoleRunResult, error) {
+		return multiagent.RoleRunResult{}, errors.New("local role runner must not execute delegated roles")
+	}), store, multiagent.FileRunClaimer{Root: runDir}, events, multiagent.DurableRuntimeOptions{
+		Clock: func() time.Time { return clock.Load().(time.Time) },
+		Delegation: &multiagent.DurableDelegationOptions{
+			Subject: graphRoleDelegationSubject, Dispatcher: dispatcher, Outcomes: box,
+			Deadline: 10 * time.Second, RequireWorkspaceID: true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	acceptedChildren := make(chan multiagent.FanOutLane, 2)
+	release := make(chan struct{})
+	var childExecutions atomic.Int32
+	worker, err := startGraphRoleWorkerWithRunner(nc, runDir, "", func(ctx context.Context, gotRunID string) error {
+		_, resumeErr := runtime.Resume(ctx, gotRunID)
+		return resumeErr
+	}, func(ctx context.Context, command multiagent.GraphRoleCommand) (multiagent.RoleRunResult, error) {
+		if command.Lane == "" {
+			return multiagent.RoleRunResult{Outcome: multiagent.OutcomePlanReady, LocalIterations: 1, FanOut: &multiagent.FanOutPlan{Tasks: []multiagent.FanOutTask{
+				{Lane: multiagent.FanOutResearch, Role: multiagent.RolePlanner, Description: "research recovery"},
+				{Lane: multiagent.FanOutImplementation, Role: multiagent.RoleDeveloper, Description: "implement recovery"},
+				{Lane: multiagent.FanOutReview, Role: multiagent.RoleReviewer, Description: "review recovery"},
+			}}}, nil
+		}
+		if childExecutions.Add(1) == 1 {
+			return multiagent.RoleRunResult{Outcome: multiagent.OutcomePlanReady, LocalIterations: 1}, nil
+		}
+		acceptedChildren <- command.Lane
+		<-release // Simulate a worker crash after its durable accepted fact.
+		return multiagent.RoleRunResult{}, ctx.Err()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	defer close(release)
+
+	state, runErr := runtime.Run(t.Context(), multiagent.RunRequest{
+		RunID: runID, Task: multiagent.TaskReference{ID: "parent-task", Description: "recover three delegated children"}, WorkspaceID: workspaceID,
+	})
+	var waitingErr *multiagent.RunWaitingError
+	if !errors.As(runErr, &waitingErr) || state.Status != multiagent.RunStatusPaused {
+		t.Fatalf("Run() state=%#v err=%v", state, runErr)
+	}
+	initial, err := box.Report(t.Context(), runID)
+	if err != nil || len(initial) != 1 {
+		t.Fatalf("initial command report=%+v err=%v", initial, err)
+	}
+	waitForGraphTerminal(t, runDir, runID, initial[0].Command.IdempotencyKey)
+	state, runErr = runtime.Resume(t.Context(), runID)
+	if !errors.As(runErr, &waitingErr) || state.Status != multiagent.RunStatusPaused {
+		t.Fatalf("parent Resume() state=%#v err=%v", state, runErr)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-acceptedChildren:
+		case <-time.After(3 * time.Second):
+			record, _ := store.Load(t.Context(), runID)
+			traces, _ := box.Report(t.Context(), runID)
+			t.Fatalf("fan-out child did not reach accepted-only execution; waiting=%#v join=%#v traces=%+v", record.Waiting, record.DelegationJoin, traces)
+		}
+	}
+
+	var waiting multiagent.DurableRun
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		waiting, err = store.Load(t.Context(), runID)
+		if err == nil && waiting.Waiting != nil && waiting.Waiting.Kind == "delegation_join" && waiting.DelegationJoin != nil && len(waiting.DelegationJoin.Children) == 3 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if waiting.DelegationJoin == nil || len(waiting.DelegationJoin.Children) != 3 {
+		t.Fatalf("persisted delegation join=%#v err=%v", waiting.DelegationJoin, err)
+	}
+
+	clock.Store(start.Add(11 * time.Second))
+	worker.wakeExpired(t.Context(), start.Add(11*time.Second))
+	deadline = time.Now().Add(3 * time.Second)
+	var terminal multiagent.DurableRun
+	for time.Now().Before(deadline) {
+		terminal, err = store.Load(t.Context(), runID)
+		if err == nil && terminal.State.Status == multiagent.RunStatusFailed && terminal.Failure != nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil || terminal.State.Status != multiagent.RunStatusFailed || terminal.Failure == nil {
+		t.Fatalf("terminal run=%#v err=%v", terminal, err)
+	}
+
+	traces, err := box.Report(t.Context(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	children := make(map[string]event.CommandTrace)
+	for _, trace := range traces {
+		if trace.Command.JoinID != "" {
+			children[trace.Command.Lane] = trace
+		}
+	}
+	if len(children) != 3 {
+		t.Fatalf("child traces=%d want 3; report=%+v", len(children), traces)
+	}
+	stable := make(map[string][]string, 3)
+	for lane, trace := range children {
+		if len(trace.Outcomes) != 2 || trace.Outcomes[0].Status != event.OutcomeAccepted || !trace.Outcomes[1].Status.Terminal() {
+			t.Fatalf("lane %s outcomes=%+v", lane, trace.Outcomes)
+		}
+		if trace.Outcomes[1].DeliveryKey != trace.Command.IdempotencyKey || trace.Outcomes[1].JoinID != trace.Command.JoinID || trace.Outcomes[1].Lane != trace.Command.Lane {
+			t.Fatalf("lane %s terminal identity=%+v command=%+v", lane, trace.Outcomes[1], trace.Command)
+		}
+		stable[lane] = []string{trace.Outcomes[0].EventID, trace.Outcomes[1].EventID}
+	}
+	succeeded, timedOut := 0, 0
+	for _, trace := range children {
+		switch trace.Outcomes[1].Status {
+		case event.OutcomeSucceeded:
+			succeeded++
+		case event.OutcomeTimedOut:
+			timedOut++
+		}
+	}
+	if succeeded != 1 || timedOut != 2 {
+		t.Fatalf("mixed child terminals=%+v", children)
+	}
+
+	allEvents, err := events.Query(t.Context(), event.EventFilter{RunID: runID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := multiagent.BuildReferenceRunReport(multiagent.ReferenceWorkflowInput{Objective: "recover three delegated children"}, terminal.State, allEvents)
+	if len(report.FanOut) != 3 {
+		t.Fatalf("terminal fan-out report=%+v", report.FanOut)
+	}
+
+	worker.wakeExpired(t.Context(), start.Add(12*time.Second))
+	replayed, err := box.Report(t.Context(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, trace := range replayed {
+		if trace.Command.JoinID == "" {
+			continue
+		}
+		ids := stable[trace.Command.Lane]
+		if len(trace.Outcomes) != 2 || len(ids) != 2 || trace.Outcomes[0].EventID != ids[0] || trace.Outcomes[1].EventID != ids[1] {
+			t.Fatalf("lane %s replay changed trusted facts: %+v", trace.Command.Lane, trace.Outcomes)
+		}
+	}
+}
+
 func TestGraphRoleWorkerExpiryClosesUnclaimedCommand(t *testing.T) {
 	runDir := t.TempDir()
 	command := graphWorkerTestCommand("run-unclaimed-expiry", time.Now().Add(-time.Second))

@@ -952,3 +952,31 @@ trace before starting another paid provider run.
 **Scanner contract:** timeout synthesis is owned by the running graph-worker
 scanner in `prizm serve`; direct manual `Resume` consumes durable outcomes but
 does not synthesize missing command outcomes.
+
+## 2026-10-09 — R1 Integrated Fan-Out Scanner Recovery
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Added an integrated regression using embedded NATS, the shared canonical
+  SQLite outbox/event/run database, and a persisted `DurableRuntime`. The real
+  parent command produces a three-child `delegation_join`; one child records a
+  successful terminal while two simulate worker loss after durable acceptance.
+- The graph-worker deadline scanner persists both missing trusted terminal
+  facts before invoking the actual durable resume callback. The parent reaches
+  a terminal failed state, and its event-derived report contains all three
+  fan-out children.
+- Re-running the scanner preserves each accepted and terminal event identity
+  and does not append duplicate outcomes.
+
+**Evidence:**
+`go test ./cmd/prizm-cli -run TestGraphRoleWorkerEmbeddedNATSRecoversPersistedFanoutJoin -count=1`
+passed. The full CLI package requires workspace-local `TMP`/`TEMP`; a first
+sandbox run without those settings failed existing worktree-safety tests before
+the corrected validation run.
+
+**Open risks:** a successful configured-provider graph task remains required
+before claiming the complete R1 score gate. Authenticated remote workers remain
+R3 scope.
+
+**Next action:** complete the configured-provider acceptance trace, then assess
+the remaining R1 gate evidence before starting R3/R4 work.
