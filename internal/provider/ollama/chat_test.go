@@ -113,6 +113,39 @@ func TestChatProviderContentOnly(t *testing.T) {
 	}
 }
 
+func TestChatProviderGLM53ClearsThinkingAndExcludesItFromResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if request["model"] != "glm-5.3:cloud" || request["clear_thinking"] != true {
+			t.Fatalf("request=%#v", request)
+		}
+		if _, present := request["think"]; present {
+			t.Fatalf("GLM request must use clear_thinking instead of think: %#v", request)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "glm-5.3:cloud", "done": true, "prompt_eval_count": 12, "eval_count": 4,
+			"message": map[string]any{"role": "assistant", "content": `{"schema_version":1}`, "thinking": "private reasoning"},
+		})
+	}))
+	defer server.Close()
+
+	response, err := ollama.NewChatProvider(server.URL).ChatGenerate(context.Background(), provider.ChatGenerateRequest{
+		Model: "glm-5.3:cloud", Messages: []provider.ChatMessage{{Role: "user", Content: "return JSON"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Content != `{"schema_version":1}` || response.PromptTokens != 12 || response.OutputTokens != 4 {
+		t.Fatalf("response=%#v", response)
+	}
+	if _, present := response.Raw["thinking"]; present {
+		t.Fatalf("thinking must not cross provider boundary: %#v", response.Raw)
+	}
+}
+
 func TestChatProviderToolCalls(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := map[string]any{

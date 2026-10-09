@@ -21,6 +21,23 @@ type scopedProbeProvider struct {
 
 type unscopedProbeProvider struct{}
 
+type chatProbeProvider struct {
+	captured provider.ChatGenerateRequest
+}
+
+func (p *chatProbeProvider) Generate(context.Context, provider.GenerateRequest) (provider.GenerateResponse, error) {
+	return provider.GenerateResponse{}, fmt.Errorf("text generation must not be used when chat is available")
+}
+
+func (p *chatProbeProvider) ChatGenerate(_ context.Context, request provider.ChatGenerateRequest) (provider.ChatGenerateResponse, error) {
+	p.captured = request
+	return provider.ChatGenerateResponse{
+		Content:      `{"schema_version":1,"understanding":"done"}`,
+		PromptTokens: 11,
+		OutputTokens: 7,
+	}, nil
+}
+
 func (unscopedProbeProvider) Generate(context.Context, provider.GenerateRequest) (provider.GenerateResponse, error) {
 	return provider.GenerateResponse{}, nil
 }
@@ -126,6 +143,33 @@ func TestSubAgentBackendCodexUsesReadOnlyRunScope(t *testing.T) {
 	}
 	if probe.scope.Workspace != workDir || !probe.scope.ReadOnly {
 		t.Fatalf("codex scope=%#v", probe.scope)
+	}
+}
+
+func TestSubAgentBackendUsesChatProviderForStructuredRoleOutput(t *testing.T) {
+	probe := &chatProbeProvider{}
+	registry := provider.NewProviderRegistry()
+	registry.Register("glm-5.3:cloud", probe, provider.ModelInfo{ProviderName: "ollama"})
+	backend := &subAgentBackend{providers: registry}
+	llm, _, _, err := backend.Bind(subagent.AgentRuntime{AgentID: "planner", Provider: "ollama", Model: "glm-5.3:cloud"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := llm(context.Background(), []v2.Message{
+		{Role: "system", Content: "role contract"},
+		{Role: "user", Content: "bounded task"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if turn.Text != `{"schema_version":1,"understanding":"done"}` || turn.PromptTokens != 11 || turn.CompletionTokens != 7 {
+		t.Fatalf("turn=%#v", turn)
+	}
+	if probe.captured.Model != "glm-5.3:cloud" || probe.captured.Agent != "planner" || probe.captured.MaxTokens != 4096 {
+		t.Fatalf("request=%#v", probe.captured)
+	}
+	if len(probe.captured.Messages) != 2 || probe.captured.Messages[1].Content != "bounded task" {
+		t.Fatalf("messages=%#v", probe.captured.Messages)
 	}
 }
 

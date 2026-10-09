@@ -151,6 +151,19 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 			resp, gerr = scoped.GenerateInRunScope(ctx, request, provider.RunScope{Workspace: workspace, ReadOnly: true})
 		} else if native, ok := prov.(provider.NativeToolProvider); ok && native.UsesNativeTools() {
 			return subagent.Turn{}, fmt.Errorf("native-tool provider cannot guarantee an isolated read-only run scope")
+		} else if chat, ok := prov.(provider.ChatProvider); ok {
+			messages := make([]provider.ChatMessage, 0, len(msgs))
+			for _, msg := range msgs {
+				messages = append(messages, provider.ChatMessage{Role: msg.Role, Content: msg.Content})
+			}
+			chatResp, chatErr := chat.ChatGenerate(ctx, provider.ChatGenerateRequest{
+				Agent: rt.AgentID, Model: rt.Model, Messages: messages,
+				Temperature: 0.7, MaxTokens: 4096,
+			})
+			if chatErr != nil {
+				return subagent.Turn{}, chatErr
+			}
+			return subagent.Turn{Text: chatResp.Content, PromptTokens: chatResp.PromptTokens, CompletionTokens: chatResp.OutputTokens}, nil
 		} else {
 			resp, gerr = prov.Generate(ctx, request)
 		}
