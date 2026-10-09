@@ -735,6 +735,8 @@ it with a durable intake.
 
 **Open risks:** no live graph-role worker, real-provider proof, embedded-NATS
 delivery matrix, or parallel research/code/review fan-out/fan-in exists yet.
+Graph delegation deadline checks run only when an API/operator/outcome resume
+path executes; there is no graph wake/recovery scheduler at wall-clock expiry.
 R4 adapters remain blocked on that verified command-consumer contract.
 
 **Next action:** compose a graph-owned worker and durable publisher/outcome
