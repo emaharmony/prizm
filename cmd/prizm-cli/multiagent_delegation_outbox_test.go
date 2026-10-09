@@ -24,6 +24,33 @@ func (graphInlineTestRunner) RunRole(context.Context, multiagent.RoleRunRequest)
 	return multiagent.RoleRunResult{Outcome: multiagent.TransitionOutcome("done"), LocalIterations: 1}, nil
 }
 
+func TestGraphDelegationOutboxBoundsBackgroundPublishByCommandDeadline(t *testing.T) {
+	t.Setenv(graphRoleDelegationRequestedEnv, "1")
+	seen := make(chan time.Time, 1)
+	restore := configureGraphRolePublisher(graphWorkerPublisherFunc(func(ctx context.Context, _ string, _ []byte) error {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("background dispatch did not receive a command deadline")
+		}
+		seen <- deadline
+		return nil
+	}))
+	defer restore()
+	outbox, _, err := newGraphDelegationOutbox(filepath.Join(t.TempDir(), "outbox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outbox.Close()
+	deadline := time.Now().Add(time.Minute).UTC()
+	command := event.Command{EventID: "evt-background", Type: multiagent.GraphRoleDelegationCommandType, RunID: "run-background", TaskID: "task", DelegationID: "delegation", CorrelationID: "corr", IdempotencyKey: "delivery-background", Deadline: deadline, SchemaVersion: event.CommandSchemaVersion, Payload: json.RawMessage(`{}`)}
+	if err := outbox.Dispatch(context.Background(), graphRoleDelegationSubject, command); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-seen; !got.Equal(deadline) {
+		t.Fatalf("publish deadline=%v want %v", got, deadline)
+	}
+}
+
 func TestCLIGraphRunUsesInlineRoleRunnerWhileGraphDelegationIsDisabled(t *testing.T) {
 	t.Setenv(graphRoleDelegationRequestedEnv, "")
 	ctx := t.Context()

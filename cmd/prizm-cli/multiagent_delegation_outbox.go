@@ -65,9 +65,19 @@ func (o graphDelegationOutbox) Dispatch(ctx context.Context, subject string, com
 	}
 	dispatcher := event.Dispatcher{Outbox: o.SQLiteOutbox, Publisher: o.publisher,
 		Lease: 30 * time.Second, MaxAttempts: 3, RetryAfter: 250 * time.Millisecond, DeferTerminalOnPublishFailure: true}
+	// HTTP-started graph runs intentionally detach from their request context.
+	// NATS FlushWithContext still needs a bound, so use the already-persisted
+	// command deadline rather than imposing a run-wide deadline (approval waits
+	// and other durable phases may legitimately outlive this publication).
+	publishCtx := ctx
+	if _, bounded := publishCtx.Deadline(); !bounded && !command.Deadline.IsZero() {
+		var cancel context.CancelFunc
+		publishCtx, cancel = context.WithDeadline(ctx, command.Deadline)
+		defer cancel()
+	}
 	var lastErr error
 	for attempt := 0; attempt < dispatcher.MaxAttempts; attempt++ {
-		processed, err := dispatcher.DispatchOne(ctx)
+		processed, err := dispatcher.DispatchOne(publishCtx)
 		if err == nil && processed {
 			return nil
 		}
@@ -76,9 +86,9 @@ func (o graphDelegationOutbox) Dispatch(ctx context.Context, subject string, com
 		}
 		timer := time.NewTimer(dispatcher.RetryAfter)
 		select {
-		case <-ctx.Done():
+		case <-publishCtx.Done():
 			timer.Stop()
-			return ctx.Err()
+			return publishCtx.Err()
 		case <-timer.C:
 		}
 	}
