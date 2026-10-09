@@ -711,3 +711,32 @@ composition.
 **Next action:** continue the canonical graph delegation checkpoint work; keep
 the standalone listener compatibility-only unless a production caller adopts
 it with a durable intake.
+
+## 2026-10-09 — R1 Canonical Graph Delegation Safety Gate
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Completed the canonical graph's durable child/delegation checkpoint and
+  outcome-consumption seam with deterministic injected-outcome coverage. The
+  typed command/outcome envelope and SQLite outbox remain the durable path for
+  `workflow/v2` delegation delivery and outcome acknowledgement.
+- Kept production canonical-graph delegation disabled. A production request via
+  `PRIZM_GRAPH_ROLE_DELEGATION=1` now fails fast because no durable graph-role
+  publisher and worker are composed. `PRIZM_GRAPH_ROLE_DELEGATION_TEST_ONLY=1`
+  exists only for deterministic composition tests that inject correlated
+  outcomes; it is not a production feature flag.
+- The existing sub-agent worker cannot safely consume graph commands: it accepts
+  legacy task packets, while graph roles require the parent-owned profile,
+  workspace/worktree, authorization, proposal lifecycle, validation, and
+  graph-role result contract.
+- Evidence: `go test ./cmd/prizm-cli -count=1` passed, including default inline
+  graph execution, production enablement fail-fast, and test-only durable
+  checkpoint/restart outcome consumption. No Recall changes were made.
+
+**Open risks:** no live graph-role worker, real-provider proof, embedded-NATS
+delivery matrix, or parallel research/code/review fan-out/fan-in exists yet.
+R4 adapters remain blocked on that verified command-consumer contract.
+
+**Next action:** compose a graph-owned worker and durable publisher/outcome
+intake, then prove the R1 failure matrix and parallel fan-in with an
+event-derived report.
