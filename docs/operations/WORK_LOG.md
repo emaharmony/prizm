@@ -948,3 +948,7 @@ full build, vet, and test passed on combined head before this narrow repair.
 
 **Next action:** add the live three-child accepted-worker-crash acceptance
 trace before starting another paid provider run.
+
+**Scanner contract:** timeout synthesis is owned by the running graph-worker
+scanner in `prizm serve`; direct manual `Resume` consumes durable outcomes but
+does not synthesize missing command outcomes.
