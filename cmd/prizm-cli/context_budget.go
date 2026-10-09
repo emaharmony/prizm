@@ -231,6 +231,7 @@ func (cb *contextBudget) checkAndCompress(messages []provider.ChatMessage, itera
 const (
 	defaultOllamaCloudModel         = "glm-5.3:cloud"
 	defaultOllamaCloudContextTokens = 1048576
+	conservativeContextTokens       = 202752
 )
 
 // resolveRuntimeModel preserves an explicitly configured model and applies the
@@ -258,4 +259,15 @@ func getModelContextTokens(model string) (int, bool) {
 	}
 	tokens, ok := known[model]
 	return tokens, ok
+}
+
+// contextTokensForAgentModel selects the configured model's known context
+// limit. An omitted model resolves to the GLM-5.3 default; an explicit unknown
+// model keeps the historic conservative limit until its capability is known.
+func contextTokensForAgentModel(model string) int {
+	resolved := resolveRuntimeModel(model)
+	if tokens, ok := getModelContextTokens(resolved); ok {
+		return tokens
+	}
+	return conservativeContextTokens
 }

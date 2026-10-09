@@ -109,6 +109,26 @@ func TestResolveRuntimeModel(t *testing.T) {
 	}
 }
 
+func TestContextTokensForAgentModel(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		want  int
+	}{
+		{name: "omitted uses GLM default", model: "", want: defaultOllamaCloudContextTokens},
+		{name: "known uses model limit", model: "deepseek-v4-pro:cloud", want: 131072},
+		{name: "unknown is conservative", model: "unregistered-model", want: conservativeContextTokens},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := contextTokensForAgentModel(tt.model); got != tt.want {
+				t.Fatalf("contextTokensForAgentModel(%q) = %d, want %d", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEstimateTokenCount(t *testing.T) {
 	msg := []provider.ChatMessage{
 		{Role: "system", Content: "You are a helpful assistant."},

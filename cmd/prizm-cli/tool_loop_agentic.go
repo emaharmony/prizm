@@ -81,10 +81,7 @@ func (cc *conversationContext) runToolLoopAgentic(
 	iterationCount := 0
 
 	// V73: Context budget management
-	contextTokens := defaultOllamaCloudContextTokens
-	if agentCtxTokens, ok := getModelContextTokens(resolveRuntimeModel(agentCfg.Model)); ok {
-		contextTokens = agentCtxTokens
-	}
+	contextTokens := contextTokensForAgentModel(agentCfg.Model)
 	ctxBudget := defaultContextBudget(contextTokens)
 	ctxBudget.compressThreshold = 0.50 // Compress at 50% to leave room for LLM response + tool results
 	ctxBudget.warnThreshold = 0.40     // Warn at 40%
