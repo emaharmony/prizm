@@ -196,12 +196,10 @@ func (s *SQLiteOutbox) terminalFailure(ctx context.Context, key, msg string, sta
 		return errors.New("event outbox: delivery is not claimed")
 	}
 	// A publisher can report an uncertain delivery after the worker has
-	// already durably emitted its terminal fact. That fact is authoritative:
-	// do not synthesize another terminal event with the same stable delivery
-	// identity and a different body. Mark the notification delivered because
-	// the terminal outcome proves the worker received the command.
-	var terminalEventID string
-	err = tx.QueryRowContext(ctx, `SELECT event_id FROM command_outcomes WHERE delivery_key=? AND terminal=1`, key).Scan(&terminalEventID)
+	// already durably emitted an acceptance or terminal fact. Either fact
+	// proves receipt, so do not synthesize a competing terminal event.
+	var workerEventID string
+	err = tx.QueryRowContext(ctx, `SELECT event_id FROM command_outcomes WHERE delivery_key=? AND (status=? OR terminal=1) ORDER BY sequence LIMIT 1`, key, OutcomeAccepted).Scan(&workerEventID)
 	if err == nil {
 		if _, err := tx.ExecContext(ctx, `UPDATE event_outbox SET state=?,last_error='',lease_expires='',updated_at=? WHERE idempotency_key=? AND state=?`, DeliveryDelivered, s.now().UTC().Format(time.RFC3339Nano), key, DeliveryClaimed); err != nil {
 			return err
@@ -215,9 +213,13 @@ func (s *SQLiteOutbox) terminalFailure(ctx context.Context, key, msg string, sta
 	if err := json.Unmarshal(b, &cmd); err != nil {
 		return err
 	}
+	var sequence int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence), 0) + 1 FROM command_outcomes WHERE delivery_key=?`, key).Scan(&sequence); err != nil {
+		return err
+	}
 	now := s.now().UTC()
 	payload, _ := json.Marshal(map[string]string{"error": msg})
-	out := Outcome{EventID: outcomeEventID(key, status), CommandEventID: cmd.EventID, RunID: cmd.RunID, TaskID: cmd.TaskID, DelegationID: cmd.DelegationID, CorrelationID: cmd.CorrelationID, CausationID: cmd.EventID, DeliveryKey: key, Status: status, Sequence: 1, OccurredAt: now, Payload: payload}
+	out := Outcome{EventID: outcomeEventID(key, status), CommandEventID: cmd.EventID, RunID: cmd.RunID, TaskID: cmd.TaskID, DelegationID: cmd.DelegationID, CorrelationID: cmd.CorrelationID, CausationID: cmd.EventID, DeliveryKey: key, Status: status, Sequence: sequence, OccurredAt: now, Payload: payload}
 	if _, err := recordOutcomeTx(ctx, tx, cmd, out); err != nil {
 		return err
 	}

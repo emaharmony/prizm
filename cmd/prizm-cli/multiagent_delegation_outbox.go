@@ -111,9 +111,10 @@ func newGraphDelegationOutboxForComposition(path string, enableDelegation bool) 
 		return adapter, nil, nil
 	}
 	return adapter, &multiagent.DurableDelegationOptions{
-		Subject:    graphRoleDelegationSubject,
-		Dispatcher: adapter,
-		Outcomes:   adapter,
-		Deadline:   graphRoleDelegationDeadline,
+		Subject:            graphRoleDelegationSubject,
+		Dispatcher:         adapter,
+		Outcomes:           adapter,
+		Deadline:           graphRoleDelegationDeadline,
+		RequireWorkspaceID: requested,
 	}, nil
 }

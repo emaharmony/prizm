@@ -43,6 +43,9 @@ type GraphRoleOutcome struct {
 type delegatedRoleOutcome = GraphRoleOutcome
 
 func (r *DurableRuntime) dispatchDelegatedRole(ctx context.Context, record DurableRun) (DurableRun, error) {
+	if r.delegation.RequireWorkspaceID && strings.TrimSpace(record.State.WorkspaceID) == "" {
+		return record, errors.New("multiagent: delegated graph role requires a persisted workspace identity")
+	}
 	role := record.State.CurrentRole
 	roleState := record.State.RoleStates[role]
 	childID := fmt.Sprintf("%s:%s:%d", record.State.CurrentTask.ID, role, roleState.Visits)
@@ -279,6 +282,9 @@ func (r *DurableRuntime) startDelegationJoin(ctx context.Context, record Durable
 func (r *DurableRuntime) dispatchPendingDelegationJoin(ctx context.Context, record DurableRun) (DurableRun, error) {
 	if record.Waiting == nil || record.Waiting.Kind != "delegation_join" || record.DelegationJoin == nil {
 		return record, errors.New("multiagent: no pending delegation join")
+	}
+	if r.delegation.RequireWorkspaceID && strings.TrimSpace(record.State.WorkspaceID) == "" {
+		return record, errors.New("multiagent: delegated graph role requires a persisted workspace identity")
 	}
 	for i := range record.DelegationJoin.Children {
 		child := &record.DelegationJoin.Children[i]

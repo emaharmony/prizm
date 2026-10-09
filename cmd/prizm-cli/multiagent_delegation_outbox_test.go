@@ -82,6 +82,20 @@ func TestNewGraphDelegationOutboxRejectsProductionEnablementWithoutWorker(t *tes
 	}
 }
 
+func TestNewGraphDelegationOutboxRequiresWorkspaceForProductionDispatch(t *testing.T) {
+	t.Setenv(graphRoleDelegationRequestedEnv, "1")
+	restore := configureGraphRolePublisher(graphWorkerPublisherFunc(func(context.Context, string, []byte) error { return nil }))
+	defer restore()
+	outbox, options, err := newGraphDelegationOutbox(filepath.Join(t.TempDir(), "multiagent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outbox.Close()
+	if options == nil || !options.RequireWorkspaceID {
+		t.Fatalf("production durable delegation must require a workspace identity: %+v", options)
+	}
+}
+
 func TestCLIGraphRunDelegatesAndResumesThroughDurableOutboxAfterRestart(t *testing.T) {
 	t.Setenv(graphRoleDelegationRequestedEnv, "")
 	ctx := t.Context()

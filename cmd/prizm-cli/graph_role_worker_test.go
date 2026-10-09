@@ -426,6 +426,15 @@ func TestGraphRoleWorkerPublishExhaustionStillClosesAndReplays(t *testing.T) {
 	if state != "terminal" || outcome.Status != event.OutcomeSucceeded {
 		t.Fatalf("ledger state=%q outcome=%#v", state, outcome)
 	}
+	box, err := event.NewSQLiteOutbox(filepath.Join(runDir, command.RunID, "multiagent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer box.Close()
+	trace, err := box.Report(t.Context(), command.RunID)
+	if err != nil || len(trace) != 1 || len(trace[0].Outcomes) != 2 || !trace[0].Outcomes[1].Status.Terminal() {
+		t.Fatalf("outcomes must persist before notification, trace=%+v err=%v", trace, err)
+	}
 }
 
 func TestGraphRoleWorkerAcceptanceReplayUsesPersistedBytes(t *testing.T) {

@@ -377,10 +377,11 @@ type DelegationOutcomeSource interface {
 
 // DurableDelegationOptions enables graph-owned delegated role execution.
 type DurableDelegationOptions struct {
-	Subject    string
-	Dispatcher DelegationDispatcher
-	Outcomes   DelegationOutcomeSource
-	Deadline   time.Duration
+	Subject            string
+	Dispatcher         DelegationDispatcher
+	Outcomes           DelegationOutcomeSource
+	Deadline           time.Duration
+	RequireWorkspaceID bool
 }
 
 // ExecutionClaim is exclusive ownership of one run.

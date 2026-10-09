@@ -285,13 +285,19 @@ func (w *graphRoleWorker) execute(command multiagent.GraphRoleCommand) {
 	case "ignore":
 		return
 	case "replay":
+		if err := w.recordTrustedOutcome(ctx, ledgerPath, replay); err != nil {
+			log.Printf("[GRAPH-WORKER] replay outcome %s: %v", command.DeliveryKey, err)
+			return
+		}
 		_ = w.publishMessage(ctx, graphRoleOutcomeSubject, replay)
 		return
 	case "ambiguous":
 		outcome, encoded, buildErr := w.buildOutcome(command, event.OutcomeFailed, 2, map[string]string{"message": "worker ownership changed during role execution; outcome is ambiguous and was failed closed"})
 		if buildErr == nil && w.storeTerminalOutcome(ctx, ledgerPath, command.DeliveryKey, outcome, encoded) == nil {
-			_ = w.nc.Publish(graphRoleOutcomeSubject, encoded)
-			_ = w.nc.Flush()
+			if w.recordTrustedOutcome(ctx, ledgerPath, encoded) == nil {
+				_ = w.nc.Publish(graphRoleOutcomeSubject, encoded)
+				_ = w.nc.Flush()
+			}
 		}
 		return
 	}
@@ -371,6 +377,9 @@ func (w *graphRoleWorker) persistAcceptedAndPublish(ctx context.Context, ledgerP
 			}
 		}
 	}
+	if err := w.recordTrustedOutcome(ctx, ledgerPath, encoded); err != nil {
+		return err
+	}
 	var publishErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		publishErr = w.publishMessage(ctx, graphRoleOutcomeSubject, encoded)
@@ -390,7 +399,27 @@ func (w *graphRoleWorker) persistAndPublishTerminal(ctx context.Context, ledgerP
 	if err := w.storeTerminalOutcome(ctx, ledgerPath, command.DeliveryKey, outcome, encoded); err != nil {
 		return err
 	}
+	if err := w.recordTrustedOutcome(ctx, ledgerPath, encoded); err != nil {
+		return err
+	}
 	return w.publishMessage(ctx, graphRoleOutcomeSubject, encoded)
+}
+
+// recordTrustedOutcome closes the persistence-before-notification boundary:
+// only bytes already committed in the worker ledger can enter the canonical
+// outbox. Replays are strict byte-identical idempotent writes.
+func (w *graphRoleWorker) recordTrustedOutcome(ctx context.Context, ledgerPath string, encoded []byte) error {
+	var outcome event.Outcome
+	if err := json.Unmarshal(encoded, &outcome); err != nil {
+		return err
+	}
+	box, err := event.NewSQLiteOutbox(ledgerPath)
+	if err != nil {
+		return err
+	}
+	defer box.Close()
+	_, err = box.RecordOutcome(ctx, outcome)
+	return err
 }
 
 func (w *graphRoleWorker) publishMessage(ctx context.Context, subject string, payload []byte) error {

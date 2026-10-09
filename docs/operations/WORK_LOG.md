@@ -839,3 +839,32 @@ gate can be claimed.
 **Next action:** rebuild the isolated acceptance binary, run one opt-in graph
 task, then inspect the outbox trace for a workspace-bound command, exactly one
 accepted fact, one terminal fact, and a successful snapshot.
+
+## 2026-10-09 — R1 Persistence-Before-Notification Outcome Closure
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Moved trusted worker outcome insertion ahead of NATS publication. Accepted,
+  terminal, ambiguous, and replayed outcomes now enter `command_outcomes` from
+  their exact graph-role ledger bytes before transport notification; NATS is
+  notification-only and duplicate intake remains byte-identical.
+- Production graph delegation now explicitly requires the composition-seeded
+  workspace identity. Test-only injected delegation remains available without
+  that production invariant.
+- A fresh acceptance run exposed a second dispatcher race: it attempted a
+  synthetic terminal at sequence one after the worker had already persisted
+  acceptance at sequence one. Publisher uncertainty now treats accepted or
+  terminal worker facts as delivery proof; the rare no-worker fallback derives
+  its sequence from the durable maximum.
+- Added coverage for persistence before notification, production workspace
+  requirement, worker-terminal publisher failure, and accepted worker receipt
+  during publisher failure.
+
+**Open risks:** the real-provider process also reported external Codex CLI
+plugin-cache and PowerShell snapshot errors; those are provider-environment
+failures outside the durable event contract. The graph worker should be rerun
+from this repair before R1 acceptance is claimed.
+
+**Next action:** rebuild the isolated binary and rerun one opt-in provider
+task. Confirm the snapshot, command workspace fields, and one accepted plus
+one terminal outbox fact before investigating any provider-environment error.
