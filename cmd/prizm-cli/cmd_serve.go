@@ -836,8 +836,8 @@ func executeServe(args []string) {
 		log.Printf("[MEMORY] WARNING: local MarkdownStore is nil, memory_search will have no fallback")
 	}
 	tool.RegisterResearchToolsWithScoped(toolReg, memSearcher, localStore, scopedMemory, tool.WebSearchConfig{})
-	if scopedMemory != nil {
-		toolReg.Register(&tool.MemoryWriteTool{Store: memoryStore, Scoped: scopedMemory})
+	if err := registerScopedMemoryTool(toolReg, memoryStore, scopedMemory); err != nil {
+		log.Printf("[MEMORY] failed to register memory_write: %v", err)
 	}
 
 	// Researcher reference-image tools: fetch/generate/analyze/collect.
@@ -1512,6 +1512,17 @@ func executeServe(args []string) {
 	}
 
 	fmt.Println("✅ Prizm stopped.")
+}
+
+// registerScopedMemoryTool is the single serve composition seam for the
+// scoped memory writer. Keeping registration here lets integration tests invoke
+// the exact tool instance shape used by the live serve process without adding a
+// public mutation endpoint.
+func registerScopedMemoryTool(reg *tool.Registry, store memory.MemoryStore, scoped *memory.Facade) error {
+	if reg == nil || scoped == nil {
+		return nil
+	}
+	return reg.Register(&tool.MemoryWriteTool{Store: store, Scoped: scoped})
 }
 
 // handleDiscordMessage processes an incoming Discord message through the

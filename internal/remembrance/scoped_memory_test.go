@@ -84,7 +84,7 @@ func TestScopedMemoryBackendCaptureIdempotentSendsScopeAndKey(t *testing.T) {
 		if body["idempotency_key"] != "sync-key" || body["owner_id"] != "user-a" || body["project_id"] != "project-a" || body["task_id"] != "task-a" || body["agent_id"] != "agent-a" {
 			t.Fatalf("bad scope/key: %#v", body)
 		}
-		_, _ = w.Write([]byte(`{"id":"remote-original"}`))
+		_, _ = w.Write([]byte(`{"id":"remote-original","decision":"PERSIST"}`))
 	}))
 	defer server.Close()
 	backend := ScopedMemoryBackend{Client: NewClient(server.URL)}
@@ -92,6 +92,21 @@ func TestScopedMemoryBackendCaptureIdempotentSendsScopeAndKey(t *testing.T) {
 	id, err := backend.CaptureIdempotent(context.Background(), mem, "sync-key")
 	if err != nil || id != "remote-original" {
 		t.Fatalf("capture = %q, %v", id, err)
+	}
+}
+
+func TestScopedMemoryBackendCaptureIdempotentRejectsFailedDecision(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"remote-failed","decision":"FAILED"}`))
+	}))
+	defer server.Close()
+
+	backend := ScopedMemoryBackend{Client: NewClient(server.URL)}
+	_, err := backend.CaptureIdempotent(context.Background(), memory.Memory{
+		ID: "local-id", Content: "durable", Summary: "durable", ProjectID: "project-a", TaskID: "task-a",
+	}, "sync-key")
+	if err == nil || !strings.Contains(err.Error(), `decision="FAILED"`) {
+		t.Fatalf("failed decision error = %v, want rejected FAILED decision", err)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/emaharmony/prizm/internal/memory"
@@ -36,8 +37,13 @@ func (b ScopedMemoryBackend) CaptureIdempotent(ctx context.Context, mem memory.M
 	if err != nil {
 		return "", err
 	}
-	if decision, _ := result["decision"].(string); decision == "SKIP" {
-		return "", fmt.Errorf("recall skipped idempotent capture")
+	decision, _ := result["decision"].(string)
+	switch strings.ToUpper(strings.TrimSpace(decision)) {
+	case "PASS", "PERSIST", "ACTIVE", "COLD", "ACCEPT", "ACCEPTED", "STORE", "STORED":
+		// These decisions represent an accepted capture across Recall's
+		// compatibility and gated ingestion responses.
+	default:
+		return "", fmt.Errorf("recall rejected idempotent capture: decision=%q", decision)
 	}
 	if id, ok := result["id"].(string); ok {
 		return id, nil

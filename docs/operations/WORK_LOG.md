@@ -704,3 +704,17 @@ run and retain a live outage/recovery trace with scoped replay evidence.
 **Open risks:** the existing process-level harness proves outage, restart, duplicate replay, scope isolation, and crash-after-remote-success recovery through real Prizm memory/reconciliation components, but it does not prove an HTTP or tool invocation through the running serve process. FTS remained intentionally disabled in the deterministic Recall acceptance environment.
 
 **Next action:** add or expose a scoped capture/tool route in a follow-up change, then rerun the same disposable serve composition with Recall down/up and scoped search assertions before treating the API-level acceptance as complete.
+
+## 2026-10-09 — R6 Serve Tool Seam and Recall Terminal Decision Repair
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/pr86-recall-idempotency`, paired with Recall `codex/prizm-r6-capture-idempotency`
+
+- Extracted the existing serve registration of `MemoryWriteTool` into a narrow helper used by the live serve path and an integration test. The test executes that registered tool against the real scoped facade with Recall unreachable, confirms local fallback and durable pending/fallback lifecycle facts, then searches through the same facade with exact project/task/session/agent scope and confirms one scoped result.
+- Hardened `ScopedMemoryBackend.CaptureIdempotent` to accept only recognized successful Recall terminal decisions (`PASS`, `PERSIST`, `ACTIVE`, `COLD`, and compatibility aliases). A response carrying `decision=FAILED`, even with a raw capture ID, now returns an error and cannot produce a false synced terminal fact.
+
+**Verification:** targeted serve composition test passed; all `internal/remembrance` tests passed. The broader `cmd/prizm-cli` package run reached unrelated pre-existing Windows temp-path/access failures in approval/reference-workspace and subagent tests; those failures were outside this change.
+
+**Open risks:** the seam proves the actual registered serve tool and scoped fallback/search behavior while Recall is down. The previously recorded process harness remains the evidence for Recall restart, replay, and crash-after-success behavior; a public serve capture route remains intentionally absent.
+
+**Next action:** rerun the process-level trace against a Recall build that reports accepted idempotent terminal decisions, then retain the scoped search and terminal-event evidence with the paired API review.
