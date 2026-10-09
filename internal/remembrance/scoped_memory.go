@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/emaharmony/prizm/internal/memory"
@@ -16,24 +17,38 @@ type ScopedMemoryBackend struct {
 	Client *Client
 }
 
-func (b ScopedMemoryBackend) Capture(_ context.Context, mem memory.Memory) (string, error) {
+func (b ScopedMemoryBackend) Capture(ctx context.Context, mem memory.Memory) (string, error) {
+	return b.CaptureIdempotent(ctx, mem, mem.ID)
+}
+
+// CaptureIdempotent binds the durable Prizm delivery key to Recall's atomic,
+// scope-aware capture API. Replays return the original remote memory ID.
+func (b ScopedMemoryBackend) CaptureIdempotent(ctx context.Context, mem memory.Memory, key string) (string, error) {
 	if b.Client == nil {
 		return "", fmt.Errorf("remembrance client is not configured")
 	}
-	result, err := b.Client.CaptureWithMetadata(CaptureRequest{
+	result, err := b.Client.CaptureWithMetadataContext(ctx, CaptureRequest{
 		OwnerID: mem.UserID, AgentID: mem.AgentID, SessionID: mem.SessionID, TaskID: mem.TaskID,
 		Scope: "task", Category: mem.Category, Summary: mem.Summary,
 		SourceRef: mem.ID, ImportanceScore: 0.5, ProjectID: mem.ProjectID,
 		Title: mem.Summary, Content: mem.Content, SourceType: "prizm_scoped_memory",
-		SourceAgent: mem.Source,
+		SourceAgent: mem.Source, IdempotencyKey: key,
 	})
 	if err != nil {
 		return "", err
 	}
-	if id, ok := result["id"].(string); ok {
+	decision, _ := result["decision"].(string)
+	switch strings.ToUpper(strings.TrimSpace(decision)) {
+	case "PASS", "PERSIST", "ACTIVE", "COLD", "ACCEPT", "ACCEPTED", "STORE", "STORED":
+		// These decisions represent an accepted capture across Recall's
+		// compatibility and gated ingestion responses.
+	default:
+		return "", fmt.Errorf("recall rejected idempotent capture: decision=%q", decision)
+	}
+	if id, ok := result["id"].(string); ok && strings.TrimSpace(id) != "" {
 		return id, nil
 	}
-	return mem.ID, nil
+	return "", fmt.Errorf("recall idempotent capture returned no remote ID")
 }
 
 func (b ScopedMemoryBackend) Search(_ context.Context, req memory.SearchRequest) ([]memory.Memory, error) {

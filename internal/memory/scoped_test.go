@@ -25,7 +25,7 @@ func (p *scopedPrimary) Capture(_ context.Context, mem Memory) (string, error) {
 
 func TestScopedCapturePersistsPendingSyncAndRetriesWithoutDuplicateLocalMemory(t *testing.T) {
 	local := tempStore(t)
-	primary := &scopedPrimary{err: errors.New("offline")}
+	primary := &idempotentPrimary{err: errors.New("offline"), deliveries: map[string]string{}}
 	events := &scopedEvents{}
 	f := &Facade{Local: local, Primary: primary, Events: events, Source: "test"}
 	req := CaptureRequest{Scope: scopedTestScope(), CaptureKey: "sync-retry", Content: "durable sync candidate"}
@@ -44,12 +44,26 @@ func TestScopedCapturePersistsPendingSyncAndRetriesWithoutDuplicateLocalMemory(t
 	}
 	primary.err = nil
 	second, fallback, err := f.Capture(context.Background(), req)
-	if err != nil || fallback || second.ID != first.ID || primary.captures != 2 {
-		t.Fatalf("idempotent sync retry = %#v fallback=%v captures=%d err=%v", second, fallback, primary.captures, err)
+	if err != nil || fallback || second.ID != first.ID || primary.remoteCalls != 1 {
+		t.Fatalf("idempotent sync retry = %#v fallback=%v remoteCalls=%d err=%v", second, fallback, primary.remoteCalls, err)
 	}
 	all, err := local.ListRecent(context.Background(), 0)
 	if err != nil || len(all) != 1 {
 		t.Fatalf("retry duplicated local memory: %#v err=%v", all, err)
+	}
+}
+
+func TestScopedCapturePersistsPendingBeforePrimaryDelivery(t *testing.T) {
+	local := tempStore(t)
+	primary := &idempotentPrimary{deliveries: map[string]string{}}
+	events := &scopedEvents{failType: EventScopedCaptureSyncPending, failNext: 1}
+	f := &Facade{Local: local, Primary: primary, Events: events, Source: "test"}
+	_, _, err := f.Capture(context.Background(), CaptureRequest{Scope: scopedTestScope(), CaptureKey: "pending-first", Content: "must not reach primary"})
+	if err == nil {
+		t.Fatal("expected pending-intent persistence failure")
+	}
+	if primary.remoteCalls != 0 {
+		t.Fatalf("remote delivery occurred before durable pending intent: %d", primary.remoteCalls)
 	}
 }
 func (p *scopedPrimary) Search(_ context.Context, _ SearchRequest) ([]Memory, error) {

@@ -7,6 +7,38 @@ the next contributor.
 > Prizm is source-available under an all-rights-reserved [license](../../LICENSE)
 > and is preview-stage.
 
+## 2026-10-08 — R6 Durable Reconciliation Contract
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r6-memory-reconciliation`, based on merged staging `dca2156`
+
+- Added an `internal/memory` reconciliation consumer that startup-scans durable
+  `sync_pending` facts and receives notifications when new pending captures are
+  persisted. It reconstructs and revalidates the trusted scope against the
+  local record, uses bounded retry/backoff, and records retry or terminal facts
+  in the existing SQLite event store.
+- Terminal sync and failure facts use stable IDs derived from the sync key, so
+  duplicate consumers cannot duplicate the local terminal evidence. A remote
+  success followed by a process failure before local confirmation is safely
+  replayed only through the explicit idempotent-primary contract.
+- Serve now starts the consumer, exposes pending/error state through health,
+  and cancels it before closing its event store. Deterministic coverage proves
+  restart recovery, outage/recovery, concurrent workers, crash recovery,
+  scope mismatch rejection, two-project isolation, unsupported primary failure,
+  and retry exhaustion.
+- Inspected the current Remembrance capture API: `source_ref` is persisted but
+  has no idempotency key, lookup, uniqueness constraint, or atomic dedupe.
+  The Remembrance adapter therefore does not opt into replay; Prizm fails
+  closed instead of risking duplicate remote writes. `localhost:18790` was not
+  available for a bounded live trace.
+
+**Open risks:** R6 cannot complete a live local-to-Recall reconciliation until
+Recall exposes an atomic idempotency-key contract returning the original remote
+identifier. R1's durable event outbox and delegation gates remain open.
+
+**Next action:** add and verify Recall's idempotent ingest contract, implement
+the adapter capability, then run a live outage/recovery trace.
+
 ## 2026-10-02 — R2 Scope Isolation and Serve Wiring
 
 **Roadmap IDs:** R2, R6
@@ -486,6 +518,28 @@ then complete the R1 approval-to-verified-resume slice.
 - [Prizm Roadmap](../architecture/PRIZM_ROADMAP.md)
 - [Current Plan of Action](PLAN_OF_ACTION.md)
 
+## 2026-10-09 — R6 Recall Atomic Capture Contract
+
+**Roadmap IDs:** R2, R6
+
+- Paired the local reconciliation contract with Recall migration 14. The Recall
+  durable capture outbox now stores an idempotency key and payload fingerprint,
+  with a `COALESCE`-normalized unique index over owner, workspace, project,
+  repository, task, session, agent, and key. Replays with an identical payload
+  reuse the original capture and remote memory ID; a changed payload returns a
+  conflict.
+- `ScopedMemoryBackend` now implements `IdempotentPrimaryBackend` and carries
+  the stable local memory ID to Recall's `/v1/memory/ingest` API. Focused Go
+  adapter and reconciler tests pass. Direct Recall service acceptance covered
+  duplicate, restart, and concurrent duplicate delivery with one raw capture.
+
+**Open risks:** the paired Recall worktree requires its own review and its
+broken virtual environment prevented running its full pytest suite. A
+process-level Prizm-to-Recall outage/recovery trace remains required.
+
+**Next action:** review the paired API migration, then run the configured
+Prizm process against Recall through outage and restart recovery.
+
 ## 2026-10-02 — R2 Autonomous Prompt Scope and Sync-Pending Evidence
 
 **Roadmap IDs:** R2, R6
@@ -565,3 +619,102 @@ R6 follow-up work; the R2/R6 acceptance claims remain limited accordingly.
 **Next action:** publish the branch for review, then implement idempotent
 local-to-Recall reconciliation and perform the live outage/recovery trace when
 the required local services are available.
+
+## 2026-10-08 — R6 Durable Pending-Intent Hardening
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r6-memory-reconciliation` at `b80d96a`
+
+- Moved `sync_pending` persistence ahead of every primary-memory delivery. Initial delivery now uses the same `IdempotentPrimaryBackend` contract and stable sync key as replay, so a crash or synced-event failure after remote success replays without creating another remote record.
+- Changed reconciliation health to count only unresolved pending facts. A terminal synced or failed fact no longer leaves health reporting stale pending work, while a later pending event correctly opens a new delivery attempt.
+- Kept valid local captures pending when the primary is absent or cannot prove idempotency at serve startup. The reconciler records the availability issue but does not dead-letter memory that a later eligible backend can deliver.
+- Added deterministic coverage for pending-event failure before remote delivery, crash after remote success before synced evidence, absent-primary startup retention, non-idempotent primary retention, and terminal-aware health accounting. `go test ./internal/memory -count=1` passed.
+
+**Open risks:** The existing Recall integration still lacks an atomic idempotency-key operation. Live Recall outage/recovery and process-level startup verification remain unproven until Recall exposes that capability.
+
+**Next action:** run the full validation suite, then add the committed R6 hardening to the review branch; implement the Recall idempotency-key contract when the external API is available.
+
+## 2026-10-08 — R6 Causal Replay and Retry-Generation Repair
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r6-memory-reconciliation`, following `b80d96a`
+
+- Reconciliation now requests SQLite facts in durable insertion order. The public event query keeps its ID-cursor ordering; stores that cannot prove causal ordering fail closed for reconciliation rather than replay potentially stale intent.
+- Terminal sync and failure facts remain deterministic and idempotent, now per pending generation. A later `sync_pending` opens a new generation, clears earlier retry/backoff history, and can write its own terminal evidence.
+- Propagated terminal event-store errors through `RunOnce`, so a failed synced/failed write remains visible in reconciler health instead of being cleared by the final status update.
+- Added SQLite-backed regression coverage for pending → terminal → re-pending causal order, retry-generation reset, terminal-write health reporting, and unsupported causal-order stores. Focused memory/event tests and the full Go suite, build, vet, staticcheck, and diff checks passed.
+
+**Open risks:** The current Recall adapter still lacks an atomic idempotency-key operation, so it remains ineligible for mutation replay. A live primary outage/recovery trace is still unproven.
+
+**Next action:** implement or adopt Recall's atomic idempotency-key contract, then run and retain a live outage/recovery trace with scoped replay evidence.
+
+## 2026-10-08 — R6 Reconciliation Scale and Concurrent Retry Repair
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r6-memory-reconciliation`, following `b40fae0`
+
+- Made retry evidence deterministic per `(sync_key, pending generation, attempt)`.
+  Concurrent workers that observe the same failed delivery now write one durable
+  retry fact, and replay counts distinct attempt values rather than raw retry
+  rows before applying the bounded retry budget.
+- Added bounded SQLite insertion-order pagination using a durable rowid cursor.
+  The public `EventStore.Query` API continues to use its documented event-ID
+  cursor. Reconciliation and health reconstruction consume all causal pages,
+  while stores unable to prove causal pagination fail closed.
+- Added regression coverage for two simultaneous failed workers and for a
+  terminal fact beyond one reconciliation page. `go build ./...`, `go vet
+  ./...`, `staticcheck ./...`, focused memory/event tests, and the full Go
+  suite pass.
+
+**Open risks:** Recall still lacks an atomic idempotency-key capture operation,
+so its current adapter cannot safely participate in remote replay. A live
+outage/recovery trace remains required.
+
+**Next action:** implement or adopt Recall's atomic idempotency contract, then
+run and retain a live outage/recovery trace with scoped replay evidence.
+
+## 2026-10-09 — R6 Process-Level Recall Outage and Restart Acceptance
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/pr86-recall-idempotency`, paired with Recall `codex/prizm-r6-capture-idempotency`
+
+- Started Recall from the installed `.venv` against a fresh SQLite database under the Recall worktree's `.tmp` directory, with embeddings, chunking, CAG, and NATS disabled for deterministic acceptance. Health returned HTTP 200 and migration 14 (`capture_idempotency`) applied.
+- A separate Go harness used Prizm's real `memory.Facade`, SQLite event store, and `remembrance.ScopedMemoryBackend`. With Recall unavailable, a formally scoped capture returned local fallback and persisted its pending intent. A fresh process reconciled it after Recall startup to one synced terminal fact.
+- Re-running reconciliation after a Recall process restart produced no duplicate remote record. A second owner/project/task scope reused the producer key but produced a distinct local and remote capture, proving scope namespacing.
+- An injected event-store failure after remote success left the local sync pending; a later process replayed the stable key and recorded one synced terminal fact. The final Recall database contained four raw captures and four distinct idempotency keys, including the duplicate and crash-replay checks.
+- Recall's `/health` endpoint remained available after restart. The test database health probe reported `fts_ok: false` after the intentionally embedding-disabled run; this is an environment/test-mode limitation and did not affect capture idempotency or reconciliation.
+
+**Verification:** process-level Go harness phases `offline`, `reconcile`, duplicate `reconcile`, `isolation`, `crash`, service restart, and post-restart replays all completed with zero unresolved pending facts and zero terminal failures. Recall reports 489 pytest tests passed and 3 skipped on the paired worktree.
+
+**Open risks:** no production data or credentials were used. The temporary harness and SQLite artifacts remain under `.tmp` and are not tracked. The FTS health warning in embedding-disabled mode should not be interpreted as a production Recall health result.
+
+**Next action:** review the paired Recall API commit and attach this trace to the PR86 handoff; do not claim the broader R6 score gate beyond the evidence recorded here.
+
+## 2026-10-09 — R6 Production Serve Composition Preflight
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/pr86-recall-idempotency`, paired with Recall `codex/prizm-r6-capture-idempotency`
+
+- Built and started the actual PR86 `prizm serve` binary in a disposable run directory with embedded NATS, a loopback health port, and a loopback API port. With Recall intentionally unavailable, startup returned healthy and logs confirmed the reconciliation consumer, local Markdown fallback, memory extraction subscription, and API all initialized.
+- The serve API exposes `GET /api/v1/memories` for retrieval, but no scoped capture endpoint or HTTP tool dispatcher. `POST /api/v1/memories` and `POST /api/v1/memories/capture` return 405, while `/api/v1/memory/capture` returns 404. The registered `MemoryWriteTool` is an internal composition object and is not reachable through the serve API.
+- The NATS extraction subscription routes to local `AutoExtractor` behavior and requires a model provider; it does not invoke the scoped `memory.Facade` reconciliation path. The retrieval endpoint also does not accept owner/project/task scope fields and its Remembrance branch uses the fixed project name `prizm`, so a serve-driven scoped search proof cannot be made from the current public route.
+
+**Verification:** serve startup and health/API status checks completed on disposable loopback ports; all route probes were sanitized and emitted status codes and schema keys only. The process was stopped after the checks. No provider task, production data, credentials, Recall code, or PR87 files were used.
+
+**Open risks:** the existing process-level harness proves outage, restart, duplicate replay, scope isolation, and crash-after-remote-success recovery through real Prizm memory/reconciliation components, but it does not prove an HTTP or tool invocation through the running serve process. FTS remained intentionally disabled in the deterministic Recall acceptance environment.
+
+**Next action:** add or expose a scoped capture/tool route in a follow-up change, then rerun the same disposable serve composition with Recall down/up and scoped search assertions before treating the API-level acceptance as complete.
+
+## 2026-10-09 — R6 Serve Tool Seam and Recall Terminal Decision Repair
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/pr86-recall-idempotency`, paired with Recall `codex/prizm-r6-capture-idempotency`
+
+- Extracted the existing serve registration of `MemoryWriteTool` into a narrow helper used by the live serve path and an integration test. The test executes that registered tool against the real scoped facade with Recall unreachable, confirms local fallback and durable pending/fallback lifecycle facts, then searches through the same facade with exact project/task/session/agent scope and confirms one scoped result.
+- Hardened `ScopedMemoryBackend.CaptureIdempotent` to accept only recognized successful Recall terminal decisions (`PASS`, `PERSIST`, `ACTIVE`, `COLD`, and compatibility aliases). A response carrying `decision=FAILED`, even with a raw capture ID, now returns an error and cannot produce a false synced terminal fact.
+
+**Verification:** targeted serve composition test passed; all `internal/remembrance` tests passed. The broader `cmd/prizm-cli` package run reached unrelated pre-existing Windows temp-path/access failures in approval/reference-workspace and subagent tests; those failures were outside this change.
+
+**Open risks:** the seam proves the actual registered serve tool and scoped fallback/search behavior while Recall is down. The previously recorded process harness remains the evidence for Recall restart, replay, and crash-after-success behavior; a public serve capture route remains intentionally absent.
+
+**Next action:** rerun the process-level trace against a Recall build that reports accepted idempotent terminal decisions, then retain the scoped search and terminal-event evidence with the paired API review.
