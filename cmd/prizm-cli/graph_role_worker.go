@@ -137,6 +137,13 @@ func (w *graphRoleWorker) wakeExpired(ctx context.Context, now time.Time) {
 				log.Printf("[GRAPH-WORKER] recover expired %s: %v", record.Waiting.DeliveryKey, err)
 			}
 		}
+		if record.Waiting.Kind == "delegation_join" && record.DelegationJoin != nil {
+			for _, child := range record.DelegationJoin.Children {
+				if err := w.recoverExpiredOutcome(ctx, record.State.RunID, child.DeliveryKey); err != nil {
+					log.Printf("[GRAPH-WORKER] recover expired %s: %v", child.DeliveryKey, err)
+				}
+			}
+		}
 		w.resumeRun(record.State.RunID, "deadline wake")
 	}
 }

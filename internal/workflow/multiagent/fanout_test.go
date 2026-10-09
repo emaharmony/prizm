@@ -218,6 +218,42 @@ func TestDelegationJoinDeadlineEmitsTimedOutChildrenAndReport(t *testing.T) {
 	}
 }
 
+func TestDelegationJoinConsumesTerminalBeforeExpiry(t *testing.T) {
+	now := time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
+	clock := now
+	env := newDurableTestEnvironment(t)
+	dispatch := &recordingDelegationDispatcher{store: env.store}
+	source := &recordingOutcomeSource{store: env.store}
+	runtime := newGraphDelegationRuntimeWithClock(t, env, dispatch, source, func() time.Time { return clock })
+	if _, err := runtime.Run(t.Context(), RunRequest{RunID: "run-graph-delegation", Task: TaskReference{ID: "parent-task", Description: "delegate"}}); err == nil {
+		t.Fatal("Run unexpectedly completed")
+	}
+	payload, _ := json.Marshal(GraphRoleOutcome{Result: RoleRunResult{Outcome: OutcomePlanReady, LocalIterations: 1, FanOut: validFanOutPlan()}})
+	parentOutcome := matchingOutcome(dispatch.command, "parent-fanout", event.OutcomeSucceeded, 1, payload)
+	parentOutcome.OccurredAt = now.Add(30 * time.Second)
+	source.outcomes = []event.Outcome{parentOutcome}
+	if _, err := runtime.Resume(t.Context(), "run-graph-delegation"); err == nil {
+		t.Fatal("expected join wait")
+	}
+	record, err := env.store.Load(t.Context(), "run-graph-delegation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := record.DelegationJoin.Children[0]
+	childPayload, _ := json.Marshal(GraphRoleOutcome{Result: RoleRunResult{Outcome: TransitionOutcome("ok"), LocalIterations: 1}})
+	childOutcome := matchingOutcome(event.Command{EventID: child.CommandEventID, RunID: record.State.RunID, TaskID: child.ChildID, DelegationID: child.DelegationID, JoinID: child.JoinID, Lane: string(child.Lane), CorrelationID: child.CorrelationID, IdempotencyKey: child.DeliveryKey}, "child-terminal", event.OutcomeSucceeded, 1, childPayload)
+	childOutcome.OccurredAt = now.Add(30 * time.Second)
+	source.outcomes = []event.Outcome{childOutcome}
+	clock = clock.Add(2 * time.Minute)
+	if _, err := runtime.Resume(t.Context(), "run-graph-delegation"); err == nil {
+		t.Fatal("remaining children should still wait")
+	}
+	record, err = env.store.Load(t.Context(), "run-graph-delegation")
+	if err != nil || record.DelegationJoin.Children[0].Status != event.OutcomeSucceeded {
+		t.Fatalf("terminal child was not consumed before expiry: %#v err=%v", record.DelegationJoin.Children[0], err)
+	}
+}
+
 func TestDelegationJoinConsumesAllChildrenAndConvergesParent(t *testing.T) {
 	runtime, env, dispatch, source := newWaitingDelegationRuntime(t, "run-graph-delegation")
 	payload, _ := json.Marshal(GraphRoleOutcome{Result: RoleRunResult{Outcome: TransitionOutcome("ok"), LocalIterations: 1, FanOut: validFanOutPlan()}})

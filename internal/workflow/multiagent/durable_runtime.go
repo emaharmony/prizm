@@ -189,6 +189,24 @@ func (r *DurableRuntime) Resume(
 			}
 		}
 	}
+	// Fan-out checkpoints have the same ordering requirement as a single
+	// delegation: durable child facts must be consumed before an expired
+	// dispatch checkpoint can synthesize a join timeout.
+	if record.Phase == CheckpointWaiting && record.Waiting != nil && record.Waiting.Kind == "delegation_join" && r.delegation != nil && r.delegation.Outcomes != nil {
+		outcomes, outcomeErr := r.delegation.Outcomes.PendingOutcomes(ctx, runID)
+		if outcomeErr != nil {
+			return record.State, outcomeErr
+		}
+		if len(outcomes) > 0 {
+			record, err = r.resumeDelegationJoin(ctx, record)
+			if err != nil {
+				return record.State, err
+			}
+			if record.Phase == CheckpointWaiting {
+				return record.State, waitingError(record)
+			}
+		}
+	}
 	if record.Phase == CheckpointWaiting && record.Waiting != nil &&
 		record.Waiting.Kind == "delegation_outcome" && record.Waiting.DispatchPending {
 		if !r.now().UTC().Before(record.Waiting.Deadline) {

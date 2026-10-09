@@ -396,7 +396,10 @@ func (r *DurableRuntime) resumeDelegationJoin(ctx context.Context, record Durabl
 		}
 		return r.completeDelegationJoin(ctx, record)
 	}
-	return r.expireDelegationJoin(ctx, record)
+	// The caller decides whether an otherwise pending join has expired. A
+	// durable child fact must be checkpointed and observed before deadline
+	// policy turns its siblings into synthetic timeout outcomes.
+	return record, nil
 }
 
 func (r *DurableRuntime) expireDelegationJoin(ctx context.Context, record DurableRun) (DurableRun, error) {

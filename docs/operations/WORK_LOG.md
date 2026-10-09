@@ -916,3 +916,20 @@ acceptance run remains required before claiming the R1 gate.
 **Next action:** run the full suite in the provider acceptance environment,
 then inspect a live graph task for one accepted fact, one terminal fact, and a
 valid snapshot.
+
+## 2026-10-09 — R1 User-Approved Ollama Cloud Default
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- The user approved `ollama/glm-5.3:cloud` as the default across all agent
+  profiles and examples while preserving capabilities and a 1,048,576-token
+  model-window declaration.
+- An isolated Ollama 0.34.4 service at `http://127.0.0.1:11435` completed a
+  real cloud-provider graph task with `PRIZM_OK`. Configuration validation and
+  doctor passed apart from the pre-existing Remembrance offline warning.
+
+**Evidence:** provider/CLI-focused tests passed on the default-provider commit;
+the runtime lifecycle regressions are committed separately as `016a3b6`.
+
+**Next action:** preserve the provider default for the next live graph run and
+inspect the durable outbox and snapshot as part of the R1 acceptance record.
