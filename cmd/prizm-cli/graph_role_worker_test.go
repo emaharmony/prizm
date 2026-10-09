@@ -88,6 +88,50 @@ func TestGraphRoleWorkerEmbeddedNATSExecutesThreeFanoutLanesConcurrently(t *test
 	}
 }
 
+func TestGraphRoleWorkerFanoutExpiryClosesAcceptedChildrenWithoutDuplicates(t *testing.T) {
+	runDir := t.TempDir()
+	base := graphWorkerTestCommand("run-fanout-expiry", time.Now().Add(-time.Second))
+	commands := []multiagent.GraphRoleCommand{
+		fanoutWorkerCommand(base, multiagent.FanOutResearch, multiagent.RolePlanner),
+		fanoutWorkerCommand(base, multiagent.FanOutImplementation, multiagent.RoleDeveloper),
+		fanoutWorkerCommand(base, multiagent.FanOutReview, multiagent.RoleReviewer),
+	}
+	worker := &graphRoleWorker{runDir: runDir, workerID: "crashed-worker", publish: func(context.Context, string, []byte) error { return nil }}
+	for _, command := range commands {
+		prepareGraphWorkerRun(t, runDir, command)
+		path := filepath.Join(runDir, command.RunID, "multiagent.db")
+		if action, _, err := worker.claimExecution(t.Context(), path, command); err != nil || action != "execute" {
+			t.Fatalf("claim %s action=%q err=%v", command.DeliveryKey, action, err)
+		}
+		if err := worker.persistAcceptedAndPublish(t.Context(), path, command); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Simulate one child having reached a terminal fact before the worker crash.
+	path := filepath.Join(runDir, base.RunID, "multiagent.db")
+	if err := worker.persistAndPublishTerminal(t.Context(), path, commands[0], event.OutcomeSucceeded, multiagent.GraphRoleOutcome{Result: multiagent.RoleRunResult{Outcome: multiagent.OutcomePlanReady, LocalIterations: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range commands {
+		if err := worker.recoverExpiredOutcome(t.Context(), command.RunID, command.DeliveryKey); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, command := range commands {
+		trace := waitForGraphTerminal(t, runDir, command.RunID, command.DeliveryKey)
+		if got := trace.Outcomes[len(trace.Outcomes)-1].Status; !got.Terminal() {
+			t.Fatalf("child %s terminal=%s", command.DeliveryKey, got)
+		}
+		if err := worker.recoverExpiredOutcome(t.Context(), command.RunID, command.DeliveryKey); err != nil {
+			t.Fatal(err)
+		}
+		trace = waitForGraphTerminal(t, runDir, command.RunID, command.DeliveryKey)
+		if len(trace.Outcomes) != 2 {
+			t.Fatalf("child %s outcomes=%d want accepted plus one terminal", command.DeliveryKey, len(trace.Outcomes))
+		}
+	}
+}
+
 func waitForGraphLedgerTerminal(t *testing.T, runDir string, command multiagent.GraphRoleCommand) event.Outcome {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
