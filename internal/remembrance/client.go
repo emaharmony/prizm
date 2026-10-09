@@ -167,6 +167,7 @@ type CaptureRequest struct {
 	Content         string   `json:"content"`
 	SourceType      string   `json:"source_type"`
 	SourceAgent     string   `json:"source_agent,omitempty"`
+	IdempotencyKey  string   `json:"idempotency_key,omitempty"`
 }
 
 // ScopedSearchRequest carries the exact authorization boundary to Recall.

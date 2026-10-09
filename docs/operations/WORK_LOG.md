@@ -518,6 +518,28 @@ then complete the R1 approval-to-verified-resume slice.
 - [Prizm Roadmap](../architecture/PRIZM_ROADMAP.md)
 - [Current Plan of Action](PLAN_OF_ACTION.md)
 
+## 2026-10-09 — R6 Recall Atomic Capture Contract
+
+**Roadmap IDs:** R2, R6
+
+- Paired the local reconciliation contract with Recall migration 14. The Recall
+  durable capture outbox now stores an idempotency key and payload fingerprint,
+  with a `COALESCE`-normalized unique index over owner, workspace, project,
+  repository, task, session, agent, and key. Replays with an identical payload
+  reuse the original capture and remote memory ID; a changed payload returns a
+  conflict.
+- `ScopedMemoryBackend` now implements `IdempotentPrimaryBackend` and carries
+  the stable local memory ID to Recall's `/v1/memory/ingest` API. Focused Go
+  adapter and reconciler tests pass. Direct Recall service acceptance covered
+  duplicate, restart, and concurrent duplicate delivery with one raw capture.
+
+**Open risks:** the paired Recall worktree requires its own review and its
+broken virtual environment prevented running its full pytest suite. A
+process-level Prizm-to-Recall outage/recovery trace remains required.
+
+**Next action:** review the paired API migration, then run the configured
+Prizm process against Recall through outage and restart recovery.
+
 ## 2026-10-02 — R2 Autonomous Prompt Scope and Sync-Pending Evidence
 
 **Roadmap IDs:** R2, R6

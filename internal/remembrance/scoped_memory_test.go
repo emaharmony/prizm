@@ -2,6 +2,7 @@ package remembrance
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,29 @@ import (
 
 	"github.com/emaharmony/prizm/internal/memory"
 )
+
+func TestScopedMemoryBackendCaptureIdempotentSendsScopeAndKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/memory/ingest" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["idempotency_key"] != "sync-key" || body["owner_id"] != "user-a" || body["project_id"] != "project-a" || body["task_id"] != "task-a" || body["agent_id"] != "agent-a" {
+			t.Fatalf("bad scope/key: %#v", body)
+		}
+		_, _ = w.Write([]byte(`{"id":"remote-original"}`))
+	}))
+	defer server.Close()
+	backend := ScopedMemoryBackend{Client: NewClient(server.URL)}
+	mem := memory.Memory{ID: "local-id", Content: "durable", Summary: "durable", UserID: "user-a", ProjectID: "project-a", TaskID: "task-a", AgentID: "agent-a"}
+	id, err := backend.CaptureIdempotent(context.Background(), mem, "sync-key")
+	if err != nil || id != "remote-original" {
+		t.Fatalf("capture = %q, %v", id, err)
+	}
+}
 
 func TestScopedMemorySearchSendsScopeAndRejectsIncompleteMetadata(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

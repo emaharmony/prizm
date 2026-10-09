@@ -17,6 +17,12 @@ type ScopedMemoryBackend struct {
 }
 
 func (b ScopedMemoryBackend) Capture(_ context.Context, mem memory.Memory) (string, error) {
+	return b.CaptureIdempotent(context.Background(), mem, mem.ID)
+}
+
+// CaptureIdempotent binds the durable Prizm delivery key to Recall's atomic,
+// scope-aware capture API. Replays return the original remote memory ID.
+func (b ScopedMemoryBackend) CaptureIdempotent(_ context.Context, mem memory.Memory, key string) (string, error) {
 	if b.Client == nil {
 		return "", fmt.Errorf("remembrance client is not configured")
 	}
@@ -25,15 +31,18 @@ func (b ScopedMemoryBackend) Capture(_ context.Context, mem memory.Memory) (stri
 		Scope: "task", Category: mem.Category, Summary: mem.Summary,
 		SourceRef: mem.ID, ImportanceScore: 0.5, ProjectID: mem.ProjectID,
 		Title: mem.Summary, Content: mem.Content, SourceType: "prizm_scoped_memory",
-		SourceAgent: mem.Source,
+		SourceAgent: mem.Source, IdempotencyKey: key,
 	})
 	if err != nil {
 		return "", err
 	}
+	if decision, _ := result["decision"].(string); decision == "SKIP" {
+		return "", fmt.Errorf("recall skipped idempotent capture")
+	}
 	if id, ok := result["id"].(string); ok {
 		return id, nil
 	}
-	return mem.ID, nil
+	return "", fmt.Errorf("recall idempotent capture returned no remote ID")
 }
 
 func (b ScopedMemoryBackend) Search(_ context.Context, req memory.SearchRequest) ([]memory.Memory, error) {
