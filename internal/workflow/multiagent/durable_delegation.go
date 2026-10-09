@@ -25,6 +25,8 @@ type GraphRoleCommand struct {
 	RunID          string         `json:"run_id"`
 	WorkspaceID    string         `json:"workspace_id"`
 	DelegationID   string         `json:"delegation_id"`
+	JoinID         string         `json:"join_id,omitempty"`
+	Lane           FanOutLane     `json:"lane,omitempty"`
 	DeliveryKey    string         `json:"delivery_key"`
 	CorrelationID  string         `json:"correlation_id"`
 	CommandEventID string         `json:"command_event_id"`
@@ -67,7 +69,7 @@ func (r *DurableRuntime) dispatchDelegatedRole(ctx context.Context, record Durab
 	if err != nil {
 		return record, err
 	}
-	return record, nil
+	return record, waitingError(record)
 }
 
 func (r *DurableRuntime) dispatchPendingDelegation(ctx context.Context, record DurableRun) (DurableRun, error) {
@@ -241,7 +243,7 @@ func (r *DurableRuntime) startDelegationJoin(ctx context.Context, record Durable
 		deliveryKey := delegationID + ":0"
 		children = append(children, DelegationJoinChild{ChildID: childID, Lane: lane, Role: task.Role,
 			Task: TaskReference{ID: childID, Description: task.Description}, ExecutionKey: executionKey,
-			DelegationID: delegationID, DeliveryKey: deliveryKey, CommandEventID: event.CommandEventID(deliveryKey),
+			DelegationID: delegationID, JoinID: "join:" + record.ActiveExecutionKey, DeliveryKey: deliveryKey, CommandEventID: event.CommandEventID(deliveryKey),
 			CorrelationID: record.State.RunID + ":" + executionKey, Deadline: deadline, DispatchPending: true})
 	}
 	record.DelegationJoin = &DelegationJoinState{JoinID: "join:" + record.ActiveExecutionKey,
@@ -260,6 +262,7 @@ func (r *DurableRuntime) startDelegationJoin(ctx context.Context, record Durable
 		Since: now, JoinID: record.DelegationJoin.JoinID, StartedAt: now, Deadline: deadline}
 	record.PendingDelegationOutcomeAck = parentEventID
 	r.supervisor.emitRun(event.EventMultiAgentRunPaused, record.State, record.Waiting.Reason)
+	r.supervisor.emit(event.EventMultiAgentFanoutStarted, record.State, map[string]any{"run_id": record.State.RunID, "join_id": record.DelegationJoin.JoinID, "status": "started"})
 	var err error
 	if record, err = r.checkpoint(ctx, record); err != nil {
 		return record, err
@@ -296,11 +299,13 @@ func (r *DurableRuntime) dispatchPendingDelegationJoin(ctx context.Context, reco
 		}
 		cmd := event.Command{EventID: child.CommandEventID, Type: GraphRoleDelegationCommandType, RunID: record.State.RunID,
 			TaskID: child.ChildID, DelegationID: child.DelegationID, CorrelationID: child.CorrelationID,
+			JoinID: record.DelegationJoin.JoinID, Lane: string(child.Lane),
 			IdempotencyKey: child.DeliveryKey, Deadline: child.Deadline, SchemaVersion: event.CommandSchemaVersion, Payload: payload}
 		if err := r.delegation.Dispatcher.Dispatch(ctx, r.delegation.Subject, cmd); err != nil {
 			return record, fmt.Errorf("multiagent: dispatch fan-out lane %s: %w", child.Lane, err)
 		}
 		child.DispatchPending = false
+		r.supervisor.emit(event.EventMultiAgentFanoutChildDispatched, record.State, map[string]any{"run_id": record.State.RunID, "join_id": record.DelegationJoin.JoinID, "lane": string(child.Lane), "role": string(child.Role), "child_id": child.ChildID, "delivery_key": child.DeliveryKey, "status": "dispatched"})
 		if record, err = r.checkpoint(ctx, record); err != nil {
 			return record, err
 		}
@@ -356,6 +361,7 @@ func (r *DurableRuntime) resumeDelegationJoin(ctx context.Context, record Durabl
 			} else {
 				child.Error = "child outcome " + string(outcome.Status)
 			}
+			r.supervisor.emit(event.EventMultiAgentFanoutChildCompleted, record.State, map[string]any{"run_id": record.State.RunID, "join_id": child.JoinID, "lane": string(child.Lane), "role": string(child.Role), "child_id": child.ChildID, "status": string(child.Status)})
 		} else if outcome.Status != event.OutcomeAccepted && outcome.Status != event.OutcomeProgress {
 			return record, &RecoveryFailedError{RunID: record.State.RunID, Cause: fmt.Errorf("unsupported fan-out outcome status %q", outcome.Status)}
 		}
@@ -429,6 +435,7 @@ func (r *DurableRuntime) completeDelegationJoin(ctx context.Context, record Dura
 	role := join.ParentRole
 	cfg, _ := r.supervisor.graph.RoleConfig(role)
 	record.DelegationJoin = nil
+	r.supervisor.emit(event.EventMultiAgentFanoutJoined, record.State, map[string]any{"run_id": record.State.RunID, "join_id": join.JoinID, "status": "joined"})
 	record.Waiting = nil
 	record.State.Status = RunStatusRunning
 	rs := record.State.RoleStates[role]
@@ -445,7 +452,7 @@ func matchDelegationJoinOutcome(runID string, child *DelegationJoinChild, outcom
 	if err := outcome.Validate(); err != nil {
 		return err
 	}
-	if child == nil || outcome.RunID != runID || outcome.TaskID != child.ChildID || outcome.DelegationID != child.DelegationID || outcome.DeliveryKey != child.DeliveryKey || outcome.CommandEventID != child.CommandEventID || outcome.CorrelationID != child.CorrelationID || outcome.CausationID != child.CommandEventID {
+	if child == nil || outcome.RunID != runID || outcome.TaskID != child.ChildID || outcome.DelegationID != child.DelegationID || outcome.JoinID != child.JoinID || outcome.Lane != string(child.Lane) || outcome.DeliveryKey != child.DeliveryKey || outcome.CommandEventID != child.CommandEventID || outcome.CorrelationID != child.CorrelationID || outcome.CausationID != child.CommandEventID {
 		return errors.New("fan-out outcome identity does not match checkpoint")
 	}
 	return nil

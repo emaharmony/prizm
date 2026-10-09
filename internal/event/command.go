@@ -25,6 +25,8 @@ type Command struct {
 	RunID          string          `json:"run_id"`
 	TaskID         string          `json:"task_id,omitempty"`
 	DelegationID   string          `json:"delegation_id,omitempty"`
+	JoinID         string          `json:"join_id,omitempty"`
+	Lane           string          `json:"lane,omitempty"`
 	CorrelationID  string          `json:"correlation_id"`
 	CausationID    string          `json:"causation_id,omitempty"`
 	IdempotencyKey string          `json:"idempotency_key"`
@@ -68,6 +70,8 @@ type Outcome struct {
 	RunID          string          `json:"run_id"`
 	TaskID         string          `json:"task_id,omitempty"`
 	DelegationID   string          `json:"delegation_id,omitempty"`
+	JoinID         string          `json:"join_id,omitempty"`
+	Lane           string          `json:"lane,omitempty"`
 	CorrelationID  string          `json:"correlation_id"`
 	CausationID    string          `json:"causation_id"`
 	DeliveryKey    string          `json:"delivery_key"`

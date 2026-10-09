@@ -354,7 +354,7 @@ func newWaitingDelegationRuntime(t *testing.T, runID string) (*DurableRuntime, d
 
 func matchingOutcome(cmd event.Command, id string, status event.OutcomeStatus, sequence int64, payload []byte) event.Outcome {
 	return event.Outcome{EventID: id, CommandEventID: cmd.EventID, RunID: cmd.RunID, TaskID: cmd.TaskID,
-		DelegationID: cmd.DelegationID, CorrelationID: cmd.CorrelationID, CausationID: cmd.EventID,
+		DelegationID: cmd.DelegationID, JoinID: cmd.JoinID, Lane: cmd.Lane, CorrelationID: cmd.CorrelationID, CausationID: cmd.EventID,
 		DeliveryKey: cmd.IdempotencyKey, Status: status, Sequence: sequence,
 		OccurredAt: time.Date(2026, time.July, 23, 12, 1, 0, 0, time.UTC), Payload: payload}
 }

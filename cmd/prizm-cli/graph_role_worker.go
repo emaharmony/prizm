@@ -123,7 +123,7 @@ func (w *graphRoleWorker) wakeExpired(ctx context.Context, now time.Time) {
 		}
 		record, loadErr := store.Load(ctx, entry.Name())
 		store.Close()
-		if loadErr != nil || record.Waiting == nil || record.Waiting.Kind != "delegation_outcome" || now.Before(record.Waiting.Deadline) {
+		if loadErr != nil || record.Waiting == nil || (record.Waiting.Kind != "delegation_outcome" && record.Waiting.Kind != "delegation_join") || now.Before(record.Waiting.Deadline) {
 			continue
 		}
 		w.resumeRun(record.State.RunID, "deadline wake")
@@ -217,7 +217,7 @@ func (w *graphRoleWorker) verifyDurableCommand(ctx context.Context, command mult
 	cmd := stored.Command
 	if stored.Subject != graphRoleDelegationSubject || cmd.Type != multiagent.GraphRoleDelegationCommandType ||
 		cmd.EventID != command.CommandEventID || cmd.RunID != command.RunID || cmd.TaskID != command.ChildID ||
-		cmd.DelegationID != command.DelegationID || cmd.CorrelationID != command.CorrelationID ||
+		cmd.DelegationID != command.DelegationID || cmd.JoinID != command.JoinID || cmd.Lane != string(command.Lane) || cmd.CorrelationID != command.CorrelationID ||
 		cmd.IdempotencyKey != command.DeliveryKey || !cmd.Deadline.Equal(command.Deadline) || !bytes.Equal(cmd.Payload, wire) {
 		return "", errors.New("wire command does not match canonical outbox row")
 	}
@@ -235,6 +235,15 @@ func (w *graphRoleWorker) validateCommand(command multiagent.GraphRoleCommand) e
 		command.Request.Run.CurrentRole != command.Role || command.Request.Run.ExecutionKey != command.ExecutionKey ||
 		command.Request.Run.WorkspaceID != command.WorkspaceID || command.CommandEventID != event.CommandEventID(command.DeliveryKey) {
 		return errors.New("graph role command context does not match its durable identity")
+	}
+	if (command.JoinID == "") != (command.Lane == "") {
+		return errors.New("graph role join and lane identity must be paired")
+	}
+	if command.JoinID != "" {
+		want := map[multiagent.FanOutLane]multiagent.Role{multiagent.FanOutResearch: multiagent.RolePlanner, multiagent.FanOutImplementation: multiagent.RoleDeveloper, multiagent.FanOutReview: multiagent.RoleReviewer}[command.Lane]
+		if want == "" || command.Role != want {
+			return errors.New("graph role fan-out lane is not bound to its role")
+		}
 	}
 	return nil
 }
@@ -402,6 +411,7 @@ func (w *graphRoleWorker) buildOutcome(command multiagent.GraphRoleCommand, stat
 	outcome := event.Outcome{EventID: event.CommandEventID(command.DeliveryKey + ":" + string(status)),
 		CommandEventID: command.CommandEventID, RunID: command.RunID, TaskID: command.ChildID,
 		DelegationID: command.DelegationID, CorrelationID: command.CorrelationID,
+		JoinID: command.JoinID, Lane: string(command.Lane),
 		CausationID: command.CommandEventID, DeliveryKey: command.DeliveryKey,
 		Status: status, Sequence: sequence, OccurredAt: time.Now().UTC(), Payload: raw}
 	data, err := json.Marshal(outcome)

@@ -7,6 +7,9 @@ func init() {
 	Schemas[EventMultiAgentRunCreated] = Schema{
 		Required: []string{"run_id", "workflow_id", "status"},
 	}
+	for _, eventType := range []string{EventMultiAgentFanoutStarted, EventMultiAgentFanoutChildDispatched, EventMultiAgentFanoutChildCompleted, EventMultiAgentFanoutJoined} {
+		Schemas[eventType] = Schema{Required: []string{"run_id", "join_id"}, Optional: []string{"lane", "role", "status", "reason", "child_id", "delivery_key"}}
+	}
 	Schemas[EventMultiAgentRunStarted] = Schema{
 		Required: []string{"run_id", "workflow_id", "status"},
 	}

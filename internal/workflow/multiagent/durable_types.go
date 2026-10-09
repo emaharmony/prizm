@@ -143,6 +143,7 @@ type DelegationJoinChild struct {
 	Task            TaskReference       `json:"task"`
 	ExecutionKey    string              `json:"execution_key"`
 	DelegationID    string              `json:"delegation_id"`
+	JoinID          string              `json:"join_id"`
 	DeliveryKey     string              `json:"delivery_key"`
 	CommandEventID  string              `json:"command_event_id"`
 	CorrelationID   string              `json:"correlation_id"`
@@ -299,7 +300,7 @@ func (j DelegationJoinState) Validate(runID string, currentRole Role) error {
 		if expectedRoles[child.Lane] == "" || child.Role != expectedRoles[child.Lane] {
 			return fmt.Errorf("delegation join child %q has invalid lane-role binding", child.ChildID)
 		}
-		if strings.TrimSpace(child.ChildID) == "" || strings.TrimSpace(child.ExecutionKey) == "" ||
+		if strings.TrimSpace(child.ChildID) == "" || strings.TrimSpace(child.JoinID) == "" || strings.TrimSpace(child.ExecutionKey) == "" ||
 			strings.TrimSpace(child.DelegationID) == "" || strings.TrimSpace(child.DeliveryKey) == "" ||
 			strings.TrimSpace(child.CommandEventID) == "" || strings.TrimSpace(child.CorrelationID) == "" ||
 			child.Task.ID == "" || child.Deadline.IsZero() {

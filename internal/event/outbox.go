@@ -271,7 +271,7 @@ func (s *SQLiteOutbox) RecordOutcome(ctx context.Context, outcome Outcome) (bool
 }
 
 func recordOutcomeTx(ctx context.Context, tx *sql.Tx, cmd Command, outcome Outcome) (bool, error) {
-	if outcome.CommandEventID != cmd.EventID || outcome.RunID != cmd.RunID || outcome.TaskID != cmd.TaskID || outcome.DelegationID != cmd.DelegationID || outcome.CorrelationID != cmd.CorrelationID || outcome.DeliveryKey != cmd.IdempotencyKey || outcome.CausationID != cmd.EventID {
+	if outcome.CommandEventID != cmd.EventID || outcome.RunID != cmd.RunID || outcome.TaskID != cmd.TaskID || outcome.DelegationID != cmd.DelegationID || outcome.JoinID != cmd.JoinID || outcome.Lane != cmd.Lane || outcome.CorrelationID != cmd.CorrelationID || outcome.DeliveryKey != cmd.IdempotencyKey || outcome.CausationID != cmd.EventID {
 		return false, errors.New("event outbox: outcome identity does not match command")
 	}
 	if outcome.Status == OutcomeProgress {
