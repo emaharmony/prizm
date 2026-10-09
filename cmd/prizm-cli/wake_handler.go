@@ -373,10 +373,7 @@ func (wh *WakeHandler) handleWorkflowStart(req workstart.Request) {
 		log.Printf("[WAKE] workflow.start: no agent configured")
 		return
 	}
-	model := agentCfg.Model
-	if model == "" {
-		model = "glm-5.1:cloud"
-	}
+	model := resolveRuntimeModel(agentCfg.Model)
 
 	// Resolve the result channel from the request or project config.
 	channel := resolved.Channel
@@ -738,10 +735,7 @@ You can create branches, commit changes, push to remote, and open PRs. You are n
 		return
 	}
 
-	model := agentCfg.Model
-	if model == "" {
-		model = "glm-5.1:cloud"
-	}
+	model := resolveRuntimeModel(agentCfg.Model)
 
 	// Create or reuse a session for this action
 	sessionKey := fmt.Sprintf("wake:%s:%s", action, time.Now().Format("2006-01-02"))

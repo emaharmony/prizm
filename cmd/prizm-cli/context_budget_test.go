@@ -81,6 +81,7 @@ func TestGetModelContextTokens(t *testing.T) {
 		want  int
 		found bool
 	}{
+		{defaultOllamaCloudModel, defaultOllamaCloudContextTokens, true},
 		{"glm-5.1:cloud", 202752, true},
 		{"deepseek-v4-pro:cloud", 131072, true},
 		{"unknown-model", 0, false},
@@ -96,6 +97,15 @@ func TestGetModelContextTokens(t *testing.T) {
 				t.Errorf("getModelContextTokens(%q) = %d, want %d", tt.model, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveRuntimeModel(t *testing.T) {
+	if got := resolveRuntimeModel(""); got != defaultOllamaCloudModel {
+		t.Fatalf("resolveRuntimeModel(empty) = %q, want default %q", got, defaultOllamaCloudModel)
+	}
+	if got := resolveRuntimeModel("custom-model"); got != "custom-model" {
+		t.Fatalf("resolveRuntimeModel(custom) = %q, want configured model", got)
 	}
 }
 

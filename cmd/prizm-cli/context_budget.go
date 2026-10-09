@@ -226,10 +226,26 @@ func (cb *contextBudget) checkAndCompress(messages []provider.ChatMessage, itera
 	return estimated
 }
 
+// defaultOllamaCloudModel is the configured runtime default when an agent model
+// is omitted. Its Ollama /api/tags manifest reports context_length: 1048576.
+const (
+	defaultOllamaCloudModel         = "glm-5.3:cloud"
+	defaultOllamaCloudContextTokens = 1048576
+)
+
+// resolveRuntimeModel preserves an explicitly configured model and applies the
+// Prizm default when a legacy or programmatically constructed agent omits one.
+func resolveRuntimeModel(model string) string {
+	if model == "" {
+		return defaultOllamaCloudModel
+	}
+	return model
+}
+
 // modelContextTokens maps known model names to their maximum context window size.
 func getModelContextTokens(model string) (int, bool) {
 	known := map[string]int{
-		"glm-5.3:cloud":           1048576,
+		defaultOllamaCloudModel:   defaultOllamaCloudContextTokens,
 		"glm-5.1:cloud":           202752,
 		"glm-5.2:cloud":           202752,
 		"glm-4:cloud":             131072,

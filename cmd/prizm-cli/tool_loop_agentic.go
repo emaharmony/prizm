@@ -81,8 +81,8 @@ func (cc *conversationContext) runToolLoopAgentic(
 	iterationCount := 0
 
 	// V73: Context budget management
-	contextTokens := 202752 // glm-5.1:cloud default
-	if agentCtxTokens, ok := getModelContextTokens(agentCfg.Model); ok {
+	contextTokens := defaultOllamaCloudContextTokens
+	if agentCtxTokens, ok := getModelContextTokens(resolveRuntimeModel(agentCfg.Model)); ok {
 		contextTokens = agentCtxTokens
 	}
 	ctxBudget := defaultContextBudget(contextTokens)
