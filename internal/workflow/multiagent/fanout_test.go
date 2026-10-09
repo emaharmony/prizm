@@ -144,7 +144,7 @@ func TestDelegationJoinRecoversPendingDispatchAfterRestart(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run unexpectedly completed")
 	}
-	payload, _ := json.Marshal(GraphRoleOutcome{Result: RoleRunResult{Outcome: OutcomePlanReady, LocalIterations: 1, FanOut: validFanOutPlan()}})
+	payload, _ := json.Marshal(GraphRoleOutcome{Result: RoleRunResult{Outcome: TransitionOutcome("ok"), LocalIterations: 1, FanOut: validFanOutPlan()}})
 	parent := dispatch.cmds[0]
 	source.outcomes = append(source.outcomes, matchingOutcome(parent, "parent-fanout", event.OutcomeSucceeded, 1, payload))
 	if _, err = runtime.Resume(t.Context(), "run-graph-delegation"); err == nil {
@@ -216,4 +216,67 @@ func TestDelegationJoinDeadlineEmitsTimedOutChildrenAndReport(t *testing.T) {
 	if len(report.FanOut) != 3 {
 		t.Fatalf("report fanout=%#v", report.FanOut)
 	}
+}
+
+func TestDelegationJoinConsumesAllChildrenAndConvergesParent(t *testing.T) {
+	runtime, env, dispatch, source := newWaitingDelegationRuntime(t, "run-graph-delegation")
+	payload, _ := json.Marshal(GraphRoleOutcome{Result: RoleRunResult{Outcome: TransitionOutcome("ok"), LocalIterations: 1, FanOut: validFanOutPlan()}})
+	source.outcomes = append(source.outcomes, matchingOutcome(dispatch.command, "parent-fanout", event.OutcomeSucceeded, 1, payload))
+	if _, err := runtime.Resume(t.Context(), "run-graph-delegation"); err == nil {
+		t.Fatal("expected join wait after parent result")
+	}
+	record, err := env.store.Load(t.Context(), "run-graph-delegation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.outcomes = nil
+	for i, child := range record.DelegationJoin.Children {
+		childPayload, _ := json.Marshal(GraphRoleOutcome{Result: RoleRunResult{Outcome: TransitionOutcome("ok"), LocalIterations: 1}})
+		source.outcomes = append(source.outcomes, matchingOutcome(event.Command{EventID: child.CommandEventID, RunID: record.State.RunID, TaskID: child.ChildID, DelegationID: child.DelegationID, JoinID: child.JoinID, Lane: string(child.Lane), CorrelationID: child.CorrelationID, IdempotencyKey: child.DeliveryKey}, "child-"+string(rune('a'+i)), event.OutcomeSucceeded, 1, childPayload))
+	}
+	state, err := runtime.Resume(t.Context(), "run-graph-delegation")
+	if err != nil || state.Status == RunStatusPaused {
+		t.Fatalf("join convergence state=%#v err=%v", state, err)
+	}
+	record, err = env.store.Load(t.Context(), "run-graph-delegation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.DelegationJoin != nil || record.Waiting != nil {
+		t.Fatalf("join remained after convergence: %#v", record)
+	}
+}
+
+func TestDelegationJoinValidateRejectsDuplicateLaneAndMismatchedJoin(t *testing.T) {
+	runtime, env, dispatch, source := newWaitingDelegationRuntime(t, "run-graph-delegation")
+	payload, _ := json.Marshal(GraphRoleOutcome{Result: RoleRunResult{Outcome: TransitionOutcome("ok"), LocalIterations: 1, FanOut: validFanOutPlan()}})
+	source.outcomes = append(source.outcomes, matchingOutcome(dispatch.command, "parent-fanout", event.OutcomeSucceeded, 1, payload))
+	if _, err := runtime.Resume(t.Context(), "run-graph-delegation"); err == nil {
+		t.Fatal("expected join wait")
+	}
+	record, err := env.store.Load(t.Context(), "run-graph-delegation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate := record
+	duplicate.DelegationJoin = cloneDelegationJoin(record.DelegationJoin)
+	duplicate.DelegationJoin.Children[1].Lane = duplicate.DelegationJoin.Children[0].Lane
+	if err := duplicate.Validate(runtime.supervisor.graph); err == nil {
+		t.Fatal("duplicate lane accepted")
+	}
+	mismatch := record
+	mismatch.DelegationJoin = cloneDelegationJoin(record.DelegationJoin)
+	mismatch.DelegationJoin.Children[0].JoinID = "join:forged"
+	if err := mismatch.Validate(runtime.supervisor.graph); err == nil {
+		t.Fatal("mismatched child join accepted")
+	}
+}
+
+func cloneDelegationJoin(join *DelegationJoinState) *DelegationJoinState {
+	if join == nil {
+		return nil
+	}
+	cloned := *join
+	cloned.Children = append([]DelegationJoinChild(nil), join.Children...)
+	return &cloned
 }

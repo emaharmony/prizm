@@ -295,6 +295,7 @@ func (j DelegationJoinState) Validate(runID string, currentRole Role) error {
 		return errors.New("delegation join requires exactly 3 children")
 	}
 	seen := make(map[string]struct{}, len(j.Children))
+	seenLanes := make(map[FanOutLane]struct{}, len(j.Children))
 	expectedRoles := map[FanOutLane]Role{FanOutResearch: RolePlanner, FanOutImplementation: RoleDeveloper, FanOutReview: RoleReviewer}
 	for _, child := range j.Children {
 		if expectedRoles[child.Lane] == "" || child.Role != expectedRoles[child.Lane] {
@@ -306,6 +307,13 @@ func (j DelegationJoinState) Validate(runID string, currentRole Role) error {
 			child.Task.ID == "" || child.Deadline.IsZero() {
 			return errors.New("delegation join child identity is incomplete")
 		}
+		if child.JoinID != j.JoinID {
+			return fmt.Errorf("delegation join child %q has mismatched join identity", child.ChildID)
+		}
+		if _, ok := seenLanes[child.Lane]; ok {
+			return fmt.Errorf("delegation join lane %q is duplicated", child.Lane)
+		}
+		seenLanes[child.Lane] = struct{}{}
 		if _, ok := seen[child.DeliveryKey]; ok {
 			return fmt.Errorf("delegation join delivery key %q is duplicated", child.DeliveryKey)
 		}
