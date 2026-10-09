@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -243,6 +244,119 @@ func TestGraphRoleWorkerAutonomouslyWakesExpiredDelegation(t *testing.T) {
 	}
 }
 
+func TestGraphRoleWorkerPublishExhaustionStillClosesAndReplays(t *testing.T) {
+	runDir := t.TempDir()
+	command := graphWorkerTestCommand("run-publish-exhaustion", time.Now().Add(time.Minute))
+	prepareGraphWorkerRun(t, runDir, command)
+	var executions atomic.Int32
+	var attempts atomic.Int32
+	var published []event.Outcome
+	worker := &graphRoleWorker{runDir: runDir, workerID: "worker-1", executeRole: func(context.Context, multiagent.GraphRoleCommand) (multiagent.RoleRunResult, error) {
+		executions.Add(1)
+		return multiagent.RoleRunResult{Outcome: multiagent.OutcomePlanReady, LocalIterations: 1}, nil
+	}, publish: func(_ context.Context, _ string, payload []byte) error {
+		if attempts.Add(1) <= 4 {
+			return errors.New("publish unavailable")
+		}
+		var outcome event.Outcome
+		if err := json.Unmarshal(payload, &outcome); err != nil {
+			return err
+		}
+		published = append(published, outcome)
+		return nil
+	}}
+	worker.execute(command)
+	worker.execute(command)
+	if executions.Load() != 1 {
+		t.Fatalf("executions=%d want 1", executions.Load())
+	}
+	if attempts.Load() != 5 || len(published) != 1 || !published[0].Status.Terminal() {
+		t.Fatalf("publish attempts=%d published=%#v", attempts.Load(), published)
+	}
+	state, outcome := graphWorkerLedgerOutcome(t, runDir, command)
+	if state != "terminal" || outcome.Status != event.OutcomeSucceeded {
+		t.Fatalf("ledger state=%q outcome=%#v", state, outcome)
+	}
+}
+
+func TestGraphRoleWorkerExpiredDeliveryPersistsTerminalBeforePublish(t *testing.T) {
+	runDir := t.TempDir()
+	command := graphWorkerTestCommand("run-expired-delivery", time.Now().Add(-time.Second))
+	prepareGraphWorkerRun(t, runDir, command)
+	var published []event.Outcome
+	worker := &graphRoleWorker{runDir: runDir, workerID: "worker-expired", publish: func(_ context.Context, _ string, payload []byte) error {
+		var outcome event.Outcome
+		if err := json.Unmarshal(payload, &outcome); err != nil {
+			return err
+		}
+		published = append(published, outcome)
+		return nil
+	}}
+	worker.execute(command)
+	state, outcome := graphWorkerLedgerOutcome(t, runDir, command)
+	if state != "terminal" || outcome.Status != event.OutcomeTimedOut {
+		t.Fatalf("ledger state=%q outcome=%#v", state, outcome)
+	}
+	if len(published) != 2 || published[1].Status != event.OutcomeTimedOut {
+		t.Fatalf("published=%#v", published)
+	}
+}
+
+func TestGraphRoleWorkerReplaysTerminalAfterDeadline(t *testing.T) {
+	runDir := t.TempDir()
+	command := graphWorkerTestCommand("run-replay-after-deadline", time.Now().Add(500*time.Millisecond))
+	prepareGraphWorkerRun(t, runDir, command)
+	var first []event.Outcome
+	firstWorker := &graphRoleWorker{runDir: runDir, workerID: "worker-first", executeRole: func(context.Context, multiagent.GraphRoleCommand) (multiagent.RoleRunResult, error) {
+		return multiagent.RoleRunResult{Outcome: multiagent.OutcomePlanReady, LocalIterations: 1}, nil
+	}, publish: func(_ context.Context, _ string, payload []byte) error {
+		var outcome event.Outcome
+		if err := json.Unmarshal(payload, &outcome); err != nil {
+			return err
+		}
+		first = append(first, outcome)
+		return nil
+	}}
+	firstWorker.execute(command)
+	time.Sleep(600 * time.Millisecond)
+	var replay []event.Outcome
+	secondWorker := &graphRoleWorker{runDir: runDir, workerID: "worker-second", publish: func(_ context.Context, _ string, payload []byte) error {
+		var outcome event.Outcome
+		if err := json.Unmarshal(payload, &outcome); err != nil {
+			return err
+		}
+		replay = append(replay, outcome)
+		return nil
+	}}
+	secondWorker.execute(command)
+	if len(first) != 2 || first[1].Status != event.OutcomeSucceeded || len(replay) != 1 || replay[0].Status != event.OutcomeSucceeded {
+		t.Fatalf("first=%#v replay=%#v", first, replay)
+	}
+}
+
+func TestGraphRoleWorkerLateSuccessIsTimedOut(t *testing.T) {
+	runDir := t.TempDir()
+	command := graphWorkerTestCommand("run-late-success", time.Now().Add(20*time.Millisecond))
+	prepareGraphWorkerRun(t, runDir, command)
+	var published []event.Outcome
+	worker := &graphRoleWorker{runDir: runDir, workerID: "worker-late", executeRole: func(context.Context, multiagent.GraphRoleCommand) (multiagent.RoleRunResult, error) {
+		time.Sleep(60 * time.Millisecond)
+		return multiagent.RoleRunResult{Outcome: multiagent.OutcomePlanReady, LocalIterations: 1}, nil
+	}, publish: func(_ context.Context, _ string, payload []byte) error {
+		var outcome event.Outcome
+		if err := json.Unmarshal(payload, &outcome); err != nil {
+			return err
+		}
+		published = append(published, outcome)
+		return nil
+	}}
+	worker.execute(command)
+	state, outcome := graphWorkerLedgerOutcome(t, runDir, command)
+	if state != "terminal" || outcome.Status != event.OutcomeTimedOut || len(published) != 2 || published[1].Status != event.OutcomeTimedOut {
+		t.Fatalf("state=%q ledger=%#v published=%#v", state, outcome, published)
+	}
+}
+
 func TestGraphDelegationPublisherRetriesBeforeReturning(t *testing.T) {
 	t.Setenv(graphRoleDelegationRequestedEnv, "1")
 	var attempts atomic.Int32
@@ -319,6 +433,25 @@ func prepareGraphWorkerRun(t *testing.T, runDir string, command multiagent.Graph
 		t.Fatal(err)
 	}
 	box.Close()
+}
+
+func graphWorkerLedgerOutcome(t *testing.T, runDir string, command multiagent.GraphRoleCommand) (string, event.Outcome) {
+	t.Helper()
+	db, err := openGraphRoleLedger(t.Context(), filepath.Join(runDir, command.RunID, "multiagent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var state string
+	var encoded []byte
+	if err := db.QueryRowContext(t.Context(), `SELECT state,outcome_json FROM graph_role_executions WHERE delivery_key=?`, command.DeliveryKey).Scan(&state, &encoded); err != nil {
+		t.Fatal(err)
+	}
+	var outcome event.Outcome
+	if err := json.Unmarshal(encoded, &outcome); err != nil {
+		t.Fatal(err)
+	}
+	return state, outcome
 }
 
 func waitForGraphTerminal(t *testing.T, runDir, runID, key string) event.CommandTrace {

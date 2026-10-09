@@ -49,6 +49,7 @@ type graphRoleWorker struct {
 	subs        []*nats.Subscription
 	cancel      context.CancelFunc
 	done        chan struct{}
+	publish     func(context.Context, string, []byte) error
 }
 
 func startGraphRoleWorker(nc *nats.Conn, runDir, configPath string, resume func(context.Context, string) error) (*graphRoleWorker, error) {
@@ -240,10 +241,6 @@ func (w *graphRoleWorker) validateCommand(command multiagent.GraphRoleCommand) e
 
 func (w *graphRoleWorker) execute(command multiagent.GraphRoleCommand) {
 	ctx := context.Background()
-	if !time.Now().UTC().Before(command.Deadline) {
-		w.publishOutcome(command, event.OutcomeTimedOut, 1, map[string]string{"message": "command deadline exceeded before worker acceptance"})
-		return
-	}
 	manifest, err := loadReferenceManifest(w.runDir, command.RunID)
 	if err != nil {
 		return
@@ -258,9 +255,7 @@ func (w *graphRoleWorker) execute(command multiagent.GraphRoleCommand) {
 	case "ignore":
 		return
 	case "replay":
-		if err := w.nc.Publish(graphRoleOutcomeSubject, replay); err == nil {
-			_ = w.nc.Flush()
-		}
+		_ = w.publishMessage(ctx, graphRoleOutcomeSubject, replay)
 		return
 	case "ambiguous":
 		outcome, encoded, buildErr := w.buildOutcome(command, event.OutcomeFailed, 2, map[string]string{"message": "worker ownership changed during role execution; outcome is ambiguous and was failed closed"})
@@ -271,7 +266,15 @@ func (w *graphRoleWorker) execute(command multiagent.GraphRoleCommand) {
 		return
 	}
 	if err := w.persistAcceptedAndPublish(ctx, ledgerPath, command); err != nil {
-		log.Printf("[GRAPH-WORKER] accept %s: %v", command.DeliveryKey, err)
+		// Acceptance is durable before publication. Continue the single claimed
+		// execution so a terminal result can still close the ledger when NATS is
+		// temporarily unavailable; a later redelivery will replay that result.
+		log.Printf("[GRAPH-WORKER] accept publication %s: %v", command.DeliveryKey, err)
+	}
+	if !time.Now().UTC().Before(command.Deadline) {
+		if publishErr := w.persistAndPublishTerminal(ctx, ledgerPath, command, event.OutcomeTimedOut, map[string]string{"message": "command deadline exceeded before worker acceptance"}); publishErr != nil {
+			log.Printf("[GRAPH-WORKER] terminal %s: %v", command.DeliveryKey, publishErr)
+		}
 		return
 	}
 	if manifest.WorkspaceID != command.WorkspaceID {
@@ -297,6 +300,12 @@ func (w *graphRoleWorker) execute(command multiagent.GraphRoleCommand) {
 			status = event.OutcomeTimedOut
 		}
 		if publishErr := w.persistAndPublishTerminal(ctx, ledgerPath, command, status, map[string]string{"message": err.Error()}); publishErr != nil {
+			log.Printf("[GRAPH-WORKER] terminal %s: %v", command.DeliveryKey, publishErr)
+		}
+		return
+	}
+	if !command.Deadline.IsZero() && !time.Now().UTC().Before(command.Deadline) {
+		if publishErr := w.persistAndPublishTerminal(ctx, ledgerPath, command, event.OutcomeTimedOut, map[string]string{"message": "role execution exceeded command deadline"}); publishErr != nil {
 			log.Printf("[GRAPH-WORKER] terminal %s: %v", command.DeliveryKey, publishErr)
 		}
 		return
@@ -337,9 +346,7 @@ func (w *graphRoleWorker) persistAcceptedAndPublish(ctx context.Context, ledgerP
 	}
 	var publishErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		if publishErr = w.nc.Publish(graphRoleOutcomeSubject, encoded); publishErr == nil {
-			publishErr = w.nc.Flush()
-		}
+		publishErr = w.publishMessage(ctx, graphRoleOutcomeSubject, encoded)
 		if publishErr == nil {
 			return nil
 		}
@@ -356,10 +363,7 @@ func (w *graphRoleWorker) persistAndPublishTerminal(ctx context.Context, ledgerP
 	if err := w.storeTerminalOutcome(ctx, ledgerPath, command.DeliveryKey, outcome, encoded); err != nil {
 		return err
 	}
-	if err := w.nc.Publish(graphRoleOutcomeSubject, encoded); err != nil {
-		return err
-	}
-	return w.nc.Flush()
+	return w.publishMessage(ctx, graphRoleOutcomeSubject, encoded)
 }
 
 func (w *graphRoleWorker) publishOutcome(command multiagent.GraphRoleCommand, status event.OutcomeStatus, sequence int64, payload any) error {
@@ -367,8 +371,21 @@ func (w *graphRoleWorker) publishOutcome(command multiagent.GraphRoleCommand, st
 	if err != nil {
 		return err
 	}
-	if err := w.nc.Publish(graphRoleOutcomeSubject, data); err != nil {
+	return w.publishMessage(context.Background(), graphRoleOutcomeSubject, data)
+}
+
+func (w *graphRoleWorker) publishMessage(ctx context.Context, subject string, payload []byte) error {
+	if w.publish != nil {
+		return w.publish(ctx, subject, payload)
+	}
+	if w.nc == nil || !w.nc.IsConnected() {
+		return errors.New("graph role NATS publisher is disconnected")
+	}
+	if err := w.nc.Publish(subject, payload); err != nil {
 		return err
+	}
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		return w.nc.FlushWithContext(ctx)
 	}
 	return w.nc.Flush()
 }
