@@ -272,6 +272,38 @@ func TestDelegationJoinValidateRejectsDuplicateLaneAndMismatchedJoin(t *testing.
 	}
 }
 
+func TestDelegationJoinRoutesChildProposalToParentApproval(t *testing.T) {
+	runtime, env, dispatch, source := newWaitingDelegationRuntime(t, "run-graph-delegation")
+	parentPayload, _ := json.Marshal(GraphRoleOutcome{Result: RoleRunResult{Outcome: TransitionOutcome("ok"), LocalIterations: 1, FanOut: validFanOutPlan()}})
+	source.outcomes = append(source.outcomes, matchingOutcome(dispatch.command, "parent-fanout", event.OutcomeSucceeded, 1, parentPayload))
+	if _, err := runtime.Resume(t.Context(), "run-graph-delegation"); err == nil {
+		t.Fatal("expected join wait")
+	}
+	record, err := env.store.Load(t.Context(), "run-graph-delegation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.outcomes = nil
+	for i, child := range record.DelegationJoin.Children {
+		result := RoleRunResult{Outcome: TransitionOutcome("ok"), LocalIterations: 1}
+		if child.Lane == FanOutImplementation {
+			result.Proposals = []ProposalReference{{ProposalID: "child-proposal", ApprovalID: "child-approval"}}
+		}
+		childPayload, _ := json.Marshal(GraphRoleOutcome{Result: result})
+		cmd := event.Command{EventID: child.CommandEventID, RunID: record.State.RunID, TaskID: child.ChildID, DelegationID: child.DelegationID, JoinID: child.JoinID, Lane: string(child.Lane), CorrelationID: child.CorrelationID, IdempotencyKey: child.DeliveryKey}
+		source.outcomes = append(source.outcomes, matchingOutcome(cmd, "child-proposal-"+string(rune('a'+i)), event.OutcomeSucceeded, 1, childPayload))
+	}
+	state, err := runtime.Resume(t.Context(), "run-graph-delegation")
+	var waitingErr *RunWaitingError
+	if !errors.As(err, &waitingErr) || state.Status != RunStatusPaused {
+		t.Fatalf("proposal state=%#v err=%v", state, err)
+	}
+	record, err = env.store.Load(t.Context(), "run-graph-delegation")
+	if err != nil || record.Waiting == nil || record.Waiting.Kind != "proposal_approval" || record.ApprovedTask == nil || len(record.ApprovedTask.Proposals) != 1 {
+		t.Fatalf("parent proposal checkpoint=%#v err=%v", record, err)
+	}
+}
+
 func cloneDelegationJoin(join *DelegationJoinState) *DelegationJoinState {
 	if join == nil {
 		return nil
