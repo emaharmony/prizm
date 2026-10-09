@@ -68,8 +68,8 @@ func NewDurableRuntime(
 		return nil, errors.New("multiagent: canonical event publisher is required")
 	}
 	if options.Delegation != nil && (strings.TrimSpace(options.Delegation.Subject) == "" ||
-		options.Delegation.Dispatcher == nil || options.Delegation.Outcomes == nil) {
-		return nil, errors.New("multiagent: delegated role execution requires subject, dispatcher, and outcome source")
+		options.Delegation.Dispatcher == nil || options.Delegation.Outcomes == nil || options.Delegation.Deadline <= 0) {
+		return nil, errors.New("multiagent: delegated role execution requires subject, dispatcher, outcome source, and positive deadline")
 	}
 	buffer := &durableEventBuffer{}
 	supervisor, err := NewSupervisor(
@@ -167,6 +167,17 @@ func (r *DurableRuntime) Resume(
 	}
 	if record.PendingDelegationOutcomeAck != "" {
 		record, err = r.ackDelegationOutcome(ctx, record, record.PendingDelegationOutcomeAck)
+		if err != nil {
+			return record.State, err
+		}
+	}
+	if record.Phase == CheckpointWaiting && record.Waiting != nil &&
+		record.Waiting.Kind == "delegation_outcome" && record.Waiting.DispatchPending {
+		if !r.now().UTC().Before(record.Waiting.Deadline) {
+			record, err = r.timeoutDelegation(ctx, record, "delegated role deadline exceeded before dispatch completed")
+			return record.State, err
+		}
+		record, err = r.dispatchPendingDelegation(ctx, record)
 		if err != nil {
 			return record.State, err
 		}

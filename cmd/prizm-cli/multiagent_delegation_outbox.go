@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
@@ -12,10 +13,13 @@ import (
 const (
 	graphRoleDelegationSubject  = "prizm.graph.role.delegation"
 	graphRoleDelegationDeadline = 30 * time.Minute
-	// graphRoleDelegationEnabledEnv remains opt-in until the CLI composes a
-	// durable publisher and graph-role worker. Accepting commands without that
-	// consumer leaves role runs paused until their deadline.
-	graphRoleDelegationEnabledEnv = "PRIZM_GRAPH_ROLE_DELEGATION"
+	// graphRoleDelegationRequestedEnv deliberately fails until the CLI composes
+	// a durable publisher and graph-role worker. Accepting commands without
+	// that consumer leaves role runs paused until their deadline.
+	graphRoleDelegationRequestedEnv = "PRIZM_GRAPH_ROLE_DELEGATION"
+	// graphRoleDelegationTestOnlyEnv permits deterministic composition tests to
+	// inject correlated durable outcomes. It is not a production feature flag.
+	graphRoleDelegationTestOnlyEnv = "PRIZM_GRAPH_ROLE_DELEGATION_TEST_ONLY"
 )
 
 // graphDelegationOutbox is the CLI composition adapter between the graph's
@@ -32,12 +36,15 @@ func (o graphDelegationOutbox) Dispatch(ctx context.Context, subject string, com
 }
 
 func newGraphDelegationOutbox(path string) (graphDelegationOutbox, *multiagent.DurableDelegationOptions, error) {
+	if os.Getenv(graphRoleDelegationRequestedEnv) == "1" && os.Getenv(graphRoleDelegationTestOnlyEnv) != "1" {
+		return graphDelegationOutbox{}, nil, fmt.Errorf("graph role delegation is unavailable: no durable graph-role worker is composed")
+	}
 	outbox, err := event.NewSQLiteOutbox(path)
 	if err != nil {
 		return graphDelegationOutbox{}, nil, err
 	}
 	adapter := graphDelegationOutbox{SQLiteOutbox: outbox}
-	if os.Getenv(graphRoleDelegationEnabledEnv) != "1" {
+	if os.Getenv(graphRoleDelegationTestOnlyEnv) != "1" {
 		return adapter, nil, nil
 	}
 	return adapter, &multiagent.DurableDelegationOptions{

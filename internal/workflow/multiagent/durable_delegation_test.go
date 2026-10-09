@@ -12,10 +12,11 @@ import (
 )
 
 type recordingDelegationDispatcher struct {
-	store   DurableRunStore
-	command event.Command
-	called  bool
-	err     error
+	store    DurableRunStore
+	command  event.Command
+	commands []event.Command
+	called   bool
+	err      error
 }
 
 func (d *recordingDelegationDispatcher) Dispatch(ctx context.Context, _ string, cmd event.Command) error {
@@ -29,6 +30,7 @@ func (d *recordingDelegationDispatcher) Dispatch(ctx context.Context, _ string, 
 	}
 	d.called = true
 	d.command = cmd
+	d.commands = append(d.commands, cmd)
 	return d.err
 }
 
@@ -174,6 +176,97 @@ func TestDurableGraphDelegationRejectsDuplicateSequenceAfterPersistingFirst(t *t
 	}
 }
 
+func TestDurableGraphDelegationRetriesPendingDispatchWithSameCommand(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	dispatch := &recordingDelegationDispatcher{store: env.store, err: errors.New("publish interrupted")}
+	source := &recordingOutcomeSource{store: env.store}
+	runtime := newGraphDelegationRuntime(t, env, dispatch, source)
+	request := RunRequest{RunID: "run-graph-delegation", Task: TaskReference{ID: "parent-task", Description: "retry dispatch"}}
+	if _, err := runtime.Run(t.Context(), request); err == nil {
+		t.Fatal("Run() should report interrupted dispatch")
+	}
+	stored, err := env.store.Load(t.Context(), request.RunID)
+	if err != nil || stored.Waiting == nil || !stored.Waiting.DispatchPending {
+		t.Fatalf("pending dispatch checkpoint=%#v err=%v", stored, err)
+	}
+	first := dispatch.command
+	dispatch.err = nil
+	_, err = runtime.Resume(t.Context(), request.RunID)
+	var waitingErr *RunWaitingError
+	if !errors.As(err, &waitingErr) || len(dispatch.commands) != 2 ||
+		dispatch.commands[1].EventID != first.EventID || dispatch.commands[1].IdempotencyKey != first.IdempotencyKey ||
+		string(dispatch.commands[1].Payload) != string(first.Payload) || !dispatch.commands[1].Deadline.Equal(first.Deadline) {
+		t.Fatalf("Resume() err=%v commands=%#v", err, dispatch.commands)
+	}
+	stored, err = env.store.Load(t.Context(), request.RunID)
+	if err != nil || stored.Waiting.DispatchPending {
+		t.Fatalf("completed dispatch checkpoint=%#v err=%v", stored, err)
+	}
+}
+
+func TestDurableGraphDelegationRejectsChildProposalsAsGovernanceFailure(t *testing.T) {
+	runtime, env, dispatch, source := newWaitingDelegationRuntime(t, "run-graph-delegation")
+	payload, _ := json.Marshal(delegatedRoleOutcome{Result: RoleRunResult{Outcome: TransitionOutcome("ok"), LocalIterations: 1,
+		Proposals: []ProposalReference{{ProposalID: "proposal-child", ApprovalID: "approval-child"}}}})
+	source.outcomes = []event.Outcome{matchingOutcome(dispatch.command, "terminal-proposal", event.OutcomeSucceeded, 1, payload)}
+
+	state, err := runtime.Resume(t.Context(), "run-graph-delegation")
+	if err == nil || state.Status != RunStatusFailed || len(source.acked) != 1 {
+		t.Fatalf("Resume() state=%#v err=%v acknowledged=%v", state, err, source.acked)
+	}
+	stored, loadErr := env.store.Load(t.Context(), "run-graph-delegation")
+	if loadErr != nil || stored.Phase != CheckpointTerminal || stored.Failure == nil || stored.Failure.Kind != "delegation_governance" {
+		t.Fatalf("governance checkpoint=%#v loadErr=%v", stored, loadErr)
+	}
+}
+
+func TestDurableGraphDelegationDeadlineFailsOnceWithoutRedispatch(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	dispatch := &recordingDelegationDispatcher{store: env.store}
+	source := &recordingOutcomeSource{store: env.store}
+	now := time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
+	runtime := newGraphDelegationRuntimeWithClock(t, env, dispatch, source, func() time.Time { return now })
+	request := RunRequest{RunID: "run-graph-delegation", Task: TaskReference{ID: "parent-task", Description: "deadline"}}
+	if _, err := runtime.Run(t.Context(), request); err == nil {
+		t.Fatal("Run() should wait for delegated outcome")
+	}
+	if dispatch.command.Deadline.IsZero() || !dispatch.command.Deadline.Equal(now.Add(time.Minute)) {
+		t.Fatalf("command deadline=%v", dispatch.command.Deadline)
+	}
+	now = now.Add(time.Minute)
+	state, err := runtime.Resume(t.Context(), request.RunID)
+	if err == nil || state.Status != RunStatusFailed {
+		t.Fatalf("Resume() state=%#v err=%v", state, err)
+	}
+	stored, loadErr := env.store.Load(t.Context(), request.RunID)
+	if loadErr != nil || stored.Failure == nil || stored.Failure.Kind != "delegation_timeout" || len(dispatch.commands) != 1 {
+		t.Fatalf("timeout checkpoint=%#v dispatches=%d loadErr=%v", stored, len(dispatch.commands), loadErr)
+	}
+	state, err = runtime.Resume(t.Context(), request.RunID)
+	if err != nil || state.Status != RunStatusFailed || len(dispatch.commands) != 1 {
+		t.Fatalf("terminal Resume() state=%#v err=%v dispatches=%d", state, err, len(dispatch.commands))
+	}
+}
+
+func TestNewDurableRuntimeRequiresPositiveDelegationDeadline(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	graph, diagnostics, err := Compile(baseDef(), nil, CompileOptions{})
+	if err != nil {
+		t.Fatalf("compile graph: %v (%s)", err, diagnostics.Error())
+	}
+	for _, deadline := range []time.Duration{0, -time.Second} {
+		runtime, err := NewDurableRuntime(graph, &countingRoleRunner{}, env.store, env.claimer, env.events, DurableRuntimeOptions{
+			Delegation: &DurableDelegationOptions{
+				Subject: "graph.roles", Dispatcher: &recordingDelegationDispatcher{store: env.store},
+				Outcomes: &recordingOutcomeSource{store: env.store}, Deadline: deadline,
+			},
+		})
+		if err == nil || runtime != nil {
+			t.Fatalf("NewDurableRuntime() deadline=%v runtime=%v err=%v", deadline, runtime, err)
+		}
+	}
+}
+
 func newWaitingDelegationRuntime(t *testing.T, runID string) (*DurableRuntime, durableTestEnvironment, *recordingDelegationDispatcher, *recordingOutcomeSource) {
 	t.Helper()
 	env := newDurableTestEnvironment(t)
@@ -196,14 +289,21 @@ func matchingOutcome(cmd event.Command, id string, status event.OutcomeStatus, s
 }
 
 func newGraphDelegationRuntime(t *testing.T, env durableTestEnvironment, dispatch DelegationDispatcher, source DelegationOutcomeSource) *DurableRuntime {
+	return newGraphDelegationRuntimeWithClock(t, env, dispatch, source, func() time.Time {
+		return time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
+	})
+}
+
+func newGraphDelegationRuntimeWithClock(t *testing.T, env durableTestEnvironment, dispatch DelegationDispatcher, source DelegationOutcomeSource, clock func() time.Time) *DurableRuntime {
 	t.Helper()
 	graph, diagnostics, err := Compile(baseDef(), nil, CompileOptions{})
 	if err != nil {
 		t.Fatalf("compile graph: %v (%s)", err, diagnostics.Error())
 	}
 	runtime, err := NewDurableRuntime(graph, &countingRoleRunner{}, env.store, env.claimer, env.events, DurableRuntimeOptions{
-		Clock:      func() time.Time { return time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC) },
-		Delegation: &DurableDelegationOptions{Subject: "graph.roles", Dispatcher: dispatch, Outcomes: source},
+		Clock: clock,
+		Delegation: &DurableDelegationOptions{Subject: "graph.roles", Dispatcher: dispatch, Outcomes: source,
+			Deadline: time.Minute},
 	})
 	if err != nil {
 		t.Fatalf("new durable runtime: %v", err)

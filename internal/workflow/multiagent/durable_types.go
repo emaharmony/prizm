@@ -61,6 +61,8 @@ type WaitingState struct {
 	CorrelationID       string    `json:"correlation_id,omitempty"`
 	LastOutcomeSequence int64     `json:"last_outcome_sequence,omitempty"`
 	StartedAt           time.Time `json:"started_at,omitempty"`
+	Deadline            time.Time `json:"deadline,omitempty"`
+	DispatchPending     bool      `json:"dispatch_pending,omitempty"`
 }
 
 // ProposalDecision is the approval authority's decision for one exact
@@ -206,7 +208,7 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 		if r.Waiting != nil && r.Waiting.Kind == "delegation_outcome" {
 			if strings.TrimSpace(r.Waiting.ChildID) == "" || strings.TrimSpace(r.Waiting.DelegationID) == "" ||
 				strings.TrimSpace(r.Waiting.DeliveryKey) == "" || strings.TrimSpace(r.Waiting.CommandEventID) == "" ||
-				strings.TrimSpace(r.Waiting.CorrelationID) == "" || r.Waiting.StartedAt.IsZero() {
+				strings.TrimSpace(r.Waiting.CorrelationID) == "" || r.Waiting.StartedAt.IsZero() || r.Waiting.Deadline.IsZero() {
 				problems = append(problems, "delegation outcome wait requires exact child, delegation, delivery, command, correlation, and start identity")
 			}
 		}
@@ -287,6 +289,7 @@ type DurableDelegationOptions struct {
 	Subject    string
 	Dispatcher DelegationDispatcher
 	Outcomes   DelegationOutcomeSource
+	Deadline   time.Duration
 }
 
 // ExecutionClaim is exclusive ownership of one run.

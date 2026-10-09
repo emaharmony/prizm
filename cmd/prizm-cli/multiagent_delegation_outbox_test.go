@@ -25,7 +25,8 @@ func (graphInlineTestRunner) RunRole(context.Context, multiagent.RoleRunRequest)
 }
 
 func TestCLIGraphRunUsesInlineRoleRunnerWhileGraphDelegationIsDisabled(t *testing.T) {
-	t.Setenv(graphRoleDelegationEnabledEnv, "")
+	t.Setenv(graphRoleDelegationRequestedEnv, "")
+	t.Setenv(graphRoleDelegationTestOnlyEnv, "")
 	ctx := t.Context()
 	root := t.TempDir()
 	runDir := filepath.Join(root, "runs")
@@ -74,8 +75,18 @@ func TestCLIGraphRunUsesInlineRoleRunnerWhileGraphDelegationIsDisabled(t *testin
 	}
 }
 
+func TestNewGraphDelegationOutboxRejectsProductionEnablementWithoutWorker(t *testing.T) {
+	t.Setenv(graphRoleDelegationRequestedEnv, "1")
+	t.Setenv(graphRoleDelegationTestOnlyEnv, "")
+	_, _, err := newGraphDelegationOutbox(filepath.Join(t.TempDir(), "multiagent.db"))
+	if err == nil || err.Error() != "graph role delegation is unavailable: no durable graph-role worker is composed" {
+		t.Fatalf("production graph delegation enablement error=%v", err)
+	}
+}
+
 func TestCLIGraphRunDelegatesAndResumesThroughDurableOutboxAfterRestart(t *testing.T) {
-	t.Setenv(graphRoleDelegationEnabledEnv, "1")
+	t.Setenv(graphRoleDelegationRequestedEnv, "")
+	t.Setenv(graphRoleDelegationTestOnlyEnv, "1")
 	ctx := t.Context()
 	root := t.TempDir()
 	runDir := filepath.Join(root, "runs")

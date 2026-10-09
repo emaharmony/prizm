@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/emaharmony/prizm/internal/event"
 )
@@ -24,24 +23,12 @@ type delegatedRoleOutcome struct {
 }
 
 func (r *DurableRuntime) dispatchDelegatedRole(ctx context.Context, record DurableRun) (DurableRun, error) {
-	if r.delegation.Dispatcher == nil || r.delegation.Outcomes == nil || strings.TrimSpace(r.delegation.Subject) == "" {
-		return record, errors.New("multiagent: delegated role execution requires subject, dispatcher, and outcome source")
-	}
 	role := record.State.CurrentRole
 	roleState := record.State.RoleStates[role]
 	childID := fmt.Sprintf("%s:%s:%d", record.State.CurrentTask.ID, role, roleState.Visits)
 	delegationID := "graph:" + record.ActiveExecutionKey
 	deliveryKey := delegationID + ":0"
 	correlationID := record.State.RunID + ":" + record.ActiveExecutionKey
-	payload, err := json.Marshal(delegatedRolePayload{ChildID: childID, Role: role, Task: record.State.CurrentTask, ExecutionKey: record.ActiveExecutionKey})
-	if err != nil {
-		return record, fmt.Errorf("multiagent: marshal delegated role: %w", err)
-	}
-	cmd := event.Command{EventID: event.CommandEventID(deliveryKey), Type: delegatedRoleCommandType,
-		RunID: record.State.RunID, TaskID: childID, DelegationID: delegationID,
-		CorrelationID: correlationID, IdempotencyKey: deliveryKey,
-		SchemaVersion: event.CommandSchemaVersion, Payload: payload}
-
 	now := r.now().UTC()
 	roleState.Status = RoleStatusWaiting
 	roleState.UpdatedAt = now
@@ -51,16 +38,43 @@ func (r *DurableRuntime) dispatchDelegatedRole(ctx context.Context, record Durab
 	record.Phase = CheckpointWaiting
 	record.Waiting = &WaitingState{Kind: "delegation_outcome", Reason: "waiting for delegated role outcome",
 		SafeToRetry: false, Since: now, ChildID: childID, DelegationID: delegationID,
-		DeliveryKey: deliveryKey, CommandEventID: cmd.EventID, CorrelationID: correlationID, StartedAt: now}
+		DeliveryKey: deliveryKey, CommandEventID: event.CommandEventID(deliveryKey), CorrelationID: correlationID,
+		StartedAt: now, Deadline: now.Add(r.delegation.Deadline), DispatchPending: true}
 	r.supervisor.emitRun(event.EventMultiAgentRunPaused, record.State, record.Waiting.Reason)
-	record, err = r.checkpoint(ctx, record)
+	record, err := r.checkpoint(ctx, record)
 	if err != nil {
 		return record, err
 	}
+	record, err = r.dispatchPendingDelegation(ctx, record)
+	if err != nil {
+		return record, err
+	}
+	return record, waitingError(record)
+}
+
+func (r *DurableRuntime) dispatchPendingDelegation(ctx context.Context, record DurableRun) (DurableRun, error) {
+	waiting := record.Waiting
+	if waiting == nil || waiting.Kind != "delegation_outcome" || !waiting.DispatchPending {
+		return record, errors.New("multiagent: no pending graph delegation dispatch")
+	}
+	payload, err := json.Marshal(delegatedRolePayload{ChildID: waiting.ChildID, Role: record.State.CurrentRole,
+		Task: record.State.CurrentTask, ExecutionKey: record.ActiveExecutionKey})
+	if err != nil {
+		return record, fmt.Errorf("multiagent: marshal delegated role: %w", err)
+	}
+	cmd := event.Command{EventID: waiting.CommandEventID, Type: delegatedRoleCommandType,
+		RunID: record.State.RunID, TaskID: waiting.ChildID, DelegationID: waiting.DelegationID,
+		CorrelationID: waiting.CorrelationID, IdempotencyKey: waiting.DeliveryKey, Deadline: waiting.Deadline,
+		SchemaVersion: event.CommandSchemaVersion, Payload: payload}
 	if err := r.delegation.Dispatcher.Dispatch(ctx, r.delegation.Subject, cmd); err != nil {
 		return record, fmt.Errorf("multiagent: dispatch delegated role: %w", err)
 	}
-	return record, waitingError(record)
+	waiting.DispatchPending = false
+	record, err = r.checkpoint(ctx, record)
+	if err != nil {
+		return record, fmt.Errorf("multiagent: checkpoint delegated role dispatch: %w", err)
+	}
+	return record, nil
 }
 
 func (r *DurableRuntime) resumeDelegation(ctx context.Context, record DurableRun) (DurableRun, error) {
@@ -72,12 +86,15 @@ func (r *DurableRuntime) resumeDelegation(ctx context.Context, record DurableRun
 		return record, fmt.Errorf("multiagent: load delegation outcomes: %w", err)
 	}
 	if len(outcomes) == 0 {
-		return record, nil
+		return r.expireDelegation(ctx, record)
 	}
 	waiting := record.Waiting
 	for _, outcome := range outcomes {
 		if err := matchDelegationOutcome(record.State.RunID, waiting, outcome); err != nil {
 			return record, &RecoveryFailedError{RunID: record.State.RunID, Cause: err}
+		}
+		if outcome.OccurredAt.After(waiting.Deadline) {
+			return r.timeoutDelegation(ctx, record, "delegated role outcome arrived after deadline")
 		}
 		if outcome.Sequence <= waiting.LastOutcomeSequence {
 			return record, &RecoveryFailedError{RunID: record.State.RunID, Cause: fmt.Errorf("stale or duplicate delegation outcome sequence %d", outcome.Sequence)}
@@ -107,6 +124,26 @@ func (r *DurableRuntime) resumeDelegation(ctx context.Context, record DurableRun
 		if err := validateRoleRunResult(r.supervisor.graph, decoded.Result); err != nil {
 			return record, &RecoveryFailedError{RunID: record.State.RunID, Cause: fmt.Errorf("invalid delegated role result: %w", err)}
 		}
+		if len(decoded.Result.Proposals) != 0 {
+			role := record.State.CurrentRole
+			cause := errors.New("delegated role result contains mutation proposals that require parent-owned approval")
+			state, terminalErr := r.supervisor.failRole(record.State, role, cause)
+			record.State = state
+			record.Phase = CheckpointTerminal
+			record.Failure = persistedFailure("delegation_governance", terminalErr, r.now())
+			record.PendingTransition = nil
+			record.Waiting = nil
+			record.PendingDelegationOutcomeAck = outcome.EventID
+			record, err = r.checkpoint(ctx, record)
+			if err != nil {
+				return record, err
+			}
+			record, err = r.ackDelegationOutcome(ctx, record, outcome.EventID)
+			if err != nil {
+				return record, err
+			}
+			return record, terminalErr
+		}
 		role := record.State.CurrentRole
 		roleConfig, _ := r.supervisor.graph.RoleConfig(role)
 		record.State.Status = RunStatusRunning
@@ -122,7 +159,33 @@ func (r *DurableRuntime) resumeDelegation(ctx context.Context, record DurableRun
 		}
 		return r.ackDelegationOutcome(ctx, record, outcome.EventID)
 	}
+	return r.expireDelegation(ctx, record)
+}
+
+func (r *DurableRuntime) expireDelegation(ctx context.Context, record DurableRun) (DurableRun, error) {
+	if record.Waiting != nil && !r.now().UTC().Before(record.Waiting.Deadline) {
+		return r.timeoutDelegation(ctx, record, "delegated role deadline exceeded")
+	}
 	return record, nil
+}
+
+func (r *DurableRuntime) timeoutDelegation(ctx context.Context, record DurableRun, reason string) (DurableRun, error) {
+	return r.failDelegation(ctx, record, "delegation_timeout", errors.New(reason))
+}
+
+func (r *DurableRuntime) failDelegation(ctx context.Context, record DurableRun, kind string, cause error) (DurableRun, error) {
+	role := record.State.CurrentRole
+	state, terminalErr := r.supervisor.failRole(record.State, role, cause)
+	record.State = state
+	record.Phase = CheckpointTerminal
+	record.Failure = persistedFailure(kind, terminalErr, r.now())
+	record.PendingTransition = nil
+	record.Waiting = nil
+	record, checkpointErr := r.checkpoint(ctx, record)
+	if checkpointErr != nil {
+		return record, checkpointErr
+	}
+	return record, terminalErr
 }
 
 func (r *DurableRuntime) ackDelegationOutcome(ctx context.Context, record DurableRun, eventID string) (DurableRun, error) {
