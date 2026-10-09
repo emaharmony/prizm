@@ -68,13 +68,14 @@ func (m referenceWorkflowManifest) registryBacked() bool {
 }
 
 type referenceRuntime struct {
-	runtime *multiagent.DurableRuntime
-	store   *multiagent.SQLiteDurableRunStore
-	events  *event.SQLiteEventStore
+	runtime    *multiagent.DurableRuntime
+	store      *multiagent.SQLiteDurableRunStore
+	events     *event.SQLiteEventStore
+	delegation graphDelegationOutbox
 }
 
 func (r *referenceRuntime) close() error {
-	return errors.Join(r.store.Close(), r.events.Close())
+	return errors.Join(r.store.Close(), r.events.Close(), r.delegation.Close())
 }
 
 func executeReferenceWorkflowRun(inputFile, runDir, configPath string) error {
@@ -415,6 +416,12 @@ func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkfl
 		store.Close()
 		return nil, err
 	}
+	delegation, delegationOptions, err := newGraphDelegationOutbox(dbPath)
+	if err != nil {
+		store.Close()
+		eventStore.Close()
+		return nil, err
+	}
 	// Two convergence paths onto the same *multiagent.CompiledGraph: a legacy
 	// reference-workflow manifest builds it from the embedded Definition via
 	// CompatAdaptDefinition (unchanged since PR4 — a signature retarget, not
@@ -434,6 +441,7 @@ func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkfl
 		if defErr != nil {
 			store.Close()
 			eventStore.Close()
+			delegation.Close()
 			return nil, fmt.Errorf("open definition registry for run %s: %w", manifest.RunID, defErr)
 		}
 		reg, getErr := defStore.Get(context.Background(), manifest.WorkflowID, manifest.WorkflowVersion)
@@ -441,11 +449,13 @@ func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkfl
 		if getErr != nil {
 			store.Close()
 			eventStore.Close()
+			delegation.Close()
 			return nil, fmt.Errorf("resolve registry definition for run %s: %w", manifest.RunID, getErr)
 		}
 		if closeErr != nil {
 			store.Close()
 			eventStore.Close()
+			delegation.Close()
 			return nil, fmt.Errorf("close definition registry for run %s: %w", manifest.RunID, closeErr)
 		}
 		graph = reg.Graph
@@ -455,6 +465,7 @@ func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkfl
 		if err != nil {
 			store.Close()
 			eventStore.Close()
+			delegation.Close()
 			return nil, err
 		}
 	}
@@ -472,14 +483,15 @@ func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkfl
 	runtime, err := multiagent.NewDurableRuntime(
 		graph, runner, store,
 		multiagent.FileRunClaimer{Root: runDir}, eventStore,
-		multiagent.DurableRuntimeOptions{Interaction: interaction, Reflection: reflection, Memory: reflectionMemory, Proposals: proposals},
+		multiagent.DurableRuntimeOptions{Interaction: interaction, Reflection: reflection, Memory: reflectionMemory, Proposals: proposals, Delegation: delegationOptions},
 	)
 	if err != nil {
 		store.Close()
 		eventStore.Close()
+		delegation.Close()
 		return nil, err
 	}
-	return &referenceRuntime{runtime: runtime, store: store, events: eventStore}, nil
+	return &referenceRuntime{runtime: runtime, store: store, events: eventStore, delegation: delegation}, nil
 }
 
 type unavailableRoleRunner struct{}
