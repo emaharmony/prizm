@@ -406,6 +406,17 @@ func openInspectionReferenceRuntime(runDir string, manifest referenceWorkflowMan
 }
 
 func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkflowManifest, runner multiagent.RoleRunner, interaction *multiagent.InteractionScheduler, proposals multiagent.ProposalLifecycle) (*referenceRuntime, error) {
+	return openReferenceRuntimeWithInteractionForComposition(runDir, manifest, runner, interaction, proposals, false)
+}
+
+// openReferenceRuntimeWithInteractionForDelegationTest is reserved for package
+// tests that inject graph delegation outcomes. Production composition must keep
+// graph delegation disabled until a durable worker is available.
+func openReferenceRuntimeWithInteractionForDelegationTest(runDir string, manifest referenceWorkflowManifest, runner multiagent.RoleRunner, interaction *multiagent.InteractionScheduler, proposals multiagent.ProposalLifecycle) (*referenceRuntime, error) {
+	return openReferenceRuntimeWithInteractionForComposition(runDir, manifest, runner, interaction, proposals, true)
+}
+
+func openReferenceRuntimeWithInteractionForComposition(runDir string, manifest referenceWorkflowManifest, runner multiagent.RoleRunner, interaction *multiagent.InteractionScheduler, proposals multiagent.ProposalLifecycle, enableGraphDelegation bool) (*referenceRuntime, error) {
 	dbPath := filepath.Join(runDir, manifest.RunID, "multiagent.db")
 	store, err := multiagent.NewSQLiteDurableRunStore(dbPath)
 	if err != nil {
@@ -416,7 +427,11 @@ func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkfl
 		store.Close()
 		return nil, err
 	}
-	delegation, delegationOptions, err := newGraphDelegationOutbox(dbPath)
+	newDelegationOutbox := newGraphDelegationOutbox
+	if enableGraphDelegation {
+		newDelegationOutbox = newGraphDelegationOutboxForTest
+	}
+	delegation, delegationOptions, err := newDelegationOutbox(dbPath)
 	if err != nil {
 		store.Close()
 		eventStore.Close()

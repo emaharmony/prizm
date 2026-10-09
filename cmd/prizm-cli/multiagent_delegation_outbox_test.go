@@ -26,7 +26,6 @@ func (graphInlineTestRunner) RunRole(context.Context, multiagent.RoleRunRequest)
 
 func TestCLIGraphRunUsesInlineRoleRunnerWhileGraphDelegationIsDisabled(t *testing.T) {
 	t.Setenv(graphRoleDelegationRequestedEnv, "")
-	t.Setenv(graphRoleDelegationTestOnlyEnv, "")
 	ctx := t.Context()
 	root := t.TempDir()
 	runDir := filepath.Join(root, "runs")
@@ -77,7 +76,6 @@ func TestCLIGraphRunUsesInlineRoleRunnerWhileGraphDelegationIsDisabled(t *testin
 
 func TestNewGraphDelegationOutboxRejectsProductionEnablementWithoutWorker(t *testing.T) {
 	t.Setenv(graphRoleDelegationRequestedEnv, "1")
-	t.Setenv(graphRoleDelegationTestOnlyEnv, "")
 	_, _, err := newGraphDelegationOutbox(filepath.Join(t.TempDir(), "multiagent.db"))
 	if err == nil || err.Error() != "graph role delegation is unavailable: no durable graph-role worker is composed" {
 		t.Fatalf("production graph delegation enablement error=%v", err)
@@ -86,7 +84,6 @@ func TestNewGraphDelegationOutboxRejectsProductionEnablementWithoutWorker(t *tes
 
 func TestCLIGraphRunDelegatesAndResumesThroughDurableOutboxAfterRestart(t *testing.T) {
 	t.Setenv(graphRoleDelegationRequestedEnv, "")
-	t.Setenv(graphRoleDelegationTestOnlyEnv, "1")
 	ctx := t.Context()
 	root := t.TempDir()
 	runDir := filepath.Join(root, "runs")
@@ -128,7 +125,7 @@ func TestCLIGraphRunDelegatesAndResumesThroughDurableOutboxAfterRestart(t *testi
 		RunID:         runID, WorkflowID: registered.WorkflowID, WorkflowVersion: registered.Version,
 		DefinitionDBPath: definitionDB,
 	}
-	first, err := openReferenceRuntimeWithInteraction(runDir, manifest, graphDelegationTestRunner{}, nil, nil)
+	first, err := openReferenceRuntimeWithInteractionForDelegationTest(runDir, manifest, graphDelegationTestRunner{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +146,7 @@ func TestCLIGraphRunDelegatesAndResumesThroughDurableOutboxAfterRestart(t *testi
 		t.Fatal(err)
 	}
 
-	restarted, err := openReferenceRuntimeWithInteraction(runDir, manifest, graphDelegationTestRunner{}, nil, nil)
+	restarted, err := openReferenceRuntimeWithInteractionForDelegationTest(runDir, manifest, graphDelegationTestRunner{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -722,9 +722,9 @@ it with a durable intake.
   `workflow/v2` delegation delivery and outcome acknowledgement.
 - Kept production canonical-graph delegation disabled. A production request via
   `PRIZM_GRAPH_ROLE_DELEGATION=1` now fails fast because no durable graph-role
-  publisher and worker are composed. `PRIZM_GRAPH_ROLE_DELEGATION_TEST_ONLY=1`
-  exists only for deterministic composition tests that inject correlated
-  outcomes; it is not a production feature flag.
+  publisher and worker are composed. Deterministic composition tests inject
+  correlated outcomes only through an unexported package-test helper; no
+  environment switch can activate no-worker graph delegation in production.
 - The existing sub-agent worker cannot safely consume graph commands: it accepts
   legacy task packets, while graph roles require the parent-owned profile,
   workspace/worktree, authorization, proposal lifecycle, validation, and
