@@ -498,6 +498,13 @@ func (d Dispatcher) DispatchOne(ctx context.Context) (bool, error) {
 		if ferr != nil {
 			return true, ferr
 		}
+		if traces, reportErr := d.Outbox.Report(ctx, item.Command.RunID); reportErr == nil {
+			for _, trace := range traces {
+				if trace.Command.IdempotencyKey == item.Command.IdempotencyKey && len(trace.Outcomes) > 0 && trace.Outcomes[len(trace.Outcomes)-1].Status.Terminal() {
+					return true, nil
+				}
+			}
+		}
 		return true, err
 	}
 	return true, d.Outbox.MarkDelivered(ctx, item.Command.IdempotencyKey)

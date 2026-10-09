@@ -302,3 +302,30 @@ func TestTerminalFailureKeepsWorkerAcceptanceRecoverable(t *testing.T) {
 		t.Fatalf("accepted command must be redeliverable after publisher failure: retry=%+v err=%v", retry, err)
 	}
 }
+
+func TestDispatcherTreatsDurableTerminalAsDeliveredAfterPublishError(t *testing.T) {
+	box, err := NewSQLiteOutbox(filepath.Join(t.TempDir(), "outbox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer box.Close()
+	cmd := testCommand("terminal-proves-delivery")
+	if _, err := box.Accept(t.Context(), "s", cmd); err != nil {
+		t.Fatal(err)
+	}
+	terminal := Outcome{EventID: outcomeEventID(cmd.IdempotencyKey, OutcomeFailed), CommandEventID: cmd.EventID,
+		RunID: cmd.RunID, TaskID: cmd.TaskID, DelegationID: cmd.DelegationID, CorrelationID: cmd.CorrelationID,
+		CausationID: cmd.EventID, DeliveryKey: cmd.IdempotencyKey, Status: OutcomeFailed, Sequence: 2,
+		OccurredAt: time.Now().UTC(), Payload: json.RawMessage(`{"message":"worker failed"}`)}
+	if inserted, err := box.RecordOutcome(t.Context(), terminal); err != nil || !inserted {
+		t.Fatalf("terminal inserted=%v err=%v", inserted, err)
+	}
+	d := Dispatcher{Outbox: box, Publisher: &recordingPublisher{fail: true}, Lease: time.Second, MaxAttempts: 1, RetryAfter: time.Second}
+	if handled, err := d.DispatchOne(t.Context()); !handled || err != nil {
+		t.Fatalf("durable terminal must prove delivery: handled=%v err=%v", handled, err)
+	}
+	trace, err := box.Report(t.Context(), cmd.RunID)
+	if err != nil || len(trace) != 1 || trace[0].State != DeliveryDelivered {
+		t.Fatalf("trace=%+v err=%v", trace, err)
+	}
+}

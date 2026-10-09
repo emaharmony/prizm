@@ -889,3 +889,30 @@ paths. Full-suite validation remains the next execution step.
 
 **Next action:** run the full Go suite, then rerun the isolated provider task
 only after this recovery path is committed.
+
+## 2026-10-09 — R1 Expired Accepted-Worker Closure
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- The graph-worker deadline scanner now reads only the canonical outbox command
+  and its trusted accepted ledger fact before producing one durable timed-out
+  terminal outcome for a worker that died after acceptance. The parent is then
+  woken to consume the terminal fact.
+- Resume consumes durable delegation outcomes before evaluating an interrupted
+  pending-dispatch checkpoint or deadline. A terminal worker outcome therefore
+  cannot be discarded by recovery ordering.
+- Dispatcher publication failures now return success when the outbox already
+  proves a terminal worker result; idempotency and strict terminal bytes remain
+  unchanged.
+
+**Evidence:** deterministic focused tests cover accepted-worker expiry,
+terminal-before-expired-pending-dispatch, and terminal proof after publisher
+failure using workspace-local Go cache paths.
+
+**Open risks:** the full CLI package currently has an unrelated ambient
+`TestCoreIdentityBlock_Build` model assertion failure. The configured provider
+acceptance run remains required before claiming the R1 gate.
+
+**Next action:** run the full suite in the provider acceptance environment,
+then inspect a live graph task for one accepted fact, one terminal fact, and a
+valid snapshot.

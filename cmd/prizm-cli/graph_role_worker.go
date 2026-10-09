@@ -128,8 +128,82 @@ func (w *graphRoleWorker) wakeExpired(ctx context.Context, now time.Time) {
 		if loadErr != nil || record.Waiting == nil || (record.Waiting.Kind != "delegation_outcome" && record.Waiting.Kind != "delegation_join") || now.Before(record.Waiting.Deadline) {
 			continue
 		}
+		// A worker can die after its accepted fact has been committed and before
+		// it records a terminal fact.  Resolve that durable claim before waking
+		// the runtime: otherwise Resume observes only an expired checkpoint and
+		// no command outcome is ever available to consume.
+		if record.Waiting.Kind == "delegation_outcome" {
+			if err := w.recoverExpiredOutcome(ctx, record.State.RunID, record.Waiting.DeliveryKey); err != nil {
+				log.Printf("[GRAPH-WORKER] recover expired %s: %v", record.Waiting.DeliveryKey, err)
+			}
+		}
 		w.resumeRun(record.State.RunID, "deadline wake")
 	}
+}
+
+// recoverExpiredOutcome resolves a durable accepted execution that outlived
+// its command deadline. It only trusts the canonical command and bytes in the
+// worker ledger, so an expired checkpoint cannot manufacture a terminal result
+// for a command the worker never accepted.
+func (w *graphRoleWorker) recoverExpiredOutcome(ctx context.Context, runID, key string) error {
+	ledgerPath := filepath.Join(w.runDir, runID, "multiagent.db")
+	box, err := event.NewSQLiteOutbox(ledgerPath)
+	if err != nil {
+		return err
+	}
+	item, err := box.Get(ctx, key)
+	closeErr := box.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	var command multiagent.GraphRoleCommand
+	if err := json.Unmarshal(item.Command.Payload, &command); err != nil {
+		return err
+	}
+	if command.DeliveryKey != item.Command.IdempotencyKey || command.CommandEventID != item.Command.EventID ||
+		command.RunID != item.Command.RunID || command.ChildID != item.Command.TaskID ||
+		command.DelegationID != item.Command.DelegationID || command.JoinID != item.Command.JoinID ||
+		string(command.Lane) != item.Command.Lane || command.CorrelationID != item.Command.CorrelationID ||
+		!command.Deadline.Equal(item.Command.Deadline) {
+		return errors.New("expired graph role command does not match canonical outbox row")
+	}
+
+	db, err := openGraphRoleLedger(ctx, ledgerPath)
+	if err != nil {
+		return err
+	}
+	var accepted, terminal []byte
+	err = db.QueryRowContext(ctx, `SELECT accepted_json,outcome_json FROM graph_role_executions WHERE delivery_key=?`, key).Scan(&accepted, &terminal)
+	closeErr = db.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if len(terminal) != 0 {
+		if err := w.recordTrustedOutcome(ctx, ledgerPath, terminal); err != nil {
+			return err
+		}
+		return w.publishMessage(ctx, graphRoleOutcomeSubject, terminal)
+	}
+	if len(accepted) == 0 {
+		return nil
+	}
+	outcome, encoded, err := w.buildOutcome(command, event.OutcomeTimedOut, 2, map[string]string{"message": "worker did not record a terminal outcome before command deadline"})
+	if err != nil {
+		return err
+	}
+	if err := w.storeTerminalOutcome(ctx, ledgerPath, key, outcome, encoded); err != nil {
+		return err
+	}
+	if err := w.recordTrustedOutcome(ctx, ledgerPath, encoded); err != nil {
+		return err
+	}
+	return w.publishMessage(ctx, graphRoleOutcomeSubject, encoded)
 }
 
 func (w *graphRoleWorker) resumeRun(runID, reason string) {

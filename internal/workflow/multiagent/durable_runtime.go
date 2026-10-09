@@ -171,6 +171,24 @@ func (r *DurableRuntime) Resume(
 			return record.State, err
 		}
 	}
+	// A terminal fact can be durable even when the dispatch checkpoint was
+	// interrupted. Consume facts before interpreting DispatchPending/deadline
+	// state so recovery never discards a completed worker result.
+	if record.Phase == CheckpointWaiting && record.Waiting != nil && record.Waiting.Kind == "delegation_outcome" && r.delegation != nil && r.delegation.Outcomes != nil {
+		outcomes, outcomeErr := r.delegation.Outcomes.PendingOutcomes(ctx, runID)
+		if outcomeErr != nil {
+			return record.State, outcomeErr
+		}
+		if len(outcomes) > 0 {
+			record, err = r.resumeDelegation(ctx, record)
+			if err != nil {
+				return record.State, err
+			}
+			if record.Phase == CheckpointWaiting {
+				return record.State, waitingError(record)
+			}
+		}
+	}
 	if record.Phase == CheckpointWaiting && record.Waiting != nil &&
 		record.Waiting.Kind == "delegation_outcome" && record.Waiting.DispatchPending {
 		if !r.now().UTC().Before(record.Waiting.Deadline) {

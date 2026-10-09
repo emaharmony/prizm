@@ -319,6 +319,42 @@ func TestDurableGraphDelegationDeadlineFailsOnceWithoutRedispatch(t *testing.T) 
 	}
 }
 
+func TestDurableGraphDelegationConsumesTerminalBeforeExpiredPendingDispatch(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	dispatch := &recordingDelegationDispatcher{store: env.store}
+	source := &recordingOutcomeSource{store: env.store}
+	now := time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
+	runtime := newGraphDelegationRuntimeWithClock(t, env, dispatch, source, func() time.Time { return now })
+	request := RunRequest{RunID: "run-graph-delegation", Task: TaskReference{ID: "parent-task", Description: "terminal first"}}
+	if _, err := runtime.Run(t.Context(), request); err == nil {
+		t.Fatal("Run() should wait for delegated outcome")
+	}
+	payload, err := json.Marshal(delegatedRoleOutcome{Result: RoleRunResult{Outcome: TransitionOutcome("ok"), LocalIterations: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.outcomes = []event.Outcome{
+		matchingOutcome(dispatch.command, "accepted-before-pending-dispatch", event.OutcomeAccepted, 1, nil),
+		matchingOutcome(dispatch.command, "terminal-before-pending-dispatch", event.OutcomeSucceeded, 2, payload),
+	}
+	stored, err := env.store.Load(t.Context(), request.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.Waiting.DispatchPending = true // model a crash before the dispatch-complete checkpoint.
+	if _, err := env.store.Checkpoint(t.Context(), stored.Revision, stored, nil); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	state, err := runtime.Resume(t.Context(), request.RunID)
+	if err != nil || state.Status != RunStatusCompleted {
+		t.Fatalf("Resume() state=%#v err=%v", state, err)
+	}
+	if len(dispatch.commands) != 1 {
+		t.Fatalf("terminal outcome must prevent redispatch, commands=%d", len(dispatch.commands))
+	}
+}
+
 func TestNewDurableRuntimeRequiresPositiveDelegationDeadline(t *testing.T) {
 	env := newDurableTestEnvironment(t)
 	graph, diagnostics, err := Compile(baseDef(), nil, CompileOptions{})

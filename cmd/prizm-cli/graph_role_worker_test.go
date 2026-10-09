@@ -210,7 +210,7 @@ func TestGraphRoleWorkerEmbeddedNATSPreservesWorkerTerminalDuringPublisherFailur
 		return errors.New("publisher flush failed after worker terminal")
 	})
 	dispatcher := event.Dispatcher{Outbox: box, Publisher: publisher, Lease: time.Minute, MaxAttempts: 1}
-	if processed, err := dispatcher.DispatchOne(t.Context()); !processed || err == nil {
+	if processed, err := dispatcher.DispatchOne(t.Context()); !processed || err != nil {
 		t.Fatalf("dispatch processed=%v err=%v", processed, err)
 	}
 	traces, err := box.Report(t.Context(), command.RunID)
@@ -390,6 +390,79 @@ func TestGraphRoleWorkerAutonomouslyWakesExpiredDelegation(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expired delegation was not woken")
+	}
+}
+
+func TestGraphRoleWorkerExpiryTerminatesAcceptedWorkerCrash(t *testing.T) {
+	runDir := t.TempDir()
+	runID := "run-accepted-worker-crash"
+	dir := filepath.Join(runDir, runID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dir, "multiagent.db")
+	store, err := multiagent.NewSQLiteDurableRunStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	events, err := event.NewSQLiteEventStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer events.Close()
+	box, err := event.NewSQLiteOutbox(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer box.Close()
+	graph, err := multiagent.CompatAdaptDefinition(multiagent.DefaultReferenceDefinition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := multiagent.NewDurableRuntime(graph, graphWorkerRoleRunner(func(context.Context, multiagent.RoleRunRequest) (multiagent.RoleRunResult, error) {
+		return multiagent.RoleRunResult{}, nil
+	}), store, multiagent.FileRunClaimer{Root: runDir}, events, multiagent.DurableRuntimeOptions{Delegation: &multiagent.DurableDelegationOptions{
+		Subject: graphRoleDelegationSubject, Dispatcher: graphWorkerOutboxDispatcher{box}, Outcomes: box, Deadline: 20 * time.Millisecond,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Run(t.Context(), multiagent.RunRequest{RunID: runID, Task: multiagent.TaskReference{ID: "task", Description: "wake"}}); err == nil {
+		t.Fatal("run should pause for delegated outcome")
+	}
+	traces, err := box.Report(t.Context(), runID)
+	if err != nil || len(traces) != 1 {
+		t.Fatalf("report=%+v err=%v", traces, err)
+	}
+	var command multiagent.GraphRoleCommand
+	if err := json.Unmarshal(traces[0].Command.Payload, &command); err != nil {
+		t.Fatal(err)
+	}
+	woke := make(chan string, 1)
+	worker := &graphRoleWorker{runDir: runDir, workerID: "worker-crashed", publish: func(context.Context, string, []byte) error { return nil }, resume: func(_ context.Context, got string) error {
+		woke <- got
+		return nil
+	}}
+	if action, _, err := worker.claimExecution(t.Context(), dbPath, command); err != nil || action != "execute" {
+		t.Fatalf("claim action=%q err=%v", action, err)
+	}
+	if err := worker.persistAcceptedAndPublish(t.Context(), dbPath, command); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	worker.wakeExpired(t.Context(), time.Now().UTC())
+	select {
+	case got := <-woke:
+		if got != runID {
+			t.Fatalf("woke run %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expired accepted worker was not woken")
+	}
+	trace := waitForGraphTerminal(t, runDir, runID, command.DeliveryKey)
+	if got := trace.Outcomes[len(trace.Outcomes)-1].Status; got != event.OutcomeTimedOut {
+		t.Fatalf("terminal status=%s want timed_out", got)
 	}
 }
 
