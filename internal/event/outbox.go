@@ -394,12 +394,22 @@ func (s *SQLiteOutbox) PendingOutcomes(ctx context.Context, runID string) ([]Out
 }
 
 func (s *SQLiteOutbox) MarkOutcomeConsumed(ctx context.Context, eventID string) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE command_outcomes SET consumed=1 WHERE event_id=?`, eventID)
+	res, err := s.db.ExecContext(ctx, `UPDATE command_outcomes SET consumed=1 WHERE event_id=? AND consumed=0`, eventID)
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		return errors.New("event outbox: outcome not found")
+	if n, _ := res.RowsAffected(); n == 1 {
+		return nil
+	}
+	var consumed int
+	if err := s.db.QueryRowContext(ctx, `SELECT consumed FROM command_outcomes WHERE event_id=?`, eventID).Scan(&consumed); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("event outbox: outcome not found")
+		}
+		return err
+	}
+	if consumed == 0 {
+		return errors.New("event outbox: outcome acknowledgement was not persisted")
 	}
 	return nil
 }

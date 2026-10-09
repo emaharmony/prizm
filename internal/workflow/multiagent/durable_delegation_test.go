@@ -40,6 +40,25 @@ type recordingOutcomeSource struct {
 	acked    []string
 }
 
+type acknowledgementCheckpointFailureStore struct {
+	DurableRunStore
+	armed  bool
+	failed bool
+}
+
+func (s *acknowledgementCheckpointFailureStore) Checkpoint(
+	ctx context.Context,
+	expectedRevision int64,
+	record DurableRun,
+	events []event.Event,
+) (DurableRun, error) {
+	if s.armed && !s.failed && record.PendingDelegationOutcomeAck == "" {
+		s.failed = true
+		return DurableRun{}, errInjectedCheckpoint
+	}
+	return s.DurableRunStore.Checkpoint(ctx, expectedRevision, record, events)
+}
+
 type outboxDelegationDispatcher struct {
 	outbox  *event.SQLiteOutbox
 	command event.Command
@@ -156,6 +175,49 @@ func TestDurableGraphDelegationReplaysAndAcknowledgesSQLiteOutboxOutcome(t *test
 	pending, err := box.PendingOutcomes(t.Context(), request.RunID)
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("pending outcomes=%v err=%v", pending, err)
+	}
+}
+
+func TestDurableGraphDelegationRecoversAfterOutcomeAcknowledgedBeforeCheckpoint(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	store := &acknowledgementCheckpointFailureStore{DurableRunStore: env.store}
+	box, err := event.NewSQLiteOutbox(filepath.Join(t.TempDir(), "delegation-outbox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = box.Close() })
+	dispatch := &outboxDelegationDispatcher{outbox: box}
+	runtime := newGraphDelegationRuntimeWithStore(t, env, store, dispatch, box, func() time.Time {
+		return time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
+	})
+	request := RunRequest{RunID: "run-graph-delegation", Task: TaskReference{ID: "parent-task", Description: "ack recovery"}}
+	if _, err := runtime.Run(t.Context(), request); err == nil {
+		t.Fatal("Run() should wait for delegated outcome")
+	}
+	payload, _ := json.Marshal(delegatedRoleOutcome{Result: RoleRunResult{Outcome: TransitionOutcome("ok"), LocalIterations: 1}})
+	terminal := matchingOutcome(dispatch.command, "sqlite-terminal-after-ack", event.OutcomeSucceeded, 1, payload)
+	if inserted, err := box.RecordOutcome(t.Context(), terminal); err != nil || !inserted {
+		t.Fatalf("record terminal inserted=%v err=%v", inserted, err)
+	}
+	store.armed = true
+	if _, err := runtime.Resume(t.Context(), request.RunID); !errors.Is(err, errInjectedCheckpoint) {
+		t.Fatalf("Resume() before acknowledgement checkpoint err=%v", err)
+	}
+	stored, err := env.store.Load(t.Context(), request.RunID)
+	if err != nil || stored.PendingDelegationOutcomeAck != terminal.EventID {
+		t.Fatalf("stored acknowledgement=%q err=%v", stored.PendingDelegationOutcomeAck, err)
+	}
+	pending, err := box.PendingOutcomes(t.Context(), request.RunID)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("consumed outcome pending=%v err=%v", pending, err)
+	}
+	state, err := runtime.Resume(t.Context(), request.RunID)
+	if err != nil || state.Status != RunStatusCompleted {
+		t.Fatalf("Resume() recovery state=%#v err=%v", state, err)
+	}
+	stored, err = env.store.Load(t.Context(), request.RunID)
+	if err != nil || stored.PendingDelegationOutcomeAck != "" {
+		t.Fatalf("cleared acknowledgement=%q err=%v", stored.PendingDelegationOutcomeAck, err)
 	}
 }
 
@@ -295,12 +357,16 @@ func newGraphDelegationRuntime(t *testing.T, env durableTestEnvironment, dispatc
 }
 
 func newGraphDelegationRuntimeWithClock(t *testing.T, env durableTestEnvironment, dispatch DelegationDispatcher, source DelegationOutcomeSource, clock func() time.Time) *DurableRuntime {
+	return newGraphDelegationRuntimeWithStore(t, env, env.store, dispatch, source, clock)
+}
+
+func newGraphDelegationRuntimeWithStore(t *testing.T, env durableTestEnvironment, store DurableRunStore, dispatch DelegationDispatcher, source DelegationOutcomeSource, clock func() time.Time) *DurableRuntime {
 	t.Helper()
 	graph, diagnostics, err := Compile(baseDef(), nil, CompileOptions{})
 	if err != nil {
 		t.Fatalf("compile graph: %v (%s)", err, diagnostics.Error())
 	}
-	runtime, err := NewDurableRuntime(graph, &countingRoleRunner{}, env.store, env.claimer, env.events, DurableRuntimeOptions{
+	runtime, err := NewDurableRuntime(graph, &countingRoleRunner{}, store, env.claimer, env.events, DurableRuntimeOptions{
 		Clock: clock,
 		Delegation: &DurableDelegationOptions{Subject: "graph.roles", Dispatcher: dispatch, Outcomes: source,
 			Deadline: time.Minute},

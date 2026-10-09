@@ -171,6 +171,34 @@ func TestOutboxOutcomeTraceRejectsDuplicateTerminalAndStaleRetry(t *testing.T) {
 	}
 }
 
+func TestMarkOutcomeConsumedIsIdempotentButRejectsUnknownOutcome(t *testing.T) {
+	box, err := NewSQLiteOutbox(filepath.Join(t.TempDir(), "outbox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer box.Close()
+	cmd := testCommand("ack-idempotent")
+	if _, err := box.Accept(t.Context(), "s", cmd); err != nil {
+		t.Fatal(err)
+	}
+	outcome := Outcome{EventID: "ack-idempotent-outcome", CommandEventID: cmd.EventID, RunID: cmd.RunID,
+		TaskID: cmd.TaskID, DelegationID: cmd.DelegationID, CorrelationID: cmd.CorrelationID,
+		CausationID: cmd.EventID, DeliveryKey: cmd.IdempotencyKey, Status: OutcomeAccepted,
+		Sequence: 1, OccurredAt: time.Now().UTC()}
+	if inserted, err := box.RecordOutcome(t.Context(), outcome); err != nil || !inserted {
+		t.Fatalf("record outcome inserted=%v err=%v", inserted, err)
+	}
+	if err := box.MarkOutcomeConsumed(t.Context(), outcome.EventID); err != nil {
+		t.Fatalf("first acknowledgement: %v", err)
+	}
+	if err := box.MarkOutcomeConsumed(t.Context(), outcome.EventID); err != nil {
+		t.Fatalf("duplicate acknowledgement: %v", err)
+	}
+	if err := box.MarkOutcomeConsumed(t.Context(), "unknown-outcome"); err == nil {
+		t.Fatal("unknown outcome acknowledgement succeeded")
+	}
+}
+
 func TestRecordOutcomeRejectsMismatchedIdentityAndProgressBeforeAccepted(t *testing.T) {
 	box, _ := NewSQLiteOutbox(filepath.Join(t.TempDir(), "outbox.db"))
 	defer box.Close()
