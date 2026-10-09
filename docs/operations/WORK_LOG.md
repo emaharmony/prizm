@@ -672,3 +672,20 @@ outage/recovery trace remains required.
 
 **Next action:** implement or adopt Recall's atomic idempotency contract, then
 run and retain a live outage/recovery trace with scoped replay evidence.
+
+## 2026-10-09 — R6 Process-Level Recall Outage and Restart Acceptance
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/pr86-recall-idempotency`, paired with Recall `codex/prizm-r6-capture-idempotency`
+
+- Started Recall from the installed `.venv` against a fresh SQLite database under the Recall worktree's `.tmp` directory, with embeddings, chunking, CAG, and NATS disabled for deterministic acceptance. Health returned HTTP 200 and migration 14 (`capture_idempotency`) applied.
+- A separate Go harness used Prizm's real `memory.Facade`, SQLite event store, and `remembrance.ScopedMemoryBackend`. With Recall unavailable, a formally scoped capture returned local fallback and persisted its pending intent. A fresh process reconciled it after Recall startup to one synced terminal fact.
+- Re-running reconciliation after a Recall process restart produced no duplicate remote record. A second owner/project/task scope reused the producer key but produced a distinct local and remote capture, proving scope namespacing.
+- An injected event-store failure after remote success left the local sync pending; a later process replayed the stable key and recorded one synced terminal fact. The final Recall database contained four raw captures and four distinct idempotency keys, including the duplicate and crash-replay checks.
+- Recall's `/health` endpoint remained available after restart. The test database health probe reported `fts_ok: false` after the intentionally embedding-disabled run; this is an environment/test-mode limitation and did not affect capture idempotency or reconciliation.
+
+**Verification:** process-level Go harness phases `offline`, `reconcile`, duplicate `reconcile`, `isolation`, `crash`, service restart, and post-restart replays all completed with zero unresolved pending facts and zero terminal failures. Recall reports 489 pytest tests passed and 3 skipped on the paired worktree.
+
+**Open risks:** no production data or credentials were used. The temporary harness and SQLite artifacts remain under `.tmp` and are not tracked. The FTS health warning in embedding-disabled mode should not be interpreted as a production Recall health result.
+
+**Next action:** review the paired Recall API commit and attach this trace to the PR86 handoff; do not claim the broader R6 score gate beyond the evidence recorded here.
