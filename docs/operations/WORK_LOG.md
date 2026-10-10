@@ -980,3 +980,40 @@ R3 scope.
 
 **Next action:** complete the configured-provider acceptance trace, then assess
 the remaining R1 gate evidence before starting R3/R4 work.
+
+## 2026-10-09 — R1 Live GLM Approval and Terminal Notification Recovery
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Fixed the persistence-before-notification wake seam. A graph worker commits
+  trusted outcome bytes before NATS publication, so the subscriber normally
+  observes an idempotent insert; a verified terminal notification now resumes
+  the parent even when that insert reports the row already exists.
+- Added a regression that creates the canonical command, persists accepted and
+  terminal worker facts, delivers the exact terminal bytes, and verifies the
+  parent resume callback. Untrusted or conflicting bytes still fail before the
+  callback.
+- Live `ollama/glm-5.3:cloud` run `run_01M4HTQVKXRTHH4VN8PNK29CV0` completed
+  planner and developer roles, recorded and exactly approved proposal
+  `appr_1791599842692901700`, reconciled the applied file in the isolated
+  worktree, and completed tester validation. The allowlisted `go_test_all`
+  profile passed with exit code 0. The reviewer then failed closed because its
+  response encoded `evidence` as a string rather than an `ArtifactRef` object.
+- Clarified the reviewer output prompt with concrete `{kind, uri}` evidence
+  objects while retaining strict decoding; no string coercion or authority
+  bypass was added.
+
+**Evidence:** focused graph-worker resume tests passed. Full `go build ./...`
+and `go vet ./...` passed. The first full `go test ./... -count=1` run passed all
+packages except an existing Windows temp-directory cleanup race in
+`TestScopedPromptInjectionDoesNotCrossScopeOrCache`; focused rerun evidence is
+recorded with the final handoff.
+
+**Open risks:** the live task did not reach a completed reviewer terminal, and
+daemon restart recovery plus approval/application were demonstrated in separate
+runs rather than one continuous run. Authenticated remote workers remain R3
+scope.
+
+**Next action:** rerun the bounded configured-provider task with the clarified
+reviewer contract, including a daemon restart while paused for exact approval,
+then require a completed terminal report before claiming the R1 gate.

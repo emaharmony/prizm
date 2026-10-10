@@ -686,7 +686,12 @@ func (w *graphRoleWorker) handleOutcome(msg *nats.Msg) {
 		log.Printf("[GRAPH-WORKER] reject outcome %s: %v", outcome.EventID, recordErr)
 		return
 	}
-	if inserted {
+	// Worker outcomes are committed to the shared SQLite outbox before NATS is
+	// used as notification. A valid terminal notification therefore normally
+	// observes an existing row here. Resume from the trusted terminal bytes so
+	// the parent consumes the fact; duplicate notifications remain safe because
+	// DurableRuntime.Resume is idempotent once the run leaves its wait state.
+	if inserted || outcome.Status.Terminal() {
 		w.resumeRun(outcome.RunID, "outcome resume")
 	}
 }

@@ -601,3 +601,14 @@ func testerPassedJSON() string {
 		"handoff": {"objective": "review", "reason": "tests passed"}
 	}`
 }
+
+func TestReviewerOutputSchemaRequiresArtifactObjects(t *testing.T) {
+	schema, err := roleSchemaInstruction(RoleReviewer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(schema, `"evidence":[{"kind":"validation","uri":"path"}]`) ||
+		!strings.Contains(schema, "Every evidence item must be an object with kind and uri") {
+		t.Fatalf("reviewer schema does not describe ArtifactRef evidence: %s", schema)
+	}
+}

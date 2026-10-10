@@ -15,6 +15,7 @@ import (
 	"github.com/emaharmony/prizm/internal/bus"
 	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/workflow/multiagent"
+	"github.com/nats-io/nats.go"
 )
 
 func TestGraphRoleWorkerEmbeddedNATSExecutesThreeFanoutLanesConcurrently(t *testing.T) {
@@ -778,6 +779,52 @@ func TestGraphRoleWorkerPublishExhaustionStillClosesAndReplays(t *testing.T) {
 	trace, err := box.Report(t.Context(), command.RunID)
 	if err != nil || len(trace) != 1 || len(trace[0].Outcomes) != 2 || !trace[0].Outcomes[1].Status.Terminal() {
 		t.Fatalf("outcomes must persist before notification, trace=%+v err=%v", trace, err)
+	}
+}
+
+func TestGraphRoleWorkerPersistedTerminalNotificationResumesParent(t *testing.T) {
+	runDir := t.TempDir()
+	command := graphWorkerTestCommand("run-terminal-notification", time.Now().Add(time.Minute))
+	prepareGraphWorkerRun(t, runDir, command)
+	resumed := make(chan string, 1)
+	worker := &graphRoleWorker{
+		runDir:   runDir,
+		workerID: "worker-terminal-notification",
+		publish:  func(context.Context, string, []byte) error { return nil },
+		resume: func(_ context.Context, runID string) error {
+			resumed <- runID
+			return nil
+		},
+	}
+	ledgerPath := filepath.Join(runDir, command.RunID, "multiagent.db")
+	if action, _, err := worker.claimExecution(t.Context(), ledgerPath, command); err != nil || action != "execute" {
+		t.Fatalf("claim=%q err=%v", action, err)
+	}
+	if err := worker.persistAcceptedAndPublish(t.Context(), ledgerPath, command); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.persistAndPublishTerminal(t.Context(), ledgerPath, command, event.OutcomeFailed, map[string]string{"message": "bounded role failure"}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := openGraphRoleLedger(t.Context(), ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var terminal []byte
+	if err := db.QueryRowContext(t.Context(), `SELECT outcome_json FROM graph_role_executions WHERE delivery_key=?`, command.DeliveryKey).Scan(&terminal); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	db.Close()
+
+	worker.handleOutcome(&nats.Msg{Data: terminal})
+	select {
+	case runID := <-resumed:
+		if runID != command.RunID {
+			t.Fatalf("resumed run=%q want %q", runID, command.RunID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("trusted persisted terminal notification did not resume parent")
 	}
 }
 
