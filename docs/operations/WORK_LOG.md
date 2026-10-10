@@ -1017,3 +1017,35 @@ scope.
 **Next action:** rerun the bounded configured-provider task with the clarified
 reviewer contract, including a daemon restart while paused for exact approval,
 then require a completed terminal report before claiming the R1 gate.
+
+## 2026-10-09 — R1/R4 Remaining Acceptance Handoff
+
+**Roadmap IDs:** R1; R4 remains dependent; the broader 9/10 roadmap gates are
+not achieved
+
+- Audited the handoff at `fdc38dc` without changing runtime code. Draft PR #87
+  retains its latest verified green Linux, race, Windows, Python, vet, and
+  staticcheck evidence.
+- Three acceptance items remain: obtain a completed live reviewer result with
+  the corrected artifact-evidence prompt; prove one continuous daemon restart
+  while paused for exact approval through apply, validation, and terminal
+  completion; and repeat the acceptance task in a second independent real
+  repository.
+- The reviewer and restart checks can be combined in one controlled run. A
+  second focused session can cover the independent repository, followed by a
+  final evidence and PR-readiness pass. The working estimate is two to three
+  focused sessions, with one or two additional fix sessions only if a live
+  provider run exposes a concrete defect.
+
+**Evidence:** documentation-only audit of the roadmap, current plan, latest
+work-log entry, and repository head. No provider call, build, test, or fresh CI
+query was performed in this handoff session.
+
+**Open risks:** a transient resume error other than `ErrRunClaimed` relies on a
+later durable wake; this remains P2 hardening. The session estimate applies to
+the current R1/R4 acceptance handoff and must not be read as completion of the
+full multi-roadmap 9/10 program.
+
+**Next action:** run the corrected reviewer contract and restart-through-
+approval recovery as one bounded acceptance trace, then execute the same task
+in a second independent repository.
