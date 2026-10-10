@@ -3,6 +3,7 @@ package multiagent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -100,14 +101,75 @@ func TestAgentRoleRunnerBuildsGovernedExecutionRequest(t *testing.T) {
 	}
 }
 
+func TestAgentRoleRunnerSetsFinalizationPrerequisiteOnlyWithProposalResolver(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		t.Run(fmt.Sprintf("proposal_resolver_%t", active), func(t *testing.T) {
+			var captured AgentExecutionRequest
+			runner := newAdapterForTest(t, agentExecutorFunc(func(_ context.Context, request AgentExecutionRequest) (AgentExecutionResult, error) {
+				captured = request
+				return AgentExecutionResult{}, errors.New("stop after capture")
+			}), nil, nil)
+			if active {
+				runner.proposals = ProposalResolverFunc(func(context.Context, ProposalQuery) ([]ProposalReference, error) { return nil, nil })
+			}
+			request := adapterRoleRequest(RoleDeveloper)
+			request.RoleConfig.AllowedTools = append(request.RoleConfig.AllowedTools, "write_file_proposal")
+			_, _ = runner.RunRole(context.Background(), request)
+			want := ""
+			if active {
+				want = "write_file_proposal"
+			}
+			if captured.FinalizationPrerequisiteTool != want {
+				t.Fatalf("prerequisite=%q, want %q", captured.FinalizationPrerequisiteTool, want)
+			}
+		})
+	}
+}
+
+func TestAgentRoleRunnerPropagatesCanonicalFinalResponseContract(t *testing.T) {
+	roles := []Role{RolePlanner, RoleDeveloper, RoleTester, RoleReviewer, RoleReflector}
+	for _, role := range roles {
+		t.Run(string(role), func(t *testing.T) {
+			var captured AgentExecutionRequest
+			runner := newAdapterForTest(t, agentExecutorFunc(func(_ context.Context, request AgentExecutionRequest) (AgentExecutionResult, error) {
+				captured = request
+				return AgentExecutionResult{}, errors.New("stop after capture")
+			}), nil, nil)
+			_, _ = runner.RunRole(context.Background(), adapterRoleRequest(role))
+			want, err := roleSchemaInstruction(role)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if captured.FinalResponseContract != want {
+				t.Fatalf("contract=%q, want canonical %q", captured.FinalResponseContract, want)
+			}
+		})
+	}
+}
+
+func TestPlannerContractRequiresStringListElements(t *testing.T) {
+	prompt, err := BuildRolePrompt(adapterRoleRequest(RolePlanner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "must be a JSON string, never an object or array") {
+		t.Fatalf("planner prompt omits list element types: %s", prompt)
+	}
+	_, err = decodeRoleOutput(RolePlanner, `{"schema_version":1,"understanding":"x","implementation_plan":["x"],"task_breakdown":[{"owner":"developer"}],"acceptance_criteria":["x"],"handoff":{"objective":"x","reason":"x"}}`)
+	if err == nil || !strings.Contains(err.Error(), "task_breakdown") {
+		t.Fatalf("object task breakdown element accepted: %v", err)
+	}
+}
+
 func TestRegistryProfileResolverUsesExistingAgentRegistry(t *testing.T) {
 	registry := agent.NewRegistry()
 	if err := registry.Register(&agent.Agent{
-		Name:         "planner-agent",
-		Version:      "1.0.0",
-		Role:         "planning",
-		ProviderName: "mock",
-		Model:        "mock-model",
+		Name:            "planner-agent",
+		Version:         "1.0.0",
+		Role:            "planning",
+		ProviderName:    "mock",
+		Model:           "mock-model",
+		ReasoningEffort: "high",
 		Capabilities: []agent.AgentCapability{
 			{Action: "plan", Description: "Plan work"},
 		},
@@ -120,7 +182,7 @@ func TestRegistryProfileResolverUsesExistingAgentRegistry(t *testing.T) {
 		t.Fatalf("resolve: %v", err)
 	}
 	if profile.ID != "planner-agent" || profile.Provider != "mock" ||
-		profile.Model != "mock-model" {
+		profile.Model != "mock-model" || profile.ReasoningEffort != "high" {
 		t.Errorf("profile = %#v", profile)
 	}
 	if len(profile.Capabilities) != 1 || profile.Capabilities[0] != "plan" {

@@ -44,10 +44,11 @@ func newSubAgentResolver(cfg *orchestrator.Config) *subAgentResolver {
 	m := make(map[string]subagent.AgentRuntime, len(cfg.Agents))
 	for _, a := range cfg.Agents {
 		m[a.ID] = subagent.AgentRuntime{
-			AgentID:      a.ID,
-			Provider:     a.Provider,
-			Model:        a.Model,
-			Capabilities: append([]string(nil), a.Capabilities...),
+			AgentID:         a.ID,
+			Provider:        a.Provider,
+			Model:           a.Model,
+			ReasoningEffort: a.ReasoningEffort,
+			Capabilities:    append([]string(nil), a.Capabilities...),
 		}
 	}
 	return &subAgentResolver{agents: m}
@@ -160,6 +161,7 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 			chatResp, chatErr := chat.ChatGenerate(ctx, provider.ChatGenerateRequest{
 				Agent: rt.AgentID, Model: rt.Model, Messages: messages,
 				Temperature: 0.7, MaxTokens: replyMaxTokens,
+				ReasoningEffort: subAgentReasoningEffort(rt.Model, rt.ReasoningEffort),
 			})
 			if chatErr != nil {
 				return subagent.Turn{}, chatErr
@@ -221,6 +223,16 @@ func subAgentReplyMaxTokens(model string) int {
 		return 8192
 	}
 	return 4096
+}
+
+func subAgentReasoningEffort(model, configured string) string {
+	if effort := strings.TrimSpace(configured); effort != "" {
+		return effort
+	}
+	if strings.EqualFold(strings.TrimSpace(model), "glm-5.3:cloud") {
+		return "low"
+	}
+	return ""
 }
 
 func (b *subAgentBackend) validateScopedWorkspace(workDir string) (string, error) {

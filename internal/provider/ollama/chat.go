@@ -56,7 +56,7 @@ type chatRequest struct {
 	Messages      []ollamaMessage  `json:"messages"`
 	Tools         []ollamaFunction `json:"tools,omitempty"`
 	Stream        bool             `json:"stream"`
-	Think         *bool            `json:"think,omitempty"`
+	Think         any              `json:"think,omitempty"`
 	ClearThinking *bool            `json:"clear_thinking,omitempty"`
 	Options       generateOptions  `json:"options,omitempty"`
 }
@@ -151,11 +151,23 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 	// thinking out of the returned provider response: only final content and
 	// native tool calls cross this boundary.
 	if isGLM53Cloud(req.Model) {
+		effort := strings.TrimSpace(req.ReasoningEffort)
+		if effort == "" {
+			effort = "low"
+		}
+		if effort != "low" && effort != "high" && effort != "max" {
+			return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: glm-5.3 reasoning effort %q is unsupported (want low, high, or max)", effort)
+		}
 		body.ClearThinking = boolPtr(true)
+		body.Think = effort
 	} else {
 		// Disable thinking for other reasoning-hybrid models so tool-call intent
 		// remains in the structured tool_calls field.
-		body.Think = boolPtr(false)
+		if effort := strings.TrimSpace(req.ReasoningEffort); effort != "" {
+			body.Think = effort
+		} else {
+			body.Think = boolPtr(false)
+		}
 	}
 
 	bodyBytes, err := json.Marshal(body)

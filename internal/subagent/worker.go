@@ -26,6 +26,7 @@ type AgentRuntime struct {
 	AgentID             string
 	Provider            string
 	Model               string
+	ReasoningEffort     string
 	Capabilities        []string
 	RunID               string
 	TaskID              string

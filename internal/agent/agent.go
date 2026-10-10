@@ -28,12 +28,13 @@ import (
 // Agent names must be alphanumeric + hyphens (same rule as adapters in V9).
 // This prevents ambiguity in policy action format: agent.<name>.<action>.
 type Agent struct {
-	Name         string            // e.g., "coder", "reviewer", "planner"
-	Version      string            // e.g., "1.0.0"
-	Role         string            // e.g., "implementation", "review", "planning"
-	Capabilities []AgentCapability // what this agent can do
-	ProviderName string            // e.g., "ollama", "mock"
-	Model        string            // e.g., "deepseek-v4-pro:cloud"
+	Name            string            // e.g., "coder", "reviewer", "planner"
+	Version         string            // e.g., "1.0.0"
+	Role            string            // e.g., "implementation", "review", "planning"
+	Capabilities    []AgentCapability // what this agent can do
+	ProviderName    string            // e.g., "ollama", "mock"
+	Model           string            // e.g., "deepseek-v4-pro:cloud"
+	ReasoningEffort string            // optional provider-supported named thinking level
 }
 
 // AgentCapability declares what an agent can do.

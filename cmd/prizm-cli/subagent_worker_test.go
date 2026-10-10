@@ -155,7 +155,7 @@ func TestSubAgentBackendUsesChatProviderForStructuredRoleOutput(t *testing.T) {
 	registry := provider.NewProviderRegistry()
 	registry.Register("glm-5.3:cloud", probe, provider.ModelInfo{ProviderName: "ollama"})
 	backend := &subAgentBackend{providers: registry}
-	llm, _, _, err := backend.Bind(subagent.AgentRuntime{AgentID: "planner", Provider: "ollama", Model: "glm-5.3:cloud"})
+	llm, _, _, err := backend.Bind(subagent.AgentRuntime{AgentID: "planner", Provider: "ollama", Model: "glm-5.3:cloud", ReasoningEffort: "max"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestSubAgentBackendUsesChatProviderForStructuredRoleOutput(t *testing.T) {
 	if turn.Text != `{"schema_version":1,"understanding":"done"}` || turn.PromptTokens != 11 || turn.CompletionTokens != 7 {
 		t.Fatalf("turn=%#v", turn)
 	}
-	if probe.captured.Model != "glm-5.3:cloud" || probe.captured.Agent != "planner" || probe.captured.MaxTokens != 8192 {
+	if probe.captured.Model != "glm-5.3:cloud" || probe.captured.Agent != "planner" || probe.captured.MaxTokens != 8192 || probe.captured.ReasoningEffort != "max" {
 		t.Fatalf("request=%#v", probe.captured)
 	}
 	if len(probe.captured.Messages) != 2 || probe.captured.Messages[1].Content != "bounded task" {
@@ -194,6 +194,18 @@ func TestSubAgentBackendRejectsReplyCapConsumedWithoutContent(t *testing.T) {
 func TestSubAgentReplyMaxTokensLeavesOtherModelsUnchanged(t *testing.T) {
 	if got := subAgentReplyMaxTokens("qwen3.5:9b"); got != 4096 {
 		t.Fatalf("qwen reply max = %d, want 4096", got)
+	}
+}
+
+func TestSubAgentReasoningEffortDefaultsGLMLowOnly(t *testing.T) {
+	if got := subAgentReasoningEffort("glm-5.3:cloud", ""); got != "low" {
+		t.Fatalf("GLM default reasoning effort = %q, want low", got)
+	}
+	if got := subAgentReasoningEffort("glm-5.3:cloud", "high"); got != "high" {
+		t.Fatalf("configured GLM reasoning effort = %q, want high", got)
+	}
+	if got := subAgentReasoningEffort("qwen3.5:9b", ""); got != "" {
+		t.Fatalf("other model default reasoning effort = %q, want empty", got)
 	}
 }
 

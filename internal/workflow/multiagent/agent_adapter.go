@@ -110,6 +110,10 @@ func (r *AgentRoleRunner) RunRole(
 	if err != nil {
 		return RoleRunResult{}, err
 	}
+	finalResponseContract, err := roleSchemaInstruction(request.Run.CurrentRole)
+	if err != nil {
+		return RoleRunResult{}, err
+	}
 	startedAt := r.now().UTC()
 	executionContext := ctx
 	cancelExecution := func() {}
@@ -118,19 +122,23 @@ func (r *AgentRoleRunner) RunRole(
 	}
 	defer cancelExecution()
 	executionRequest := AgentExecutionRequest{
-		RunID:                request.Run.RunID,
-		TaskID:               request.Run.Task.ID,
-		ExecutionKey:         request.Run.ExecutionKey,
-		Role:                 request.Run.CurrentRole,
-		Visit:                request.Run.Visit,
-		Profile:              profile,
-		Prompt:               prompt,
-		Workspace:            workspace,
-		AllowedTools:         append([]string(nil), request.RoleConfig.AllowedTools...),
-		RequiredCapabilities: append([]string(nil), request.RoleConfig.Capabilities...),
-		MaxIterations:        request.RoleConfig.MaxLocalIterations,
-		MaxTokens:            request.RoleConfig.TokenBudget,
-		Deadline:             deadline(startedAt, request.RoleConfig.TimeBudget),
+		RunID:                 request.Run.RunID,
+		TaskID:                request.Run.Task.ID,
+		ExecutionKey:          request.Run.ExecutionKey,
+		Role:                  request.Run.CurrentRole,
+		Visit:                 request.Run.Visit,
+		Profile:               profile,
+		Prompt:                prompt,
+		Workspace:             workspace,
+		AllowedTools:          append([]string(nil), request.RoleConfig.AllowedTools...),
+		RequiredCapabilities:  append([]string(nil), request.RoleConfig.Capabilities...),
+		FinalResponseContract: finalResponseContract,
+		MaxIterations:         request.RoleConfig.MaxLocalIterations,
+		MaxTokens:             request.RoleConfig.TokenBudget,
+		Deadline:              deadline(startedAt, request.RoleConfig.TimeBudget),
+	}
+	if request.Run.CurrentRole == RoleDeveloper && r.proposals != nil {
+		executionRequest.FinalizationPrerequisiteTool = "write_file_proposal"
 	}
 	execution, err := r.executor.ExecuteAgent(executionContext, executionRequest)
 	if err != nil {
@@ -532,7 +540,7 @@ func remainingLimit(limit Limit, used int) (Limit, bool) {
 func roleSchemaInstruction(role Role) (string, error) {
 	switch role {
 	case RolePlanner:
-		return `JSON schema: {"schema_version":1,"understanding":"...","implementation_plan":["..."],"task_breakdown":["..."],"acceptance_criteria":["..."],"risks":["..."],"assumptions":["..."],"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"file","uri":"path"}],"unresolved_issues":[{"id":"issue-1","summary":"...","blocking":false}],"notes":"..."}}. Use [] when there is no evidence or unresolved issue.`, nil
+		return `JSON schema: {"schema_version":1,"understanding":"...","implementation_plan":["..."],"task_breakdown":["..."],"acceptance_criteria":["..."],"risks":["..."],"assumptions":["..."],"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"file","uri":"path"}],"unresolved_issues":[{"id":"issue-1","summary":"...","blocking":false}],"notes":"..."}}. Every element of implementation_plan, task_breakdown, acceptance_criteria, risks, and assumptions must be a JSON string, never an object or array. Use [] when there is no evidence or unresolved issue.`, nil
 	case RoleDeveloper:
 		return `JSON schema: {"schema_version":1,"summary":"...","commands_executed":["..."],"known_limitations":["..."],"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"file","uri":"path"}],"unresolved_issues":[{"id":"issue-1","summary":"...","blocking":false}],"notes":"..."}}. After a write proposal, omit changed_artifacts: Prizm derives that field from the persisted proposal. Use [] when there is no evidence or unresolved issue.`, nil
 	case RoleTester:

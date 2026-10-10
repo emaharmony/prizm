@@ -3,6 +3,7 @@ package multiagent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/emaharmony/prizm/internal/cost"
@@ -32,21 +33,37 @@ func (e SubagentExecutor) ExecuteAgent(
 	}
 	maxTokens := int(request.MaxTokens)
 	expectedDeliverable := "one strict JSON object matching the role schema"
-	if request.Role == RoleDeveloper {
+	finalizationPrerequisiteTool := strings.TrimSpace(request.FinalizationPrerequisiteTool)
+	if finalizationPrerequisiteTool != "" {
 		expectedDeliverable = "first emit one write_file_proposal tool_request JSON; after its result, emit one strict developer role-schema JSON"
 	}
+	if finalizationPrerequisiteTool != "" {
+		allowed := false
+		for _, toolName := range request.AllowedTools {
+			if toolName == finalizationPrerequisiteTool {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return AgentExecutionResult{}, fmt.Errorf("multiagent: finalization prerequisite tool %q is not allowed for role %q", finalizationPrerequisiteTool, request.Role)
+		}
+	}
 	result, err := e.Runner.Run(ctx, v2.TaskPacket{
-		Type:                "task_delegation",
-		TargetAgent:         request.Profile.ID,
-		TaskID:              executionTaskID(request),
-		Description:         request.Prompt,
-		ExpectedDeliverable: expectedDeliverable,
-		Deadline:            deadlineValue,
-		MaxTokens:           maxTokens,
+		Type:                         "task_delegation",
+		TargetAgent:                  request.Profile.ID,
+		TaskID:                       executionTaskID(request),
+		Description:                  request.Prompt,
+		ExpectedDeliverable:          expectedDeliverable,
+		FinalizationPrerequisiteTool: finalizationPrerequisiteTool,
+		FinalResponseContract:        strings.TrimSpace(request.FinalResponseContract),
+		Deadline:                     deadlineValue,
+		MaxTokens:                    maxTokens,
 	}, subagent.AgentRuntime{
 		AgentID:             request.Profile.ID,
 		Provider:            request.Profile.Provider,
 		Model:               request.Profile.Model,
+		ReasoningEffort:     request.Profile.ReasoningEffort,
 		Capabilities:        append([]string(nil), request.Profile.Capabilities...),
 		WorkDir:             request.Workspace.Path,
 		RunID:               request.RunID,

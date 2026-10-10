@@ -80,9 +80,15 @@ type TaskPacket struct {
 	Description         string      `json:"description"`
 	Context             TaskContext `json:"context"`
 	ExpectedDeliverable string      `json:"expected_deliverable"`
-	ValidationChecklist []string    `json:"validation_checklist"`
-	Priority            string      `json:"priority"`
-	Deadline            string      `json:"deadline"`
+	// FinalizationPrerequisiteTool, when set by trusted composition, must
+	// execute successfully before the runner may close the tool phase.
+	FinalizationPrerequisiteTool string `json:"finalization_prerequisite_tool,omitempty"`
+	// FinalResponseContract is the trusted role-owned schema reminder repeated
+	// on the final-only turn after long tool transcripts.
+	FinalResponseContract string   `json:"final_response_contract,omitempty"`
+	ValidationChecklist   []string `json:"validation_checklist"`
+	Priority              string   `json:"priority"`
+	Deadline              string   `json:"deadline"`
 	// RequiredCapability, when set, is the capability the target agent must hold
 	// to run this task (capability-aware routing). Empty = no requirement.
 	RequiredCapability string `json:"required_capability,omitempty"`
