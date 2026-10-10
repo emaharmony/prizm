@@ -1127,3 +1127,35 @@ independent repository acceptance remain open.
 **Next action:** obtain a green full validation run, commit and push the atomic
 proposal checkpoint, then retry the unchanged bounded live Prizm acceptance
 task without raising provider limits.
+
+## 2026-10-10 — R1 Outbox Contention Gate
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Fixed a concurrent SQLite outbox race exposed by parallel graph lanes. The
+  outbox now begins its read-before-write transactions with an immediate write
+  reservation, so another connection waits under the existing bounded busy
+  timeout instead of failing a deferred transaction upgrade with
+  `SQLITE_BUSY`.
+- Added a causal two-connection regression. One connection holds a real write
+  reservation while the second records an accepted outcome; the second must
+  wait and then durably persist sequence 1 after release.
+- Kept WAL, the per-connection busy timeout, transaction boundaries, and the
+  accepted-outcome authority contract unchanged. No manual resume or test-only
+  retry was added.
+
+**Evidence:** the contention regression and neighboring outcome tests passed
+five consecutive runs. The previously failing embedded-NATS fanout/recovery
+test passed ten consecutive runs. `go build ./...`, `go vet ./...`, and
+`go test ./... -count=1` passed with workspace-local caches. Independent review
+found no blocker in the outbox fix or the atomic patch integration.
+
+**Open risks:** the configured provider can still consume its bounded reply in
+private reasoning without returning actionable content. The continuous live
+restart-at-approval trace, completed live reviewer, and second independent
+repository acceptance remain unproved.
+
+**Next action:** run the unchanged bounded live Prizm task once against the
+clean acceptance clone, restart only at the exact approval pause, and require
+apply, full validation, and reviewer completion before advancing to the
+independent Roblox Factory snapshot.
