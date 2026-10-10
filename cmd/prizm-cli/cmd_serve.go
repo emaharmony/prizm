@@ -781,6 +781,7 @@ func executeServe(args []string) {
 	toolReg = tool.NewRegistry()
 	tool.RegisterBuiltinsWithRoots(toolReg, workspaceRoot, 10*1024*1024, readRoots, writeRoots) // all read-only + project tools
 	toolReg.Register(&tool.WriteFileProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
+	toolReg.Register(&tool.ApplyPatchProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
 	toolReg.Register(&tool.CreateDirectoryProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
 	// V35: Direct write tool for autonomous wake actions (auto-approved via policy)
 	toolReg.Register(&tool.WriteFileDirect{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
@@ -2404,7 +2405,7 @@ func (cc *conversationContext) publishEvent(subject string, payload map[string]a
 func (cc *conversationContext) publishReviewEvent(toolName string, input map[string]any, agentID string) {
 	// Only fire for file-mutating tools
 	switch toolName {
-	case "write_file", "write_file_proposal", "write_file_direct",
+	case "write_file", "write_file_proposal", "apply_patch_proposal", "write_file_direct",
 		"edit_file", "edit_file_proposal",
 		"git_commit", "git_push":
 		// Extract file path if available
@@ -3102,6 +3103,7 @@ var readOnlyTools = map[string]bool{
 var mutationProposalTools = map[string]bool{
 	"write_file":                true,
 	"write_file_proposal":       true,
+	"apply_patch_proposal":      true,
 	"create_directory":          true,
 	"create_directory_proposal": true,
 	"git_add":                   true,

@@ -98,6 +98,7 @@ func (b *subAgentBackend) executorFor(workDir string) *tool.Executor {
 	roots := []string{workDir}
 	tool.RegisterBuiltinsWithRoots(reg, workDir, subAgentWorktreeMaxFileSize, roots, roots)
 	_ = reg.Register(&tool.WriteFileProposal{WorkspaceRoot: workDir, AllowedPaths: roots})
+	_ = reg.Register(&tool.ApplyPatchProposal{WorkspaceRoot: workDir, AllowedPaths: roots})
 	_ = reg.Register(&tool.CreateDirectoryProposal{WorkspaceRoot: workDir, AllowedPaths: roots})
 	_ = reg.Register(&tool.WriteFileDirect{WorkspaceRoot: workDir, AllowedPaths: roots})
 	_ = reg.Register(&tool.CreateDirectoryDirect{WorkspaceRoot: workDir, AllowedPaths: roots})

@@ -343,6 +343,9 @@ func buildLiveReferenceComponents(runDir, configPath string, manifest referenceW
 	if err := toolRegistry.Register(&tool.WriteFileProposal{WorkspaceRoot: manifest.WorkspacePath, AllowedPaths: writeRoots}); err != nil {
 		return nil, err
 	}
+	if err := toolRegistry.Register(&tool.ApplyPatchProposal{WorkspaceRoot: manifest.WorkspacePath, AllowedPaths: writeRoots}); err != nil {
+		return nil, err
+	}
 	if err := toolRegistry.Register(&tool.CreateDirectoryProposal{WorkspaceRoot: manifest.WorkspacePath, AllowedPaths: writeRoots}); err != nil {
 		return nil, err
 	}

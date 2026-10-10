@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/emaharmony/prizm/internal/safety"
 )
 
@@ -335,6 +336,55 @@ type WriteFileProposal struct {
 	AllowedPaths  []string
 	// Emit is called to emit events.
 	Emit func(eventType, source string, payload map[string]any)
+}
+
+// ApplyPatchProposal validates one bounded unified diff against an exact clean
+// Git state. Execute is non-mutating; the patch is applied only by the mutation
+// executor after the persisted approval is granted.
+type ApplyPatchProposal struct {
+	WorkspaceRoot string
+	AllowedPaths  []string
+}
+
+func (t *ApplyPatchProposal) Name() string { return "apply_patch_proposal" }
+func (t *ApplyPatchProposal) Description() string {
+	return "Proposes one atomic multi-file unified diff for approval. Requires the exact current base SHA and does not modify the worktree."
+}
+func (t *ApplyPatchProposal) Schema() ToolSchema {
+	return ToolSchema{Input: map[string]ParamSpec{
+		"patch":    {Type: "string", Description: "Complete unified diff for all requested file changes", Required: true},
+		"base_sha": {Type: "string", Description: "Exact git HEAD SHA the patch was prepared against", Required: true},
+	}, Output: ParamSpec{Type: "object", Description: "Approval identity, exact patch plan, and changed paths"}}
+}
+func (t *ApplyPatchProposal) Execute(ctx context.Context, input map[string]any) (ToolResult, error) {
+	patch, patchOK := input["patch"].(string)
+	base, baseOK := input["base_sha"].(string)
+	if !patchOK || strings.TrimSpace(patch) == "" {
+		return ToolResult{Success: false, Error: "required parameter 'patch' must be a non-empty string"}, nil
+	}
+	if !baseOK || strings.TrimSpace(base) == "" {
+		return ToolResult{Success: false, Error: "required parameter 'base_sha' must be a non-empty string"}, nil
+	}
+	plan, err := gitx.PlanPatch(ctx, t.WorkspaceRoot, patch, base)
+	if err != nil {
+		return ToolResult{Success: false, Error: err.Error()}, nil
+	}
+	roots := append([]string(nil), t.AllowedPaths...)
+	if len(roots) == 0 {
+		roots = []string{t.WorkspaceRoot}
+	}
+	for _, path := range plan.Paths {
+		absolute := filepath.Join(t.WorkspaceRoot, filepath.FromSlash(path))
+		if _, err := safety.ResolveAndContainMulti(roots, absolute); err != nil {
+			return ToolResult{Success: false, Error: fmt.Sprintf("patch path %q is outside configured write roots: %v", path, err)}, nil
+		}
+	}
+	return ToolResult{Success: true, Output: map[string]any{
+		"mutation_type": "apply_patch", "target_path": fmt.Sprintf("%d files", len(plan.Paths)),
+		"paths": plan.Paths, "base_sha": plan.BaseSHA, "base_tree": plan.BaseTree,
+		"expected_tree": plan.ExpectedTree, "patch_sha256": plan.PatchSHA256,
+		"preview": fmt.Sprintf("Atomic patch changing %d files at %s", len(plan.Paths), plan.BaseSHA),
+	}}, nil
 }
 
 // ApprovalProxy wraps an approval.Approval for storage.
@@ -951,6 +1001,7 @@ func RegisterBuiltinsV4(registry *Registry, workspaceRoot string, maxFileSize in
 func RegisterBuiltinsV4WithRoots(registry *Registry, workspaceRoot string, maxFileSize int64, readRoots, writeRoots []string, protectedBranch string) *Registry {
 	RegisterBuiltinsWithRoots(registry, workspaceRoot, maxFileSize, readRoots, writeRoots)
 	registry.Register(&WriteFileProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
+	registry.Register(&ApplyPatchProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
 	registry.Register(&CreateDirectoryProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
 
 	if protectedBranch == "" {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/emaharmony/prizm/internal/validation"
 )
 
@@ -20,6 +21,7 @@ type AgentRoleRunner struct {
 	approvals  ApprovalChecker
 	validation ValidationRunner
 	proposals  ProposalResolver
+	patchBase  func(context.Context, string) (string, error)
 	events     EventSink
 	now        func() time.Time
 }
@@ -37,6 +39,7 @@ type AgentRoleRunnerOptions struct {
 	Approvals  ApprovalChecker
 	Validation ValidationRunner
 	Proposals  ProposalResolver
+	PatchBase  func(context.Context, string) (string, error)
 	Clock      func() time.Time
 }
 
@@ -55,6 +58,10 @@ func NewAgentRoleRunner(options AgentRoleRunnerOptions) (*AgentRoleRunner, error
 	if now == nil {
 		now = time.Now
 	}
+	patchBase := options.PatchBase
+	if patchBase == nil {
+		patchBase = gitx.CurrentSHA
+	}
 	return &AgentRoleRunner{
 		profiles:   options.Profiles,
 		executor:   options.Executor,
@@ -62,6 +69,7 @@ func NewAgentRoleRunner(options AgentRoleRunnerOptions) (*AgentRoleRunner, error
 		approvals:  options.Approvals,
 		validation: options.Validation,
 		proposals:  options.Proposals,
+		patchBase:  patchBase,
 		now:        now,
 	}, nil
 }
@@ -138,7 +146,13 @@ func (r *AgentRoleRunner) RunRole(
 		Deadline:              deadline(startedAt, request.RoleConfig.TimeBudget),
 	}
 	if request.Run.CurrentRole == RoleDeveloper && r.proposals != nil {
-		executionRequest.FinalizationPrerequisiteTool = "write_file_proposal"
+		baseSHA, baseErr := r.patchBase(ctx, workspace.Path)
+		if baseErr != nil {
+			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "resolve trusted patch base: " + baseErr.Error()}
+		}
+		executionRequest.Prompt += fmt.Sprintf("\n\nTRUSTED PATCH BASE: Use this exact base_sha in apply_patch_proposal: %s", baseSHA)
+		executionRequest.AllowedTools = governedDeveloperTools(executionRequest.AllowedTools)
+		executionRequest.FinalizationPrerequisiteTool = "apply_patch_proposal"
 	}
 	execution, err := r.executor.ExecuteAgent(executionContext, executionRequest)
 	if err != nil {
@@ -176,7 +190,7 @@ func (r *AgentRoleRunner) RunRole(
 		}
 		executionRequest.MaxIterations = remainingIterations
 		executionRequest.MaxTokens = remainingTokens
-		executionRequest.Prompt += fmt.Sprintf("\n\nCORRECTION: Your previous response did not persist a mutation proposal. Previous output follows:\n%s\n\nYour NEXT response must be ONLY one JSON tool_request for write_file_proposal. Do not include the developer role JSON in that response. After the tool result, return ONLY the required developer role JSON. This is your only corrective turn.", execution.Output)
+		executionRequest.Prompt += fmt.Sprintf("\n\nCORRECTION: Your previous response did not persist a mutation proposal. Previous output follows:\n%s\n\nYour NEXT response must be ONLY one JSON tool_request for apply_patch_proposal containing the complete unified diff and exact base_sha. Do not include the developer role JSON in that response. After the tool result, return ONLY the required developer role JSON. This is your only corrective turn.", execution.Output)
 		correctiveRetries = 1
 		corrected, correctErr := r.executor.ExecuteAgent(executionContext, executionRequest)
 		if correctErr != nil {
@@ -274,6 +288,31 @@ func (r *AgentRoleRunner) RunRole(
 		Proposals: proposals,
 		FanOut:    cloneFanOutPlan(decoded.FanOut),
 	}, nil
+}
+
+func governedDeveloperTools(configured []string) []string {
+	allowed := map[string]bool{
+		"echo": true, "list_dir": true, "read_file": true, "read_project": true,
+		"search_files": true, "project_overview": true, "git_status": true,
+		"git_log": true, "git_diff": true, "git_branch_list": true,
+		"write_file_dry_run": true, "web_search": true, "memory_search": true,
+		"use_skill": true, "apply_patch_proposal": true,
+	}
+	out := make([]string, 0, len(configured)+1)
+	seenPatch := false
+	for _, name := range configured {
+		if !allowed[name] {
+			continue
+		}
+		if name == "apply_patch_proposal" {
+			seenPatch = true
+		}
+		out = append(out, name)
+	}
+	if !seenPatch {
+		out = append(out, "apply_patch_proposal")
+	}
+	return out
 }
 
 // ValidateApprovedRole validates a saved developer result after its exact
@@ -385,7 +424,7 @@ func BuildRolePrompt(request RoleRunRequest) (string, error) {
 		schema,
 	)
 	if request.Run.CurrentRole == RoleDeveloper {
-		prompt += "\n\nDEVELOPER TOOL PROTOCOL: Before returning the developer role-schema JSON, emit exactly one separate JSON tool_request for write_file_proposal. Do not combine the tool request with the role-schema JSON. After Prizm returns the tool result, return only the developer role-schema JSON."
+		prompt += "\n\nDEVELOPER TOOL PROTOCOL: Before returning the developer role-schema JSON, emit exactly one separate JSON tool_request for apply_patch_proposal. Its input must contain the complete unified diff in patch and the exact observed git HEAD in base_sha. Do not combine the tool request with the role-schema JSON. After Prizm returns the tool result, return only the developer role-schema JSON."
 	}
 	return prompt, nil
 }

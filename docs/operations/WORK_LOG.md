@@ -1092,3 +1092,38 @@ content, rerun the real Prizm task through exact approval with a daemon restart,
 apply, validation, and reviewer completion. Then run the independent Roblox
 Factory preflight-doctor task from an isolated snapshot that preserves its
 existing dirty production work.
+
+## 2026-10-10 — R1 Atomic Multi-File Proposal Gate
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Added `apply_patch_proposal`, a non-mutating bounded unified-diff proposal
+  that validates an exact trusted base, clean repository, canonical paths,
+  ordinary file modes, configured write roots, and `git apply --check` before
+  persisting one approval for all touched files.
+- Persisted the patch hash, base and expected trees, and sorted paths. Approved
+  application revalidates that identity and performs one `git apply` without
+  partial-reject behavior. Restart recovery compares the complete worktree
+  tree and fails ambiguous states closed.
+- Governed developer roles expose only this approval-producing mutation tool;
+  the runtime injects the trusted HEAD. Legacy single-file proposals remain
+  available to compatible non-graph callers.
+- A deterministic composition test proves real tool/policy persistence, one
+  approval for two files, durable pause, runtime reconstruction, grant, atomic
+  apply, post-apply validation, and terminal completion.
+
+**Evidence:** focused atomic and cross-package suites pass. `go build ./...`
+and `go vet ./...` pass. Two concurrent `go test ./... -count=1` runs reached
+only the previously tracked embedded-NATS `SQLITE_BUSY` race; its exact test
+passed five consecutive focused runs and the latest combined focused gate.
+The independent final review found no remaining P1/P2 after write-root
+containment was enforced at proposal and apply.
+
+**Open risks:** a fully green full-suite run is still required before the live
+provider gate. No new provider call was made. The prior provider exhaustion,
+continuous live restart-at-approval trace, completed live reviewer, and second
+independent repository acceptance remain open.
+
+**Next action:** obtain a green full validation run, commit and push the atomic
+proposal checkpoint, then retry the unchanged bounded live Prizm acceptance
+task without raising provider limits.

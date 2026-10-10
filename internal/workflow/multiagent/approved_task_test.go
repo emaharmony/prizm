@@ -3,14 +3,148 @@ package multiagent
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/emaharmony/prizm/internal/approval"
 	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/gitx"
+	"github.com/emaharmony/prizm/internal/mutation"
+	"github.com/emaharmony/prizm/internal/tool"
 	"github.com/emaharmony/prizm/internal/validation"
 )
+
+type actualPatchLifecycle struct {
+	store     *approval.Store
+	executor  *mutation.Executor
+	workspace string
+	onApply   func()
+}
+
+func (l actualPatchLifecycle) Decision(_ context.Context, op ProposalOperation) (ProposalDecision, string, error) {
+	a, err := l.store.Load(op.RunID, op.ApprovalID)
+	if err != nil {
+		return "", "", err
+	}
+	switch a.Status {
+	case approval.StatusPending:
+		return ProposalPending, "pending", nil
+	case approval.StatusApproved:
+		return ProposalGranted, "granted", nil
+	case approval.StatusDenied:
+		return ProposalDenied, a.DenialReason, nil
+	default:
+		return ProposalExpired, a.Status, nil
+	}
+}
+func (l actualPatchLifecycle) Apply(ctx context.Context, op ProposalOperation) (ProposalApplyResult, error) {
+	a, err := l.store.Load(op.RunID, op.ApprovalID)
+	if err != nil {
+		return ProposalApplyResult{}, err
+	}
+	r, err := l.executor.ApplyWithRun(ctx, op.RunID, op.ApprovalID, a.ApprovedBy)
+	if err != nil {
+		return ProposalApplyResult{}, err
+	}
+	if r.Success && l.onApply != nil {
+		l.onApply()
+	}
+	return ProposalApplyResult{Success: r.Success, TargetPath: a.TargetPath, Message: r.Message}, nil
+}
+func (l actualPatchLifecycle) Reconcile(ctx context.Context, op ProposalOperation) (ProposalReconciliation, ProposalApplyResult, error) {
+	a, err := l.store.Load(op.RunID, op.ApprovalID)
+	if err != nil {
+		return "", ProposalApplyResult{}, err
+	}
+	if a.PatchPlan == nil {
+		return ProposalAmbiguous, ProposalApplyResult{}, nil
+	}
+	tree, err := gitx.WorktreeTree(ctx, l.workspace)
+	if err != nil {
+		return ProposalAmbiguous, ProposalApplyResult{}, nil
+	}
+	if tree == a.PatchPlan.ExpectedTree {
+		return ProposalApplied, ProposalApplyResult{Success: true, TargetPath: a.TargetPath}, nil
+	}
+	if tree == a.PatchPlan.BaseTree {
+		return ProposalNotApplied, ProposalApplyResult{TargetPath: a.TargetPath}, nil
+	}
+	return ProposalAmbiguous, ProposalApplyResult{TargetPath: a.TargetPath}, nil
+}
+
+func TestDurableApprovedTaskRealAtomicPatchRestartThroughValidation(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, args := range [][]string{{"init", "-b", "main"}, {"config", "user.email", "test@prizm.local"}, {"config", "user.name", "Prizm Test"}} {
+		if _, err := gitx.RunCommand(ctx, workspace, "", "git", args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitx.RunCommand(ctx, workspace, "", "git", "add", "."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitx.RunCommand(ctx, workspace, "", "git", "commit", "-m", "base"); err != nil {
+		t.Fatal(err)
+	}
+	base, _ := gitx.CurrentSHA(ctx, workspace)
+	patch := "diff --git a/base.txt b/base.txt\n--- a/base.txt\n+++ b/base.txt\n@@ -1 +1 @@\n-base\n+changed\n" + "diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+new\n"
+	runID := "run-real-atomic-patch"
+	approvalStore := approval.NewStore(t.TempDir())
+	registry := tool.NewRegistry()
+	tool.RegisterBuiltinsV4(registry, workspace, 1024*1024, "", workspace)
+	cfg := tool.PolicyConfig{WorkspaceRoot: workspace, AllowedPaths: []string{workspace}, MaxFileSize: 1024 * 1024}
+	toolExecutor := tool.NewExecutor(registry, &cfg)
+	toolExecutor.SetApprovalStore(approvalStore)
+	proposal, err := toolExecutor.ExecuteWithPolicy(ctx, "apply_patch_proposal", "developer", "prizm", "execution-real-patch", map[string]any{"_run_id": runID, "patch": patch, "base_sha": base})
+	if err != nil || !proposal.Success {
+		t.Fatalf("proposal=%#v err=%v", proposal, err)
+	}
+	approvalID, _ := proposal.Output["approval_id"].(string)
+	proposalID, _ := proposal.Output["proposal_id"].(string)
+	baseRunner := approvedTaskRunner()
+	developer := baseRunner.scripts[RoleDeveloper][0].result
+	developer.Proposals = []ProposalReference{{ProposalID: proposalID, ApprovalID: approvalID, Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "base.txt"}, {Kind: ArtifactFile, URI: "new.txt"}}}}
+	baseRunner.scripts[RoleDeveloper][0].result = developer
+	runner := &postApplyValidationRunner{scriptedRunner: baseRunner}
+	lifecycle := actualPatchLifecycle{store: approvalStore, executor: mutation.NewExecutor(workspace, approvalStore, workspace), workspace: workspace, onApply: func() { runner.workspaceChanged = true }}
+	env := newDurableTestEnvironment(t)
+	runtime := newDurableRuntimeForTest(t, validDefinition(), runner, env.store, env.claimer, env.events, DurableRuntimeOptions{Proposals: lifecycle})
+	request := testRunRequest()
+	request.RunID = runID
+	state, err := runtime.Run(ctx, request)
+	var waiting *RunWaitingError
+	if !errors.As(err, &waiting) || state.Status != RunStatusPaused {
+		t.Fatalf("state=%q err=%v", state.Status, err)
+	}
+	a, err := approvalStore.Load(runID, approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Approve("operator"); err != nil {
+		t.Fatal(err)
+	}
+	if err := approvalStore.Save(a); err != nil {
+		t.Fatal(err)
+	}
+	restarted := newDurableRuntimeForTest(t, validDefinition(), runner, env.store, env.claimer, env.events, DurableRuntimeOptions{Proposals: lifecycle})
+	state, err = restarted.Resume(ctx, runID)
+	if err != nil || state.Status != RunStatusCompleted || runner.validationCalls != 1 {
+		t.Fatalf("state=%q validation=%d err=%v", state.Status, runner.validationCalls, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(workspace, "new.txt")); err != nil || strings.TrimSpace(string(data)) != "new" {
+		t.Fatalf("new file=%q err=%v", data, err)
+	}
+}
 
 type fakeProposalLifecycle struct {
 	mu         sync.Mutex

@@ -55,6 +55,76 @@ func TestApprovalProposalResolverRejectsTraversalTarget(t *testing.T) {
 	}
 }
 
+func TestPatchProposalResolvesManyArtifactsAndReconcilesTrees(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, args := range [][]string{{"init", "-b", "main"}, {"config", "user.email", "test@prizm.local"}, {"config", "user.name", "Prizm Test"}} {
+		if _, err := gitx.RunCommand(ctx, workspace, "", "git", args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitx.RunCommand(ctx, workspace, "", "git", "add", "."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitx.RunCommand(ctx, workspace, "", "git", "commit", "-m", "base"); err != nil {
+		t.Fatal(err)
+	}
+	base, _ := gitx.CurrentSHA(ctx, workspace)
+	patch := "diff --git a/base.txt b/base.txt\n--- a/base.txt\n+++ b/base.txt\n@@ -1 +1 @@\n-base\n+changed\n" +
+		"diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+new\n"
+	plan, err := gitx.PlanPatch(ctx, workspace, patch, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := approval.NewStore(t.TempDir())
+	item := approval.NewApproval("run-patch", "execution-patch", "developer", "prizm", approval.MutationApplyPatch, "2 files", patch, approval.PolicyDecision{Decision: approval.DecisionRequiresApproval})
+	item.PatchPlan = &approval.PatchPlan{BaseSHA: plan.BaseSHA, BaseTree: plan.BaseTree, ExpectedTree: plan.ExpectedTree, PatchSHA256: plan.PatchSHA256, Paths: plan.Paths}
+	if err := store.Save(item); err != nil {
+		t.Fatal(err)
+	}
+	refs, err := (approvalProposalResolver{store: store, workspace: workspace}).ResolveProposals(ctx, multiagent.ProposalQuery{RunID: item.RunID, ExecutionKey: item.CorrelationID, AgentID: item.RequestedBy})
+	if err != nil || len(refs) != 1 || len(refs[0].Artifacts) != 2 {
+		t.Fatalf("refs=%#v err=%v", refs, err)
+	}
+	lifecycle := newApprovalProposalLifecycle(store, workspace, t.TempDir())
+	op := multiagent.ProposalOperation{RunID: item.RunID, ProposalID: item.ProposalID, ApprovalID: item.ApprovalID, ApplyKey: "apply-patch", ExecutionKey: item.CorrelationID}
+	status, _, err := lifecycle.Reconcile(ctx, op)
+	if err != nil || status != multiagent.ProposalNotApplied {
+		t.Fatalf("base status=%q err=%v", status, err)
+	}
+	if err := item.Approve("operator"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(item); err != nil {
+		t.Fatal(err)
+	}
+	result, err := lifecycle.Apply(ctx, op)
+	if err != nil || !result.Success {
+		t.Fatalf("apply=%#v err=%v", result, err)
+	}
+	data, err := os.ReadFile(result.DiffPath)
+	if err != nil || string(data) != patch {
+		t.Fatalf("evidence is not exact approved patch: err=%v", err)
+	}
+	status, _, err = lifecycle.Reconcile(ctx, op)
+	if err != nil || status != multiagent.ProposalApplied {
+		t.Fatalf("applied status=%q err=%v", status, err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "unrelated.txt"), []byte("drift"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	status, _, err = lifecycle.Reconcile(ctx, op)
+	if err != nil || status != multiagent.ProposalAmbiguous {
+		t.Fatalf("drift status=%q err=%v", status, err)
+	}
+}
+
 func TestIsolatedReferenceWorkspaceCreatesRunWorktree(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "repo")
 	if err := os.MkdirAll(root, 0o755); err != nil {

@@ -50,7 +50,7 @@ spec:
         - search_files
         - project_overview
         - write_file_dry_run
-        - write_file_proposal
+        - apply_patch_proposal
       capabilities:
         - write
       allowedOutcomes:
@@ -93,7 +93,7 @@ spec:
         - search_files
         - project_overview
         - write_file_dry_run
-        - write_file_proposal
+        - apply_patch_proposal
       capabilities:
         - edit
       allowedOutcomes:

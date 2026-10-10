@@ -71,6 +71,7 @@ type Approval struct {
 	// the exact same input after a human approves it.
 	ToolName     string         `json:"tool_name,omitempty"`
 	Input        map[string]any `json:"input,omitempty"`
+	PatchPlan    *PatchPlan     `json:"patch_plan,omitempty"`
 	CreatedAt    time.Time      `json:"created_at"`
 	ExpiresAt    *time.Time     `json:"expires_at,omitempty"`
 	ApprovedBy   string         `json:"approved_by,omitempty"`
@@ -79,6 +80,17 @@ type Approval struct {
 	DeniedAt     *time.Time     `json:"denied_at,omitempty"`
 	DenialReason string         `json:"denial_reason,omitempty"`
 	Policy       PolicyDecision `json:"policy"`
+}
+
+// PatchPlan is the immutable identity of one validated multi-file patch.
+// It is persisted with the approval so application and restart recovery can
+// prove the exact pre- and post-mutation repository trees.
+type PatchPlan struct {
+	BaseSHA      string   `json:"base_sha"`
+	BaseTree     string   `json:"base_tree"`
+	ExpectedTree string   `json:"expected_tree"`
+	PatchSHA256  string   `json:"patch_sha256"`
+	Paths        []string `json:"paths"`
 }
 
 // PolicyDecision captures the policy outcome that led to this approval request.

@@ -35,7 +35,7 @@ func (e SubagentExecutor) ExecuteAgent(
 	expectedDeliverable := "one strict JSON object matching the role schema"
 	finalizationPrerequisiteTool := strings.TrimSpace(request.FinalizationPrerequisiteTool)
 	if finalizationPrerequisiteTool != "" {
-		expectedDeliverable = "first emit one write_file_proposal tool_request JSON; after its result, emit one strict developer role-schema JSON"
+		expectedDeliverable = "first emit one apply_patch_proposal tool_request JSON containing the complete unified diff and exact base_sha; after its result, emit one strict developer role-schema JSON"
 	}
 	if finalizationPrerequisiteTool != "" {
 		allowed := false

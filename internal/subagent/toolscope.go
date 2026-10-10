@@ -23,6 +23,7 @@ type ToolScope interface {
 var roleGatedTools = map[string]string{
 	"write_file":                "code",
 	"write_file_proposal":       "code",
+	"apply_patch_proposal":      "code",
 	"write_file_direct":         "code",
 	"create_directory":          "code",
 	"create_directory_proposal": "code",

@@ -113,14 +113,23 @@ func TestAgentRoleRunnerSetsFinalizationPrerequisiteOnlyWithProposalResolver(t *
 				runner.proposals = ProposalResolverFunc(func(context.Context, ProposalQuery) ([]ProposalReference, error) { return nil, nil })
 			}
 			request := adapterRoleRequest(RoleDeveloper)
-			request.RoleConfig.AllowedTools = append(request.RoleConfig.AllowedTools, "write_file_proposal")
+			request.RoleConfig.AllowedTools = append(request.RoleConfig.AllowedTools, "write_file_proposal", "create_directory_proposal", "shell", "apply_patch_proposal")
 			_, _ = runner.RunRole(context.Background(), request)
 			want := ""
 			if active {
-				want = "write_file_proposal"
+				want = "apply_patch_proposal"
 			}
 			if captured.FinalizationPrerequisiteTool != want {
 				t.Fatalf("prerequisite=%q, want %q", captured.FinalizationPrerequisiteTool, want)
+			}
+			if active {
+				joined := strings.Join(captured.AllowedTools, ",")
+				if strings.Contains(joined, "write_file_proposal") || strings.Contains(joined, "create_directory_proposal") || strings.Contains(joined, "shell") || !strings.Contains(joined, "apply_patch_proposal") {
+					t.Fatalf("governed developer tools=%v", captured.AllowedTools)
+				}
+				if !strings.Contains(captured.Prompt, strings.Repeat("a", 40)) {
+					t.Fatalf("trusted patch base missing from prompt")
+				}
 			}
 		})
 	}
@@ -394,6 +403,7 @@ func TestAgentRoleRunnerRequiresDeveloperProposalWithOneCorrectiveTurn(t *testin
 		Workspaces: WorkspaceResolverFunc(func(context.Context, string) (Workspace, error) {
 			return Workspace{ID: "workspace", Path: "/workspace"}, nil
 		}),
+		PatchBase: func(context.Context, string) (string, error) { return strings.Repeat("b", 40), nil },
 		Proposals: ProposalResolverFunc(func(context.Context, ProposalQuery) ([]ProposalReference, error) {
 			if calls < 2 {
 				return nil, nil
@@ -623,6 +633,7 @@ func newAdapterForTest(
 		Workspaces: workspaces,
 		Approvals:  approval,
 		Validation: validator,
+		PatchBase:  func(context.Context, string) (string, error) { return strings.Repeat("a", 40), nil },
 		Clock: func() time.Time {
 			return time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
 		},

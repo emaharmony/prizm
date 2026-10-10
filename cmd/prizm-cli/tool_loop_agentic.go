@@ -317,6 +317,7 @@ func isWriteTool(name string) bool {
 	writeTools := map[string]bool{
 		"write_file":                true,
 		"write_file_proposal":       true,
+		"apply_patch_proposal":      true,
 		"write_file_dry_run":        true,
 		"create_directory":          true,
 		"create_directory_proposal": true,
