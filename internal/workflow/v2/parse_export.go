@@ -24,5 +24,6 @@ func ParseFinalText(text string) (content string, ok bool) {
 	if !strings.Contains(text, `{"type":"final"`) && !strings.Contains(text, `{"type": "final"`) {
 		return "", false
 	}
-	return parseFinal(text), true
+	content = strings.TrimSpace(parseFinal(text))
+	return content, content != ""
 }

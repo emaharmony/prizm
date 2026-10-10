@@ -132,6 +132,7 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 	ex := b.executorFor(rt.WorkDir)
 
 	llm := func(ctx stdcontext.Context, msgs []v2.Message) (subagent.Turn, error) {
+		replyMaxTokens := subAgentReplyMaxTokens(rt.Model)
 		var sb strings.Builder
 		for _, m := range msgs {
 			sb.WriteString(m.Content)
@@ -139,7 +140,7 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 		}
 		request := provider.GenerateRequest{
 			Agent: rt.AgentID, Model: rt.Model, Prompt: sb.String(),
-			Temperature: 0.7, MaxTokens: 4096,
+			Temperature: 0.7, MaxTokens: replyMaxTokens,
 		}
 		var resp provider.GenerateResponse
 		var gerr error
@@ -158,10 +159,13 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 			}
 			chatResp, chatErr := chat.ChatGenerate(ctx, provider.ChatGenerateRequest{
 				Agent: rt.AgentID, Model: rt.Model, Messages: messages,
-				Temperature: 0.7, MaxTokens: 4096,
+				Temperature: 0.7, MaxTokens: replyMaxTokens,
 			})
 			if chatErr != nil {
 				return subagent.Turn{}, chatErr
+			}
+			if strings.TrimSpace(chatResp.Content) == "" && chatResp.OutputTokens >= replyMaxTokens {
+				return subagent.Turn{}, fmt.Errorf("model exhausted the %d-token reply allowance without final content", replyMaxTokens)
 			}
 			return subagent.Turn{Text: chatResp.Content, PromptTokens: chatResp.PromptTokens, CompletionTokens: chatResp.OutputTokens}, nil
 		} else {
@@ -212,6 +216,13 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 	return llm, parse, execFn, nil
 }
 
+func subAgentReplyMaxTokens(model string) int {
+	if strings.EqualFold(strings.TrimSpace(model), "glm-5.3:cloud") {
+		return 8192
+	}
+	return 4096
+}
+
 func (b *subAgentBackend) validateScopedWorkspace(workDir string) (string, error) {
 	if strings.TrimSpace(workDir) == "" || strings.TrimSpace(b.worktreeRoot) == "" {
 		return "", fmt.Errorf("scoped provider requires an owned run worktree")
@@ -246,6 +257,12 @@ func parseSubAgentAction(text string) subagent.Action {
 	// tool/final envelopes used by the generic delegated loop.
 	trimmed := strings.TrimSpace(text)
 	if strings.HasPrefix(trimmed, "{") && json.Valid([]byte(trimmed)) {
+		var envelope struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal([]byte(trimmed), &envelope) == nil && envelope.Type != "" {
+			return subagent.Action{}
+		}
 		return subagent.Action{Final: true, Content: trimmed}
 	}
 	return subagent.Action{}

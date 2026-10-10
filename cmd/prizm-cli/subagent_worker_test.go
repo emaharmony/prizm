@@ -23,6 +23,7 @@ type unscopedProbeProvider struct{}
 
 type chatProbeProvider struct {
 	captured provider.ChatGenerateRequest
+	response provider.ChatGenerateResponse
 }
 
 func (p *chatProbeProvider) Generate(context.Context, provider.GenerateRequest) (provider.GenerateResponse, error) {
@@ -31,6 +32,9 @@ func (p *chatProbeProvider) Generate(context.Context, provider.GenerateRequest) 
 
 func (p *chatProbeProvider) ChatGenerate(_ context.Context, request provider.ChatGenerateRequest) (provider.ChatGenerateResponse, error) {
 	p.captured = request
+	if p.response.OutputTokens != 0 || p.response.Content != "" {
+		return p.response, nil
+	}
 	return provider.ChatGenerateResponse{
 		Content:      `{"schema_version":1,"understanding":"done"}`,
 		PromptTokens: 11,
@@ -165,11 +169,31 @@ func TestSubAgentBackendUsesChatProviderForStructuredRoleOutput(t *testing.T) {
 	if turn.Text != `{"schema_version":1,"understanding":"done"}` || turn.PromptTokens != 11 || turn.CompletionTokens != 7 {
 		t.Fatalf("turn=%#v", turn)
 	}
-	if probe.captured.Model != "glm-5.3:cloud" || probe.captured.Agent != "planner" || probe.captured.MaxTokens != 4096 {
+	if probe.captured.Model != "glm-5.3:cloud" || probe.captured.Agent != "planner" || probe.captured.MaxTokens != 8192 {
 		t.Fatalf("request=%#v", probe.captured)
 	}
 	if len(probe.captured.Messages) != 2 || probe.captured.Messages[1].Content != "bounded task" {
 		t.Fatalf("messages=%#v", probe.captured.Messages)
+	}
+}
+
+func TestSubAgentBackendRejectsReplyCapConsumedWithoutContent(t *testing.T) {
+	probe := &chatProbeProvider{response: provider.ChatGenerateResponse{OutputTokens: 8192}}
+	registry := provider.NewProviderRegistry()
+	registry.Register("glm-5.3:cloud", probe, provider.ModelInfo{ProviderName: "ollama"})
+	backend := &subAgentBackend{providers: registry}
+	llm, _, _, err := backend.Bind(subagent.AgentRuntime{AgentID: "developer", Provider: "ollama", Model: "glm-5.3:cloud"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = llm(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "8192-token reply allowance") {
+		t.Fatalf("empty capped reply err=%v", err)
+	}
+}
+
+func TestSubAgentReplyMaxTokensLeavesOtherModelsUnchanged(t *testing.T) {
+	if got := subAgentReplyMaxTokens("qwen3.5:9b"); got != 4096 {
+		t.Fatalf("qwen reply max = %d, want 4096", got)
 	}
 }
 
@@ -191,6 +215,18 @@ func TestSubAgentBackendRejectsUnscopedCodexProvider(t *testing.T) {
 	}
 	if _, err = llm(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "cannot guarantee") {
 		t.Fatalf("unscoped codex err=%v", err)
+	}
+}
+
+func TestParseSubAgentActionRejectsEmptyOrMalformedFinalEnvelope(t *testing.T) {
+	for _, input := range []string{
+		`{"type":"final","content":""}`,
+		`analysis mentions {"type":"final","content":`,
+	} {
+		action := parseSubAgentAction(input)
+		if action.Final || action.Tool != "" {
+			t.Fatalf("input %q produced action %#v", input, action)
+		}
 	}
 }
 
@@ -216,6 +252,15 @@ func TestParseSubAgentActionAcceptsStrictRoleJSON(t *testing.T) {
 	toolAction := parseSubAgentAction(`{"type":"tool_request","tool":"read_file","input":{"path":"README.md"}}`)
 	if toolAction.Final || toolAction.Tool != "read_file" {
 		t.Fatalf("tool action = %#v", toolAction)
+	}
+	fenced := parseSubAgentAction("```json\n{\"type\":\"final\",\"content\":\"done\"}\n```")
+	if !fenced.Final || fenced.Content != "done" {
+		t.Fatalf("fenced final action = %#v", fenced)
+	}
+	roleWithMarker := `{"schema_version":1,"summary":"example contains \"type\":\"final\" text"}`
+	action = parseSubAgentAction(roleWithMarker)
+	if !action.Final || action.Content != roleWithMarker {
+		t.Fatalf("direct role JSON with marker text = %#v", action)
 	}
 }
 

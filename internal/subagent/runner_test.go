@@ -12,11 +12,12 @@ import (
 // scriptBackend is a mock Backend that replays a scripted sequence of model
 // turns and records tool executions.
 type scriptBackend struct {
-	turns     []Turn
-	parse     Parser
-	toolErr   error
-	toolCalls []string
-	messages  [][]v2.Message
+	turns      []Turn
+	parse      Parser
+	toolErr    error
+	toolResult string
+	toolCalls  []string
+	messages   [][]v2.Message
 }
 
 func (b *scriptBackend) Bind(_ AgentRuntime) (LLMFunc, Parser, ToolExec, error) {
@@ -34,6 +35,9 @@ func (b *scriptBackend) Bind(_ AgentRuntime) (LLMFunc, Parser, ToolExec, error) 
 		b.toolCalls = append(b.toolCalls, tool)
 		if b.toolErr != nil {
 			return "", b.toolErr
+		}
+		if b.toolResult != "" {
+			return b.toolResult, nil
 		}
 		return "ok", nil
 	}
@@ -92,20 +96,23 @@ func TestLoopRunner_ProposalToolThenRoleFinal(t *testing.T) {
 			return Action{Final: true, Content: text}
 		},
 		turns: []Turn{
-			{Text: `{"type":"tool_request","tool":"write_file_proposal","input":{"path":"feature.txt","content":"proposal"}}`},
+			{Text: `{"type":"tool_request","tool":"write_file_proposal","input":{"path":"feature.txt","content":"proposal"}}`, PromptTokens: 10, CompletionTokens: 5},
 			{Text: `{"schema_version":1,"summary":"proposed","changed_artifacts":[{"kind":"file","uri":"feature.txt"}],"handoff":{"objective":"test","reason":"proposal recorded"}}`},
 		},
 	}
 	// The existing scripted backend is intentionally simple; this focused run
 	// proves the loop accepts a proposal action then a strict role final within
 	// the narrowed two-turn budget.
-	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 2})
+	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 2, MaxTokens: 100})
 	res, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T-proposal"}, AgentRuntime{AgentID: "forge", MaxIterations: 2})
 	if err != nil || !strings.Contains(res.Summary, `"schema_version":1`) || len(backend.toolCalls) != 1 {
 		t.Fatalf("result=%+v toolCalls=%v err=%v", res, backend.toolCalls, err)
 	}
 	if len(backend.messages) < 2 || !strings.Contains(backend.messages[1][len(backend.messages[1])-1].Content, `Tool "write_file_proposal" result`) {
 		t.Fatalf("proposal result was not returned before final: %#v", backend.messages)
+	}
+	if got := backend.messages[1][len(backend.messages[1])-1].Content; !strings.Contains(got, "1 model turns and 85 aggregate tokens remain") {
+		t.Fatalf("proposal result omitted the effective budget notice: %q", got)
 	}
 }
 
@@ -142,6 +149,176 @@ func TestLoopRunner_ToolFailureIsFedBackNotFatal(t *testing.T) {
 	}
 	if !strings.Contains(res.Summary, "could not export") {
 		t.Errorf("summary = %q", res.Summary)
+	}
+}
+
+func TestClassifyAction(t *testing.T) {
+	tests := []struct {
+		name   string
+		text   string
+		action Action
+		want   string
+	}{
+		{name: "final", text: "done", action: Action{Final: true}, want: "final"},
+		{name: "tool", text: "call", action: Action{Tool: "read_file"}, want: "tool"},
+		{name: "empty", text: "  \n", want: "empty"},
+		{name: "unrecognized", text: "plain text", want: "unrecognized"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyAction(tt.text, tt.action); got != tt.want {
+				t.Fatalf("classifyAction() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWithBudgetNotice(t *testing.T) {
+	if got := withBudgetNotice("result", 3, 1200); got != "result\n3 model turns and 1200 aggregate tokens remain; finish as soon as you have enough evidence." {
+		t.Fatalf("notice = %q", got)
+	}
+	if got := withBudgetNotice("result", 3, -1); got != "result\n3 model turns remain; finish as soon as you have enough evidence." {
+		t.Fatalf("unlimited notice = %q", got)
+	}
+	if got := withBudgetNotice("result", 0, 1200); got != "result\nNo model turns remain after this response." {
+		t.Fatalf("exhausted notice = %q", got)
+	}
+}
+
+func TestLoopRunnerReservesFinalReplyAfterLateToolFeedback(t *testing.T) {
+	backend := &scriptBackend{
+		parse: lineParser,
+		turns: []Turn{
+			{Text: "TOOL read_file", PromptTokens: 400, CompletionTokens: 50},
+			{Text: "FINAL: bounded result", PromptTokens: 20, CompletionTokens: 10},
+		},
+	}
+	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 3, MaxTokens: 1600, FinalReplyReserveTokens: 100})
+	res, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T-reserve"}, AgentRuntime{AgentID: "planner"})
+	if err != nil || res.Summary != "bounded result" {
+		t.Fatalf("result=%+v err=%v", res, err)
+	}
+	if len(backend.toolCalls) != 1 || backend.toolCalls[0] != "read_file" {
+		t.Fatalf("late tool result was not preserved before finalization: %v", backend.toolCalls)
+	}
+	if got := backend.messages[1][len(backend.messages[1])-1].Content; !strings.Contains(got, "tool phase is now closed") {
+		t.Fatalf("finalization instruction missing: %q", got)
+	}
+}
+
+func TestLoopRunnerFailsWhenToolRequestedDuringFinalization(t *testing.T) {
+	backend := &scriptBackend{parse: lineParser, turns: []Turn{
+		{Text: "TOOL read_file", PromptTokens: 400, CompletionTokens: 50},
+		{Text: "TOOL search_files", PromptTokens: 20, CompletionTokens: 10},
+	}}
+	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 3, MaxTokens: 1600, FinalReplyReserveTokens: 100})
+	_, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T-ignore-reserve"}, AgentRuntime{AgentID: "planner"})
+	if err == nil || !strings.Contains(err.Error(), "did not return a final answer during its reserved finalization turn") {
+		t.Fatalf("err=%v", err)
+	}
+	if len(backend.toolCalls) != 1 || backend.toolCalls[0] != "read_file" {
+		t.Fatalf("unexpected tool executions across finalization: %v", backend.toolCalls)
+	}
+}
+
+func TestLoopRunnerFailsWhenFinalizationTurnIsEmpty(t *testing.T) {
+	backend := &scriptBackend{parse: lineParser, turns: []Turn{
+		{Text: "TOOL read_file", PromptTokens: 400, CompletionTokens: 50},
+		{Text: "", PromptTokens: 20, CompletionTokens: 10},
+	}}
+	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 3, MaxTokens: 1600, FinalReplyReserveTokens: 100})
+	_, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T-empty-final"}, AgentRuntime{AgentID: "planner"})
+	if err == nil || !strings.Contains(err.Error(), "did not return a final answer during its reserved finalization turn") {
+		t.Fatalf("err=%v", err)
+	}
+	if len(backend.messages) != 2 {
+		t.Fatalf("finalization made %d provider calls, want exactly 2 total", len(backend.messages))
+	}
+}
+
+func TestLoopRunnerFailsBeforeFinalCallWhenReserveCannotFit(t *testing.T) {
+	backend := &scriptBackend{parse: lineParser, turns: []Turn{{Text: "TOOL read_file", PromptTokens: 600, CompletionTokens: 100}}}
+	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 3, MaxTokens: 1000, FinalReplyReserveTokens: 400})
+	_, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T-no-room"}, AgentRuntime{AgentID: "planner"})
+	if err == nil || !strings.Contains(err.Error(), "lacks budget for its reserved final response") {
+		t.Fatalf("err=%v", err)
+	}
+	if len(backend.messages) != 1 {
+		t.Fatalf("unexpected extra provider call: %d", len(backend.messages))
+	}
+}
+
+func TestLoopRunnerFinalizationPreservesDenialAndToolErrorFeedback(t *testing.T) {
+	tests := []struct {
+		name         string
+		backend      *scriptBackend
+		scope        ToolScope
+		wantFeedback string
+	}{
+		{
+			name: "denial",
+			backend: &scriptBackend{parse: lineParser, turns: []Turn{
+				{Text: "TOOL write_file", PromptTokens: 400, CompletionTokens: 50},
+				{Text: "FINAL: denied safely", PromptTokens: 20, CompletionTokens: 10},
+			}},
+			scope:        DefaultToolScope(),
+			wantFeedback: "not permitted",
+		},
+		{
+			name: "tool error",
+			backend: &scriptBackend{parse: lineParser, toolErr: errors.New("offline"), turns: []Turn{
+				{Text: "TOOL read_file", PromptTokens: 400, CompletionTokens: 50},
+				{Text: "FINAL: error recorded", PromptTokens: 20, CompletionTokens: 10},
+			}},
+			wantFeedback: "failed: offline",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewLoopRunner(LoopRunnerConfig{Backend: tt.backend, Scope: tt.scope, MaxIterations: 3, MaxTokens: 1600, FinalReplyReserveTokens: 100})
+			if _, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T-feedback"}, AgentRuntime{AgentID: "planner"}); err != nil {
+				t.Fatal(err)
+			}
+			transcript := tt.backend.messages[1]
+			joined := ""
+			for _, message := range transcript {
+				joined += message.Content + "\n"
+			}
+			if !strings.Contains(joined, tt.wantFeedback) || !strings.Contains(joined, "tool phase is now closed") {
+				t.Fatalf("finalization transcript omitted feedback: %q", joined)
+			}
+		})
+	}
+}
+
+func TestLoopRunnerFinalizationFitsConfiguredReplyAllowance(t *testing.T) {
+	backend := &scriptBackend{parse: lineParser, turns: []Turn{
+		{Text: "TOOL read_file", PromptTokens: 4000, CompletionTokens: 1000},
+		{Text: "FINAL: complete near allowance", PromptTokens: 4000, CompletionTokens: 8000},
+	}}
+	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 3, MaxTokens: 20000, FinalReplyReserveTokens: 8192})
+	res, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T-full-reply"}, AgentRuntime{AgentID: "planner"})
+	if err != nil || res.Summary != "complete near allowance" {
+		t.Fatalf("result=%+v err=%v", res, err)
+	}
+	if res.PromptTokens+res.CompletionTokens != 17000 {
+		t.Fatalf("usage=%+v", res)
+	}
+}
+
+func TestLoopRunnerReserveIncludesPendingToolFeedback(t *testing.T) {
+	backend := &scriptBackend{
+		parse:      lineParser,
+		toolResult: strings.Repeat("x", 3000),
+		turns:      []Turn{{Text: "TOOL read_file", PromptTokens: 500, CompletionTokens: 100}},
+	}
+	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 3, MaxTokens: 10000, FinalReplyReserveTokens: 8192})
+	_, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T-large-feedback"}, AgentRuntime{AgentID: "planner"})
+	if err == nil || !strings.Contains(err.Error(), "lacks budget for its reserved final response") {
+		t.Fatalf("err=%v", err)
+	}
+	if len(backend.messages) != 1 {
+		t.Fatalf("large feedback allowed an unsafe final call: %d provider calls", len(backend.messages))
 	}
 }
 

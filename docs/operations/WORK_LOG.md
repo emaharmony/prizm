@@ -1049,3 +1049,46 @@ full multi-roadmap 9/10 program.
 **Next action:** run the corrected reviewer contract and restart-through-
 approval recovery as one bounded acceptance trace, then execute the same task
 in a second independent repository.
+
+## 2026-10-10 — R1 Bounded Role Finalization and Provider Blocker
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Fixed delegated final-envelope parsing so a marker with empty, missing,
+  object, or malformed content cannot publish an empty completion. Valid final
+  envelopes, tool requests, fenced finals, and strict direct role JSON remain
+  supported.
+- Added privacy-safe per-turn diagnostics, an 8,192-token GLM reply allowance,
+  and an opt-in finalization phase for the live graph runner. It accounts for
+  the actual pending tool feedback, reserves one final response, executes no
+  further tools during that phase, and fails closed if the model does not
+  return the existing strict role schema.
+- Live Prizm run `run_01M4JDQVRP089S8S9F6417WFA2` used isolated workspace
+  `workspace_9a533227548e7d4316bb1f82`. Planner finalization armed once with
+  21,031 aggregate tokens remaining and a 19,456-token conservative estimate;
+  its only finalization call returned a valid strict result and advanced the
+  graph to developer.
+- Developer turns 1 and 2 completed valid read actions. On turn 3,
+  `glm-5.3:cloud` returned no public content after consuming the complete
+  8,192-token reply allowance in private reasoning. The backend emitted an
+  explicit terminal error, and the trusted terminal notification resumed the
+  parent to failed. No proposal, approval, or mutation was recorded.
+
+**Evidence:** focused parser, CLI subagent, and runner tests passed. The prior
+embedded-NATS SQLite lock failure did not reproduce in five focused runs.
+`go build ./...`, `go vet ./...`, and `go test ./... -count=1` passed with
+workspace-local Go and temporary caches. The live trace contains only lengths,
+token counts, classifications, tool names, and terminal state; private
+reasoning and response content were not persisted in diagnostics.
+
+**Open risks:** the configured provider can consume its full bounded reply in
+private reasoning without returning actionable content. The required
+continuous restart-at-approval trace, completed reviewer report, and second
+independent Roblox Factory acceptance remain unproved. A transient resume
+error other than `ErrRunClaimed` still relies on a later durable wake.
+
+**Next action:** after the configured provider reliably returns bounded public
+content, rerun the real Prizm task through exact approval with a daemon restart,
+apply, validation, and reviewer completion. Then run the independent Roblox
+Factory preflight-doctor task from an isolated snapshot that preserves its
+existing dirty production work.

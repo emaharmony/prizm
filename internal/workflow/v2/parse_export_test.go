@@ -27,8 +27,16 @@ func TestParseFinalText(t *testing.T) {
 	if _, ok := ParseFinalText("still working"); ok {
 		t.Error("expected no final block")
 	}
-	// Final with empty content is still a final (ok=true).
-	if _, ok := ParseFinalText(`{"type":"final","content":""}`); !ok {
-		t.Error("empty-content final should still be detected")
+	if _, ok := ParseFinalText(`{"type":"final","content":""}`); ok {
+		t.Error("empty-content final must remain incomplete")
+	}
+	if _, ok := ParseFinalText(`analysis mentions {"type":"final","content":`); ok {
+		t.Error("malformed embedded marker must remain incomplete")
+	}
+	if _, ok := ParseFinalText(`{"type":"final","content":{"schema_version":1}}`); ok {
+		t.Error("object content must remain incomplete; the final protocol requires a string")
+	}
+	if _, ok := ParseFinalText(`{"type":"final"}`); ok {
+		t.Error("missing final content must remain incomplete")
 	}
 }
