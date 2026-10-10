@@ -51,6 +51,47 @@ func TestGraphDelegationOutboxBoundsBackgroundPublishByCommandDeadline(t *testin
 	}
 }
 
+func TestGraphDelegationOutboxCancelsBlockedBackgroundPublishAtCommandDeadline(t *testing.T) {
+	t.Setenv(graphRoleDelegationRequestedEnv, "1")
+	restore := configureGraphRolePublisher(graphWorkerPublisherFunc(func(ctx context.Context, _ string, _ []byte) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}))
+	defer restore()
+	outbox, _, err := newGraphDelegationOutbox(filepath.Join(t.TempDir(), "outbox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outbox.Close()
+	deadline := time.Now().Add(40 * time.Millisecond).UTC()
+	command := event.Command{EventID: "evt-blocked", Type: multiagent.GraphRoleDelegationCommandType, RunID: "run-blocked", TaskID: "task", DelegationID: "delegation", CorrelationID: "corr", IdempotencyKey: "delivery-blocked", Deadline: deadline, SchemaVersion: event.CommandSchemaVersion, Payload: json.RawMessage(`{}`)}
+	if err := outbox.Dispatch(context.Background(), graphRoleDelegationSubject, command); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("blocked publish err=%v", err)
+	}
+}
+
+func TestGraphDelegationOutboxPreservesEarlierCallerDeadline(t *testing.T) {
+	t.Setenv(graphRoleDelegationRequestedEnv, "1")
+	seen := make(chan time.Time, 1)
+	restore := configureGraphRolePublisher(graphWorkerPublisherFunc(func(ctx context.Context, _ string, _ []byte) error { d, _ := ctx.Deadline(); seen <- d; return nil }))
+	defer restore()
+	outbox, _, err := newGraphDelegationOutbox(filepath.Join(t.TempDir(), "outbox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outbox.Close()
+	callerDeadline := time.Now().Add(time.Minute).UTC()
+	ctx, cancel := context.WithDeadline(context.Background(), callerDeadline)
+	defer cancel()
+	command := event.Command{EventID: "evt-caller", Type: multiagent.GraphRoleDelegationCommandType, RunID: "run-caller", TaskID: "task", DelegationID: "delegation", CorrelationID: "corr", IdempotencyKey: "delivery-caller", Deadline: time.Now().Add(2 * time.Minute).UTC(), SchemaVersion: event.CommandSchemaVersion, Payload: json.RawMessage(`{}`)}
+	if err := outbox.Dispatch(ctx, graphRoleDelegationSubject, command); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-seen; !got.Equal(callerDeadline) {
+		t.Fatalf("deadline=%v want caller %v", got, callerDeadline)
+	}
+}
+
 func TestCLIGraphRunUsesInlineRoleRunnerWhileGraphDelegationIsDisabled(t *testing.T) {
 	t.Setenv(graphRoleDelegationRequestedEnv, "")
 	ctx := t.Context()
