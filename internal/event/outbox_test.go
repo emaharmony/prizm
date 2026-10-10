@@ -35,6 +35,69 @@ func TestOutboxAcceptOnceAndRejectKeyCollision(t *testing.T) {
 	}
 }
 
+func TestRecordOutcomeWaitsForConcurrentWriter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.db")
+	first, err := NewSQLiteOutbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := NewSQLiteOutbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+
+	cmd := testCommand("concurrent-writer")
+	if inserted, err := first.Accept(t.Context(), "s", cmd); err != nil || !inserted {
+		t.Fatalf("accept inserted=%v err=%v", inserted, err)
+	}
+
+	writer, err := first.db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Rollback()
+	if _, err := writer.ExecContext(t.Context(), `UPDATE event_outbox SET updated_at=updated_at WHERE idempotency_key=?`, cmd.IdempotencyKey); err != nil {
+		t.Fatal(err)
+	}
+
+	outcome := Outcome{EventID: "concurrent-writer-accepted", CommandEventID: cmd.EventID, RunID: cmd.RunID,
+		TaskID: cmd.TaskID, DelegationID: cmd.DelegationID, CorrelationID: cmd.CorrelationID,
+		CausationID: cmd.EventID, DeliveryKey: cmd.IdempotencyKey, Status: OutcomeAccepted,
+		Sequence: 1, OccurredAt: time.Now().UTC()}
+	result := make(chan error, 1)
+	go func() {
+		inserted, err := second.RecordOutcome(t.Context(), outcome)
+		if err == nil && !inserted {
+			err = errors.New("outcome was not inserted")
+		}
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		t.Fatalf("record outcome returned before concurrent writer released: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := writer.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("record outcome after writer release: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("record outcome did not complete after concurrent writer released")
+	}
+
+	report, err := second.Report(t.Context(), cmd.RunID)
+	if err != nil || len(report) != 1 || len(report[0].Outcomes) != 1 || report[0].Outcomes[0].Status != OutcomeAccepted {
+		t.Fatalf("report=%+v err=%v", report, err)
+	}
+}
+
 type recordingPublisher struct {
 	mu    sync.Mutex
 	calls int

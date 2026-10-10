@@ -48,7 +48,10 @@ func NewSQLiteOutbox(path string) (*SQLiteOutbox, error) {
 			return nil, err
 		}
 	}
-	db, err := sql.Open(prismsqlite.DriverName, path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	// Every explicit transaction below reads state before it writes. Acquire the
+	// write reservation at BeginTx so concurrent outcome writers wait under the
+	// busy timeout instead of failing a deferred read-to-write upgrade.
+	db, err := sql.Open(prismsqlite.DriverName, path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("event outbox: open: %w", err)
 	}
