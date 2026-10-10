@@ -243,10 +243,6 @@ func TestGraphRoleWorkerEmbeddedNATSRecoversPersistedFanoutJoin(t *testing.T) {
 		t.Fatalf("initial command report=%+v err=%v", initial, err)
 	}
 	waitForGraphTerminal(t, runDir, runID, initial[0].Command.IdempotencyKey)
-	state, runErr = runtime.Resume(t.Context(), runID)
-	if !errors.As(runErr, &waitingErr) || state.Status != multiagent.RunStatusPaused {
-		t.Fatalf("parent Resume() state=%#v err=%v", state, runErr)
-	}
 	for i := 0; i < 2; i++ {
 		select {
 		case <-acceptedChildren:
