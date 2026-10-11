@@ -76,12 +76,24 @@ Before generating or changing Prizm code, read and follow
   package-justification template from `PACKAGE_BOUNDARIES.md`.
 - If ownership is ambiguous, resolve the boundary before generating code.
 
-## Roadmap and Work Log Discipline
+## Roadmap and Work Log Discipline (THE RULE — hard requirement)
 
-For every project implementation, debugging, review, or planning session, read
-[Prizm Roadmap](docs/architecture/PRIZM_ROADMAP.md), the current
-[Plan of Action](docs/operations/PLAN_OF_ACTION.md), and the latest
-[Work Log](docs/operations/WORK_LOG.md) entry before deeper work. At session
-end, update the plan handoff and append a work-log entry that references the
-applicable roadmap IDs, evidence, risks, and next action. Do not record secrets
-or user data in the work log.
+This project's goal/roadmap document is
+[Prizm Roadmap](docs/architecture/PRIZM_ROADMAP.md) together with the current
+[Plan of Action](docs/operations/PLAN_OF_ACTION.md); its task tracker is the
+[Work Log](docs/operations/WORK_LOG.md).
+
+**RULE 1 — Alignment before work:** For every implementation, debugging,
+review, or planning session, read the Roadmap, Plan of Action, and latest Work
+Log entry before deeper work. Confirm the planned work aligns with a roadmap
+phase/ID. If it does not map, do not silently proceed — add it to the roadmap
+explicitly or push back as out of scope.
+
+**RULE 2 — Completion means the log is written:** A task is not complete when
+the code is done; it is complete when the plan handoff is updated and a
+work-log entry is appended referencing the applicable roadmap IDs, evidence,
+risks, and next action. Do not record secrets or user data in the work log.
+
+These rules are universal across all projects (see Spellforge's AGENTS.md for
+the generalized statement); where filenames differ, the discipline is the
+same: read and align with the roadmap first, log completed work after.
