@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -242,6 +243,14 @@ func TestParseSubAgentActionRejectsEmptyOrMalformedFinalEnvelope(t *testing.T) {
 	}
 }
 
+func TestParseSubAgentActionAcceptsReorderedCanonicalFinal(t *testing.T) {
+	input := "{\n  \"content\": \"done\",\n  \"type\": \"final\"\n}"
+	action := parseSubAgentAction(input)
+	if !action.Final || action.Tool != "" || action.Content != "done" {
+		t.Fatalf("action = %#v", action)
+	}
+}
+
 func TestSubAgentBackendRejectsScopedProviderOutsideOwnedWorktree(t *testing.T) {
 	registry := provider.NewProviderRegistry()
 	registry.Register("scoped", &scopedProbeProvider{}, provider.ModelInfo{ProviderName: "alias"})
@@ -266,20 +275,67 @@ func TestParseSubAgentActionAcceptsStrictRoleJSON(t *testing.T) {
 		t.Fatalf("tool action = %#v", toolAction)
 	}
 	fenced := parseSubAgentAction("```json\n{\"type\":\"final\",\"content\":\"done\"}\n```")
-	if !fenced.Final || fenced.Content != "done" {
-		t.Fatalf("fenced final action = %#v", fenced)
+	if fenced.Final || fenced.Tool != "" {
+		t.Fatalf("fenced final must be rejected: %#v", fenced)
 	}
 	roleWithMarker := `{"schema_version":1,"summary":"example contains \"type\":\"final\" text"}`
 	action = parseSubAgentAction(roleWithMarker)
 	if !action.Final || action.Content != roleWithMarker {
 		t.Fatalf("direct role JSON with marker text = %#v", action)
 	}
+	roleWithToolJSON := `{"schema_version":1,"summary":"example contains {\"type\":\"tool_request\",\"tool\":\"apply_patch_proposal\"}"}`
+	action = parseSubAgentAction(roleWithToolJSON)
+	if !action.Final || action.Tool != "" || action.Content != roleWithToolJSON {
+		t.Fatalf("direct role JSON with embedded tool JSON = %#v", action)
+	}
 }
 
 func TestParseSubAgentActionPrioritizesToolRequestOverFinal(t *testing.T) {
 	input := `{"type":"final","content":"premature"}\n{"type":"tool_request","tool":"write_file_proposal","input":{"path":"feature.txt","content":"approved"}}`
 	action := parseSubAgentAction(input)
-	if action.Final || action.Tool != "write_file_proposal" || action.Input["path"] != "feature.txt" {
+	if action.Final || action.Tool != "" {
 		t.Fatalf("action = %#v", action)
+	}
+}
+
+func TestParseSubAgentActionRejectsEmbeddedEnvelopes(t *testing.T) {
+	inputs := []string{
+		`prose {"type":"final","content":"premature"}`,
+		"prose {\n  \"input\": {\"path\": \"README.md\"},\n  \"tool\": \"read_file\",\n  \"type\": \"tool_request\"\n}\n{\"type\":\"final\",\"content\":\"premature\"}",
+		"```json\n{\"type\":\"tool_request\",\"tool\":\"read_file\",\"input\":{\"path\":\"README.md\"}}\n```",
+	}
+	for _, input := range inputs {
+		action := parseSubAgentAction(input)
+		if action.Final || action.Tool != "" {
+			t.Fatalf("input %q produced action %#v", input, action)
+		}
+	}
+}
+
+func TestParseSubAgentActionAcceptsPrettyAtomicPatchEnvelope(t *testing.T) {
+	patch := "diff --git a/a.go b/a.go\n@@ -1 +1 @@\n-func old() {}\n+func new() { println(`{ok}`) }\n"
+	encodedPatch, err := json.Marshal(patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := "{\n  \"input\": {\"patch\": " + string(encodedPatch) + ", \"base_sha\": \"6de4579\"},\n  \"tool\": \"apply_patch_proposal\",\n  \"type\": \"tool_request\"\n}"
+	action := parseSubAgentAction(input)
+	if action.Final || action.Tool != "apply_patch_proposal" || action.Input["patch"] != patch || action.Input["base_sha"] != "6de4579" {
+		t.Fatalf("action = %#v", action)
+	}
+}
+
+func TestParseSubAgentActionRejectsTypedRoleAndMalformedAtomicPatch(t *testing.T) {
+	inputs := []string{
+		`{"type":"developer_result","summary":"done"}`,
+		`{"type":"tool_request","tool":"apply_patch_proposal","input":{"patch":"diff"}}`,
+		`{"type":"tool_request","tool":"apply_patch_proposal","input":{"patch":[],"base_sha":"abc"}}`,
+		`{"type":"tool_request","tool":"apply_patch_proposal","input":{"patch":"diff","base_sha":"abc","extra":"no"}}`,
+	}
+	for _, input := range inputs {
+		action := parseSubAgentAction(input)
+		if action.Final || action.Tool != "" {
+			t.Fatalf("input %s produced action %#v", input, action)
+		}
 	}
 }

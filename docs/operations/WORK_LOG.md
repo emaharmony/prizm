@@ -1159,3 +1159,43 @@ repository acceptance remain unproved.
 clean acceptance clone, restart only at the exact approval pause, and require
 apply, full validation, and reviewer completion before advancing to the
 independent Roblox Factory snapshot.
+
+## 2026-10-10 — R1 Canonical Proposal Envelope Repair
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Corrected live run `run_01M4M4ZKYNGND1677XW8YCQMM8` used the registered
+  `software-delivery-v5` graph and clean `6de4579` acceptance clone. It failed
+  safely before proposal when the developer returned a valid JSON object that
+  the formatting-sensitive text parser classified as unrecognized. No raw
+  response content was persisted, so the exact returned keys are unknown; no
+  proposal, approval, or mutation occurred.
+- Added a strict complete-object decoder for governed worker tool requests and
+  typed finals. It accepts member reordering and whitespace, preserves decoded
+  patch bytes including braces, requires exact top-level envelope fields, and
+  requires `apply_patch_proposal` input to contain exactly non-empty string
+  `patch` and `base_sha` fields. Prose, fenced wrappers, multiple objects,
+  unknown typed objects, malformed inputs, and embedded envelope text fail
+  closed. Existing embedded-envelope parsing remains available to legacy
+  `workflow/v2` callers only.
+- The prerequisite phase now supplies the exact canonical atomic-proposal
+  envelope and input schema. New diagnostics record only fixed discriminator
+  and tool classes, known-key presence, key counts, and value kinds; they do
+  not record response values, patch content, SHA content, or private reasoning.
+
+**Evidence:** focused parser, subagent runner, and production worker tests pass,
+including pretty and reordered JSON, exact patch round-trip with source braces,
+strict typed-final parsing, role JSON isolation, and embedded-envelope
+rejection. `go build ./...`, `go vet ./...`, and `go test ./... -count=1` pass
+with workspace-local caches and temporary storage. Independent review found no
+P1/P2 blocker for one corrected bounded live trial.
+
+**Open risks:** native provider tool calls remain outside this repair; the
+worker continues to use the canonical text contract. Live provider completion,
+the continuous restart-at-approval trace, completed reviewer result, and the
+independent real-repository acceptance trace remain unproved.
+
+**Next action:** commit and deploy this exact parser repair to the verified gate
+daemon, then execute the unchanged registered task once. Review the complete
+proposal before approval, restart the same daemon and database while paused,
+and require apply, validation, and reviewer completion before advancing.

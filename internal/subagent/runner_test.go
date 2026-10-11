@@ -527,6 +527,15 @@ func TestShouldEnterPrerequisiteFullBranchBoundary(t *testing.T) {
 	}
 }
 
+func TestPrerequisiteInstructionDefinesAtomicPatchEnvelope(t *testing.T) {
+	instruction := prerequisiteInstruction("apply_patch_proposal")
+	for _, required := range []string{`"type":"tool_request"`, `"tool":"apply_patch_proposal"`, `"patch":"<complete unified diff>"`, `"base_sha":"<exact current git HEAD SHA>"`, "exactly one JSON object"} {
+		if !strings.Contains(instruction, required) {
+			t.Fatalf("instruction missing %q: %s", required, instruction)
+		}
+	}
+}
+
 func TestLoopRunnerAlreadySatisfiedPrerequisiteUsesNormalFinalization(t *testing.T) {
 	backend := &scriptBackend{parse: lineParser, turns: []Turn{
 		{Text: "TOOL write_file_proposal", PromptTokens: 4000, CompletionTokens: 100},

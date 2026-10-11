@@ -259,26 +259,96 @@ func (b *subAgentBackend) validateScopedWorkspace(workDir string) (string, error
 }
 
 func parseSubAgentAction(text string) subagent.Action {
-	if toolName, input, ok := v2.ParseToolRequestText(text); ok {
+	if toolName, input, ok := v2.ParseCanonicalToolRequestText(text); ok {
 		return subagent.Action{Tool: toolName, Input: input}
-	}
-	if content, ok := v2.ParseFinalText(text); ok {
-		return subagent.Action{Final: true, Content: content}
 	}
 	// Multi-agent role prompts require the role schema itself as the final
 	// JSON object. Accept that strict object directly after ruling out the
-	// tool/final envelopes used by the generic delegated loop.
+	// tool envelope used by the generic delegated loop.
 	trimmed := strings.TrimSpace(text)
 	if strings.HasPrefix(trimmed, "{") && json.Valid([]byte(trimmed)) {
-		var envelope struct {
-			Type string `json:"type"`
+		var envelope map[string]json.RawMessage
+		if json.Unmarshal([]byte(trimmed), &envelope) != nil {
+			return subagent.Action{}
 		}
-		if json.Unmarshal([]byte(trimmed), &envelope) == nil && envelope.Type != "" {
+		var kind string
+		if raw, exists := envelope["type"]; exists {
+			_ = json.Unmarshal(raw, &kind)
+		}
+		logSubAgentResponseShape(envelope, kind)
+		if kind == "final" {
+			if content, ok := v2.ParseCanonicalFinalText(trimmed); ok {
+				return subagent.Action{Final: true, Content: content}
+			}
+			return subagent.Action{}
+		}
+		if kind != "" {
 			return subagent.Action{}
 		}
 		return subagent.Action{Final: true, Content: trimmed}
 	}
 	return subagent.Action{}
+}
+
+func logSubAgentResponseShape(envelope map[string]json.RawMessage, kind string) {
+	discriminator := "missing"
+	switch kind {
+	case "tool_request", "final":
+		discriminator = kind
+	case "":
+	default:
+		discriminator = "other"
+	}
+	toolClass := "missing"
+	if raw, exists := envelope["tool"]; exists {
+		var toolName string
+		if json.Unmarshal(raw, &toolName) != nil {
+			toolClass = "non_string"
+		} else if toolName == "apply_patch_proposal" {
+			toolClass = "apply_patch_proposal"
+		} else {
+			toolClass = "other"
+		}
+	}
+	inputKind, inputKeys, patchKind, baseKind := "missing", 0, "missing", "missing"
+	if raw, exists := envelope["input"]; exists {
+		var input map[string]json.RawMessage
+		if json.Unmarshal(raw, &input) == nil && input != nil {
+			inputKind, inputKeys = "object", len(input)
+			patchKind = jsonValueKind(input["patch"])
+			baseKind = jsonValueKind(input["base_sha"])
+		} else {
+			inputKind = jsonValueKind(raw)
+		}
+	}
+	log.Printf("[SUBAGENT] response_shape root_kind=object discriminator=%s top_level_keys=%d has_type=%t has_tool=%t has_input=%t has_schema_version=%t tool_class=%s input_kind=%s input_keys=%d patch_kind=%s base_sha_kind=%s",
+		discriminator, len(envelope), envelope["type"] != nil, envelope["tool"] != nil, envelope["input"] != nil, envelope["schema_version"] != nil, toolClass, inputKind, inputKeys, patchKind, baseKind)
+}
+
+func jsonValueKind(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "missing"
+	}
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return "invalid"
+	}
+	switch value.(type) {
+	case string:
+		return "string"
+	case map[string]any:
+		return "object"
+	case []any:
+		return "array"
+	case bool:
+		return "boolean"
+	case float64:
+		return "number"
+	case nil:
+		return "null"
+	default:
+		return "other"
+	}
 }
 
 // subAgentPublisher publishes completions back onto the completion subject.
