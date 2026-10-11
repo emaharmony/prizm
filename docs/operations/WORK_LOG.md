@@ -1235,7 +1235,6 @@ test gate, and independent diff review are complete. Live completion,
 continuous restart at approval, completed reviewer, and independent-repository
 acceptance remain unproved.
 
-**Next action:** complete full local validation and independent review, then
-checkpoint and deploy the exact recount repair. Run the unchanged registered
-task once, stop at proposal for content review, and grant only after the same
-daemon/database restart proves recovery.
+**Next action:** checkpoint and deploy the exact recount repair. Run the
+unchanged registered task once, stop at proposal for content review, and grant
+only after the same daemon/database restart proves recovery.
