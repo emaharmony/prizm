@@ -19,12 +19,14 @@ type scriptBackend struct {
 	toolResult string
 	toolCalls  []string
 	messages   [][]v2.Message
+	allowances []ReplyAllowance
 }
 
 func (b *scriptBackend) Bind(_ AgentRuntime) (LLMFunc, Parser, ToolExec, error) {
 	i := 0
-	llm := func(_ context.Context, messages []v2.Message) (Turn, error) {
+	llm := func(_ context.Context, messages []v2.Message, allowance ReplyAllowance) (Turn, error) {
 		b.messages = append(b.messages, append([]v2.Message(nil), messages...))
+		b.allowances = append(b.allowances, allowance)
 		if i >= len(b.turns) {
 			return Turn{Text: "FINAL: done (ran out of script)"}, nil
 		}
@@ -198,7 +200,7 @@ func TestLoopRunnerReservesFinalReplyAfterLateToolFeedback(t *testing.T) {
 			{Text: "FINAL: bounded result", PromptTokens: 20, CompletionTokens: 10},
 		},
 	}
-	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 3, MaxTokens: 1600, FinalReplyReserveTokens: 100})
+	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 3, MaxTokens: 1200, FinalReplyReserveTokens: 100})
 	res, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T-reserve", FinalResponseContract: contract}, AgentRuntime{AgentID: "planner"})
 	if err != nil || res.Summary != "bounded result" {
 		t.Fatalf("result=%+v err=%v", res, err)
@@ -222,7 +224,7 @@ func TestLoopRunnerFailsWhenToolRequestedDuringFinalization(t *testing.T) {
 		{Text: "TOOL read_file", PromptTokens: 400, CompletionTokens: 50},
 		{Text: "TOOL search_files", PromptTokens: 20, CompletionTokens: 10},
 	}}
-	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 3, MaxTokens: 1600, FinalReplyReserveTokens: 100})
+	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 3, MaxTokens: 1200, FinalReplyReserveTokens: 100})
 	_, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T-ignore-reserve"}, AgentRuntime{AgentID: "planner"})
 	if err == nil || !strings.Contains(err.Error(), "did not return a final answer during its reserved finalization turn") {
 		t.Fatalf("err=%v", err)
@@ -237,7 +239,7 @@ func TestLoopRunnerFailsWhenFinalizationTurnIsEmpty(t *testing.T) {
 		{Text: "TOOL read_file", PromptTokens: 400, CompletionTokens: 50},
 		{Text: "", PromptTokens: 20, CompletionTokens: 10},
 	}}
-	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 3, MaxTokens: 1600, FinalReplyReserveTokens: 100})
+	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 3, MaxTokens: 1200, FinalReplyReserveTokens: 100})
 	_, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T-empty-final"}, AgentRuntime{AgentID: "planner"})
 	if err == nil || !strings.Contains(err.Error(), "did not return a final answer during its reserved finalization turn") {
 		t.Fatalf("err=%v", err)

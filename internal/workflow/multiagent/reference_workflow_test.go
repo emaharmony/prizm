@@ -10,22 +10,23 @@ import (
 	"github.com/emaharmony/prizm/internal/event"
 )
 
-func TestDefaultReferenceDefinitionSafetyCeilings(t *testing.T) {
+func TestDefaultReferenceDefinitionResourceBudgetsAreUnlimited(t *testing.T) {
 	definition := DefaultReferenceDefinition()
 	if err := definition.Validate(); err != nil {
 		t.Fatalf("default reference definition: %v", err)
 	}
-	if definition.ID != ReferenceWorkflowID || definition.Budgets.MaxTransitions != 12 {
+	if definition.ID != ReferenceWorkflowID || definition.Budgets.MaxTransitions != Unlimited {
 		t.Fatalf("identity/budget = %q/%d", definition.ID, definition.Budgets.MaxTransitions)
 	}
-	if definition.Budgets.MaxTesterToDeveloperLoops != 2 ||
-		definition.Budgets.MaxReviewerToDeveloperLoops != 1 ||
-		definition.Budgets.MaxTokens != 60_000 ||
+	if definition.Budgets.MaxTesterToDeveloperLoops != Unlimited ||
+		definition.Budgets.MaxReviewerToDeveloperLoops != Unlimited ||
+		definition.Budgets.MaxRepeatedFailure != Unlimited ||
+		definition.Budgets.MaxTokens != Unlimited ||
 		definition.Budgets.MaxDuration != 45*time.Minute {
 		t.Fatalf("safety budgets = %#v", definition.Budgets)
 	}
 	wantVisits := map[Role]Limit{
-		RolePlanner: 1, RoleDeveloper: 4, RoleTester: 3, RoleReviewer: 2,
+		RolePlanner: Unlimited, RoleDeveloper: Unlimited, RoleTester: Unlimited, RoleReviewer: Unlimited,
 	}
 	if !reflect.DeepEqual(definition.Budgets.MaxVisitsPerRole, wantVisits) {
 		t.Fatalf("role visits = %v, want %v", definition.Budgets.MaxVisitsPerRole, wantVisits)
@@ -54,7 +55,7 @@ func TestDefaultReferenceDefinitionSafetyCeilings(t *testing.T) {
 	}
 }
 
-func TestReferenceOverridesOnlyNarrowAuthority(t *testing.T) {
+func TestReferenceOverridesOptIntoResourceLimits(t *testing.T) {
 	transitions := Limit(8)
 	tokens := Limit(40_000)
 	definition, err := ApplyReferenceOverrides(DefaultReferenceDefinition(), ReferenceWorkflowInput{
@@ -80,16 +81,6 @@ func TestReferenceOverridesOnlyNarrowAuthority(t *testing.T) {
 		definition.Budgets.MaxVisitsPerRole[RoleDeveloper] != 3 ||
 		definition.Budgets.MaxDuration != 30*time.Minute {
 		t.Fatalf("effective definition = %#v", definition)
-	}
-
-	widened := Limit(13)
-	_, err = ApplyReferenceOverrides(DefaultReferenceDefinition(), ReferenceWorkflowInput{
-		Objective: "fix a bounded bug",
-		Workspace: "/repo",
-		Budgets:   ReferenceBudgetOverrides{MaxTransitions: &widened},
-	})
-	if err == nil || !strings.Contains(err.Error(), "exceeds safety ceiling") {
-		t.Fatalf("expected widening rejection, got %v", err)
 	}
 
 	_, err = ApplyReferenceOverrides(DefaultReferenceDefinition(), ReferenceWorkflowInput{

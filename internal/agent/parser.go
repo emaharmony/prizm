@@ -29,6 +29,8 @@ type AgentResponse struct {
 	ToolInput map[string]any    `json:"input,omitempty"`
 }
 
+const noPublicAnswer = "The model did not return a public answer."
+
 // ParseAgentOutput attempts to parse LLM output as JSON. It recognizes two shapes:
 //
 //	{"type": "final", "content": "..."}     → final response
@@ -46,34 +48,36 @@ func ParseAgentOutput(raw string) AgentResponse {
 
 	var parsed AgentResponse
 	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
-		// Not valid JSON — treat as final text response
-		return AgentResponse{
-			Type:    ResponseFinal,
-			Content: raw,
+		public, sanitizeErr := PublicResponseText(raw)
+		if sanitizeErr != nil {
+			return AgentResponse{Type: ResponseFinal, Content: noPublicAnswer}
+		}
+		text = extractJSON(strings.TrimSpace(public))
+		if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+			if strings.HasPrefix(strings.TrimSpace(text), "{") {
+				return AgentResponse{Type: ResponseFinal, Content: noPublicAnswer}
+			}
+			return AgentResponse{Type: ResponseFinal, Content: public}
 		}
 	}
 
 	switch parsed.Type {
 	case "final":
+		content, err := PublicResponseText(parsed.Content)
+		if err != nil || strings.TrimSpace(content) == "" {
+			content = noPublicAnswer
+		}
 		return AgentResponse{
 			Type:    ResponseFinal,
-			Content: parsed.Content,
+			Content: content,
 		}
 	case "tool_request":
 		if parsed.ToolName == "" {
-			// Missing tool name — fall back to final response
-			return AgentResponse{
-				Type:    ResponseFinal,
-				Content: raw,
-			}
+			return AgentResponse{Type: ResponseFinal, Content: noPublicAnswer}
 		}
 		return parsed
 	default:
-		// Unknown type — fall back to final response
-		return AgentResponse{
-			Type:    ResponseFinal,
-			Content: raw,
-		}
+		return AgentResponse{Type: ResponseFinal, Content: noPublicAnswer}
 	}
 }
 
@@ -91,9 +95,16 @@ func ParseAgentOutputWithFallback(raw string) AgentResponse {
 	if parsed.Type == ResponseToolRequest {
 		return parsed
 	}
+	if parsed.Content == noPublicAnswer {
+		return parsed
+	}
 
 	// Standard parser returned final — but maybe there's an embedded tool_request
-	text := strings.TrimSpace(raw)
+	text, err := PublicResponseText(raw)
+	if err != nil {
+		return AgentResponse{Type: ResponseFinal, Content: noPublicAnswer}
+	}
+	text = strings.TrimSpace(text)
 
 	// Find all occurrences of "tool_request" in the text
 	searchText := text
@@ -148,6 +159,47 @@ func ParseAgentOutputWithFallback(raw string) AgentResponse {
 
 	// No tool_request found — return the final response from standard parser
 	return parsed
+}
+
+// PublicResponseText removes explicit private-reasoning blocks from text that
+// is about to be shown or persisted as an agent answer. Markdown code spans
+// are preserved, and an incomplete leading block fails closed.
+func PublicResponseText(text string) (string, error) {
+	trimmed := strings.TrimLeft(text, " \t\r\n")
+	lowerTrimmed := strings.ToLower(trimmed)
+	if strings.HasPrefix(lowerTrimmed, "<think>") && !strings.Contains(lowerTrimmed, "</think>") {
+		return "", fmt.Errorf("unterminated <think> block")
+	}
+
+	lower := strings.ToLower(text)
+	var out strings.Builder
+	start := 0
+	inFence, inCode := false, false
+	for i := 0; i < len(text); {
+		if strings.HasPrefix(text[i:], "```") {
+			inFence = !inFence
+			i += 3
+			continue
+		}
+		if !inFence && text[i] == '`' {
+			inCode = !inCode
+			i++
+			continue
+		}
+		if !inFence && !inCode && strings.HasPrefix(lower[i:], "<think>") {
+			endRel := strings.Index(lower[i+len("<think>"):], "</think>")
+			if endRel < 0 {
+				return "", fmt.Errorf("unterminated <think> block")
+			}
+			out.WriteString(text[start:i])
+			i += len("<think>") + endRel + len("</think>")
+			start = i
+			continue
+		}
+		i++
+	}
+	out.WriteString(text[start:])
+	return strings.TrimSpace(out.String()), nil
 }
 
 // extractJSON tries to pull JSON content out of markdown code fences.

@@ -1,6 +1,9 @@
 package agent
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -219,6 +222,23 @@ func TestCompressionConfig_Defaults(t *testing.T) {
 	}
 	if cfg.MaxContext != 400 {
 		t.Errorf("expected max context 400, got %d", cfg.MaxContext)
+	}
+}
+
+func TestContextAgentNeverPromotesThinkingField(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"response": "",
+			"thinking": "PRIVATE_CANARY",
+		})
+	}))
+	defer server.Close()
+
+	ca := NewContextAgent(t.TempDir(), DefaultCompressionConfig())
+	ca.ollamaURL = server.URL
+	result, err := ca.callOllama("public context", "task")
+	if err == nil || result != "" || strings.Contains(err.Error(), "PRIVATE_CANARY") {
+		t.Fatalf("expected privacy-safe no-public-answer failure, result=%q err=%v", result, err)
 	}
 }
 

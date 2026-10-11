@@ -77,13 +77,15 @@ func (s *PersistenceStage) Execute(ctx context.Context, rc *RunContext) (*RunCon
 		}, nil
 	}
 
-	// 3. Write output.md — the LLM's response (if available)
-	if rc.LLMResponse != "" {
-		outputPath := filepath.Join(runDir, "output.md")
-		if err := os.WriteFile(outputPath, []byte(rc.LLMResponse), 0644); err != nil {
-			// Output write failure is non-fatal — the important artifacts are
-			// events.jsonl and summary.json
-		}
+	// 3. Write output.md — the LLM's public response, if one is available.
+	outputPath := filepath.Join(runDir, "output.md")
+	publicResponse := publicStageResponse(rc.LLMResponse)
+	if err := writePublicOutput(outputPath, publicResponse); err != nil {
+		return rc, &StageResult{
+			StageName: s.Name(),
+			Success:   false,
+			Error:     "failed to persist public output artifact",
+		}, nil
 	}
 
 	// 4. Write prompt.md — the task prompt
@@ -110,6 +112,55 @@ func (s *PersistenceStage) Execute(ctx context.Context, rc *RunContext) (*RunCon
 			"event_count":  len(rc.Events),
 		},
 	}, nil
+}
+
+func writePublicOutput(outputPath, publicResponse string) error {
+	return writePublicOutputUsing(outputPath, publicResponse, os.CreateTemp)
+}
+
+func writePublicOutputUsing(outputPath, publicResponse string, createTemp func(string, string) (*os.File, error)) error {
+	removeExisting := func() error {
+		if err := os.Remove(outputPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+
+	if publicResponse == "" {
+		return removeExisting()
+	}
+
+	tmp, err := createTemp(filepath.Dir(outputPath), ".output.md-*")
+	if err != nil {
+		if removeErr := removeExisting(); removeErr != nil {
+			return removeErr
+		}
+		return err
+	}
+	tempPath := tmp.Name()
+	_, writeErr := tmp.WriteString(publicResponse)
+	closeErr := tmp.Close()
+	if writeErr != nil || closeErr != nil {
+		_ = os.Remove(tempPath)
+		if removeErr := removeExisting(); removeErr != nil {
+			return removeErr
+		}
+		if writeErr != nil {
+			return writeErr
+		}
+		return closeErr
+	}
+
+	// Rename installs the staged artifact. If replacement fails, delete the
+	// old artifact before returning failure.
+	if err := os.Rename(tempPath, outputPath); err != nil {
+		_ = os.Remove(tempPath)
+		if removeErr := removeExisting(); removeErr != nil {
+			return removeErr
+		}
+		return err
+	}
+	return nil
 }
 
 // Rollback removes the artifacts created by this stage.

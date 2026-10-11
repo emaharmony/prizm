@@ -10,6 +10,45 @@ import (
 	"testing"
 )
 
+func TestPatchSourceRangesTreatsRemovedHeaderLikeLineAsHunkContent(t *testing.T) {
+	patch := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n" +
+		"@@ -1 +1 @@\n--- a/covered.txt\n+replacement\n" +
+		"@@ -10 +10 @@\n-old\n+new\n"
+
+	ranges, err := PatchSourceRanges(patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []PatchSourceRange{
+		{Path: "README.md", StartLine: 1, LineCount: 1},
+		{Path: "README.md", StartLine: 10, LineCount: 1},
+	}
+	if len(ranges) != len(want) {
+		t.Fatalf("ranges=%+v, want %+v", ranges, want)
+	}
+	for i := range want {
+		if ranges[i] != want[i] {
+			t.Fatalf("ranges=%+v, want %+v", ranges, want)
+		}
+	}
+}
+
+func TestPatchSourceRangesHandlesAddedAndDeletedFiles(t *testing.T) {
+	patch := "diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n" +
+		"@@ -0,0 +1 @@\n+new\n" +
+		"diff --git a/deleted.txt b/deleted.txt\ndeleted file mode 100644\n--- a/deleted.txt\n+++ /dev/null\n" +
+		"@@ -1 +0,0 @@\n-old\n"
+
+	ranges, err := PatchSourceRanges(patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []PatchSourceRange{{Path: "deleted.txt", StartLine: 1, LineCount: 1}}
+	if len(ranges) != len(want) || ranges[0] != want[0] {
+		t.Fatalf("ranges=%+v, want %+v", ranges, want)
+	}
+}
+
 func TestPlanAndApplyPatchAtomicallyChangesMultipleFiles(t *testing.T) {
 	root := initRepo(t)
 	ctx := context.Background()

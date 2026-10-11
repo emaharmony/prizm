@@ -541,11 +541,11 @@ func validateCycles(def WorkflowDefinition, idx *PositionIndex) Diagnostics {
 		}
 		cyclicEdges = append(cyclicEdges, e)
 
-		if e.Loop == nil || e.Loop.MaxTraversals <= 0 {
+		if e.Loop == nil || e.Loop.MaxTraversals < -1 || e.Loop.MaxTraversals == 0 {
 			diags = append(diags, Diagnostic{
 				Severity: SeverityError,
 				Rule:     "cycle.unbounded-loop-edge",
-				Message:  fmt.Sprintf("edge %q participates in a cycle but has no bounded loop policy (loop.maxTraversals must be > 0)", e.ID),
+				Message:  fmt.Sprintf("edge %q participates in a cycle but has no loop policy (loop.maxTraversals must be -1 for unlimited or a positive bound)", e.ID),
 				EdgeID:   e.ID,
 				NodeID:   e.From,
 			})
@@ -847,13 +847,11 @@ func validateNodeStringList(nodeID, fieldPath, fieldName string, values []string
 // because a finite global ceiling is stricter, and — unconditionally,
 // regardless of whether an edge was found to sit inside a cycle by
 // validateCycles — rejects any loop policy whose MaxTraversals is not a
-// positive integer. The overlap with validateCycles' cycle.unbounded-
+// positive integer or the unlimited sentinel. The overlap with validateCycles'
 // loop-edge is intentional: that check only fires for edges Tarjan actually
 // found inside a cycle and only catches a *missing* Loop field entirely;
 // this check fires for every edge that *has* a Loop field, anywhere in the
-// graph, and specifically catches an explicit but unsafe MaxTraversals
-// value (including -1, which is otherwise the valid "unlimited" sentinel
-// for every other budget dimension in this schema).
+// graph, and specifically catches an invalid MaxTraversals value.
 func validateSchemaBudgets(def WorkflowDefinition, idx *PositionIndex) Diagnostics {
 	var diags Diagnostics
 	b := def.Spec.Budgets
@@ -879,11 +877,11 @@ func validateSchemaBudgets(def WorkflowDefinition, idx *PositionIndex) Diagnosti
 		if e.Loop == nil {
 			continue
 		}
-		if e.Loop.MaxTraversals <= 0 {
+		if e.Loop.MaxTraversals < -1 || e.Loop.MaxTraversals == 0 {
 			diags = append(diags, Diagnostic{
 				Severity: SeverityError,
 				Rule:     "budget.unsafe-unlimited-loop",
-				Message:  fmt.Sprintf("edge %q loop.maxTraversals = %d is invalid: a loop budget must always be a positive integer (-1/unlimited is not allowed for loops, even though it is allowed for other budget dimensions)", e.ID, e.Loop.MaxTraversals),
+				Message:  fmt.Sprintf("edge %q loop.maxTraversals = %d is invalid: use -1 for unlimited or a positive bound", e.ID, e.Loop.MaxTraversals),
 				EdgeID:   e.ID,
 			})
 		}

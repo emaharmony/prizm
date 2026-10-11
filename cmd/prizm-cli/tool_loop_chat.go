@@ -16,7 +16,6 @@ import (
 	"github.com/emaharmony/prizm/internal/tool"
 )
 
-const maxChatToolIterations = 100 // V70: raised from 10 to allow full research+execution cycles
 const chatToolLoopTimeout = 2 * time.Minute
 const approvalWaitTimeout = 60 * time.Second // V74: how long to block for interactive tool approval
 
@@ -44,41 +43,22 @@ func (cc *conversationContext) runToolLoopChat(
 	placeholderMsgID string,
 	runID string,
 ) (string, []toolCallSummary, chatModelInfo, error) {
-	ctx := parentCtx
+	ctx, cancel := stdctx.WithTimeout(parentCtx, chatToolLoopTimeout)
+	defer cancel()
 
 	var summaries []toolCallSummary
 	currentMessages := make([]provider.ChatMessage, len(messages))
 	copy(currentMessages, messages)
 
-	nudgeInjected := false // only inject the wrap-up nudge once
-	var lastContent string // track last content-bearing response for fallback
 	var modelInfo chatModelInfo
 
-	for i := 0; i < maxChatToolIterations; i++ {
-		log.Printf("[TOOL-CHAT] iteration %d/%d", i+1, maxChatToolIterations)
-
-		// After 50 iterations, inject a nudge message telling the model to wrap up.
-		// This prevents infinite tool-calling loops where the model keeps requesting
-		// tools without ever producing a final content response.
-		// Only inject ONCE to avoid token waste and model confusion.
-		if i >= 50 && !nudgeInjected {
-			nudgeMsg := "You have already used several tools. Please provide your final answer now based on the information you have gathered. Do not call any more tools."
-			currentMessages = append(currentMessages, provider.ChatMessage{
-				Role:    "system",
-				Content: nudgeMsg,
-			})
-			nudgeInjected = true
+	for i := 0; ; i++ {
+		if err := ctx.Err(); err != nil {
+			return "", summaries, modelInfo, err
 		}
+		log.Printf("[TOOL-CHAT] iteration %d", i+1)
 
-		// After 80 iterations, remove tools from the request entirely.
-		// The model MUST give a final answer now.
 		toolsForThisIteration := chatTools
-		forceFinal := false
-		if i >= 80 {
-			toolsForThisIteration = []provider.ChatTool{} // explicit empty slice: no tools allowed
-			forceFinal = true
-			log.Printf("[TOOL-CHAT] iteration %d: removing tools from request to force final answer", i+1)
-		}
 
 		// Call the LLM with current messages
 		response, err := cc.callChatLLM(ctx, currentMessages, toolsForThisIteration, agentCfg)
@@ -98,31 +78,10 @@ func (cc *conversationContext) runToolLoopChat(
 			LocalFallback: localFallback,
 		}
 
-		// Track content-bearing responses for fallback
-		if response.Content != "" {
-			lastContent = response.Content
-		}
-
 		// No tool calls — this is the final response
 		if !response.HasToolCalls() {
 			log.Printf("[TOOL-CHAT] iteration %d: final response (%d chars)", i+1, len(response.Content))
 			return response.Content, summaries, modelInfo, nil
-		}
-
-		// If tools were removed (forceFinal) but model still generated tool_calls,
-		// treat the content as the final answer. Ignore hallucinated tool calls.
-		if forceFinal {
-			if response.Content != "" {
-				log.Printf("[TOOL-CHAT] iteration %d: forceFinal — model still requested tools, using content (%d chars)", i+1, len(response.Content))
-				return response.Content, summaries, modelInfo, nil
-			}
-			// No content and no valid tool calls — use last known content
-			if lastContent != "" {
-				log.Printf("[TOOL-CHAT] iteration %d: forceFinal — no content, using lastContent (%d chars)", i+1, len(lastContent))
-				return lastContent, summaries, modelInfo, nil
-			}
-			log.Printf("[TOOL-CHAT] iteration %d: forceFinal — no content and no lastContent, returning fallback", i+1)
-			return "I've gathered information but had trouble composing a final response. Please ask again.", summaries, modelInfo, nil
 		}
 
 		// Process tool calls
@@ -153,10 +112,6 @@ func (cc *conversationContext) runToolLoopChat(
 				cc.publishReviewEvent(tc.Function.Name, tc.Function.Arguments, agentCfg.ID)
 			}
 
-			// Track successful tool results as potential fallback content.
-			if summary.Status == "success" || summary.Status == "approval_needed" {
-				lastContent = summary.Result
-			}
 		}
 
 		// V73: Re-inject plan state after the first plan-changing tool call.
@@ -182,63 +137,6 @@ func (cc *conversationContext) runToolLoopChat(
 		}
 	}
 
-	// Max iterations reached — synthesize a final answer from gathered data.
-	// Instead of returning raw tool results, make one final LLM call
-	// with no tools available, asking the model to synthesize what it found.
-	log.Printf("[TOOL-CHAT] max iterations (%d) reached, synthesizing final answer", maxChatToolIterations)
-
-	// Build a synthesis prompt from the tool summaries
-	var summaryTexts []string
-	for _, s := range summaries {
-		if s.Status == "success" || s.Status == "approval_needed" {
-			summaryTexts = append(summaryTexts, fmt.Sprintf("- %s: %s", s.Tool, s.Result))
-		} else {
-			summaryTexts = append(summaryTexts, fmt.Sprintf("- %s: (error: %s)", s.Tool, s.Error))
-		}
-	}
-
-	if len(summaryTexts) == 0 {
-		return "", summaries, modelInfo, fmt.Errorf("chat tool loop exceeded max iterations (%d) with no successful tool results", maxChatToolIterations)
-	}
-
-	synthesisPrompt := fmt.Sprintf("You have gathered the following information using tools but reached the iteration limit. "+
-		"Please provide a comprehensive answer based on this data:\n\n%s", strings.Join(summaryTexts, "\n"))
-
-	// Make a final LLM call with no tools
-	synthesisMessages := append(currentMessages, provider.ChatMessage{
-		Role:    "system",
-		Content: synthesisPrompt,
-	})
-
-	synthesisResp, err := cc.callChatLLM(ctx, synthesisMessages, []provider.ChatTool{}, agentCfg)
-	if err != nil {
-		log.Printf("[TOOL-CHAT] synthesis call failed: %v", err)
-		// Fall back to lastContent if synthesis fails
-		if lastContent != "" {
-			return lastContent, summaries, modelInfo, nil
-		}
-		return "", summaries, modelInfo, fmt.Errorf("chat tool loop exceeded max iterations (%d) and synthesis failed", maxChatToolIterations)
-	}
-
-	usedFallback, _ := synthesisResp.Raw["used_fallback"].(bool)
-	localFallback, _ := synthesisResp.Raw["local_fallback"].(bool)
-	modelInfo = chatModelInfo{
-		Model:         synthesisResp.Model,
-		Provider:      synthesisResp.Provider,
-		UsedFallback:  usedFallback,
-		LocalFallback: localFallback,
-	}
-
-	if synthesisResp.Content != "" {
-		log.Printf("[TOOL-CHAT] synthesis produced %d chars", len(synthesisResp.Content))
-		return synthesisResp.Content, summaries, modelInfo, nil
-	}
-
-	// Synthesis produced no content — use lastContent
-	if lastContent != "" {
-		return lastContent, summaries, modelInfo, nil
-	}
-	return "", summaries, modelInfo, fmt.Errorf("chat tool loop exceeded max iterations (%d)", maxChatToolIterations)
 }
 
 // callChatLLM makes a single LLM call in the chat tool loop context.
@@ -260,7 +158,7 @@ func (cc *conversationContext) callChatLLM(
 		Messages:    messages,
 		Tools:       chatTools,
 		Temperature: 0.7,
-		MaxTokens:   4096,
+		MaxTokens:   0,
 	}
 
 	return chatProv.ChatGenerate(ctx, req)

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/emaharmony/prizm/internal/agent"
 	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/provider"
 )
@@ -119,6 +120,7 @@ func (s *LLMStage) executeSync(ctx context.Context, rc *RunContext) (*RunContext
 	}
 
 	// LLM completed successfully
+	publicResponse := publicStageResponse(resp.Text)
 	completeEvt := event.NewEvent(event.V1EventTypes.AgentCompleted, rc.Agent, map[string]any{
 		"run_id":        rc.RunID,
 		"agent":         rc.Agent,
@@ -135,7 +137,7 @@ func (s *LLMStage) executeSync(ctx context.Context, rc *RunContext) (*RunContext
 		StageName: s.Name(),
 		Success:   true,
 		Data: map[string]any{
-			"response":      resp.Text,
+			"response":      publicResponse,
 			"model":         resp.Model,
 			"provider":      resp.Provider,
 			"latency_ms":    resp.LatencyMS,
@@ -219,8 +221,9 @@ func (s *LLMStage) executeStreaming(ctx context.Context, rc *RunContext, sp prov
 	duration := time.Since(start).Milliseconds()
 
 	// Emit completion event (this IS persisted to events.jsonl)
+	publicResponse := publicStageResponse(fullResponse)
 	resultData := map[string]any{
-		"response":      fullResponse,
+		"response":      publicResponse,
 		"model":         rc.Model,
 		"provider":      rc.ProviderName,
 		"duration_ms":   duration,
@@ -251,6 +254,19 @@ func (s *LLMStage) executeStreaming(ctx context.Context, rc *RunContext, sp prov
 		Success:   true,
 		Data:      resultData,
 	}, nil
+}
+
+// publicStageResponse returns only user-facing text for result consumers.
+// The raw RunContext response remains untouched for tool and delegation parsing.
+func publicStageResponse(response string) string {
+	if agent.ParseAgentOutputWithFallback(response).Type == agent.ResponseToolRequest {
+		return ""
+	}
+	public, err := agent.PublicResponseText(response)
+	if err != nil {
+		return ""
+	}
+	return public
 }
 
 // Rollback is a no-op — LLM calls can't be undone.

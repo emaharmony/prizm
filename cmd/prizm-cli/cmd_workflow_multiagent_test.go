@@ -74,7 +74,7 @@ func TestReferenceManifestPersistsEffectiveDefinitionAndWorkspace(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.WorkspaceID != workspaceID || loaded.Definition.Budgets.MaxTokens != 60_000 {
+	if loaded.WorkspaceID != workspaceID || loaded.Definition.Budgets.MaxTokens != multiagent.Unlimited {
 		t.Fatalf("loaded manifest = %#v", loaded)
 	}
 	if !isReferenceWorkflowRun(runDir, manifest.RunID) {
@@ -96,7 +96,7 @@ func TestLoadReferenceManifestAllowsCleanedTerminalWorkspace(t *testing.T) {
 	}
 	manifest := referenceWorkflowManifest{
 		SchemaVersion: referenceManifestSchemaVersion,
-		RunID: "run-cleaned-workspace", WorkflowID: multiagent.ReferenceWorkflowID,
+		RunID:         "run-cleaned-workspace", WorkflowID: multiagent.ReferenceWorkflowID,
 		Input: input, Definition: definition, WorkspaceID: workspaceID,
 		WorkspacePath: workspacePath, WorkspaceCleaned: true,
 	}

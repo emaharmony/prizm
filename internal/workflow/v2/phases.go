@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/emaharmony/prizm/internal/agent"
 )
 
 // --- Phase Implementations ---
@@ -326,6 +328,12 @@ func (p *ReportPhase) Enter(_ context.Context, state *WorkflowState) error {
 }
 
 func (p *ReportPhase) RunIteration(_ context.Context, state *WorkflowState, llmResponse string) (PhaseAction, error) {
+	// Reject truncated private reasoning before it can affect completion markers,
+	// section state, tool routing, or the public report.
+	if _, err := agent.PublicResponseText(llmResponse); err != nil {
+		return PhaseAction{Type: ActionContinue}, nil
+	}
+
 	// Parse report sections
 	parseReportSections(llmResponse, state)
 
@@ -342,8 +350,14 @@ func (p *ReportPhase) RunIteration(_ context.Context, state *WorkflowState, llmR
 	}
 
 	if parsed := parseFinal(llmResponse); parsed != "" {
-		state.Report.Content = parsed
-		return PhaseAction{Type: ActionFinal, FinalContent: parsed}, nil
+		public, err := agent.PublicResponseText(parsed)
+		if err != nil {
+			// Do not complete or persist a report containing an unterminated
+			// private-reasoning block. The next iteration may produce a clean final.
+			return PhaseAction{Type: ActionContinue}, nil
+		}
+		state.Report.Content = public
+		return PhaseAction{Type: ActionFinal, FinalContent: public}, nil
 	}
 
 	return PhaseAction{Type: ActionContinue}, nil

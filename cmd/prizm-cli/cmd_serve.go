@@ -2159,6 +2159,15 @@ func (cc *conversationContext) handleMessage(msg ChannelMessage) {
 		}
 		streamMu.Unlock()
 	}
+	if responseText != "" {
+		publicResponse, sanitizeErr := sanitizeServeResponse(responseText)
+		if sanitizeErr != nil {
+			log.Printf("[PRIVACY] suppressing response for run %s: %v", run.ID, sanitizeErr)
+			responseText = "The model did not return a public answer."
+		} else {
+			responseText = publicResponse
+		}
+	}
 
 	// Deliver the response to Discord as a new message
 	// (typing-only approach: no placeholder message, just send the complete response)
@@ -2323,6 +2332,14 @@ func (cc *conversationContext) sendError(channelID, message string) {
 	if err != nil {
 		log.Printf("[ERROR] failed to send error message: %v", err)
 	}
+}
+
+func sanitizeServeResponse(response string) (string, error) {
+	public, err := agent.PublicResponseText(response)
+	if err != nil || strings.TrimSpace(public) == "" {
+		return "", fmt.Errorf("model returned no public answer")
+	}
+	return public, nil
 }
 
 func (cc *conversationContext) sendFinalReport(channelID, status, runID, message string) {

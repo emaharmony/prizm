@@ -19,6 +19,7 @@ import (
 	"github.com/emaharmony/prizm/internal/approval"
 	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/mutation"
+	"github.com/emaharmony/prizm/internal/provider"
 	mockpkg "github.com/emaharmony/prizm/internal/provider/mock"
 	"github.com/emaharmony/prizm/internal/review"
 	"github.com/emaharmony/prizm/internal/run"
@@ -56,6 +57,12 @@ func unavailableMemoryURL(t *testing.T) string {
 		t.Fatalf("failed to close unavailable memory port: %v", err)
 	}
 	return fmt.Sprintf("http://%s", addr)
+}
+
+type fixedResponseProvider string
+
+func (p fixedResponseProvider) Generate(context.Context, provider.GenerateRequest) (provider.GenerateResponse, error) {
+	return provider.GenerateResponse{Text: string(p), Model: "canary", Provider: "fixed"}, nil
 }
 
 func TestV1LifecycleWithoutMemory(t *testing.T) {
@@ -726,6 +733,65 @@ func TestV2MockProviderSuccess(t *testing.T) {
 	}
 	if !strings.Contains(string(outputData), "Mock response") {
 		t.Error("output.md does not contain mock response")
+	}
+}
+
+func TestV2PublicOutputSanitizesPrivateReasoning(t *testing.T) {
+	tests := []struct {
+		name     string
+		response string
+		want     string
+		preserve string
+	}{
+		{
+			name:     "closed block and fenced source",
+			response: "Public prefix <think>PRIVATE_CANARY</think> public answer\n```diff\n-<think>literal patch data</think>\n+kept\n```",
+			want:     "Public prefix  public answer",
+			preserve: "<think>literal patch data</think>",
+		},
+		{
+			name:     "unterminated block fails closed",
+			response: "Public prefix <think>PRIVATE_CANARY",
+			want:     "The model did not return a public answer.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, busURL := startTestServer(t)
+			defer s.Shutdown()
+			tmpDir := t.TempDir()
+			cfg := run.RunConfig{
+				Task: "privacy canary", Project: "prizm", Agent: "lumi", BusURL: busURL,
+				RunDir: filepath.Join(tmpDir, "runs"), Provider: fixedResponseProvider(tt.response),
+				Model: "canary", Timeout: 60 * time.Second,
+			}
+			result, err := run.NewRunner(cfg).Run()
+			if err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			output, err := os.ReadFile(filepath.Join(tmpDir, "runs", result.RunID, "output.md"))
+			if err != nil {
+				t.Fatalf("read output: %v", err)
+			}
+			if strings.Contains(string(output), "PRIVATE_CANARY") || !strings.Contains(string(output), tt.want) {
+				t.Fatalf("unexpected public output: %s", output)
+			}
+			if tt.preserve != "" && !strings.Contains(string(output), tt.preserve) {
+				t.Fatalf("fenced code payload was changed: %s", output)
+			}
+			events := parseEventsFile(t, filepath.Join(tmpDir, "runs", result.RunID, "events.jsonl"))
+			for _, evt := range events {
+				if evt.Type != event.V1EventTypes.AgentCompleted {
+					continue
+				}
+				summary, _ := evt.Payload["summary"].(string)
+				if strings.Contains(summary, "PRIVATE_CANARY") || !strings.Contains(summary, tt.want) {
+					t.Fatalf("unsafe agent.completed summary: %q", summary)
+				}
+				return
+			}
+			t.Fatal("agent.completed event not found")
+		})
 	}
 }
 

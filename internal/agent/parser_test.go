@@ -195,3 +195,47 @@ func TestParseAgentOutputWithFallbackPlainText(t *testing.T) {
 		t.Errorf("expected type 'final' for plain text, got %s", resp.Type)
 	}
 }
+
+func TestParseAgentOutputStripsPrivateReasoningCanary(t *testing.T) {
+	resp := ParseAgentOutput(`<ThInK>PRIVATE_CANARY</tHiNk>{"type":"final","content":"Public answer."}`)
+	if resp.Content != "Public answer." {
+		t.Fatalf("unexpected public content: %q", resp.Content)
+	}
+}
+
+func TestParseAgentOutputRejectsUnterminatedLeadingThink(t *testing.T) {
+	resp := ParseAgentOutput("<think>PRIVATE_CANARY")
+	if resp.Content != noPublicAnswer {
+		t.Fatalf("expected safe failure, got %q", resp.Content)
+	}
+}
+
+func TestParseAgentOutputRejectsUnterminatedNonLeadingThink(t *testing.T) {
+	resp := ParseAgentOutput("Public preamble. <think>PRIVATE_CANARY")
+	if resp.Content != noPublicAnswer {
+		t.Fatalf("expected safe failure, got %q", resp.Content)
+	}
+}
+
+func TestParseAgentOutputDoesNotRewriteToolArguments(t *testing.T) {
+	input := `{"type":"tool_request","tool":"write_file","input":{"content":"<think>literal source</think>"}}`
+	resp := ParseAgentOutput(input)
+	if resp.Type != ResponseToolRequest || resp.ToolInput["content"] != "<think>literal source</think>" {
+		t.Fatalf("tool content was rewritten: %#v", resp)
+	}
+}
+
+func TestParseAgentOutputUnknownJSONFailsClosed(t *testing.T) {
+	resp := ParseAgentOutput(`{"type":"unknown","private":"PRIVATE_CANARY"}`)
+	if resp.Content != noPublicAnswer {
+		t.Fatalf("unknown structured output leaked: %q", resp.Content)
+	}
+}
+
+func TestPublicResponseTextPreservesCodeExamples(t *testing.T) {
+	input := "Use `<think>literal</think>`.\n```html\n<think>literal</think>\n```"
+	got, err := PublicResponseText(input)
+	if err != nil || got != input {
+		t.Fatalf("code example changed: %q, %v", got, err)
+	}
+}

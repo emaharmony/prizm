@@ -143,7 +143,7 @@ func TestSubAgentBackendCodexUsesReadOnlyRunScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = llm(context.Background(), []v2.Message{{Content: "bounded task"}}); err != nil {
+	if _, err = llm(context.Background(), []v2.Message{{Content: "bounded task"}}, subagent.ReplyAllowance{}); err != nil {
 		t.Fatal(err)
 	}
 	if probe.scope.Workspace != workDir || !probe.scope.ReadOnly {
@@ -163,7 +163,7 @@ func TestSubAgentBackendUsesChatProviderForStructuredRoleOutput(t *testing.T) {
 	turn, err := llm(context.Background(), []v2.Message{
 		{Role: "system", Content: "role contract"},
 		{Role: "user", Content: "bounded task"},
-	})
+	}, subagent.ReplyAllowance{Phase: subagent.TurnPhaseFinal, MaxTokens: 8192})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,14 +187,25 @@ func TestSubAgentBackendRejectsReplyCapConsumedWithoutContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = llm(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "8192-token reply allowance") {
+	if _, err = llm(context.Background(), nil, subagent.ReplyAllowance{Phase: subagent.TurnPhaseFinal, MaxTokens: 8192}); err == nil || !strings.Contains(err.Error(), "8192-token reply allowance") {
 		t.Fatalf("empty capped reply err=%v", err)
 	}
 }
 
-func TestSubAgentReplyMaxTokensLeavesOtherModelsUnchanged(t *testing.T) {
-	if got := subAgentReplyMaxTokens("qwen3.5:9b"); got != 4096 {
-		t.Fatalf("qwen reply max = %d, want 4096", got)
+func TestSubAgentBackendLeavesReplyUncappedByDefault(t *testing.T) {
+	probe := &chatProbeProvider{}
+	registry := provider.NewProviderRegistry()
+	registry.Register("qwen3.5:9b", probe, provider.ModelInfo{ProviderName: "ollama"})
+	backend := &subAgentBackend{providers: registry}
+	llm, _, _, err := backend.Bind(subagent.AgentRuntime{AgentID: "developer", Provider: "ollama", Model: "qwen3.5:9b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = llm(context.Background(), nil, subagent.ReplyAllowance{}); err != nil {
+		t.Fatal(err)
+	}
+	if probe.captured.MaxTokens != 0 {
+		t.Fatalf("default reply max = %d, want provider default (0)", probe.captured.MaxTokens)
 	}
 }
 
@@ -226,7 +237,7 @@ func TestSubAgentBackendRejectsUnscopedCodexProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = llm(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "cannot guarantee") {
+	if _, err = llm(context.Background(), nil, subagent.ReplyAllowance{}); err == nil || !strings.Contains(err.Error(), "cannot guarantee") {
 		t.Fatalf("unscoped codex err=%v", err)
 	}
 }
@@ -259,7 +270,7 @@ func TestSubAgentBackendRejectsScopedProviderOutsideOwnedWorktree(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = llm(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "outside") {
+	if _, err = llm(context.Background(), nil, subagent.ReplyAllowance{}); err == nil || !strings.Contains(err.Error(), "outside") {
 		t.Fatalf("outside worktree err=%v", err)
 	}
 }

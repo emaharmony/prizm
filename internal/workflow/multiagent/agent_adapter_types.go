@@ -185,6 +185,9 @@ type AgentExecutionRequest struct {
 	RequiredCapabilities         []string
 	FinalizationPrerequisiteTool string
 	FinalResponseContract        string
+	ExploreReplyMaxTokens        int
+	PrerequisiteReplyMaxTokens   int
+	FinalReplyMaxTokens          int
 	MaxIterations                Limit
 	MaxTokens                    Limit
 	Deadline                     time.Time

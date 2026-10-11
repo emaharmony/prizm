@@ -662,7 +662,7 @@ func (cc *chatContext) processWithChatProvider(
 		cc.sessMgr.AddMessage(sess.ID, "tool", toolMsg, ts.Tool)
 	}
 
-	return finalResponse, nil
+	return sanitizeChatResponse(finalResponse)
 }
 
 // processWithTextProvider uses the text-based Provider interface (fallback).
@@ -752,10 +752,20 @@ func (cc *chatContext) processWithTextProvider(
 				}
 				cc.sessMgr.AddMessage(sess.ID, "tool", toolMsg, ts.Tool)
 			}
+		} else {
+			responseText = parsed.Content
 		}
 	}
 
-	return responseText, nil
+	return sanitizeChatResponse(responseText)
+}
+
+func sanitizeChatResponse(responseText string) (string, error) {
+	public, err := agent.PublicResponseText(responseText)
+	if err != nil || strings.TrimSpace(public) == "" {
+		return "", fmt.Errorf("model returned no public answer")
+	}
+	return public, nil
 }
 
 // buildAgentConfigMap creates a map of agent configs for the DelegationStage.
@@ -1154,12 +1164,10 @@ func (cc *chatContext) runTextToolLoop(
 
 	currentPrompt := prompt
 	var summaries []toolCallSummary
-	nudgeInjected := false
 
-	for i := 0; i < maxToolIterations; i++ {
-		if i >= 3 && !nudgeInjected {
-			currentPrompt += "\n\n[System: You have already used several tools. Please provide your final answer now based on the information you have gathered. Do not call any more tools.]"
-			nudgeInjected = true
+	for i := 0; ; i++ {
+		if err := ctx.Err(); err != nil {
+			return "", summaries, err
 		}
 
 		genResp, err := llmProvider.Generate(ctx, provider.GenerateRequest{
@@ -1175,7 +1183,8 @@ func (cc *chatContext) runTextToolLoop(
 		responseText := genResp.Text
 		parsed := agent.ParseAgentOutputWithFallback(responseText)
 		if parsed.Type != agent.ResponseToolRequest {
-			return responseText, summaries, nil
+			public, err := sanitizeChatResponse(parsed.Content)
+			return public, summaries, err
 		}
 
 		var toolInput map[string]any
@@ -1211,7 +1220,6 @@ func (cc *chatContext) runTextToolLoop(
 		currentPrompt += fmt.Sprintf("\n\n[Tool Result for %s]: %s\n\n%s:", parsed.ToolName, resultStr, agentCfg.ID)
 	}
 
-	return "", summaries, fmt.Errorf("max tool iterations (%d) reached", maxToolIterations)
 }
 
 // findAgentConfig finds an agent config by ID.

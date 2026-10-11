@@ -85,10 +85,15 @@ type TaskPacket struct {
 	FinalizationPrerequisiteTool string `json:"finalization_prerequisite_tool,omitempty"`
 	// FinalResponseContract is the trusted role-owned schema reminder repeated
 	// on the final-only turn after long tool transcripts.
-	FinalResponseContract string   `json:"final_response_contract,omitempty"`
-	ValidationChecklist   []string `json:"validation_checklist"`
-	Priority              string   `json:"priority"`
-	Deadline              string   `json:"deadline"`
+	FinalResponseContract string `json:"final_response_contract,omitempty"`
+	// Reply ceilings are trusted orchestration metadata. They bound each model
+	// phase without changing the task's aggregate MaxTokens budget.
+	ExploreReplyMaxTokens      int      `json:"explore_reply_max_tokens,omitempty"`
+	PrerequisiteReplyMaxTokens int      `json:"prerequisite_reply_max_tokens,omitempty"`
+	FinalReplyMaxTokens        int      `json:"final_reply_max_tokens,omitempty"`
+	ValidationChecklist        []string `json:"validation_checklist"`
+	Priority                   string   `json:"priority"`
+	Deadline                   string   `json:"deadline"`
 	// RequiredCapability, when set, is the capability the target agent must hold
 	// to run this task (capability-aware routing). Empty = no requirement.
 	RequiredCapability string `json:"required_capability,omitempty"`

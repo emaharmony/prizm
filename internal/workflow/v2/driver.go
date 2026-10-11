@@ -118,6 +118,9 @@ func (e *Engine) executeTool(ctx context.Context, phaseName string, req *ToolReq
 // It honours phase gates, feedback pauses, iterate/loop-back via NextPhase, and
 // EXECUTION safety enforcement (branch protection, read budget, commit/push).
 func (e *Engine) Drive(ctx context.Context, llm LLMFunc, tool ToolFunc, opts DriveOptions) (*WorkflowState, error) {
+	if err := e.configValidationError(); err != nil {
+		return e.state, fmt.Errorf("invalid workflow budget configuration: %w", err)
+	}
 	e.state.Status = StatusInProgress
 	if e.state.StartedAt == "" {
 		e.state.StartedAt = time.Now().UTC().Format(time.RFC3339)
@@ -130,9 +133,6 @@ func (e *Engine) Drive(ctx context.Context, llm LLMFunc, tool ToolFunc, opts Dri
 	}
 
 	maxTotal := e.config.Global.MaxTotalIterations
-	if maxTotal <= 0 {
-		maxTotal = 60
-	}
 	totalIter := 0
 
 	// Wall-clock budget. An unparseable or empty MaxTotalTime means "no deadline".
@@ -263,7 +263,7 @@ func (e *Engine) Drive(ctx context.Context, llm LLMFunc, tool ToolFunc, opts Dri
 		// (soft: the run continues to the next phase). Reset each phase.
 		phaseBudgetHit := false
 	iterLoop:
-		for iter := 0; iter < phase.MaxIterations() && totalIter < maxTotal; iter++ {
+		for iter := 0; (phase.MaxIterations() <= 0 || iter < phase.MaxIterations()) && (maxTotal <= 0 || totalIter < maxTotal); iter++ {
 			if reason := e.budgetExceeded(deadline); reason != "" {
 				runBudgetHit = reason
 				e.emitEvent("workflow.budget_exhausted", map[string]any{"phase": phaseName, "reason": reason})
@@ -576,7 +576,7 @@ func (e *Engine) Drive(ctx context.Context, llm LLMFunc, tool ToolFunc, opts Dri
 		if !e.advance(phaseName) {
 			break
 		}
-		if totalIter >= maxTotal {
+		if maxTotal > 0 && totalIter >= maxTotal {
 			log.Printf("[V2] total iteration budget (%d) exhausted", maxTotal)
 			break
 		}
@@ -896,8 +896,8 @@ func toolSignature(req *ToolRequest) string {
 // token ceiling. Both are soft stops: the loop finalizes gracefully (after emitting
 // workflow.budget_exhausted) rather than running unbounded — the safeguard an
 // autonomous loop needs so a stuck or expensive run can't burn time or tokens
-// without limit. A zero deadline disables the time dimension; zero MaxTotalTokens
-// is normalized to the default cap when engines are constructed.
+// without limit. A zero deadline disables the time dimension; omitted token
+// ceilings remain unlimited.
 func (e *Engine) budgetExceeded(deadline time.Time) string {
 	if !deadline.IsZero() && time.Now().After(deadline) {
 		return fmt.Sprintf("max_total_time exceeded (%s)", e.config.Global.MaxTotalTime)

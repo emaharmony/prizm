@@ -178,13 +178,16 @@ func (w *Worker) RunTask(ctx context.Context, taskID, description string, contex
 
 	args := w.execArgs(lastMessagePath)
 	cmdResult, runErr := w.runner.Run(runCtx, w.cfg.Executable, args, prompt, w.cfg.Workspace)
-	_ = os.WriteFile(stdoutPath, []byte(cmdResult.Stdout), 0644)
-	_ = os.WriteFile(stderrPath, []byte(cmdResult.Stderr), 0644)
+	const omittedOutput = "Provider process output omitted from public artifacts.\n"
+	_ = os.WriteFile(stdoutPath, []byte(omittedOutput), 0644)
+	_ = os.WriteFile(stderrPath, []byte(omittedOutput), 0644)
 
 	lastMessage := readTextIfExists(lastMessagePath)
 	if strings.TrimSpace(lastMessage) == "" {
 		lastMessage = strings.TrimSpace(cmdResult.Stdout)
 	}
+	lastMessage, _ = sanitizeCodexPublicText(lastMessage)
+	_ = os.WriteFile(lastMessagePath, []byte(lastMessage), 0644)
 
 	result := map[string]any{
 		"provider":        "codex_cli",
@@ -210,11 +213,7 @@ func (w *Worker) RunTask(ctx context.Context, taskID, description string, contex
 
 	if runErr != nil {
 		result["status"] = "failed"
-		if strings.TrimSpace(cmdResult.Stderr) != "" {
-			result["error"] = strings.TrimSpace(cmdResult.Stderr)
-		} else {
-			result["error"] = runErr.Error()
-		}
+		result["error"] = fmt.Sprintf("Codex CLI execution failed (exit %d)", cmdResult.ExitCode)
 		return result, fmt.Errorf("codexworker: exec failed: %w", runErr)
 	}
 	result["status"] = "completed"
@@ -222,6 +221,40 @@ func (w *Worker) RunTask(ctx context.Context, taskID, description string, contex
 		result["summary"] = "Codex task completed."
 	}
 	return result, nil
+}
+
+// sanitizeCodexPublicText removes explicit private reasoning before a final
+// answer is persisted or returned to report consumers. Code spans are retained.
+func sanitizeCodexPublicText(text string) (string, error) {
+	lower := strings.ToLower(text)
+	var out strings.Builder
+	start := 0
+	inFence, inCode := false, false
+	for i := 0; i < len(text); {
+		if strings.HasPrefix(text[i:], "```") {
+			inFence = !inFence
+			i += 3
+			continue
+		}
+		if !inFence && text[i] == '`' {
+			inCode = !inCode
+			i++
+			continue
+		}
+		if !inFence && !inCode && strings.HasPrefix(lower[i:], "<think>") {
+			endRel := strings.Index(lower[i+len("<think>"):], "</think>")
+			if endRel < 0 {
+				return "", fmt.Errorf("unterminated private reasoning")
+			}
+			out.WriteString(text[start:i])
+			i += len("<think>") + endRel + len("</think>")
+			start = i
+			continue
+		}
+		i++
+	}
+	out.WriteString(text[start:])
+	return strings.TrimSpace(out.String()), nil
 }
 
 // HandleCrossPrizmTask runs a signed cross-Prizm task request through Codex.

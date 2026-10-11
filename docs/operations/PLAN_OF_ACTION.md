@@ -33,6 +33,19 @@ task/review reports.
 
 ## Session Handoff
 
+### Cross-cutting runtime budget follow-up (2026-10-11)
+
+The current no-default-cap request is being implemented across active runtime
+entry points alongside the R1 work. The local autopatch model worker now sends
+`MaxTokens: 0`, and the CLI text/native tool loops retain their two-minute
+context deadlines while running without fixed iteration counts. V2 workflow
+defaults and graph visualization already use the unlimited sentinel from the
+active change set. The legacy wake loop remains capped by phase counts because
+those counts currently drive phase transitions; remove them only after a
+semantic completion contract is established. Anthropic requires a positive
+`max_tokens` request field, so uncapped Prizm requests map to a 64,000-token
+provider allowance; this is separate from Prizm run and workflow budgets.
+
 | Field | Current value |
 | --- | --- |
 | Active roadmap IDs | R1 (event contract and delegation), with R4 dependent on the completed R1 contract; R2/R6 Recall work is parked. |
@@ -54,3 +67,68 @@ open risks, and next action.
 - [Prizm Roadmap](../architecture/PRIZM_ROADMAP.md)
 - [Work Log](WORK_LOG.md)
 - [Multi-Agent Execution Graph](../architecture/MULTI_AGENT_EXECUTION_GRAPH.md)
+
+### Shared-session addendum (2026-10-11)
+
+| Field | Current value |
+| --- | --- |
+| Active roadmap IDs | R1 autonomous execution behavior; R1 durable delegation/outbox behavior; R4 remains dependent. |
+| Completed in this session | V36 wake execution now advances on standalone phase completion signals followed by a final JSON response, with signal parsing before JSON, rejection of signal-plus-tool turns, cancellation checks, and commit/push enforcement retained through its phase. The compatible `workflow/v2` report path now removes private `<think>` blocks before accepting/persisting report content and again at the shared Discord/artifact formatter; incomplete blocks fail closed, and fenced patch/code data is preserved. No package boundary changed. |
+| Evidence | Wake focused signal/parser tests pass; its focused CLI test run and `git diff --check` pass. Privacy canary and focused report-format/artifact tests pass via `go test ./internal/workflow/v2 -run 'TestReportOutputAndArtifactExcludePrivateReasoning|TestFinalReport|TestWriteReportArtifact' -count=1` with workspace-local caches. |
+| Open risks | The broader CLI package suite remains blocked by unrelated approval/workspace-scope and filesystem ACL failures. Wake completion signals are model-declared; branch-mutation and commit/push gates remain enforced, but an end-to-end fake-provider loop test is still absent. |
+| Next action | Coordinator reviews both implementation diffs and decides whether broader validation can run under the current temp-root permissions. |
+
+### Public-output privacy and wake-engine follow-up (2026-10-11)
+
+| Field | Current value |
+| --- | --- |
+| Active roadmap IDs | R1 autonomous execution behavior; R1 durable delegation/outbox behavior; R4 dependent. |
+| Public-output boundaries closed | `internal/run` now derives `output.md` and `agent.completed.summary` from sanitized public response parsing; structured tool inputs remain unchanged and raw tool-request JSON is not copied into reports. `internal/workflow.ExecuteDelegate` sanitizes returned output and `agent.completed` payloads. API invocation sanitizes final content before citation checks and again before session persistence and completion events. `cmd serve` sanitizes resolved replies before send/session/TTS/commitment and extraction events. `internal/stage.LLMStage` sanitizes final result data while retaining raw `RunContext` output for structured tool/delegation parsing. Existing V2 report formatting/artifact sanitization remains in place. |
+| Wake and V2 safeguards | Wake parsing validates the standalone completion signal and strict final JSON before sanitizing preamble and decoded prose, preserving literal `<think>` text in unified-diff hunks and rejecting malformed/private-only output. V2 rejects invalid budget values below -1 before execution. |
+| Evidence | Focused canaries pass in `internal/run`, `internal/workflow`, `internal/api`, `cmd/prizm-cli` serve response, and `internal/stage` LLM stage. The earlier V2 report/artifact canary passes. Wake focused tests and the full `internal/workflow/v2` package pass. `git diff --check` passes across the changed paths. The full CLI package still has unrelated workspace/ACL and path failures. |
+| Open risks | The full CLI suite remains unverified under current filesystem restrictions; no new package was introduced. |
+| Next action | Coordinator reviews the combined privacy and wake-engine diff and decides whether broader CLI validation can run in a less restricted environment. |
+
+### Stage persistence and memory-capture addendum (2026-10-11)
+
+`PersistenceStage` now writes only sanitized public output to `output.md`; incomplete or structured tool output removes a stale prior artifact, and removal failure returns a generic stage failure. `RemembranceStage` captures only sanitized final text and skips incomplete or tool-request output. Raw `RunContext` remains unchanged for structured parsing. Canary coverage includes secret removal, fenced diff preservation, stale-artifact removal, and unchanged raw context.
+
+**Evidence:** `go test ./internal/stage -count=1`, focused `TestSanitizeServeResponse` tests, `go build ./...`, `go vet ./...`, and `git diff --check` pass using workspace-local Go caches. No package was added.
+
+**Next action:** coordinator review of the final privacy-boundary diff; broader CLI failures remain unrelated workspace/ACL and path failures.
+
+### Final persistence replacement refinement (2026-10-11)
+
+`PersistenceStage` now reconciles `output.md` even when `LLMResponse` is empty, removing stale output for empty or unsafe content. Safe output is replaced through a same-directory temporary file and rename; temp creation, write, close, or rename failure removes the prior artifact before returning a generic stage failure. Full stage tests pass, including empty-response stale-artifact and injected temp-creation failure cases. The broader CLI suite remains limited by unrelated workspace, ACL, and path failures.
+
+### Patch grounding and reviewer-output security addendum (2026-10-11)
+
+**Roadmap IDs:** R1 (governed proposals, exact patch grounding, and review evidence); R8 (autopatch/self-improvement remains dependent on R1 approval evidence).
+
+- `autopatch.extractDiff` now excludes private fenced diff blocks from proposed public patches.
+- Claude verdict parsing ignores verdicts inside private reasoning and fails closed for malformed, nested, or unmatched `<think>` markers.
+- `gitx.PatchSourceRanges` now handles `--- ` lines inside hunks while preserving old-side source grounding for add/delete operations.
+
+**Evidence:** focused autopatch privacy tests pass; the full autopatch suite is blocked by Windows temp-root ACL failures. The full `claudeworker` package passes. Full `gitx` and `subagent`, plus focused proposal/graph tests, pass with workspace-local `TMP`/`TEMP`. No secrets or user data were recorded.
+
+**Open risks:** the full autopatch package gate remains unverified because of temp-root ACL restrictions; this is an environment limitation, not a passing suite.
+
+**Next action:** coordinator review of the three security diffs and decide whether the autopatch suite can be rerun with an allowed temp root.
+
+### Final autopatch parser review (2026-10-11)
+
+Autopatch diff extraction also rejects malformed or nested think-like tags before selecting a diff. Focused canaries pass. Independent review found no remaining P1/P2 issues; the local changes are ready for commit review.
+
+### Unlimited-default validation handoff (2026-10-11)
+
+**Roadmap IDs:** R1 runtime execution behavior; R8 autopatch/self-improvement depends on the R1 governed execution path.
+
+A full `go test ./...` attempt exposed stale CLI manifest expectations (60k instead of `UnlimitedTokens`) and two shipped template scenarios that still expected the removed default iteration caps. The CLI assertion now follows the unlimited default. The shipped templates retain explicit `-1` unlimited defaults, and the scenarios now distinguish those defaults from separate opt-in traversal-exhaustion cases. Full `internal/workflow/multiagent` tests pass.
+
+**Next action:** rerun `go test ./...` and record any remaining failures before final validation.
+
+### Full-suite validation resolved (2026-10-11)
+
+The pending full-suite rerun is complete: `go test ./...` exited 0 using workspace-local `GOCACHE`, `GOMODCACHE`, `TMP`, and `TEMP`; 88 packages passed, 5 had no test files, and none failed. This resolves the prior pending validation note. `go build ./...` and `go vet ./...` also passed earlier with workspace-local caches.
+
+**Next action:** proceed with coordinator review and commit preparation for the validated local changes.

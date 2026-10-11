@@ -57,6 +57,9 @@ func (e SubagentExecutor) ExecuteAgent(
 		ExpectedDeliverable:          expectedDeliverable,
 		FinalizationPrerequisiteTool: finalizationPrerequisiteTool,
 		FinalResponseContract:        strings.TrimSpace(request.FinalResponseContract),
+		ExploreReplyMaxTokens:        request.ExploreReplyMaxTokens,
+		PrerequisiteReplyMaxTokens:   request.PrerequisiteReplyMaxTokens,
+		FinalReplyMaxTokens:          request.FinalReplyMaxTokens,
 		Deadline:                     deadlineValue,
 		MaxTokens:                    maxTokens,
 	}, subagent.AgentRuntime{
@@ -72,6 +75,7 @@ func (e SubagentExecutor) ExecuteAgent(
 		AllowedTools:        append([]string(nil), request.AllowedTools...),
 		EnforceAllowedTools: true,
 		MaxIterations:       int(request.MaxIterations),
+		Role:                string(request.Role),
 	})
 
 	executionResult := AgentExecutionResult{

@@ -162,12 +162,6 @@ func TestTruncateStr(t *testing.T) {
 	}
 }
 
-func TestMaxToolIterations(t *testing.T) {
-	if maxToolIterations != 10 {
-		t.Errorf("maxToolIterations = %d, want 10", maxToolIterations)
-	}
-}
-
 func TestToolLoopTimeout(t *testing.T) {
 	if toolLoopTimeout != 2*time.Minute {
 		t.Errorf("toolLoopTimeout = %v, want 2m", toolLoopTimeout)

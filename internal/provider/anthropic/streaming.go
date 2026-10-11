@@ -21,9 +21,13 @@ import (
 
 // GenerateStream calls the Anthropic Messages API with streaming enabled.
 func (p *Provider) GenerateStream(ctx context.Context, req provider.GenerateRequest) (<-chan provider.TokenChunk, error) {
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = protocolDefaultMaxTokens
+	}
 	anthReq := messagesRequest{
 		Model:       req.Model,
-		MaxTokens:   req.MaxTokens,
+		MaxTokens:   maxTokens,
 		Messages:    []anthropicMessage{{Role: "user", Content: req.Prompt}},
 		Temperature: req.Temperature,
 		Stream:      true,

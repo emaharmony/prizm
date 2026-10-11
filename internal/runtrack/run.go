@@ -22,8 +22,9 @@ import (
 // DefaultTimeout is the maximum duration for a single LLM call.
 const DefaultTimeout = 20 * time.Minute
 
-// DefaultRunResponseTokens is the default response token cap for a single tracked LLM call.
-const DefaultRunResponseTokens = 4096
+// DefaultRunResponseTokens leaves response length to the provider unless a
+// caller explicitly supplies a positive cap.
+const DefaultRunResponseTokens = 0
 
 // DefaultMaxTokens is kept as a compatibility alias for older callers.
 const DefaultMaxTokens = DefaultRunResponseTokens

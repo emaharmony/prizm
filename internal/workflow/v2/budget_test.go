@@ -150,17 +150,42 @@ func TestBudgetExceededTokensOnly(t *testing.T) {
 	cfg := execVerifyConfig(false)
 	cfg.Global.MaxTotalTokens = 0
 	e2 := NewEngine(cfg, nil, nil)
-	if e2.config.Global.MaxTotalTokens != DefaultMaxTotalTokens {
-		t.Fatalf("NewEngine should default zero token ceiling to %d, got %d", DefaultMaxTotalTokens, e2.config.Global.MaxTotalTokens)
+	if e2.config.Global.MaxTotalTokens != UnlimitedTokens {
+		t.Fatalf("NewEngine should leave an omitted token ceiling unlimited, got %d", e2.config.Global.MaxTotalTokens)
 	}
-	e2.state.AddTokens(DefaultMaxTotalTokens, 0)
-	if r := e2.budgetExceeded(time.Time{}); r == "" {
-		t.Fatal("expected default token ceiling to trip")
+	e2.state.AddTokens(10_000_000, 0)
+	if r := e2.budgetExceeded(time.Time{}); r != "" {
+		t.Fatalf("omitted token ceiling unexpectedly tripped: %s", r)
 	}
 }
 
-// -1 is the explicit "unlimited" opt-out: it must survive NewEngine normalization
-// and never trip the ceiling, even past the default cap.
+func TestNewEngineRejectsInvalidNegativeGlobalTokenBudget(t *testing.T) {
+	cfg := execVerifyConfig(false)
+	cfg.Global.MaxTotalTokens = -2
+	engine := NewEngine(cfg, nil, nil)
+	if cfg.Global.MaxTotalTokens != -2 {
+		t.Fatalf("NewEngine rewrote invalid token ceiling to %d", cfg.Global.MaxTotalTokens)
+	}
+
+	if _, err := engine.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "must be -1") {
+		t.Fatalf("Run() error = %v, want invalid token budget error", err)
+	}
+	llmCalled := false
+	if _, err := engine.Drive(context.Background(), func(context.Context, []Message) (string, int, int, error) {
+		llmCalled = true
+		return `{"type":"final","content":"done"}`, 1, 1, nil
+	}, noopTool, DriveOptions{}); err == nil || !strings.Contains(err.Error(), "must be -1") {
+		t.Fatalf("Drive() error = %v, want invalid token budget error", err)
+	}
+	if llmCalled {
+		t.Fatal("Drive() called the model with an invalid token budget")
+	}
+	if _, err := engine.ProcessLLMResponse(`{"type":"final","content":"done"}`); err == nil || !strings.Contains(err.Error(), "must be -1") {
+		t.Fatalf("ProcessLLMResponse() error = %v, want invalid token budget error", err)
+	}
+}
+
+// -1 remains the persisted explicit "unlimited" sentinel.
 func TestLocalFallbackUsageIsReportedButDoesNotConsumePaidBudget(t *testing.T) {
 	cfg := &WorkflowConfig{
 		Name: "local-fallback", Version: 2,

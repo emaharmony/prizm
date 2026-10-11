@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/emaharmony/prizm/internal/agent"
 )
 
 // DiscordFormatter formats workflow messages for Discord.
@@ -388,8 +390,12 @@ func FormatFinalReport(state *WorkflowState) string {
 
 	// Report sections
 	if state.Report != nil && state.Report.Content != "" {
-		sb.WriteString("\n### Report Content\n")
-		sb.WriteString(state.Report.Content)
+		// This formatter feeds Discord and the durable report artifact, so keep
+		// it as a final public-output boundary even for manually built states.
+		if public, err := agent.PublicResponseText(state.Report.Content); err == nil && public != "" {
+			sb.WriteString("\n### Report Content\n")
+			sb.WriteString(public)
+		}
 	}
 
 	return sb.String()

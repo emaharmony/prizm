@@ -104,7 +104,7 @@ func (w *Worker) Review(ctx context.Context, repoPath, prompt string) (string, e
 
 	res, err := w.runner.Run(cctx, w.cfg.Executable, args, prompt, repoPath)
 	if err != nil && strings.TrimSpace(res.Stdout) == "" {
-		return "", fmt.Errorf("claude review failed (exit %d): %v: %s", res.ExitCode, err, strings.TrimSpace(res.Stderr))
+		return "", fmt.Errorf("claude review failed (exit %d): %v", res.ExitCode, err)
 	}
 	return res.Stdout, nil
 }
@@ -123,46 +123,131 @@ type Verdict struct {
 func ParseVerdict(output string) Verdict {
 	v := Verdict{Decision: "changes_requested"}
 	found := false
-	for _, line := range strings.Split(output, "\n") {
+	note := ""
+	publicOutput, ok := reviewerPublicOutput(output)
+	if !ok {
+		v.Notes = "Reviewer output did not contain a valid verdict; changes are required."
+		return v
+	}
+	for _, line := range strings.Split(publicOutput, "\n") {
 		l := strings.TrimSpace(line)
 		up := strings.ToUpper(l)
 		switch {
 		case strings.HasPrefix(up, "VERDICT:"):
 			val := strings.ToLower(strings.TrimSpace(l[len("VERDICT:"):]))
-			switch {
-			case strings.Contains(val, "approve"):
+			switch val {
+			case "approved", "approve":
 				v.Decision = "approved"
 				found = true
-			case strings.Contains(val, "reject"):
+			case "rejected", "reject":
 				v.Decision = "rejected"
 				found = true
-			case strings.Contains(val, "change"):
+			case "changes_requested":
 				v.Decision = "changes_requested"
 				found = true
 			}
 		case strings.HasPrefix(up, "NOTES:"):
-			v.Notes = strings.TrimSpace(l[len("NOTES:"):])
+			note = strings.TrimSpace(l[len("NOTES:"):])
 		}
 	}
-	if v.Notes == "" {
-		v.Notes = firstNonEmptyLine(output)
-	}
 	if !found {
-		v.Notes = "could not parse a VERDICT line; defaulting to changes_requested. " + v.Notes
+		v.Notes = "Reviewer output did not contain a valid verdict; changes are required."
+		return v
+	}
+	if note != "" && !containsPrivateMarker(note) {
+		if len(note) > 240 {
+			note = note[:240]
+		}
+		v.Notes = note
+	} else {
+		switch v.Decision {
+		case "approved":
+			v.Notes = "Review approved."
+		case "rejected":
+			v.Notes = "Review rejected."
+		default:
+			v.Notes = "Review requested changes."
+		}
 	}
 	return v
 }
 
-func firstNonEmptyLine(s string) string {
-	for _, line := range strings.Split(s, "\n") {
-		if t := strings.TrimSpace(line); t != "" {
-			if len(t) > 240 {
-				return t[:240]
+// reviewerPublicOutput removes complete private reasoning blocks. Malformed or
+// unbalanced markers make the entire reviewer response unusable, so private
+// text can never supply a verdict after a parsing error.
+func reviewerPublicOutput(output string) (string, bool) {
+	lower := strings.ToLower(output)
+	var public strings.Builder
+	for pos := 0; pos < len(output); {
+		open, openingOK := nextThinkTag(lower, pos)
+		close := strings.Index(lower[pos:], "</think")
+		if close >= 0 {
+			close += pos
+			if !strings.HasPrefix(lower[close:], "</think>") {
+				return "", false // malformed closing marker
 			}
-			return t
+			if open < 0 || close < open {
+				return "", false // unmatched closing marker
+			}
 		}
+		if open < 0 {
+			public.WriteString(output[pos:])
+			break
+		}
+		public.WriteString(output[pos:open])
+		if !openingOK {
+			return "", false // malformed opening marker
+		}
+		bodyStart := open + len("<think>")
+		end := strings.Index(lower[bodyStart:], "</think")
+		if end < 0 {
+			return "", false // unterminated private block
+		}
+		end += bodyStart
+		if nested, _ := nextThinkTag(lower, bodyStart); nested >= 0 && nested < end {
+			return "", false // malformed nested opening or closing marker
+		}
+		if !strings.HasPrefix(lower[end:], "</think>") {
+			return "", false // malformed closing marker
+		}
+		pos = end + len("</think>")
 	}
-	return ""
+	return public.String(), true
+}
+
+func nextThinkTag(lower string, start int) (int, bool) {
+	for offset := strings.IndexByte(lower[start:], '<'); offset >= 0; offset = strings.IndexByte(lower[start:], '<') {
+		offset += start
+		name := offset + 1
+		for name < len(lower) && isTagSpace(lower[name]) {
+			name++
+		}
+		closing := name < len(lower) && lower[name] == '/'
+		if closing {
+			name++
+			for name < len(lower) && isTagSpace(lower[name]) {
+				name++
+			}
+		}
+		if strings.HasPrefix(lower[name:], "think") {
+			if closing && strings.HasPrefix(lower[offset:], "</think>") {
+				start = offset + len("</think>")
+				continue
+			}
+			return offset, !closing && strings.HasPrefix(lower[offset:], "<think>")
+		}
+		start = offset + 1
+	}
+	return -1, true
+}
+
+func isTagSpace(ch byte) bool {
+	return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'
+}
+
+func containsPrivateMarker(s string) bool {
+	lower := strings.ToLower(s)
+	return strings.Contains(lower, "<think") || strings.Contains(lower, "</think>")
 }
 
 func (osRunner) Run(ctx context.Context, executable string, args []string, stdin, cwd string) (RunResult, error) {

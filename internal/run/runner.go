@@ -174,9 +174,6 @@ func (r *Runner) Run() (*RunResult, error) {
 	if r.config.Temperature == 0 {
 		r.config.Temperature = 0.2
 	}
-	if r.config.MaxTokens == 0 {
-		r.config.MaxTokens = 2048
-	}
 	if r.config.Timeout == 0 {
 		r.config.Timeout = 20 * time.Minute
 	}
@@ -474,7 +471,13 @@ func (r *Runner) Run() (*RunResult, error) {
 	var approvalSummaries []event.ApprovalSummary
 	var mutationSummaries []event.MutationSummary
 	var toolResult *tool.ToolResult
-	outputText := genResp.Text // default: use raw LLM output
+	agentResp := agentpkg.ParseAgentOutput(genResp.Text)
+	outputText := agentResp.Content
+	if agentResp.Type == agentpkg.ResponseToolRequest {
+		// Keep the structured input available to the governed executor, but do
+		// not copy its raw JSON payload into public report artifacts.
+		outputText = fmt.Sprintf("Tool request: %s", agentResp.ToolName)
+	}
 
 	// pendingApproval gates the run status. When a tool's policy result is
 	// PolicyRequiresApproval, this flips to true. It changes the run from
@@ -483,8 +486,6 @@ func (r *Runner) Run() (*RunResult, error) {
 	pendingApproval := false // V4: whether the run is pending approval
 
 	if r.config.ToolExecutor != nil {
-		agentResp := agentpkg.ParseAgentOutput(genResp.Text)
-
 		if agentResp.Type == agentpkg.ResponseToolRequest {
 			log.Printf("prizm: LLM requested tool %q", agentResp.ToolName)
 
@@ -583,7 +584,7 @@ func (r *Runner) Run() (*RunResult, error) {
 
 			// Build output text combining LLM response and tool result
 			var outputBuilder strings.Builder
-			outputBuilder.WriteString(genResp.Text)
+			outputBuilder.WriteString(outputText)
 			outputBuilder.WriteString("\n\n---\n**Tool Result:**\n")
 			if toolResult.Success {
 				outputBuilder.WriteString(fmt.Sprintf("Tool `%s` executed successfully.\n", agentResp.ToolName))
@@ -608,7 +609,7 @@ func (r *Runner) Run() (*RunResult, error) {
 	agentCompletedEvt := r.emitWithParent(event.V1EventTypes.AgentCompleted, "prizm-cli", map[string]any{
 		"agent":   r.config.Agent,
 		"status":  "completed",
-		"summary": genResp.Text[:min(len(genResp.Text), 200)], // Truncate to 200 chars — this is for the event payload only, not the full output. The complete text is saved in output.md.
+		"summary": outputText[:min(len(outputText), 200)], // Truncate to 200 characters; output.md contains the public response.
 	}, llmCompletedEvt.ID)
 
 	// 12. Write output.md

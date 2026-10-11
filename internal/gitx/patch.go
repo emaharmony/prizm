@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -21,6 +23,94 @@ type PatchPlan struct {
 	ExpectedTree string
 	PatchSHA256  string
 	Paths        []string
+}
+
+// PatchSourceRange is an old-side source range a unified-diff hunk relies on.
+// New files have no old-side ranges and therefore produce no entries.
+type PatchSourceRange struct {
+	Path      string
+	StartLine int
+	LineCount int
+}
+
+var unifiedHunkHeader = regexp.MustCompile(`^@@ -([0-9]+)(?:,([0-9]+))? \+[0-9]+(?:,[0-9]+)? @@`)
+
+// PatchSourceRanges parses the old-side line ranges that must be grounded
+// before a governed patch proposal may be persisted. It intentionally accepts
+// only ordinary git unified-diff file headers; unsupported encodings fail
+// closed and remain subject to PlanPatch's stronger Git validation.
+func PatchSourceRanges(patch string) ([]PatchSourceRange, error) {
+	var current string
+	var ranges []PatchSourceRange
+	var inHunk bool
+	var hunkStart, hunkOldLines int
+	lines := strings.Split(patch, "\n")
+	flushHunk := func() {
+		if inHunk && current != "" && current != "/dev/null" && hunkOldLines > 0 {
+			ranges = append(ranges, PatchSourceRange{Path: current, StartLine: hunkStart, LineCount: hunkOldLines})
+		}
+		inHunk = false
+		hunkOldLines = 0
+	}
+	for index, line := range lines {
+		if inHunk {
+			if line == "" && index == len(lines)-1 {
+				flushHunk()
+				break
+			}
+			// Git file markers and the next hunk header delimit a hunk. In
+			// particular, a removed source line such as "-- README.md" is
+			// represented by "--- README.md" and must remain hunk content.
+			if strings.HasPrefix(line, "diff --git ") || strings.HasPrefix(line, "@@ ") {
+				flushHunk()
+			} else if line == "\\ No newline at end of file" {
+				continue
+			} else if len(line) > 0 && (line[0] == ' ' || line[0] == '+' || line[0] == '-') {
+				if line[0] == ' ' || line[0] == '-' {
+					hunkOldLines++
+				}
+				continue
+			} else {
+				return nil, fmt.Errorf("patch contains malformed hunk body")
+			}
+		}
+		switch {
+		case strings.HasPrefix(line, "--- "):
+			path, err := patchHeaderPath(strings.TrimPrefix(line, "--- "))
+			if err != nil {
+				return nil, err
+			}
+			current = path
+		case strings.HasPrefix(line, "@@ "):
+			match := unifiedHunkHeader.FindStringSubmatch(line)
+			if match == nil {
+				return nil, fmt.Errorf("patch contains malformed hunk header")
+			}
+			start, _ := strconv.Atoi(match[1])
+			inHunk = true
+			hunkStart = start
+			hunkOldLines = 0
+		}
+	}
+	flushHunk()
+	return ranges, nil
+}
+
+func patchHeaderPath(value string) (string, error) {
+	value = strings.TrimSpace(strings.SplitN(value, "\t", 2)[0])
+	if value == "/dev/null" {
+		return value, nil
+	}
+	if strings.HasPrefix(value, `"`) || value == "" {
+		return "", fmt.Errorf("patch contains an unsupported source path encoding")
+	}
+	value = strings.TrimPrefix(value, "a/")
+	path := filepath.Clean(filepath.FromSlash(value))
+	first := strings.Split(path, string(filepath.Separator))[0]
+	if filepath.IsAbs(path) || path == "." || path == ".." || strings.HasPrefix(path, ".."+string(filepath.Separator)) || strings.EqualFold(first, ".git") {
+		return "", fmt.Errorf("patch source path %q is outside the workspace", value)
+	}
+	return filepath.ToSlash(path), nil
 }
 
 const (

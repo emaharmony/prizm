@@ -64,27 +64,18 @@ type Config struct {
 	RunID string
 }
 
-// DefaultConfig returns sensible defaults for a production tool loop.
+// DefaultConfig leaves model rounds unlimited. Cancellation and the configured
+// timeout remain available; callers opt into turn nudges or caps explicitly.
 func DefaultConfig() Config {
 	return Config{
-		MaxIterations:   100,
-		NudgeAfter:      50,
-		NudgeMessage:    "You have already used several tools. Please provide your final answer now based on the information you have gathered. Do not call any more tools.",
-		ForceFinalAfter: 80,
-		Timeout:         2 * time.Minute,
+		Timeout: 2 * time.Minute,
 	}
 }
 
 // CLIConfig returns defaults suitable for interactive terminal chat
 // (fewer iterations, earlier nudge, shorter timeout).
 func CLIConfig() Config {
-	return Config{
-		MaxIterations:   10,
-		NudgeAfter:      3,
-		NudgeMessage:    "You have already used several tools. Please provide your final answer now based on the information you have gathered. Do not call any more tools.",
-		ForceFinalAfter: 8,
-		Timeout:         2 * time.Minute,
-	}
+	return Config{Timeout: 2 * time.Minute}
 }
 
 // Sink is the channel-specific interface for tool loop output.
@@ -171,8 +162,12 @@ func RunChatLoop(
 	var lastContent string
 	var modelInfo ModelInfo
 
-	for i := 0; i < cfg.MaxIterations; i++ {
-		log.Printf("[TOOL-LOOP] iteration %d/%d", i+1, cfg.MaxIterations)
+	for i := 0; cfg.MaxIterations <= 0 || i < cfg.MaxIterations; i++ {
+		if cfg.MaxIterations > 0 {
+			log.Printf("[TOOL-LOOP] iteration %d/%d", i+1, cfg.MaxIterations)
+		} else {
+			log.Printf("[TOOL-LOOP] iteration %d", i+1)
+		}
 
 		// Nudge after threshold
 		if cfg.NudgeAfter > 0 && i >= cfg.NudgeAfter && !nudgeInjected {

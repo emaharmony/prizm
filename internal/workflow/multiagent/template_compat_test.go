@@ -144,6 +144,98 @@ func TestShippedTemplatesScenariosPass(t *testing.T) {
 	}
 }
 
+// TestShippedTemplateExplicitLoopBudgetsExhaustAtLimit proves the shipped
+// correction loops are unlimited by default while a workflow author can opt
+// into an exact traversal ceiling. It reuses each finite script from
+// TestShippedTemplatesScenariosPass against a copy with only that edge capped.
+func TestShippedTemplateExplicitLoopBudgetsExhaustAtLimit(t *testing.T) {
+	cases := []struct {
+		name         string
+		workflowFile string
+		scenarioFile string
+		edgeID       string
+		limit        int
+		budgetName   string
+		visits       map[string]int
+		traversals   map[string]int
+	}{
+		{
+			name:         "software-delivery tester correction",
+			workflowFile: filepath.Join("templates", "software-delivery.yaml"),
+			scenarioFile: filepath.Join("testdata", "template-scenarios", "software-delivery-loop-exhaustion.yaml"),
+			edgeID:       "tester-to-dev",
+			limit:        2,
+			budgetName:   "max_tester_to_developer_loops",
+			visits:       map[string]int{"planner": 1, "developer": 3, "tester": 3},
+			traversals:   map[string]int{"edge:tester:tests_failed": 2},
+		},
+		{
+			name:         "security-review reviewer correction",
+			workflowFile: filepath.Join("templates", "security-review.yaml"),
+			scenarioFile: filepath.Join("testdata", "template-scenarios", "security-review-loop-exhaustion.yaml"),
+			edgeID:       "reviewer-to-impl",
+			limit:        3,
+			budgetName:   "max_edge:security-reviewer:issues_found_loops",
+			visits:       map[string]int{"implementer": 4, "security-scanner": 4, "security-reviewer": 4},
+			traversals:   map[string]int{"edge:security-reviewer:issues_found": 3},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			def, idx, loadDiags, err := LoadDefinition(tc.workflowFile)
+			if err != nil {
+				t.Fatalf("LoadDefinition(%s): %v", tc.workflowFile, err)
+			}
+			if loadDiags.HasErrors() {
+				t.Fatalf("LoadDefinition(%s) produced error diagnostics: %s", tc.workflowFile, loadDiags.Error())
+			}
+
+			var correctionEdge *SchemaEdge
+			for i := range def.Spec.Edges {
+				if def.Spec.Edges[i].ID == tc.edgeID {
+					correctionEdge = &def.Spec.Edges[i]
+					break
+				}
+			}
+			if correctionEdge == nil || correctionEdge.Loop == nil {
+				t.Fatalf("correction edge %q is missing its loop policy", tc.edgeID)
+			}
+			if correctionEdge.Loop.MaxTraversals != -1 {
+				t.Fatalf("default %s maxTraversals = %d, want -1 (unlimited)", tc.edgeID, correctionEdge.Loop.MaxTraversals)
+			}
+			correctionEdge.Loop.MaxTraversals = tc.limit
+
+			graph, compileDiags, err := Compile(def, idx, CompileOptions{})
+			if err != nil {
+				t.Fatalf("Compile(%s with explicit loop limit): %v (diagnostics: %s)", tc.workflowFile, err, compileDiags.Error())
+			}
+			sf, err := LoadScenarioFile(tc.scenarioFile)
+			if err != nil {
+				t.Fatalf("LoadScenarioFile(%s): %v", tc.scenarioFile, err)
+			}
+			if len(sf.Scenarios) != 1 {
+				t.Fatalf("scenario file %s has %d scenarios, want 1", tc.scenarioFile, len(sf.Scenarios))
+			}
+			scenario := sf.Scenarios[0]
+			scenario.Expect = ScenarioExpectation{
+				FinalStatus:    "budget_exhausted",
+				LoopExhausted:  tc.budgetName,
+				NodeVisits:     tc.visits,
+				EdgeTraversals: tc.traversals,
+			}
+			result, err := RunScenario(context.Background(), graph, scenario)
+			if err != nil {
+				t.Fatalf("RunScenario(%s :: %s): %v", tc.scenarioFile, scenario.Name, err)
+			}
+			if !result.Passed {
+				t.Fatalf("scenario %s :: %s failed with explicit maxTraversals %d:\n%s", tc.scenarioFile, scenario.Name, tc.limit, joinFailures(result.Failures))
+			}
+		})
+	}
+}
+
 func joinFailures(failures []string) string {
 	out := ""
 	for _, f := range failures {

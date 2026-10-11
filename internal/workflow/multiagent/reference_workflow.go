@@ -14,7 +14,7 @@ import (
 const ReferenceWorkflowID = "multi-agent-software-task"
 
 // ReferenceWorkflowInput is the user-facing, repository-scoped task contract.
-// Role and budget overrides may only narrow the built-in workflow.
+// Role and budget overrides opt into explicit limits on the built-in workflow.
 type ReferenceWorkflowInput struct {
 	Objective          string                   `json:"objective"`
 	Workspace          string                   `json:"workspace"`
@@ -24,8 +24,8 @@ type ReferenceWorkflowInput struct {
 	Budgets            ReferenceBudgetOverrides `json:"budgets,omitempty"`
 }
 
-// ReferenceBudgetOverrides contains optional ceilings. A supplied value must
-// be positive and no greater than the corresponding built-in safety limit.
+// ReferenceBudgetOverrides contains optional ceilings. Omitted resource limits
+// remain unlimited; supplied values opt into a positive bound.
 type ReferenceBudgetOverrides struct {
 	MaxTransitions              *Limit         `json:"max_transitions,omitempty"`
 	MaxVisitsPerRole            map[Role]Limit `json:"max_visits_per_role,omitempty"`
@@ -91,14 +91,14 @@ func DefaultReferenceDefinition() Definition {
 		"list_dir", "read_file", "read_project", "search_files",
 		"project_overview", "git_status", "git_log", "git_diff",
 	}
-	planner := role(RolePlanner, "planner", 5, 8_000, 10*time.Minute, "plan", readTools)
+	planner := role(RolePlanner, "planner", Unlimited, Unlimited, 10*time.Minute, "plan", readTools)
 	developerTools := append(append([]string(nil), readTools...),
 		"write_file_dry_run", "apply_patch_proposal")
-	developer := role(RoleDeveloper, "developer", 8, 30_000, 30*time.Minute, "code", developerTools)
+	developer := role(RoleDeveloper, "developer", Unlimited, Unlimited, 30*time.Minute, "code", developerTools)
 	developer.Retry.MaxRetries = 2
-	tester := role(RoleTester, "tester", 5, 12_000, 15*time.Minute, "test", readTools)
+	tester := role(RoleTester, "tester", Unlimited, Unlimited, 15*time.Minute, "test", readTools)
 	tester.ValidationProfiles = []string{"go_test_all"}
-	reviewer := role(RoleReviewer, "reviewer", 4, 10_000, 10*time.Minute, "review", readTools)
+	reviewer := role(RoleReviewer, "reviewer", Unlimited, Unlimited, 10*time.Minute, "review", readTools)
 
 	return Definition{
 		ID:      ReferenceWorkflowID,
@@ -115,19 +115,19 @@ func DefaultReferenceDefinition() Definition {
 			{From: RolePlanner, Outcome: OutcomeCancelled, Terminal: TerminalConditionCancelled},
 		},
 		Budgets: BudgetLimits{
-			MaxTransitions: 12,
+			MaxTransitions: Unlimited,
 			MaxVisitsPerRole: map[Role]Limit{
-				RolePlanner:   1,
-				RoleDeveloper: 4,
-				RoleTester:    3,
-				RoleReviewer:  2,
+				RolePlanner:   Unlimited,
+				RoleDeveloper: Unlimited,
+				RoleTester:    Unlimited,
+				RoleReviewer:  Unlimited,
 			},
-			MaxLocalIterations:          24,
+			MaxLocalIterations:          Unlimited,
 			MaxRetries:                  4,
-			MaxTokens:                   60_000,
-			MaxRepeatedFailure:          2,
-			MaxTesterToDeveloperLoops:   2,
-			MaxReviewerToDeveloperLoops: 1,
+			MaxTokens:                   Unlimited,
+			MaxRepeatedFailure:          Unlimited,
+			MaxTesterToDeveloperLoops:   Unlimited,
+			MaxReviewerToDeveloperLoops: Unlimited,
 			MaxDuration:                 45 * time.Minute,
 		},
 	}
@@ -164,7 +164,7 @@ func ApplyReferenceOverrides(
 			problems = append(problems, name+" must be positive")
 			return
 		}
-		if *override > *target {
+		if *target != Unlimited && *override > *target {
 			problems = append(problems, fmt.Sprintf(
 				"%s %d exceeds safety ceiling %d", name, *override, *target))
 			return
@@ -194,7 +194,7 @@ func ApplyReferenceOverrides(
 			problems = append(problems, fmt.Sprintf("max_visits_per_role contains unknown role %q", role))
 		case limit <= 0:
 			problems = append(problems, fmt.Sprintf("max_visits_per_role.%s must be positive", role))
-		case limit > ceiling:
+		case ceiling != Unlimited && limit > ceiling:
 			problems = append(problems, fmt.Sprintf(
 				"max_visits_per_role.%s %d exceeds safety ceiling %d", role, limit, ceiling))
 		default:

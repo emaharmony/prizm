@@ -1277,3 +1277,113 @@ GitHub remote; the reviewed code commit `ef4808b` is already on the branch.
 patch-context mechanism from privacy-safe public evidence, design the smallest
 bounded repair, and require independent review and a fresh validation gate
 before authorizing another provider call.
+## 2026-10-11 — Remove Implicit Runtime Token and Iteration Ceilings
+
+**Roadmap IDs:** R1 (autonomous execution behavior)
+
+- Removed the local autopatch worker's implicit 4096-token output request cap;
+  it now passes the provider's uncapped value unless a caller supplies a cap.
+- Removed the CLI tool-loop iteration assertion that encoded the old default
+  count. Both CLI tool loops keep their existing two-minute wall-clock
+  deadlines and now observe context cancellation while iterating.
+- Confirmed graph projection maps `Unlimited` to an absent maximum and v2
+  workflow engine loops honor unlimited defaults with cancellation checks.
+- Retained legacy wake phase iteration limits for now: they are the only normal
+  state-machine transitions between phases. Removing those values without a
+  completion signal would trap the flow in its initial phase.
+- Anthropic maps an uncapped Prizm request to a 64,000-token provider allowance
+  because its Messages API requires a positive `max_tokens`; explicit positive
+  request values are preserved.
+
+**Evidence:** focused autopatch cap test and CLI tool-loop tests pass. The
+attempted wider package run is not green: workspace temp-root resolution is
+denied in validation/multiagent tests, CLI worktree/symlink tests fail under the
+current filesystem permissions, and existing template loop-exhaustion tests
+show expectation mismatches. These were not modified in this slice.
+
+**Open risks:** Anthropic's required `max_tokens` argument is a provider-side
+output allowance and currently defaults to 64,000, distinct from Prizm's run
+budget. The wake phase caps remain.
+
+**Next action:** finish the broader defaults audit, update the wake phase
+completion protocol before removing its transition-driving limits, and rerun
+affected focused checks.
+
+## 2026-10-11 — Wake Completion Signals and V2 Report Privacy
+
+**Roadmap IDs:** R1 autonomous execution behavior; R1 durable delegation/outbox behavior; R4 dependent.
+
+- Updated the wake workflow to use standalone phase-completion signals followed by final JSON, removing outer and per-phase iteration transition caps. Signal parsing occurs before JSON parsing; signal-plus-tool turns retry, cancellation is checked each iteration, and commit/push enforcement remains active until that phase completes.
+- Closed the V2 report privacy boundary. `ReportPhase` rejects incomplete private-reasoning blocks before markers or report state can change, strips complete `<think>` blocks before storing or returning report content, and the shared final formatter sanitizes again before Discord output or artifact persistence. Fenced code and patch data remain intact.
+- Kept all changes in existing packages; no new package was introduced.
+
+**Evidence:** wake focused completion-signal/parser tests and `git diff --check` pass. The privacy canary plus report-format and artifact tests pass with `go test ./internal/workflow/v2 -run 'TestReportOutputAndArtifactExcludePrivateReasoning|TestFinalReport|TestWriteReportArtifact' -count=1`, using workspace-local Go caches. The broad wake CLI package run still fails in unrelated approval/workspace-scope, temp-root ACL, and subagent worktree tests.
+
+**Open risks:** wake completion signals remain model-declared, and the wake loop lacks an end-to-end fake-provider test. The current filesystem restrictions prevent interpreting the unrelated wider CLI failures as regressions in this change.
+
+**Next action:** coordinator reviews the wake and privacy diffs and decides whether wider validation is practical under the current filesystem permissions.
+
+## 2026-10-11 — Public Output Boundaries and Wake Parsing
+
+**Roadmap IDs:** R1 autonomous execution behavior; R1 durable delegation/outbox behavior; R4 dependent.
+
+- Sanitized model text at the identified public boundaries: runner `output.md` and `agent.completed.summary`, delegated return values and completion events, API invocation replies/session/event results, serve replies/session/TTS/commitment and extraction events, and stage final response data. Structured tool inputs and raw stage context remain available to their parsers; tool payloads are not rewritten for display sanitization.
+- Kept the existing V2 Discord/report artifact boundary and canary. Added focused runner, delegate, API, serve, and stage canaries for tagged and unterminated reasoning, with fenced diff payload preservation.
+- Hardened wake completion parsing: validate the standalone marker and strict final JSON before sanitizing public preamble and final prose, preserving literal reasoning-like tags inside diff hunks. Added rejection for invalid workflow token-budget values below -1 before any LLM call.
+- Kept changes in existing domain packages; no new package was added.
+
+**Evidence:** focused tests pass for `TestV2PublicOutputSanitizesPrivateReasoning`, `TestExecuteDelegatePublishesOnlyPublicOutput`, `TestPublicInvocationResponseSanitizesPrivateReasoning`, `TestSanitizeServeResponse*`, and `TestLLMStageResult*`. Wake focused tests and full `go test ./internal/workflow/v2` pass. `git diff --check` passes for the combined changes. The full `cmd/prizm-cli` package still has unrelated workspace/ACL and path failures; those remain outside this slice.
+
+**Open risks:** full CLI validation is limited by the current host’s workspace and filesystem permissions. The report covers the concrete provider-output publication paths identified and reviewed during this session.
+
+**Next action:** coordinator review of the combined diffs and decision on whether to retry the wider CLI suite under suitable filesystem permissions.
+
+## 2026-10-11 — Stage Persistence and Memory Capture Privacy
+
+- Closed the remaining stage output paths: persistence stores sanitized public text and deletes any stale `output.md` for incomplete reasoning or structured tool output; a failed deletion fails the stage with a generic error. Remembrance capture now skips unsafe or non-final structured output. The raw run context remains available to internal parsing.
+- Added regression coverage for sanitized output, fenced diff preservation, stale artifact removal, skipped tool payloads, and raw context preservation.
+
+**Evidence:** full `go test ./internal/stage -count=1`, focused serve response tests, `go build ./...`, `go vet ./...`, and `git diff --check` pass with workspace-local Go caches.
+
+**Next action:** coordinator review of the combined privacy diff. The broader CLI suite remains constrained by unrelated workspace, ACL, and path failures.
+
+### Persistence replacement refinement (2026-10-11)
+
+- Extended `PersistenceStage` reconciliation to empty `LLMResponse` values so stale output is removed for empty or unsafe content. Public output replacement uses a same-directory temporary file and rename; failures clean up the prior artifact and return a generic error.
+
+**Evidence:** `go test ./internal/stage -count=1` passes, including empty-response cleanup and injected temp-creation failure regressions; `gofmt` and `git diff --check` pass for the persistence implementation and tests. The broader CLI suite remains limited by unrelated workspace, ACL, and path failures.
+
+## 2026-10-11 — Patch Grounding and Reviewer Output Security
+
+**Roadmap IDs:** R1 governed proposals/review evidence; R8 autopatch remains dependent on R1 approval and provenance.
+
+- Excluded private fenced diffs from autopatch patch extraction.
+- Hardened Claude verdict parsing so verdict text inside private reasoning is ignored and malformed, nested, or unmatched reasoning tags fail closed.
+- Fixed patch source-range accounting for in-hunk `--- ` lines while retaining old-side grounding for additions and deletions.
+
+**Evidence:** focused autopatch tests pass; the full autopatch suite is blocked by Windows temp-root ACL errors. The full `claudeworker` suite passes. Full `gitx` and `subagent`, and focused proposal/graph checks, pass with workspace-local `TMP`/`TEMP`. No secrets or user data were included in this entry.
+
+**Open risks:** full autopatch suite validation is still pending an allowed temp root.
+
+**Next action:** coordinator reviews the security changes and decides whether to retry the autopatch suite under suitable temp-root permissions.
+
+### Final autopatch parser review (2026-10-11)
+
+- Diff extraction now rejects malformed or nested think-like tags before selecting a patch. Focused canaries pass. Independent review found no remaining P1/P2 issues, and the local changes are ready for commit review.
+
+## 2026-10-11 — Unlimited Defaults Validation Handoff
+
+**Roadmap IDs:** R1 runtime execution behavior; R8 autopatch depends on the governed R1 path.
+
+- The initial full `go test ./...` run found stale CLI manifest expectations of 60k rather than `UnlimitedTokens`, and two shipped template scenarios that expected default loop caps that were removed.
+- The CLI assertion was updated. Shipped templates retain `-1` unlimited defaults; scenarios now assert those defaults and test traversal exhaustion separately with explicit opt-in caps.
+
+**Evidence:** full `internal/workflow/multiagent` tests pass. The complete suite has not yet been rerun after these corrections.
+
+**Next action:** rerun `go test ./...` and record any remaining failures.
+
+### Full Go validation green (2026-10-11)
+
+The full `go test ./...` rerun explicitly exited 0 with workspace-local `GOCACHE`, `GOMODCACHE`, `TMP`, and `TEMP`: 88 packages passed, 5 had no test files, and 0 failed. This resolves the earlier pending full-suite note. `go build ./...` and `go vet ./...` passed earlier with workspace-local caches.
+
+**Next action:** coordinator review and commit preparation for the validated local changes.

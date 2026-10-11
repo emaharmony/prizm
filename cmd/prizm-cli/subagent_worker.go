@@ -133,8 +133,8 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 	// file + git tools (not just git) operate inside it.
 	ex := b.executorFor(rt.WorkDir)
 
-	llm := func(ctx stdcontext.Context, msgs []v2.Message) (subagent.Turn, error) {
-		replyMaxTokens := subAgentReplyMaxTokens(rt.Model)
+	llm := func(ctx stdcontext.Context, msgs []v2.Message, allowance subagent.ReplyAllowance) (subagent.Turn, error) {
+		replyMaxTokens := allowance.MaxTokens
 		var sb strings.Builder
 		for _, m := range msgs {
 			sb.WriteString(m.Content)
@@ -167,7 +167,7 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 			if chatErr != nil {
 				return subagent.Turn{}, chatErr
 			}
-			if strings.TrimSpace(chatResp.Content) == "" && chatResp.OutputTokens >= replyMaxTokens {
+			if replyMaxTokens > 0 && strings.TrimSpace(chatResp.Content) == "" && chatResp.OutputTokens >= replyMaxTokens {
 				return subagent.Turn{}, fmt.Errorf("model exhausted the %d-token reply allowance without final content", replyMaxTokens)
 			}
 			return subagent.Turn{Text: chatResp.Content, PromptTokens: chatResp.PromptTokens, CompletionTokens: chatResp.OutputTokens}, nil
@@ -191,6 +191,17 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 		for key, value := range input {
 			execInput[key] = value
 		}
+		if toolName == "read_file" {
+			if _, ok := execInput["start_line"]; !ok {
+				execInput["start_line"] = 1
+			}
+			if _, ok := execInput["max_lines"]; !ok {
+				execInput["max_lines"] = 80
+			}
+			if requested, ok := numericToolInput(execInput["max_bytes"]); !ok || requested <= 0 || requested > subAgentReadPageBytes {
+				execInput["max_bytes"] = subAgentReadPageBytes
+			}
+		}
 		project := "subagent"
 		correlationID := rt.AgentID
 		if rt.RunID != "" {
@@ -213,17 +224,36 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 			}
 			return "", fmt.Errorf("tool %s failed", toolName)
 		}
+		if toolName == "read_file" {
+			encoded, marshalErr := json.Marshal(res.Output)
+			if marshalErr != nil {
+				return "", fmt.Errorf("encode read_file result: %w", marshalErr)
+			}
+			if len(encoded) > subagentToolFeedbackBytes {
+				return "", fmt.Errorf("read_file page metadata exceeded bounded feedback envelope")
+			}
+			return string(encoded), nil
+		}
 		return fmt.Sprintf("%v", res.Output), nil
 	}
 
 	return llm, parse, execFn, nil
 }
 
-func subAgentReplyMaxTokens(model string) int {
-	if strings.EqualFold(strings.TrimSpace(model), "glm-5.3:cloud") {
-		return 8192
+const (
+	subAgentReadPageBytes     = 1024
+	subagentToolFeedbackBytes = 3000
+)
+
+func numericToolInput(value any) (int, bool) {
+	switch n := value.(type) {
+	case int:
+		return n, true
+	case float64:
+		return int(n), n == float64(int(n))
+	default:
+		return 0, false
 	}
-	return 4096
 }
 
 func subAgentReasoningEffort(model, configured string) string {

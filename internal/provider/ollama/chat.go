@@ -212,14 +212,14 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 			// and let FailoverProvider skip this target for the rest of the
 			// session instead of retrying it.
 			if resp.StatusCode == http.StatusTooManyRequests && isQuotaExhausted(bodyStr) {
-				return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: HTTP %d: %s: %w", resp.StatusCode, bodyStr, provider.ErrQuotaExhausted)
+				return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: HTTP %d: %w", resp.StatusCode, provider.ErrQuotaExhausted)
 			}
 			// Retry on transient errors
 			if isRetryableStatus(resp.StatusCode) && attempt < 3 {
 				time.Sleep(time.Duration(attempt+1) * time.Second)
 				continue
 			}
-			return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: HTTP %d: %s", resp.StatusCode, bodyStr)
+			return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: HTTP %d", resp.StatusCode)
 		}
 		break // success
 	}
@@ -230,7 +230,11 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 	}
 
 	if oResp.Error != "" {
-		return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: %s", oResp.Error)
+		return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: model request failed")
+	}
+	publicContent, err := sanitizeGenerateText(oResp.Message.Content)
+	if err != nil {
+		return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: no public answer: %w", err)
 	}
 
 	// Diagnostic: if the model returned thinking content despite think:false,
@@ -265,7 +269,7 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 	}
 
 	return provider.ChatGenerateResponse{
-		Content:      oResp.Message.Content,
+		Content:      publicContent,
 		ToolCalls:    toolCalls,
 		Model:        oResp.Model,
 		Provider:     Name + "-chat",

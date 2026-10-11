@@ -2,11 +2,16 @@ package subagent
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
+	"github.com/emaharmony/prizm/internal/gitx"
 	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 )
 
@@ -25,8 +30,23 @@ type Turn struct {
 	CompletionTokens int
 }
 
-// LLMFunc calls the agent's model with the running transcript.
-type LLMFunc func(ctx context.Context, messages []v2.Message) (Turn, error)
+type TurnPhase string
+
+const (
+	TurnPhaseExplore      TurnPhase = "explore"
+	TurnPhasePrerequisite TurnPhase = "prerequisite"
+	TurnPhaseFinal        TurnPhase = "final"
+)
+
+// ReplyAllowance is trusted runner metadata for one provider call.
+type ReplyAllowance struct {
+	Phase     TurnPhase
+	MaxTokens int
+}
+
+// LLMFunc calls the agent's model with the running transcript and the exact
+// phase-specific reply ceiling selected by the runner.
+type LLMFunc func(ctx context.Context, messages []v2.Message, allowance ReplyAllowance) (Turn, error)
 
 // Action is the parsed intent of a model turn: either a final answer or a tool
 // call. This matches the two outcomes v2's phase parser produces.
@@ -75,21 +95,23 @@ type LoopRunnerConfig struct {
 	FinalReplyReserveTokens int
 }
 
-// DefaultMaxIterations bounds a single delegated task's tool-loop turns.
-const DefaultMaxIterations = 25
+// DefaultMaxIterations leaves delegated tool-loop turns unlimited unless the
+// caller explicitly opts into a bound. Cancellation and deadlines still stop
+// the loop.
+const DefaultMaxIterations = -1
 
 // DefaultSubAgentTokenBudget bounds aggregate prompt+completion tokens for one delegated task.
-const DefaultSubAgentTokenBudget = 100_000
+const DefaultSubAgentTokenBudget = v2.UnlimitedTokens
 
 // DefaultMaxTokens is kept as a compatibility alias for older callers.
 const DefaultMaxTokens = DefaultSubAgentTokenBudget
 
 // NewLoopRunner builds a LoopRunner from config.
 func NewLoopRunner(cfg LoopRunnerConfig) *LoopRunner {
-	if cfg.MaxIterations <= 0 {
+	if cfg.MaxIterations == 0 {
 		cfg.MaxIterations = DefaultMaxIterations
 	}
-	if cfg.MaxTokens == 0 || cfg.MaxTokens < v2.UnlimitedTokens {
+	if cfg.MaxTokens == 0 {
 		cfg.MaxTokens = DefaultSubAgentTokenBudget
 	}
 	sp := cfg.SystemPrompt
@@ -133,15 +155,27 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 		maxTokens = r.maxTokens
 	}
 	finalReplyReserveTokens := r.finalReplyReserveTokens
+	exploreReplyTokens := phaseReplyTokens(packet.ExploreReplyMaxTokens, finalReplyReserveTokens)
+	prerequisiteReplyTokens := phaseReplyTokens(packet.PrerequisiteReplyMaxTokens, finalReplyReserveTokens)
+	finalReplyTokens := phaseReplyTokens(packet.FinalReplyMaxTokens, finalReplyReserveTokens)
 	prerequisiteRequired := strings.TrimSpace(packet.FinalizationPrerequisiteTool) != ""
-	if prerequisiteRequired && maxTokens > 0 && finalReplyReserveTokens > 0 && maxTokens < 2*finalReplyReserveTokens {
+	if maxTokens <= 0 {
+		finalReplyReserveTokens = 0
+		exploreReplyTokens = 0
+		prerequisiteReplyTokens = 0
+		finalReplyTokens = 0
+	}
+	if prerequisiteRequired && maxTokens > 0 && prerequisiteReplyTokens > 0 && finalReplyTokens > 0 && maxTokens < prerequisiteReplyTokens+finalReplyTokens {
 		log.Printf("[SUBAGENT] task=%s finalization=false reason=two_reply_reserve_exceeds_task_budget task_budget=%d reserve=%d",
-			packet.TaskID, maxTokens, finalReplyReserveTokens)
+			packet.TaskID, maxTokens, prerequisiteReplyTokens+finalReplyTokens)
 		finalReplyReserveTokens = 0
-	} else if maxTokens > 0 && maxTokens <= finalReplyReserveTokens {
+		prerequisiteReplyTokens = 0
+		finalReplyTokens = 0
+	} else if maxTokens > 0 && maxTokens <= finalReplyTokens {
 		log.Printf("[SUBAGENT] task=%s finalization=false reason=reserve_exceeds_task_budget task_budget=%d reserve=%d",
-			packet.TaskID, maxTokens, finalReplyReserveTokens)
+			packet.TaskID, maxTokens, finalReplyTokens)
 		finalReplyReserveTokens = 0
+		finalReplyTokens = 0
 	}
 	totalPrompt, totalCompletion := 0, 0
 	iterations, toolCalls, deniedToolCalls := 0, 0, 0
@@ -150,6 +184,7 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 	prerequisiteSatisfied := !prerequisiteRequired
 	lastPromptTokens, lastCompletionTokens := 0, 0
 	finalPromptGrowthTokens := 0
+	coverage := newSourceCoverage(runtime.WorkDir)
 	// usage snapshots the accumulated token counts onto any RunResult (success or
 	// failure) so delegated spend is never lost from the parent budget.
 	usage := func(r RunResult) RunResult {
@@ -161,31 +196,34 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 		finalOnly = true
 		finalPromptGrowthTokens = promptGrowthTokens
 		log.Printf("[SUBAGENT] task=%s turn=%d finalization=true remaining_tokens=%d estimated_final_tokens=%d",
-			packet.TaskID, turn, max(0, maxTokens-used), finalReplyEstimate(promptTokens, completionTokens, finalReplyReserveTokens, promptGrowthTokens))
+			packet.TaskID, turn, max(0, maxTokens-used), finalReplyEstimate(promptTokens, completionTokens, finalReplyTokens, promptGrowthTokens))
 	}
 	armPrerequisite := func(turn, used, promptTokens, completionTokens, promptGrowthTokens int) {
 		prerequisiteOnly = true
 		finalPromptGrowthTokens = promptGrowthTokens
 		log.Printf("[SUBAGENT] task=%s turn=%d prerequisite_finalization=true remaining_tokens=%d estimated_prerequisite_and_final_tokens=%d tool=%q",
-			packet.TaskID, turn, max(0, maxTokens-used), prerequisiteAndFinalEstimate(promptTokens, completionTokens, finalReplyReserveTokens, promptGrowthTokens, futureGrowthReserve), packet.FinalizationPrerequisiteTool)
+			packet.TaskID, turn, max(0, maxTokens-used), prerequisiteAndFinalEstimatePhased(promptTokens, completionTokens, prerequisiteReplyTokens, finalReplyTokens, promptGrowthTokens, futureGrowthReserve), packet.FinalizationPrerequisiteTool)
 	}
 	maxIterations := r.maxIterations
-	if runtime.MaxIterations > 0 && runtime.MaxIterations < maxIterations {
+	if runtime.MaxIterations > 0 && (maxIterations < 0 || runtime.MaxIterations < maxIterations) {
 		maxIterations = runtime.MaxIterations
 	}
 	considerFinalization := func(turn, used, promptTokens, completionTokens, promptGrowthTokens int) (string, error) {
 		if !prerequisiteSatisfied {
-			remainingCalls := maxIterations - turn
-			if remainingCalls < 2 {
+			remainingCalls := -1
+			if maxIterations > 0 {
+				remainingCalls = maxIterations - turn
+			}
+			if remainingCalls >= 0 && remainingCalls < 2 {
 				return "", fmt.Errorf("task %q lacks two remaining iterations for required tool %q and its final response", packet.TaskID, packet.FinalizationPrerequisiteTool)
 			}
-			if remainingCalls == 2 || shouldEnterPrerequisite(maxTokens, used, promptTokens, completionTokens, finalReplyReserveTokens, promptGrowthTokens, futureGrowthReserve) {
+			if remainingCalls == 2 || shouldEnterPrerequisitePhased(maxTokens, used, promptTokens, completionTokens, exploreReplyTokens, prerequisiteReplyTokens, finalReplyTokens, promptGrowthTokens, futureGrowthReserve) {
 				armPrerequisite(turn, used, promptTokens, completionTokens, promptGrowthTokens)
 				return prerequisitePhaseInstruction, nil
 			}
 			return "", nil
 		}
-		if shouldEnterFinalization(maxTokens, used, promptTokens, completionTokens, finalReplyReserveTokens, promptGrowthTokens) {
+		if shouldEnterFinalization(maxTokens, used, promptTokens, completionTokens, finalReplyTokens, promptGrowthTokens) {
 			armFinalization(turn, used, promptTokens, completionTokens, promptGrowthTokens)
 			return finalInstruction, nil
 		}
@@ -193,7 +231,7 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 	}
 
 	if !prerequisiteSatisfied {
-		if maxIterations < 2 {
+		if maxIterations > 0 && maxIterations < 2 {
 			return usage(RunResult{}), fmt.Errorf("task %q lacks two iterations for required tool %q and its final response", packet.TaskID, packet.FinalizationPrerequisiteTool)
 		}
 		if maxIterations == 2 {
@@ -202,18 +240,25 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 		}
 	}
 
-	for i := 0; i < maxIterations; i++ {
+	for i := 0; maxIterations < 0 || i < maxIterations; i++ {
 		if err := ctx.Err(); err != nil {
 			return usage(RunResult{}), err
 		}
-		if finalOnly && !canAffordFinalReply(maxTokens, totalPrompt+totalCompletion, lastPromptTokens, lastCompletionTokens, finalReplyReserveTokens, finalPromptGrowthTokens) {
+		if finalOnly && !canAffordFinalReply(maxTokens, totalPrompt+totalCompletion, lastPromptTokens, lastCompletionTokens, finalReplyTokens, finalPromptGrowthTokens) {
 			return usage(RunResult{Artifacts: artifacts.result()}), fmt.Errorf("task %q lacks budget for its reserved final response", packet.TaskID)
 		}
-		if prerequisiteOnly && !canAffordPrerequisiteAndFinal(maxTokens, totalPrompt+totalCompletion, lastPromptTokens, lastCompletionTokens, finalReplyReserveTokens, finalPromptGrowthTokens, futureGrowthReserve) {
+		if prerequisiteOnly && !canAffordPrerequisiteAndFinalPhased(maxTokens, totalPrompt+totalCompletion, lastPromptTokens, lastCompletionTokens, prerequisiteReplyTokens, finalReplyTokens, finalPromptGrowthTokens, futureGrowthReserve) {
 			return usage(RunResult{Artifacts: artifacts.result()}), fmt.Errorf("task %q lacks budget for required tool %q and its reserved final response", packet.TaskID, packet.FinalizationPrerequisiteTool)
 		}
 
-		turn, err := llm(ctx, messages)
+		phase := TurnPhaseExplore
+		allowanceTokens := exploreReplyTokens
+		if prerequisiteOnly {
+			phase, allowanceTokens = TurnPhasePrerequisite, prerequisiteReplyTokens
+		} else if finalOnly {
+			phase, allowanceTokens = TurnPhaseFinal, finalReplyTokens
+		}
+		turn, err := llm(ctx, messages, ReplyAllowance{Phase: phase, MaxTokens: allowanceTokens})
 		if err != nil {
 			return usage(RunResult{}), fmt.Errorf("model turn %d: %w", i+1, err)
 		}
@@ -281,6 +326,32 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 			continue
 		}
 
+		if action.Tool == packet.FinalizationPrerequisiteTool && action.Tool == "apply_patch_proposal" {
+			patch, _ := action.Input["patch"].(string)
+			missing, coverageErr := coverage.missingPatchContext(patch)
+			if coverageErr != nil {
+				return usage(RunResult{Artifacts: artifacts.result()}), fmt.Errorf("task %q proposal context is invalid: %w", packet.TaskID, coverageErr)
+			}
+			if len(missing) > 0 {
+				if prerequisiteOnly {
+					return usage(RunResult{Artifacts: artifacts.result()}), fmt.Errorf("task %q lacks grounded source context for required proposal: %s", packet.TaskID, formatMissingCoverage(missing))
+				}
+				feedback := withBudgetNotice("Proposal was not executed because its old-side hunks were not observed under the current file hashes. Read these exact source ranges, then regenerate the proposal: "+formatMissingCoverage(missing), maxIterations-i-1, remainingTokens(maxTokens, usedTokens))
+				growth := len(feedback)
+				if !canAffordOrdinaryPrerequisiteAndFinal(maxTokens, usedTokens, turn.PromptTokens, turn.CompletionTokens, exploreReplyTokens, prerequisiteReplyTokens, finalReplyTokens, growth, futureGrowthReserve) {
+					return usage(RunResult{Artifacts: artifacts.result()}), fmt.Errorf("task %q lacks grounded proposal context and budget for another exploration turn", packet.TaskID)
+				}
+				messages = append(messages, v2.Message{Role: "user", Content: feedback})
+				continue
+			}
+			if !prerequisiteOnly {
+				if !canAffordFinalReply(maxTokens, usedTokens, turn.PromptTokens, turn.CompletionTokens, finalReplyTokens, maxToolFeedbackBytes+len(finalInstruction)) {
+					return usage(RunResult{Artifacts: artifacts.result()}), fmt.Errorf("task %q produced a grounded proposal without budget for its reserved final response", packet.TaskID)
+				}
+				prerequisiteOnly = true
+			}
+		}
+
 		artifacts.record(action.Tool, action.Input)
 		result, terr := exec(ctx, action.Tool, action.Input)
 		log.Printf("[SUBAGENT] task=%s turn=%d tool=%q execution_error=%t result_bytes=%d",
@@ -293,8 +364,13 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 			messages = append(messages, v2.Message{Role: "user", Content: withBudgetNotice(fmt.Sprintf("Tool %q failed: %v. Try another approach or give your final answer.", action.Tool, terr), maxIterations-i-1, remainingTokens(maxTokens, usedTokens))})
 		} else {
 			messages = append(messages, v2.Message{Role: "user", Content: withBudgetNotice(truncate(fmt.Sprintf("Tool %q result:\n%s", action.Tool, result), maxToolFeedbackBytes), maxIterations-i-1, remainingTokens(maxTokens, usedTokens))})
+			if action.Tool == "read_file" && packet.FinalizationPrerequisiteTool == "apply_patch_proposal" {
+				if recordErr := coverage.recordRead(result); recordErr != nil {
+					return usage(RunResult{Artifacts: artifacts.result()}), fmt.Errorf("task %q received invalid read_file coverage metadata: %w", packet.TaskID, recordErr)
+				}
+			}
 		}
-		growth := len(messages[len(messages)-1].Content) + len(finalInstruction)
+		growth := len(messages[len(messages)-1].Content)
 		if prerequisiteOnly {
 			prerequisiteOnly = false
 			prerequisiteSatisfied = true
@@ -348,6 +424,38 @@ func prerequisiteAndFinalEstimate(lastPromptTokens, lastCompletionTokens, replyR
 	// The prerequisite reply is billed once as completion and then appears in
 	// the final call's growing prompt. The final reply consumes the third reserve.
 	return 2*nextPrompt + 3*replyReserveTokens + futureGrowthReserve
+}
+
+func prerequisiteAndFinalEstimatePhased(lastPromptTokens, lastCompletionTokens, prerequisiteReplyTokens, finalReplyTokens, promptGrowthTokens, futureGrowthReserve int) int {
+	nextPrompt := lastPromptTokens + lastCompletionTokens + promptGrowthTokens
+	return 2*nextPrompt + 2*prerequisiteReplyTokens + futureGrowthReserve + finalReplyTokens
+}
+
+func canAffordPrerequisiteAndFinalPhased(maxTokens, usedTokens, lastPromptTokens, lastCompletionTokens, prerequisiteReplyTokens, finalReplyTokens, promptGrowthTokens, futureGrowthReserve int) bool {
+	if maxTokens <= 0 || prerequisiteReplyTokens <= 0 || finalReplyTokens <= 0 {
+		return true
+	}
+	return maxTokens-usedTokens >= prerequisiteAndFinalEstimatePhased(lastPromptTokens, lastCompletionTokens, prerequisiteReplyTokens, finalReplyTokens, promptGrowthTokens, futureGrowthReserve)
+}
+
+func canAffordOrdinaryPrerequisiteAndFinal(maxTokens, usedTokens, lastPromptTokens, lastCompletionTokens, exploreReplyTokens, prerequisiteReplyTokens, finalReplyTokens, promptGrowthTokens, futureGrowthReserve int) bool {
+	if maxTokens <= 0 || exploreReplyTokens <= 0 || prerequisiteReplyTokens <= 0 || finalReplyTokens <= 0 {
+		return true
+	}
+	nextPrompt := lastPromptTokens + lastCompletionTokens + promptGrowthTokens
+	estimate := nextPrompt + exploreReplyTokens + prerequisiteAndFinalEstimatePhased(nextPrompt, exploreReplyTokens, prerequisiteReplyTokens, finalReplyTokens, futureGrowthReserve, futureGrowthReserve)
+	return maxTokens-usedTokens >= estimate
+}
+
+func shouldEnterPrerequisitePhased(maxTokens, usedTokens, lastPromptTokens, lastCompletionTokens, exploreReplyTokens, prerequisiteReplyTokens, finalReplyTokens, promptGrowthTokens, futureGrowthReserve int) bool {
+	return !canAffordOrdinaryPrerequisiteAndFinal(maxTokens, usedTokens, lastPromptTokens, lastCompletionTokens, exploreReplyTokens, prerequisiteReplyTokens, finalReplyTokens, promptGrowthTokens, futureGrowthReserve)
+}
+
+func phaseReplyTokens(configured, fallback int) int {
+	if configured > 0 {
+		return configured
+	}
+	return fallback
 }
 
 func canAffordPrerequisiteAndFinal(maxTokens, usedTokens, lastPromptTokens, lastCompletionTokens, replyReserveTokens, promptGrowthTokens, futureGrowthReserve int) bool {
@@ -408,8 +516,14 @@ func remainingTokens(maxTokens, usedTokens int) int {
 }
 
 func withBudgetNotice(message string, remainingTurns, remainingTokenBudget int) string {
-	if remainingTurns <= 0 {
+	if remainingTurns == 0 {
 		return message + "\nNo model turns remain after this response."
+	}
+	if remainingTurns < 0 && remainingTokenBudget < 0 {
+		return message
+	}
+	if remainingTurns < 0 {
+		return fmt.Sprintf("%s\n%d aggregate tokens remain; finish as soon as you have enough evidence.", message, remainingTokenBudget)
 	}
 	if remainingTokenBudget >= 0 {
 		return fmt.Sprintf("%s\n%d model turns and %d aggregate tokens remain; finish as soon as you have enough evidence.", message, remainingTurns, remainingTokenBudget)
@@ -428,6 +542,94 @@ func classifyAction(text string, action Action) string {
 		return "empty"
 	}
 	return "unrecognized"
+}
+
+type observedSourcePage struct {
+	Path      string `json:"canonical_path"`
+	SHA256    string `json:"sha256"`
+	StartLine int    `json:"start_line"`
+	EndLine   int    `json:"end_line"`
+}
+
+type sourceCoverage struct {
+	root  string
+	pages map[string][]observedSourcePage
+}
+
+func newSourceCoverage(root string) *sourceCoverage {
+	return &sourceCoverage{root: root, pages: map[string][]observedSourcePage{}}
+}
+
+func (c *sourceCoverage) recordRead(result string) error {
+	var page observedSourcePage
+	if err := json.Unmarshal([]byte(result), &page); err != nil {
+		return err
+	}
+	page.Path = filepath.ToSlash(filepath.Clean(page.Path))
+	if page.Path == "." || page.Path == "" || page.SHA256 == "" || page.StartLine <= 0 || page.EndLine < page.StartLine {
+		return fmt.Errorf("incomplete read coverage metadata")
+	}
+	c.pages[page.Path] = append(c.pages[page.Path], page)
+	return nil
+}
+
+func (c *sourceCoverage) missingPatchContext(patch string) ([]gitx.PatchSourceRange, error) {
+	ranges, err := gitx.PatchSourceRanges(patch)
+	if err != nil {
+		return nil, err
+	}
+	missing := make([]gitx.PatchSourceRange, 0)
+	for _, required := range ranges {
+		currentHash, hashErr := c.fileHash(required.Path)
+		if hashErr != nil {
+			return nil, hashErr
+		}
+		end := required.StartLine + required.LineCount - 1
+		covered := false
+		for _, page := range c.pages[required.Path] {
+			if page.SHA256 == currentHash && page.StartLine <= required.StartLine && page.EndLine >= end {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			missing = append(missing, required)
+		}
+	}
+	return missing, nil
+}
+
+func (c *sourceCoverage) fileHash(path string) (string, error) {
+	root, err := filepath.Abs(c.root)
+	if err != nil {
+		return "", err
+	}
+	abs := filepath.Join(root, filepath.FromSlash(path))
+	rel, err := filepath.Rel(root, abs)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("patch source path %q is outside the workspace", path)
+	}
+	info, err := os.Lstat(abs)
+	if err != nil {
+		return "", fmt.Errorf("inspect patch source %q: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return "", fmt.Errorf("patch source %q is not a regular file", path)
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(data)), nil
+}
+
+func formatMissingCoverage(ranges []gitx.PatchSourceRange) string {
+	parts := make([]string, 0, len(ranges))
+	for _, item := range ranges {
+		parts = append(parts, fmt.Sprintf("%s:%d-%d", item.Path, item.StartLine, item.StartLine+item.LineCount-1))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ", ")
 }
 
 // artifactSet dedupes file paths touched during a run so the completion reports
