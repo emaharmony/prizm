@@ -1238,3 +1238,42 @@ acceptance remain unproved.
 **Next action:** checkpoint and deploy the exact recount repair. Run the
 unchanged registered task once, stop at proposal for content review, and grant
 only after the same daemon/database restart proves recovery.
+
+## 2026-10-10 — R1 Recount Live Gate
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Built the independently reviewed recount code from local checkpoint
+  `648aa70` and deployed binary SHA-256
+  `51C663EDC2B5A1928B11CFE26672F17EFCB14408836EB7CB04D2BA1172E533BC`
+  to the same gate configuration and durable data directories.
+- Verified the registered `software-delivery-v5` graph retained its 200,000
+  total-token cap, per-role caps and iteration limits, the task packet retained
+  its exact SHA-256, and the acceptance clone was clean at `6de4579`.
+- Dispatched exactly one run, `run_01M4M68BG82B8PFYHY1TGKNCNE`. The planner
+  completed and the developer returned a canonical `apply_patch_proposal`.
+  Recount accepted the unified-diff structure, then indexed Git precheck
+  rejected the proposed context at `internal/provider/ollama/chat.go:160` as
+  not applying to the exact target.
+- The run failed before proposal persistence. No approval directory exists,
+  and the isolated run worktree and source clone remain clean at `6de4579`.
+
+**Evidence:** daemon health reported four agents; the running executable path
+and hash matched the rebuilt binary; the task hash and target HEAD matched the
+reviewed gate. The terminal snapshot records the semantic patch-precheck
+failure. This demonstrates that the canonical envelope and recount repairs
+crossed their prior parsing failures while Git still rejected invalid context
+without approval or mutation. The raw proposal was intentionally not retained.
+
+**Open risks:** the provider generated patch context that did not apply to the
+exact source it had read. The unavailable raw patch prevents a more specific
+claim about which context line was stale or incorrect. Live approval recovery,
+apply, validation, completed reviewer, and the independent real-repository
+acceptance remain unproved. Documentation commit `648aa70` is local because
+automatic approval review rejected its push pending explicit ownership of the
+GitHub remote; the reviewed code commit `ef4808b` is already on the branch.
+
+**Next action:** do not retry the live provider task. Diagnose the incorrect
+patch-context mechanism from privacy-safe public evidence, design the smallest
+bounded repair, and require independent review and a fresh validation gate
+before authorizing another provider call.
