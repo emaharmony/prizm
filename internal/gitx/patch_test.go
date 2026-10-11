@@ -2,6 +2,8 @@ package gitx
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,12 +48,45 @@ func TestPlanAndApplyPatchAtomicallyChangesMultipleFiles(t *testing.T) {
 	}
 }
 
+func TestPlanAndApplyPatchRecountsIncorrectHunkCounts(t *testing.T) {
+	root := initRepo(t)
+	ctx := context.Background()
+	base, _ := CurrentSHA(ctx, root)
+	patch := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1,99 +1,99 @@\n-hello\n+changed\n" +
+		"diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,99 @@\n+new\n"
+	plan, err := PlanPatch(ctx, root, patch, base)
+	if err != nil {
+		t.Fatalf("plan recounted patch: %v", err)
+	}
+	sum := sha256.Sum256([]byte(patch))
+	if plan.PatchSHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("patch hash=%q, want exact input hash", plan.PatchSHA256)
+	}
+	if got := strings.Join(plan.Paths, ","); got != "README.md,new.txt" {
+		t.Fatalf("paths=%q", got)
+	}
+	if !CheckPatchDirection(ctx, root, patch, false) {
+		t.Fatal("forward direction was not detected before apply")
+	}
+	if err := ApplyPlannedPatch(ctx, root, patch, plan); err != nil {
+		t.Fatalf("apply recounted patch: %v", err)
+	}
+	actualTree, err := WorktreeTree(ctx, root)
+	if err != nil || actualTree != plan.ExpectedTree {
+		t.Fatalf("tree=%q want=%q err=%v", actualTree, plan.ExpectedTree, err)
+	}
+	if !CheckPatchDirection(ctx, root, patch, true) {
+		t.Fatal("reverse direction was not detected after apply")
+	}
+}
+
 func TestPlanPatchRejectsUnsafeOrStaleInput(t *testing.T) {
 	root := initRepo(t)
 	ctx := context.Background()
 	base, _ := CurrentSHA(ctx, root)
 	tests := []struct{ name, patch, base string }{
 		{"malformed", "not a patch", base},
+		{"invalid hunk body", "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n?invalid\n", base},
 		{"dotgit", "diff --git a/.git/config b/.git/config\nnew file mode 100644\n--- /dev/null\n+++ b/.git/config\n@@ -0,0 +1 @@\n+x\n", base},
 		{"mixed case dotgit", "diff --git a/.GIT/config b/.GIT/config\nnew file mode 100644\n--- /dev/null\n+++ b/.GIT/config\n@@ -0,0 +1 @@\n+x\n", base},
 		{"symlink", "diff --git a/link b/link\nnew file mode 120000\n--- /dev/null\n+++ b/link\n@@ -0,0 +1 @@\n+outside\n", base},

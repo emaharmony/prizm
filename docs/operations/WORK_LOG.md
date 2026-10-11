@@ -1199,3 +1199,43 @@ independent real-repository acceptance trace remain unproved.
 daemon, then execute the unchanged registered task once. Review the complete
 proposal before approval, restart the same daemon and database while paused,
 and require apply, validation, and reviewer completion before advancing.
+
+## 2026-10-10 — R1 Governed Patch Hunk Recount
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Live run `run_01M4M5S9KN928HX89GHVMXZQFF` proved the repaired canonical
+  worker parser reached `apply_patch_proposal`. Git rejected the submitted
+  unified diff as corrupt at stdin line 16, before proposal persistence. No
+  approval directory was created, and both the isolated run worktree and
+  source clone remained clean at `6de4579`.
+- The raw patch was intentionally not persisted, so its exact defect and hunk
+  counts are unknown. Inspection proved the local pipeline does not trim or
+  normalize patch bytes: JSON decoding yields the string, the tool only checks
+  trimmed emptiness, Git receives the original value, the plan hashes it, and
+  approval stores it unchanged.
+- Added Git's documented `--recount` behavior consistently to the governed
+  patch path: path inspection, indexed precheck, temporary-index expected-tree
+  calculation, actual apply, reverse rollback, and direction checks. This
+  tolerates incorrect hunk header counts without changing the approval-bound
+  patch bytes, base, expected tree, paths, or atomic apply behavior. No reject,
+  three-way, unsafe-path, inaccurate-EOF, or content-normalization mode was
+  added.
+
+**Evidence:** focused Git and real proposal-tool tests pass. They prove exact
+trailing-newline content and SHA-256 persistence before approval, wrong-count
+multi-file planning and apply to the exact expected tree, forward and reverse
+direction checks, and structurally malformed patch rejection without mutation.
+`go build ./...`, `go vet ./...`, `go test ./... -count=1`, and
+`git diff --check` pass with workspace-local caches and temporary storage.
+
+**Open risks:** `--recount` is a bounded compatibility policy, not a proven
+explanation for the unavailable failed-run patch. The fresh full build, vet,
+test gate, and independent diff review are complete. Live completion,
+continuous restart at approval, completed reviewer, and independent-repository
+acceptance remain unproved.
+
+**Next action:** complete full local validation and independent review, then
+checkpoint and deploy the exact recount repair. Run the unchanged registered
+task once, stop at proposal for content review, and grant only after the same
+daemon/database restart proves recovery.

@@ -2,8 +2,11 @@ package tool
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/emaharmony/prizm/internal/approval"
@@ -55,6 +58,13 @@ func TestApplyPatchProposalPersistsOneExactApprovalWithoutMutation(t *testing.T)
 	item := items[0]
 	if item.MutationType != approval.MutationApplyPatch || item.Content != patch || item.PatchPlan == nil || len(item.PatchPlan.Paths) != 2 {
 		t.Fatalf("approval=%#v", item)
+	}
+	if !strings.HasSuffix(item.Content, "\n") {
+		t.Fatal("approval lost the patch's trailing newline")
+	}
+	sum := sha256.Sum256([]byte(patch))
+	if item.PatchPlan.PatchSHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("patch hash=%q, want exact input hash", item.PatchPlan.PatchSHA256)
 	}
 	if err := gitx.EnsureClean(ctx, root); err != nil {
 		t.Fatalf("proposal mutated repo: %v", err)
