@@ -48,12 +48,22 @@ type PendingTransition struct {
 
 // WaitingState records an external condition that pauses safe advancement.
 type WaitingState struct {
-	Kind        string    `json:"kind"`
-	Reason      string    `json:"reason"`
-	SafeToRetry bool      `json:"safe_to_retry"`
-	Since       time.Time `json:"since"`
-	ProposalID  string    `json:"proposal_id,omitempty"`
-	ApprovalID  string    `json:"approval_id,omitempty"`
+	Kind                string    `json:"kind"`
+	Reason              string    `json:"reason"`
+	SafeToRetry         bool      `json:"safe_to_retry"`
+	Since               time.Time `json:"since"`
+	ProposalID          string    `json:"proposal_id,omitempty"`
+	ApprovalID          string    `json:"approval_id,omitempty"`
+	ChildID             string    `json:"child_id,omitempty"`
+	DelegationID        string    `json:"delegation_id,omitempty"`
+	DeliveryKey         string    `json:"delivery_key,omitempty"`
+	CommandEventID      string    `json:"command_event_id,omitempty"`
+	CorrelationID       string    `json:"correlation_id,omitempty"`
+	LastOutcomeSequence int64     `json:"last_outcome_sequence,omitempty"`
+	StartedAt           time.Time `json:"started_at,omitempty"`
+	Deadline            time.Time `json:"deadline,omitempty"`
+	DispatchPending     bool      `json:"dispatch_pending,omitempty"`
+	JoinID              string    `json:"join_id,omitempty"`
 }
 
 // ProposalDecision is the approval authority's decision for one exact
@@ -124,6 +134,42 @@ type ApprovedTaskState struct {
 	Proposals  []ProposalProgress `json:"proposals"`
 }
 
+// DelegationJoinChild is the durable identity and bounded result state for one
+// parallel fan-out lane.
+type DelegationJoinChild struct {
+	ChildID         string              `json:"child_id"`
+	Lane            FanOutLane          `json:"lane"`
+	Role            Role                `json:"role"`
+	Task            TaskReference       `json:"task"`
+	ExecutionKey    string              `json:"execution_key"`
+	DelegationID    string              `json:"delegation_id"`
+	JoinID          string              `json:"join_id"`
+	DeliveryKey     string              `json:"delivery_key"`
+	CommandEventID  string              `json:"command_event_id"`
+	CorrelationID   string              `json:"correlation_id"`
+	Deadline        time.Time           `json:"deadline"`
+	DispatchPending bool                `json:"dispatch_pending"`
+	Status          event.OutcomeStatus `json:"status"`
+	LastSequence    int64               `json:"last_sequence,omitempty"`
+	Result          *RoleRunResult      `json:"result,omitempty"`
+	Error           string              `json:"error,omitempty"`
+}
+
+// DelegationJoinState retains the parent result while three bounded child
+// delegations execute in parallel and converge deterministically.
+type DelegationJoinState struct {
+	JoinID             string                `json:"join_id"`
+	ParentExecutionKey string                `json:"parent_execution_key"`
+	ParentRole         Role                  `json:"parent_role"`
+	ParentResult       RoleRunResult         `json:"parent_result"`
+	ParentStartedAt    time.Time             `json:"parent_started_at"`
+	ParentFinishedAt   time.Time             `json:"parent_finished_at"`
+	StartedAt          time.Time             `json:"started_at"`
+	Deadline           time.Time             `json:"deadline"`
+	FailurePolicy      string                `json:"failure_policy"`
+	Children           []DelegationJoinChild `json:"children"`
+}
+
 // PersistedFailure is bounded diagnostic information. It never contains
 // prompts, credentials, or provider output.
 type PersistedFailure struct {
@@ -134,19 +180,21 @@ type PersistedFailure struct {
 
 // DurableRun is the atomic persistence envelope around canonical RunState.
 type DurableRun struct {
-	SchemaVersion             int                `json:"schema_version"`
-	Revision                  int64              `json:"revision"`
-	State                     RunState           `json:"state"`
-	Phase                     CheckpointPhase    `json:"phase"`
-	PendingTransition         *PendingTransition `json:"pending_transition,omitempty"`
-	ActiveExecutionKey        string             `json:"active_execution_key,omitempty"`
-	LastCompletedExecutionKey string             `json:"last_completed_execution_key,omitempty"`
-	Waiting                   *WaitingState      `json:"waiting,omitempty"`
-	ApprovedTask              *ApprovedTaskState `json:"approved_task,omitempty"`
-	ProposalResults           []ProposalProgress `json:"proposal_results,omitempty"`
-	Failure                   *PersistedFailure  `json:"failure,omitempty"`
-	Reflections               []ReflectionRecord `json:"reflections,omitempty"`
-	ReplanCount               int                `json:"replan_count,omitempty"`
+	SchemaVersion               int                  `json:"schema_version"`
+	Revision                    int64                `json:"revision"`
+	State                       RunState             `json:"state"`
+	Phase                       CheckpointPhase      `json:"phase"`
+	PendingTransition           *PendingTransition   `json:"pending_transition,omitempty"`
+	ActiveExecutionKey          string               `json:"active_execution_key,omitempty"`
+	LastCompletedExecutionKey   string               `json:"last_completed_execution_key,omitempty"`
+	Waiting                     *WaitingState        `json:"waiting,omitempty"`
+	DelegationJoin              *DelegationJoinState `json:"delegation_join,omitempty"`
+	ApprovedTask                *ApprovedTaskState   `json:"approved_task,omitempty"`
+	ProposalResults             []ProposalProgress   `json:"proposal_results,omitempty"`
+	Failure                     *PersistedFailure    `json:"failure,omitempty"`
+	Reflections                 []ReflectionRecord   `json:"reflections,omitempty"`
+	ReplanCount                 int                  `json:"replan_count,omitempty"`
+	PendingDelegationOutcomeAck string               `json:"pending_delegation_outcome_ack,omitempty"`
 }
 
 // Validate rejects corrupt, internally contradictory, or future state.
@@ -195,6 +243,20 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 		if r.Waiting != nil && r.Waiting.Kind == "proposal_approval" && r.ApprovedTask == nil {
 			problems = append(problems, "proposal approval wait requires approved_task state")
 		}
+		if r.Waiting != nil && r.Waiting.Kind == "delegation_outcome" {
+			if strings.TrimSpace(r.Waiting.ChildID) == "" || strings.TrimSpace(r.Waiting.DelegationID) == "" ||
+				strings.TrimSpace(r.Waiting.DeliveryKey) == "" || strings.TrimSpace(r.Waiting.CommandEventID) == "" ||
+				strings.TrimSpace(r.Waiting.CorrelationID) == "" || r.Waiting.StartedAt.IsZero() || r.Waiting.Deadline.IsZero() {
+				problems = append(problems, "delegation outcome wait requires exact child, delegation, delivery, command, correlation, and start identity")
+			}
+		}
+		if r.Waiting != nil && r.Waiting.Kind == "delegation_join" {
+			if r.DelegationJoin == nil {
+				problems = append(problems, "delegation join wait requires delegation_join state")
+			} else if err := r.DelegationJoin.Validate(r.State.RunID, r.State.CurrentRole); err != nil {
+				problems = append(problems, err.Error())
+			}
+		}
 		if r.ApprovedTask != nil {
 			if r.ApprovedTask.Role != r.State.CurrentRole || len(r.ApprovedTask.Proposals) == 0 {
 				problems = append(problems, "approved_task must belong to the current role and contain proposals")
@@ -213,9 +275,55 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 			problems = append(problems, "terminal checkpoint requires terminal run state")
 		}
 	}
+	if r.DelegationJoin != nil && (r.Phase != CheckpointWaiting || r.Waiting == nil || r.Waiting.Kind != "delegation_join") {
+		problems = append(problems, "delegation_join state requires a delegation_join waiting checkpoint")
+	}
 
 	if len(problems) != 0 {
 		return &ContractError{Problems: problems}
+	}
+	return nil
+}
+
+func (j DelegationJoinState) Validate(runID string, currentRole Role) error {
+	if strings.TrimSpace(j.JoinID) == "" || strings.TrimSpace(j.ParentExecutionKey) == "" ||
+		j.ParentRole != currentRole || j.ParentStartedAt.IsZero() || j.ParentFinishedAt.IsZero() ||
+		j.StartedAt.IsZero() || j.Deadline.IsZero() || j.FailurePolicy != "wait_for_all_then_fail" {
+		return errors.New("delegation join identity or policy is invalid")
+	}
+	if len(j.Children) != 3 {
+		return errors.New("delegation join requires exactly 3 children")
+	}
+	seen := make(map[string]struct{}, len(j.Children))
+	seenLanes := make(map[FanOutLane]struct{}, len(j.Children))
+	expectedRoles := map[FanOutLane]Role{FanOutResearch: RolePlanner, FanOutImplementation: RoleDeveloper, FanOutReview: RoleReviewer}
+	for _, child := range j.Children {
+		if expectedRoles[child.Lane] == "" || child.Role != expectedRoles[child.Lane] {
+			return fmt.Errorf("delegation join child %q has invalid lane-role binding", child.ChildID)
+		}
+		if strings.TrimSpace(child.ChildID) == "" || strings.TrimSpace(child.JoinID) == "" || strings.TrimSpace(child.ExecutionKey) == "" ||
+			strings.TrimSpace(child.DelegationID) == "" || strings.TrimSpace(child.DeliveryKey) == "" ||
+			strings.TrimSpace(child.CommandEventID) == "" || strings.TrimSpace(child.CorrelationID) == "" ||
+			child.Task.ID == "" || child.Deadline.IsZero() {
+			return errors.New("delegation join child identity is incomplete")
+		}
+		if child.JoinID != j.JoinID {
+			return fmt.Errorf("delegation join child %q has mismatched join identity", child.ChildID)
+		}
+		if _, ok := seenLanes[child.Lane]; ok {
+			return fmt.Errorf("delegation join lane %q is duplicated", child.Lane)
+		}
+		seenLanes[child.Lane] = struct{}{}
+		if _, ok := seen[child.DeliveryKey]; ok {
+			return fmt.Errorf("delegation join delivery key %q is duplicated", child.DeliveryKey)
+		}
+		seen[child.DeliveryKey] = struct{}{}
+		if child.Status != "" && !child.Status.Terminal() && child.Status != event.OutcomeAccepted && child.Status != event.OutcomeProgress {
+			return fmt.Errorf("delegation join child %q has invalid status %q", child.ChildID, child.Status)
+		}
+		if child.Result != nil && child.Result.FanOut != nil {
+			return fmt.Errorf("delegation join child %q cannot nest a fan-out plan", child.ChildID)
+		}
 	}
 	return nil
 }
@@ -250,6 +358,30 @@ type DurableRunStore interface {
 // reconciliation.
 type EventPublisher interface {
 	Store(context.Context, event.Event) error
+}
+
+// DelegationDispatcher publishes one already-checkpointed graph delegation.
+// Implementations must make Dispatch idempotent by Command.IdempotencyKey.
+type DelegationDispatcher interface {
+	Dispatch(context.Context, string, event.Command) error
+}
+
+// DelegationOutcomeSource exposes durable, explicitly acknowledged outcomes.
+// The graph runtime acknowledges an outcome only after its state and events are
+// checkpointed. MarkOutcomeConsumed must be idempotent for an already-consumed
+// event because recovery may repeat the call after an interrupted checkpoint.
+type DelegationOutcomeSource interface {
+	PendingOutcomes(context.Context, string) ([]event.Outcome, error)
+	MarkOutcomeConsumed(context.Context, string) error
+}
+
+// DurableDelegationOptions enables graph-owned delegated role execution.
+type DurableDelegationOptions struct {
+	Subject            string
+	Dispatcher         DelegationDispatcher
+	Outcomes           DelegationOutcomeSource
+	Deadline           time.Duration
+	RequireWorkspaceID bool
 }
 
 // ExecutionClaim is exclusive ownership of one run.

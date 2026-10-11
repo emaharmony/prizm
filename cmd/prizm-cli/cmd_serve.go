@@ -781,6 +781,7 @@ func executeServe(args []string) {
 	toolReg = tool.NewRegistry()
 	tool.RegisterBuiltinsWithRoots(toolReg, workspaceRoot, 10*1024*1024, readRoots, writeRoots) // all read-only + project tools
 	toolReg.Register(&tool.WriteFileProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
+	toolReg.Register(&tool.ApplyPatchProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
 	toolReg.Register(&tool.CreateDirectoryProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
 	// V35: Direct write tool for autonomous wake actions (auto-approved via policy)
 	toolReg.Register(&tool.WriteFileDirect{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
@@ -1292,6 +1293,19 @@ func executeServe(args []string) {
 	if strings.TrimSpace(graphWorkspace) == "" {
 		graphWorkspace = "."
 	}
+	multiAgentController := newReferenceMultiAgentController(runDir, *configPath)
+	var graphWorker *graphRoleWorker
+	restoreGraphPublisher := func() {}
+	if os.Getenv(graphRoleDelegationRequestedEnv) == "1" {
+		restoreGraphPublisher = configureGraphRolePublisher(natsCommandPublisher{nc: natsConn})
+		graphWorker, err = startGraphRoleWorker(natsConn, runDir, *configPath, multiAgentController.resumeSync)
+		if err != nil {
+			restoreGraphPublisher()
+			fmt.Fprintf(os.Stderr, "Error starting graph role worker: %v\n", err)
+			return
+		}
+		log.Printf("[GRAPH-WORKER] started: %s -> %s", graphRoleDelegationSubject, graphRoleOutcomeSubject)
+	}
 	apiServer := api.NewServer(api.Config{
 		Addr:               cfg.BindAddr(apiPort),
 		Orch:               orch,
@@ -1326,7 +1340,7 @@ func executeServe(args []string) {
 		ToolRegForInvoke:      toolReg,
 		ToolExecForInvoke:     toolExec,
 		MultiAgentRuns:        multiagent.RunLocator{Root: runDir, DefinitionStore: definitionStore},
-		MultiAgentController:  newReferenceMultiAgentController(runDir, *configPath),
+		MultiAgentController:  multiAgentController,
 		DefinitionStore:       definitionStore,
 		WorkflowRunStarter:    newGraphRunStarter(runDir, definitionDBPath, *configPath, graphWorkspace),
 	})
@@ -1476,6 +1490,10 @@ func executeServe(args []string) {
 	// V78: Graceful teardown — unsubscribe NATS, stop reviewers, stop bots, cleanup
 	for _, sub := range infraSubs {
 		sub.Unsubscribe()
+	}
+	if graphWorker != nil {
+		graphWorker.Close()
+		restoreGraphPublisher()
 	}
 	if mangoReviewer != nil {
 		mangoReviewer.Close()
@@ -2387,7 +2405,7 @@ func (cc *conversationContext) publishEvent(subject string, payload map[string]a
 func (cc *conversationContext) publishReviewEvent(toolName string, input map[string]any, agentID string) {
 	// Only fire for file-mutating tools
 	switch toolName {
-	case "write_file", "write_file_proposal", "write_file_direct",
+	case "write_file", "write_file_proposal", "apply_patch_proposal", "write_file_direct",
 		"edit_file", "edit_file_proposal",
 		"git_commit", "git_push":
 		// Extract file path if available
@@ -3085,6 +3103,7 @@ var readOnlyTools = map[string]bool{
 var mutationProposalTools = map[string]bool{
 	"write_file":                true,
 	"write_file_proposal":       true,
+	"apply_patch_proposal":      true,
 	"create_directory":          true,
 	"create_directory_proposal": true,
 	"git_add":                   true,

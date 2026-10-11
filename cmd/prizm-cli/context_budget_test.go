@@ -81,6 +81,7 @@ func TestGetModelContextTokens(t *testing.T) {
 		want  int
 		found bool
 	}{
+		{defaultOllamaCloudModel, defaultOllamaCloudContextTokens, true},
 		{"glm-5.1:cloud", 202752, true},
 		{"deepseek-v4-pro:cloud", 131072, true},
 		{"unknown-model", 0, false},
@@ -94,6 +95,35 @@ func TestGetModelContextTokens(t *testing.T) {
 			}
 			if ok && got != tt.want {
 				t.Errorf("getModelContextTokens(%q) = %d, want %d", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveRuntimeModel(t *testing.T) {
+	if got := resolveRuntimeModel(""); got != defaultOllamaCloudModel {
+		t.Fatalf("resolveRuntimeModel(empty) = %q, want default %q", got, defaultOllamaCloudModel)
+	}
+	if got := resolveRuntimeModel("custom-model"); got != "custom-model" {
+		t.Fatalf("resolveRuntimeModel(custom) = %q, want configured model", got)
+	}
+}
+
+func TestContextTokensForAgentModel(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		want  int
+	}{
+		{name: "omitted uses GLM default", model: "", want: defaultOllamaCloudContextTokens},
+		{name: "known uses model limit", model: "deepseek-v4-pro:cloud", want: 131072},
+		{name: "unknown is conservative", model: "unregistered-model", want: conservativeContextTokens},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := contextTokensForAgentModel(tt.model); got != tt.want {
+				t.Fatalf("contextTokensForAgentModel(%q) = %d, want %d", tt.model, got, tt.want)
 			}
 		})
 	}

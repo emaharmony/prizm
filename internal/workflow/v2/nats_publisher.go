@@ -1,11 +1,14 @@
 package v2
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
+	prizmevent "github.com/emaharmony/prizm/internal/event"
 	"github.com/nats-io/nats.go"
 )
 
@@ -14,7 +17,35 @@ import (
 // and publishing of task delegation packets, feedback/approval requests,
 // post-execution review requests, and generic events.
 type NATSPublisher struct {
-	conn *nats.Conn
+	conn   *nats.Conn
+	outbox *prizmevent.SQLiteOutbox
+}
+
+// UseOutbox routes task commands through the durable canonical intake.
+// Existing callers remain direct-publish compatible when it is unset.
+func (p *NATSPublisher) UseOutbox(outbox *prizmevent.SQLiteOutbox) { p.outbox = outbox }
+
+// ReplayOutbox dispatches pending or expired commands after process restart.
+func (p *NATSPublisher) ReplayOutbox(ctx context.Context) error {
+	if p.outbox == nil || p.conn == nil {
+		return nil
+	}
+	d := prizmevent.Dispatcher{Outbox: p.outbox, Publisher: natsCommandPublisher{p.conn}, Lease: 30 * time.Second, MaxAttempts: 3, RetryAfter: time.Second}
+	for {
+		handled, err := d.DispatchOne(ctx)
+		if err != nil {
+			return err
+		}
+		if !handled {
+			return nil
+		}
+	}
+}
+
+type natsCommandPublisher struct{ conn *nats.Conn }
+
+func (p natsCommandPublisher) Publish(_ context.Context, subject string, data []byte) error {
+	return p.conn.Publish(subject, data)
 }
 
 // NewNATSPublisher connects to NATS and returns a publisher.
@@ -54,6 +85,33 @@ func (p *NATSPublisher) PublishTaskPacket(subject string, packet TaskPacket) err
 	data, err := json.Marshal(packet)
 	if err != nil {
 		return fmt.Errorf("marshal task packet: %w", err)
+	}
+	if p.outbox != nil {
+		runID := packet.RunID
+		if runID == "" {
+			runID = packet.TaskID
+		}
+		corr := packet.CorrelationID
+		if corr == "" {
+			corr = runID
+		}
+		key := packet.DeliveryKey
+		if key == "" {
+			key = packet.TaskID
+		}
+		cmd := prizmevent.Command{EventID: prizmevent.CommandEventID(key), Type: "prizm.command.delegation", RunID: runID, TaskID: packet.TaskID, DelegationID: packet.DelegationID, CorrelationID: corr, IdempotencyKey: key, SchemaVersion: prizmevent.CommandSchemaVersion, Payload: data}
+		if deadline, parseErr := time.Parse(time.RFC3339, packet.Deadline); parseErr == nil {
+			cmd.Deadline = deadline
+		}
+		if _, err := p.outbox.Accept(context.Background(), subject, cmd); err != nil {
+			return fmt.Errorf("persist task packet: %w", err)
+		}
+		d := prizmevent.Dispatcher{Outbox: p.outbox, Publisher: natsCommandPublisher{p.conn}, Lease: 30 * time.Second, MaxAttempts: 3, RetryAfter: time.Second}
+		if _, err := d.DispatchOne(context.Background()); err != nil {
+			return fmt.Errorf("dispatch task packet: %w", err)
+		}
+		log.Printf("[NATS-PUB] durably published task packet %s to %s (agent: %s)", packet.TaskID, subject, packet.TargetAgent)
+		return nil
 	}
 	if err := p.conn.Publish(subject, data); err != nil {
 		return fmt.Errorf("publish task packet to %s: %w", subject, err)
@@ -138,8 +196,10 @@ func (p *NATSPublisher) PublishEvent(subject string, eventType string, payload m
 // the Natural Gates engine. It converts incoming NATS messages into
 // ExternalEvent structs and sends them to the engine's external event channel.
 type NATSListener struct {
-	conn *nats.Conn
-	subs []*nats.Subscription
+	conn      *nats.Conn
+	subs      []*nats.Subscription
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 // NewNATSListener connects to NATS and returns a listener.
@@ -148,12 +208,12 @@ func NewNATSListener(natsURL string) (*NATSListener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("nats connect for listener: %w", err)
 	}
-	return &NATSListener{conn: nc}, nil
+	return &NATSListener{conn: nc, done: make(chan struct{})}, nil
 }
 
 // NewNATSListenerFromConn creates a listener from an existing NATS connection.
 func NewNATSListenerFromConn(nc *nats.Conn) *NATSListener {
-	return &NATSListener{conn: nc}
+	return &NATSListener{conn: nc, done: make(chan struct{})}
 }
 
 // Conn returns the underlying NATS connection.
@@ -163,6 +223,7 @@ func (l *NATSListener) Conn() *nats.Conn {
 
 // Close unsubscribes all subscriptions and closes the NATS connection.
 func (l *NATSListener) Close() {
+	l.closeOnce.Do(func() { close(l.done) })
 	for _, sub := range l.subs {
 		if sub != nil {
 			sub.Unsubscribe()
@@ -186,6 +247,9 @@ func (l *NATSListener) Listen(engine *Engine) error {
 	}
 	if engine == nil {
 		return fmt.Errorf("engine is nil")
+	}
+	if l.done == nil {
+		l.done = make(chan struct{})
 	}
 
 	eventCh := engine.GetExternalEventChannel()
@@ -236,6 +300,49 @@ func (l *NATSListener) Listen(engine *Engine) error {
 
 	// Subscribe to task completion notifications
 	sub, err = l.conn.Subscribe("prizm.workflow.task.complete", func(msg *nats.Msg) {
+		var outcome prizmevent.Outcome
+		if json.Unmarshal(msg.Data, &outcome) == nil && outcome.EventID != "" {
+			evtType := "task_complete"
+			if outcome.Status == prizmevent.OutcomeAccepted {
+				evtType = "task_accepted"
+			} else if outcome.Status == prizmevent.OutcomeProgress {
+				evtType = "task_progress"
+			}
+			data := map[string]any{"task_id": outcome.TaskID, "delegation_id": outcome.DelegationID, "delivery_key": outcome.DeliveryKey}
+			if evtType == "task_complete" {
+				var completion TaskCompletion
+				if len(outcome.Payload) > 0 {
+					if err := json.Unmarshal(outcome.Payload, &completion); err != nil {
+						log.Printf("[NATS-LISTEN] failed to parse terminal outcome: %v", err)
+						return
+					}
+				}
+				if completion.TaskID == "" {
+					completion.TaskID = outcome.TaskID
+				}
+				completion.DelegationID = outcome.DelegationID
+				completion.DeliveryKey = outcome.DeliveryKey
+				if completion.Status == "" {
+					if outcome.Status == prizmevent.OutcomeSucceeded {
+						completion.Status = "completed"
+					} else {
+						completion.Status = "failed"
+					}
+				}
+				data["completion"] = completion
+			}
+			evt := ExternalEvent{Type: evtType, CorrelationID: outcome.CorrelationID, Source: "nats_compatibility", Data: data}
+			// This standalone listener is a compatibility adapter and is not used by
+			// the production wake composition, which persists outcomes before
+			// forwarding. Apply backpressure here so canonical facts are never
+			// silently dropped; Close releases a blocked callback.
+			select {
+			case eventCh <- evt:
+			case <-l.done:
+				log.Printf("[NATS-LISTEN] listener closed before canonical outcome delivery")
+			}
+			return
+		}
 		var completion TaskCompletion
 		if err := json.Unmarshal(msg.Data, &completion); err != nil {
 			log.Printf("[NATS-LISTEN] failed to parse task completion: %v", err)

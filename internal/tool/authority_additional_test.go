@@ -55,7 +55,7 @@ func TestEvaluatePolicyAdditionalDecisions(t *testing.T) {
 		{name: "research", tool: "web_search", decision: PolicyApproved},
 		{name: "skill", tool: "use_skill", decision: PolicyApproved},
 		{name: "dry run", tool: "write_file_dry_run", decision: PolicyApproved},
-		{name: "unimplemented patch", tool: "apply_patch_proposal", decision: PolicyDenied},
+		{name: "patch proposal", tool: "apply_patch_proposal", input: map[string]any{"patch": "diff", "base_sha": "abc"}, decision: PolicyRequiresApproval},
 		{name: "unknown", tool: "unknown_tool", decision: PolicyDenied},
 		{name: "mcp default", tool: "mcp_files_read", decision: PolicyRequiresApproval},
 		{name: "mcp opt in", cfg: PolicyConfig{AutoApproveMCP: true}, tool: "mcp_files_read", decision: PolicyApproved},

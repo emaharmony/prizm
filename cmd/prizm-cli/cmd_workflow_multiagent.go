@@ -68,13 +68,15 @@ func (m referenceWorkflowManifest) registryBacked() bool {
 }
 
 type referenceRuntime struct {
-	runtime *multiagent.DurableRuntime
-	store   *multiagent.SQLiteDurableRunStore
-	events  *event.SQLiteEventStore
+	runtime     *multiagent.DurableRuntime
+	store       *multiagent.SQLiteDurableRunStore
+	events      *event.SQLiteEventStore
+	delegation  graphDelegationOutbox
+	workspaceID string
 }
 
 func (r *referenceRuntime) close() error {
-	return errors.Join(r.store.Close(), r.events.Close())
+	return errors.Join(r.store.Close(), r.events.Close(), r.delegation.Close())
 }
 
 func executeReferenceWorkflowRun(inputFile, runDir, configPath string) error {
@@ -119,7 +121,8 @@ func executeReferenceWorkflowRun(inputFile, runDir, configPath string) error {
 	}
 	defer runtime.close()
 	state, runErr := runtime.runtime.Run(context.Background(), multiagent.RunRequest{
-		RunID: runID,
+		RunID:       runID,
+		WorkspaceID: runtime.workspaceID,
 		Task: multiagent.TaskReference{
 			ID: "task_" + runID, Description: multiagent.ReferenceTaskDescription(input),
 		},
@@ -305,7 +308,21 @@ func executeReferenceWorkflowReport(runID, runDir string, jsonOutput bool) error
 	return nil
 }
 
+type liveReferenceComponents struct {
+	runner      multiagent.RoleRunner
+	interaction *multiagent.InteractionScheduler
+	lifecycle   multiagent.ProposalLifecycle
+}
+
 func openLiveReferenceRuntime(runDir, configPath string, manifest referenceWorkflowManifest) (*referenceRuntime, error) {
+	components, err := buildLiveReferenceComponents(runDir, configPath, manifest)
+	if err != nil {
+		return nil, err
+	}
+	return openReferenceRuntimeWithInteraction(runDir, manifest, components.runner, components.interaction, components.lifecycle)
+}
+
+func buildLiveReferenceComponents(runDir, configPath string, manifest referenceWorkflowManifest) (*liveReferenceComponents, error) {
 	cfg, err := orchestrator.LoadConfig(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("load Prizm config: %w", err)
@@ -324,6 +341,9 @@ func openLiveReferenceRuntime(runDir, configPath string, manifest referenceWorkf
 	writeRoots := []string{manifest.WorkspacePath}
 	tool.RegisterBuiltinsWithRoots(toolRegistry, manifest.WorkspacePath, 10*1024*1024, readRoots, writeRoots)
 	if err := toolRegistry.Register(&tool.WriteFileProposal{WorkspaceRoot: manifest.WorkspacePath, AllowedPaths: writeRoots}); err != nil {
+		return nil, err
+	}
+	if err := toolRegistry.Register(&tool.ApplyPatchProposal{WorkspaceRoot: manifest.WorkspacePath, AllowedPaths: writeRoots}); err != nil {
 		return nil, err
 	}
 	if err := toolRegistry.Register(&tool.CreateDirectoryProposal{WorkspaceRoot: manifest.WorkspacePath, AllowedPaths: writeRoots}); err != nil {
@@ -354,8 +374,9 @@ func openLiveReferenceRuntime(runDir, configPath string, manifest referenceWorkf
 	}
 	toolInfos := toolRegistry.ListWithDescriptions()
 	loop := subagent.NewLoopRunner(subagent.LoopRunnerConfig{
-		Backend: backend,
-		Scope:   subagent.DefaultToolScope(),
+		Backend:                 backend,
+		Scope:                   subagent.DefaultToolScope(),
+		FinalReplyReserveTokens: 8192,
 		SystemPrompt: func(_ v2.TaskPacket, runtime subagent.AgentRuntime) string {
 			charter := fmt.Sprintf("You are the distinct %q authority in a bounded multi-agent software workflow. Follow the role contract in the task. When it requires a tool, emit one tool_request JSON, wait for its result, then return exactly one final role JSON object.", runtime.AgentID)
 			return charter + agent.BuildToolPromptSuffix(toolInfos, manifest.WorkspacePath, manifest.WorkspacePath)
@@ -397,7 +418,7 @@ func openLiveReferenceRuntime(runDir, configPath string, manifest referenceWorkf
 		}
 	}
 	lifecycle := newApprovalProposalLifecycle(approvalStore, manifest.WorkspacePath, runDir)
-	return openReferenceRuntimeWithInteraction(runDir, manifest, roleRunner, interaction, lifecycle)
+	return &liveReferenceComponents{runner: roleRunner, interaction: interaction, lifecycle: lifecycle}, nil
 }
 
 func openInspectionReferenceRuntime(runDir string, manifest referenceWorkflowManifest) (*referenceRuntime, error) {
@@ -405,6 +426,17 @@ func openInspectionReferenceRuntime(runDir string, manifest referenceWorkflowMan
 }
 
 func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkflowManifest, runner multiagent.RoleRunner, interaction *multiagent.InteractionScheduler, proposals multiagent.ProposalLifecycle) (*referenceRuntime, error) {
+	return openReferenceRuntimeWithInteractionForComposition(runDir, manifest, runner, interaction, proposals, false)
+}
+
+// openReferenceRuntimeWithInteractionForDelegationTest is reserved for package
+// tests that inject graph delegation outcomes. Production composition must keep
+// graph delegation disabled until a durable worker is available.
+func openReferenceRuntimeWithInteractionForDelegationTest(runDir string, manifest referenceWorkflowManifest, runner multiagent.RoleRunner, interaction *multiagent.InteractionScheduler, proposals multiagent.ProposalLifecycle) (*referenceRuntime, error) {
+	return openReferenceRuntimeWithInteractionForComposition(runDir, manifest, runner, interaction, proposals, true)
+}
+
+func openReferenceRuntimeWithInteractionForComposition(runDir string, manifest referenceWorkflowManifest, runner multiagent.RoleRunner, interaction *multiagent.InteractionScheduler, proposals multiagent.ProposalLifecycle, enableGraphDelegation bool) (*referenceRuntime, error) {
 	dbPath := filepath.Join(runDir, manifest.RunID, "multiagent.db")
 	store, err := multiagent.NewSQLiteDurableRunStore(dbPath)
 	if err != nil {
@@ -413,6 +445,16 @@ func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkfl
 	eventStore, err := event.NewSQLiteEventStore(dbPath)
 	if err != nil {
 		store.Close()
+		return nil, err
+	}
+	newDelegationOutbox := newGraphDelegationOutbox
+	if enableGraphDelegation {
+		newDelegationOutbox = newGraphDelegationOutboxForTest
+	}
+	delegation, delegationOptions, err := newDelegationOutbox(dbPath)
+	if err != nil {
+		store.Close()
+		eventStore.Close()
 		return nil, err
 	}
 	// Two convergence paths onto the same *multiagent.CompiledGraph: a legacy
@@ -434,6 +476,7 @@ func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkfl
 		if defErr != nil {
 			store.Close()
 			eventStore.Close()
+			delegation.Close()
 			return nil, fmt.Errorf("open definition registry for run %s: %w", manifest.RunID, defErr)
 		}
 		reg, getErr := defStore.Get(context.Background(), manifest.WorkflowID, manifest.WorkflowVersion)
@@ -441,11 +484,13 @@ func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkfl
 		if getErr != nil {
 			store.Close()
 			eventStore.Close()
+			delegation.Close()
 			return nil, fmt.Errorf("resolve registry definition for run %s: %w", manifest.RunID, getErr)
 		}
 		if closeErr != nil {
 			store.Close()
 			eventStore.Close()
+			delegation.Close()
 			return nil, fmt.Errorf("close definition registry for run %s: %w", manifest.RunID, closeErr)
 		}
 		graph = reg.Graph
@@ -455,6 +500,7 @@ func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkfl
 		if err != nil {
 			store.Close()
 			eventStore.Close()
+			delegation.Close()
 			return nil, err
 		}
 	}
@@ -472,14 +518,15 @@ func openReferenceRuntimeWithInteraction(runDir string, manifest referenceWorkfl
 	runtime, err := multiagent.NewDurableRuntime(
 		graph, runner, store,
 		multiagent.FileRunClaimer{Root: runDir}, eventStore,
-		multiagent.DurableRuntimeOptions{Interaction: interaction, Reflection: reflection, Memory: reflectionMemory, Proposals: proposals},
+		multiagent.DurableRuntimeOptions{Interaction: interaction, Reflection: reflection, Memory: reflectionMemory, Proposals: proposals, Delegation: delegationOptions},
 	)
 	if err != nil {
 		store.Close()
 		eventStore.Close()
+		delegation.Close()
 		return nil, err
 	}
-	return &referenceRuntime{runtime: runtime, store: store, events: eventStore}, nil
+	return &referenceRuntime{runtime: runtime, store: store, events: eventStore, delegation: delegation, workspaceID: manifest.WorkspaceID}, nil
 }
 
 type unavailableRoleRunner struct{}

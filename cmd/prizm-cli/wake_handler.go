@@ -26,6 +26,7 @@ import (
 	"github.com/emaharmony/prizm/internal/agent"
 	"github.com/emaharmony/prizm/internal/api"
 	contextpkg "github.com/emaharmony/prizm/internal/context"
+	prizmevent "github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/factorymonitor"
 	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/emaharmony/prizm/internal/improve"
@@ -372,10 +373,7 @@ func (wh *WakeHandler) handleWorkflowStart(req workstart.Request) {
 		log.Printf("[WAKE] workflow.start: no agent configured")
 		return
 	}
-	model := agentCfg.Model
-	if model == "" {
-		model = "glm-5.1:cloud"
-	}
+	model := resolveRuntimeModel(agentCfg.Model)
 
 	// Resolve the result channel from the request or project config.
 	channel := resolved.Channel
@@ -737,10 +735,7 @@ You can create branches, commit changes, push to remote, and open PRs. You are n
 		return
 	}
 
-	model := agentCfg.Model
-	if model == "" {
-		model = "glm-5.1:cloud"
-	}
+	model := resolveRuntimeModel(agentCfg.Model)
 
 	// Create or reuse a session for this action
 	sessionKey := fmt.Sprintf("wake:%s:%s", action, time.Now().Format("2006-01-02"))
@@ -2367,8 +2362,24 @@ func (wh *WakeHandler) RunGatedLoop(ctx stdcontext.Context, project *orchestrato
 	// Engine: NATS emitter for dashboard observability + delegation for optional
 	// sub-agent reviewers. Falls back to a no-op log emitter without NATS.
 	var emitter v2.EventEmitter = &v2.LogEmitter{}
+	var workflowPublisher *v2.NATSPublisher
+	var delegationPublisher *v2.NATSPublisher
+	var workflowOutbox *prizmevent.SQLiteOutbox
 	if wh.natsConn != nil {
-		emitter = v2.NewNATSEmitter(v2.NewNATSPublisherFromConn(wh.natsConn), "prizm.workflow")
+		workflowPublisher = v2.NewNATSPublisherFromConn(wh.natsConn)
+		outbox, outboxErr := prizmevent.NewSQLiteOutbox(filepath.Join(stateDir, "event-outbox.db"))
+		if outboxErr != nil {
+			log.Printf("[GATED-LOOP] durable event outbox unavailable; refusing delegated dispatch: %v", outboxErr)
+		} else {
+			defer outbox.Close()
+			workflowPublisher.UseOutbox(outbox)
+			delegationPublisher = workflowPublisher
+			workflowOutbox = outbox
+			if replayErr := workflowPublisher.ReplayOutbox(ctx); replayErr != nil {
+				log.Printf("[GATED-LOOP] pending event replay paused after publish failure: %v", replayErr)
+			}
+		}
+		emitter = v2.NewNATSEmitter(workflowPublisher, "prizm.workflow")
 	}
 	delegation := v2.NewDelegationManager("prizm.agent.openclaw", "prizm.workflow.task.complete")
 	delegation.ApplyTimeoutConfig(config.Global.DelegationTimeouts)
@@ -2441,13 +2452,9 @@ func (wh *WakeHandler) RunGatedLoop(ctx stdcontext.Context, project *orchestrato
 	// Delegation transport: publish delegated task packets onto the agent subject so
 	// other agents/Prizms can pick them up. Without NATS, delegations are still
 	// recorded in state but not dispatched.
-	if wh.natsConn != nil {
+	if delegationPublisher != nil {
 		engine.SetTaskPublisher(func(packet v2.TaskPacket) error {
-			data, err := json.Marshal(packet)
-			if err != nil {
-				return err
-			}
-			return wh.natsConn.Publish(delegation.Subject(), data)
+			return delegationPublisher.PublishTaskPacket(delegation.Subject(), packet)
 		})
 	}
 
@@ -2492,27 +2499,28 @@ func (wh *WakeHandler) RunGatedLoop(ctx stdcontext.Context, project *orchestrato
 
 		// Delegated task completions: forward into the engine so the delegation
 		// manager closes out the record and the task_completion gate sees it.
+		if workflowOutbox != nil {
+			if err := forwardDurableDelegationOutcomes(ctx, workflowOutbox, runID, eventCh); err != nil {
+				log.Printf("[GATED-LOOP] delegation outcome replay paused: %v", err)
+			}
+		}
 		csub, csubErr := wh.natsConn.Subscribe(delegation.Subject()+".complete", func(msg *nats.Msg) {
-			var payload map[string]any
-			if err := json.Unmarshal(msg.Data, &payload); err != nil {
+			if workflowOutbox == nil {
 				return
 			}
-			if wfID, _ := payload["workflow_id"].(string); wfID != "" && wfID != runID {
+			var outcome prizmevent.Outcome
+			if err := json.Unmarshal(msg.Data, &outcome); err != nil {
 				return
 			}
-			evt := v2.ExternalEvent{
-				Type:          "task_complete",
-				CorrelationID: runID,
-				Source:        "nats",
-				Data: map[string]any{
-					"task_id":        payload["task_id"],
-					"status":         payload["status"],
-					"output_summary": payload["output_summary"],
-				},
+			if outcome.RunID != runID {
+				return
 			}
-			select {
-			case eventCh <- evt:
-			default:
+			if _, err := workflowOutbox.RecordOutcome(ctx, outcome); err != nil {
+				log.Printf("[GATED-LOOP] rejected delegation outcome %s: %v", outcome.EventID, err)
+				return
+			}
+			if err := forwardDurableDelegationOutcomes(ctx, workflowOutbox, runID, eventCh); err != nil {
+				log.Printf("[GATED-LOOP] delegation outcome delivery paused: %v", err)
 			}
 		})
 		if csubErr == nil {
@@ -2643,6 +2651,53 @@ func (wh *WakeHandler) RunGatedLoop(ctx stdcontext.Context, project *orchestrato
 
 // buildGatedLoopSystemPrompt builds the project-aware system prompt for the loop.
 // No hardcoded repo paths or agent IDs — everything comes from the project config.
+func forwardDurableDelegationOutcomes(ctx stdcontext.Context, outbox *prizmevent.SQLiteOutbox, runID string, eventCh chan<- v2.ExternalEvent) error {
+	outcomes, err := outbox.PendingOutcomes(ctx, runID)
+	if err != nil {
+		return err
+	}
+	for _, out := range outcomes {
+		evt := v2.ExternalEvent{CorrelationID: out.CorrelationID, Source: "durable_outcome", Data: map[string]any{"task_id": out.TaskID, "delegation_id": out.DelegationID, "delivery_key": out.DeliveryKey}}
+		eventID := out.EventID
+		evt.Acknowledge = func() error { return outbox.MarkOutcomeConsumed(ctx, eventID) }
+		switch out.Status {
+		case prizmevent.OutcomeAccepted:
+			evt.Type = "task_accepted"
+		case prizmevent.OutcomeProgress:
+			evt.Type = "task_progress"
+		case prizmevent.OutcomeSucceeded, prizmevent.OutcomeFailed, prizmevent.OutcomeTimedOut, prizmevent.OutcomeRejected:
+			evt.Type = "task_complete"
+			var completion v2.TaskCompletion
+			if len(out.Payload) > 0 {
+				if err := json.Unmarshal(out.Payload, &completion); err != nil {
+					return fmt.Errorf("decode terminal outcome %s: %w", out.EventID, err)
+				}
+			}
+			if completion.TaskID == "" {
+				completion.TaskID = out.TaskID
+			}
+			completion.DelegationID = out.DelegationID
+			completion.DeliveryKey = out.DeliveryKey
+			if completion.Status == "" {
+				if out.Status == prizmevent.OutcomeSucceeded {
+					completion.Status = "completed"
+				} else {
+					completion.Status = "failed"
+				}
+			}
+			evt.Data["completion"] = completion
+		default:
+			return fmt.Errorf("unsupported delegation outcome %q", out.Status)
+		}
+		select {
+		case eventCh <- evt:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
 func (wh *WakeHandler) buildGatedLoopSystemPrompt(project *orchestrator.ProjectConfig, taskPrompt, repoPath string, requirePush bool) string {
 	var b strings.Builder
 	b.WriteString("You are an autonomous engineering agent running a gated dev loop. You build production-quality code.\n\n")

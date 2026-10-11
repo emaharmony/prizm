@@ -13,10 +13,11 @@ import (
 // AgentProfile is the execution identity resolved from an existing Prism agent
 // registry or configuration source.
 type AgentProfile struct {
-	ID           string
-	Provider     string
-	Model        string
-	Capabilities []string
+	ID              string
+	Provider        string
+	Model           string
+	ReasoningEffort string
+	Capabilities    []string
 }
 
 // AgentProfileResolver resolves RoleConfig.AgentRef without giving the adapter
@@ -49,10 +50,11 @@ func (r RegistryProfileResolver) ResolveAgent(ref string) (AgentProfile, error) 
 		capabilities = append(capabilities, capability.Action)
 	}
 	return AgentProfile{
-		ID:           resolved.Name,
-		Provider:     resolved.ProviderName,
-		Model:        resolved.Model,
-		Capabilities: capabilities,
+		ID:              resolved.Name,
+		Provider:        resolved.ProviderName,
+		Model:           resolved.Model,
+		ReasoningEffort: resolved.ReasoningEffort,
+		Capabilities:    capabilities,
 	}, nil
 }
 
@@ -171,19 +173,21 @@ func (f ValidationRunnerFunc) RunValidation(
 // AgentExecutionRequest is the narrow request sent to Prism's real bounded
 // agent execution seam.
 type AgentExecutionRequest struct {
-	RunID                string
-	TaskID               string
-	ExecutionKey         string
-	Role                 Role
-	Visit                int
-	Profile              AgentProfile
-	Prompt               string
-	Workspace            Workspace
-	AllowedTools         []string
-	RequiredCapabilities []string
-	MaxIterations        Limit
-	MaxTokens            Limit
-	Deadline             time.Time
+	RunID                        string
+	TaskID                       string
+	ExecutionKey                 string
+	Role                         Role
+	Visit                        int
+	Profile                      AgentProfile
+	Prompt                       string
+	Workspace                    Workspace
+	AllowedTools                 []string
+	RequiredCapabilities         []string
+	FinalizationPrerequisiteTool string
+	FinalResponseContract        string
+	MaxIterations                Limit
+	MaxTokens                    Limit
+	Deadline                     time.Time
 }
 
 // AgentExecutionResult is the transport-neutral result returned by the real

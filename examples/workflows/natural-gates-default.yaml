@@ -35,25 +35,25 @@ agents:
     role: implementation
     capabilities: [write_code, git_operations, file_operations, code_review]
     provider: ollama
-    model: glm-5.2:cloud
+    model: glm-5.3:cloud
     availability: online
   - name: mango
     role: implementation-review
     capabilities: [write_code, data_structuring, complex_computation, code_review, test_writing]
-    provider: openclaw-subagent
-    model: deepseek-v4-pro:cloud
+    provider: ollama
+    model: glm-5.3:cloud
     availability: online
   - name: junie
     role: implementation
     capabilities: [write_code, refactoring, test_writing, debugging]
-    provider: openclaw-subagent
-    model: glm-5.2:cloud
+    provider: ollama
+    model: glm-5.3:cloud
     availability: online
   - name: lumi
     role: architect-reviewer
     capabilities: [architecture_design, code_review, creative_direction, plan_approval, agent_orchestration]
-    provider: openclaw
-    model: deepseek-v4-pro:cloud
+    provider: ollama
+    model: glm-5.3:cloud
     availability: online
 
 # Phase definitions in execution order

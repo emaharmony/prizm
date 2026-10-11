@@ -29,6 +29,7 @@ type DurableRuntimeOptions struct {
 	Reflection  ReflectionRunner
 	Memory      ReflectionMemorySink
 	Proposals   ProposalLifecycle
+	Delegation  *DurableDelegationOptions
 }
 
 // DurableRuntime advances a run only through atomically persisted checkpoints.
@@ -43,6 +44,7 @@ type DurableRuntime struct {
 	reflection  ReflectionRunner
 	memory      ReflectionMemorySink
 	proposals   ProposalLifecycle
+	delegation  *DurableDelegationOptions
 }
 
 // NewDurableRuntime creates the Phase 1 persistence and recovery boundary
@@ -64,6 +66,10 @@ func NewDurableRuntime(
 	}
 	if publisher == nil {
 		return nil, errors.New("multiagent: canonical event publisher is required")
+	}
+	if options.Delegation != nil && (strings.TrimSpace(options.Delegation.Subject) == "" ||
+		options.Delegation.Dispatcher == nil || options.Delegation.Outcomes == nil || options.Delegation.Deadline <= 0) {
+		return nil, errors.New("multiagent: delegated role execution requires subject, dispatcher, outcome source, and positive deadline")
 	}
 	buffer := &durableEventBuffer{}
 	supervisor, err := NewSupervisor(
@@ -96,6 +102,7 @@ func NewDurableRuntime(
 		reflection:  options.Reflection,
 		memory:      options.Memory,
 		proposals:   options.Proposals,
+		delegation:  options.Delegation,
 	}, nil
 }
 
@@ -158,12 +165,100 @@ func (r *DurableRuntime) Resume(
 		r.publishRecoveryFailure(ctx, runID, err)
 		return record.State, &RecoveryFailedError{RunID: runID, Cause: err}
 	}
+	if record.PendingDelegationOutcomeAck != "" {
+		record, err = r.ackDelegationOutcome(ctx, record, record.PendingDelegationOutcomeAck)
+		if err != nil {
+			return record.State, err
+		}
+	}
+	// A terminal fact can be durable even when the dispatch checkpoint was
+	// interrupted. Consume facts before interpreting DispatchPending/deadline
+	// state so recovery never discards a completed worker result.
+	if record.Phase == CheckpointWaiting && record.Waiting != nil && record.Waiting.Kind == "delegation_outcome" && r.delegation != nil && r.delegation.Outcomes != nil {
+		outcomes, outcomeErr := r.delegation.Outcomes.PendingOutcomes(ctx, runID)
+		if outcomeErr != nil {
+			return record.State, outcomeErr
+		}
+		if len(outcomes) > 0 {
+			record, err = r.resumeDelegation(ctx, record)
+			if err != nil {
+				return record.State, err
+			}
+			if record.Phase == CheckpointWaiting {
+				return record.State, waitingError(record)
+			}
+		}
+	}
+	// Fan-out checkpoints have the same ordering requirement as a single
+	// delegation: durable child facts must be consumed before an expired
+	// dispatch checkpoint can synthesize a join timeout.
+	if record.Phase == CheckpointWaiting && record.Waiting != nil && record.Waiting.Kind == "delegation_join" && r.delegation != nil && r.delegation.Outcomes != nil {
+		outcomes, outcomeErr := r.delegation.Outcomes.PendingOutcomes(ctx, runID)
+		if outcomeErr != nil {
+			return record.State, outcomeErr
+		}
+		if len(outcomes) > 0 {
+			record, err = r.resumeDelegationJoin(ctx, record)
+			if err != nil {
+				return record.State, err
+			}
+			if record.Phase == CheckpointWaiting {
+				return record.State, waitingError(record)
+			}
+		}
+	}
+	if record.Phase == CheckpointWaiting && record.Waiting != nil &&
+		record.Waiting.Kind == "delegation_outcome" && record.Waiting.DispatchPending {
+		if !r.now().UTC().Before(record.Waiting.Deadline) {
+			record, err = r.timeoutDelegation(ctx, record, "delegated role deadline exceeded before dispatch completed")
+			return record.State, err
+		}
+		record, err = r.dispatchPendingDelegation(ctx, record)
+		if err != nil {
+			return record.State, err
+		}
+	}
+	if record.Phase == CheckpointWaiting && record.Waiting != nil &&
+		record.Waiting.Kind == "delegation_join" && record.DelegationJoin != nil {
+		pending := false
+		for _, child := range record.DelegationJoin.Children {
+			pending = pending || child.DispatchPending
+		}
+		if pending {
+			if !r.now().UTC().Before(record.Waiting.Deadline) {
+				record, err = r.expireDelegationJoin(ctx, record)
+				return record.State, err
+			}
+			record, err = r.dispatchPendingDelegationJoin(ctx, record)
+			if err != nil {
+				return record.State, err
+			}
+		}
+	}
 	if err := r.dispatchOutbox(ctx, runID); err != nil {
 		return record.State, err
 	}
 	if record.Phase == CheckpointTerminal {
 		r.publishRecoveryCompleted(ctx, record.State, "terminal run unchanged")
 		return record.State, nil
+	}
+	if record.Phase == CheckpointWaiting && record.Waiting != nil && record.Waiting.Kind == "delegation_outcome" {
+		record, err = r.resumeDelegation(ctx, record)
+		if err != nil {
+			return record.State, err
+		}
+		if record.Phase == CheckpointWaiting {
+			return record.State, waitingError(record)
+		}
+	}
+	if record.Phase == CheckpointWaiting && record.Waiting != nil && record.Waiting.Kind == "delegation_join" {
+		record, err = r.resumeDelegationJoin(ctx, record)
+		if err != nil {
+			return record.State, err
+		}
+		if record.Phase == CheckpointWaiting {
+			return record.State, waitingError(record)
+		}
 	}
 
 	// An operator pause is a special CheckpointWaiting exit: it was taken
@@ -511,6 +606,9 @@ func (r *DurableRuntime) executePreparedRole(
 	ctx context.Context,
 	record DurableRun,
 ) (DurableRun, error) {
+	if r.delegation != nil {
+		return r.dispatchDelegatedRole(ctx, record)
+	}
 	role := record.State.CurrentRole
 	roleConfig, _ := r.supervisor.graph.RoleConfig(role)
 	startedAt := r.now().UTC()

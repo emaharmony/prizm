@@ -41,6 +41,16 @@ func TestDefaultReferenceDefinitionSafetyCeilings(t *testing.T) {
 				}
 			}
 		}
+		if role.Role == RoleDeveloper {
+			hasPatch, hasLegacy := false, false
+			for _, toolName := range role.AllowedTools {
+				hasPatch = hasPatch || toolName == "apply_patch_proposal"
+				hasLegacy = hasLegacy || toolName == "write_file_proposal"
+			}
+			if !hasPatch || hasLegacy {
+				t.Fatalf("developer proposal tools = %v", role.AllowedTools)
+			}
+		}
 	}
 }
 

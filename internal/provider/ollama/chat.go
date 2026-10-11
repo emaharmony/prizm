@@ -52,12 +52,13 @@ type ollamaFunction struct {
 }
 
 type chatRequest struct {
-	Model    string           `json:"model"`
-	Messages []ollamaMessage  `json:"messages"`
-	Tools    []ollamaFunction `json:"tools,omitempty"`
-	Stream   bool             `json:"stream"`
-	Think    *bool            `json:"think,omitempty"`
-	Options  generateOptions  `json:"options,omitempty"`
+	Model         string           `json:"model"`
+	Messages      []ollamaMessage  `json:"messages"`
+	Tools         []ollamaFunction `json:"tools,omitempty"`
+	Stream        bool             `json:"stream"`
+	Think         any              `json:"think,omitempty"`
+	ClearThinking *bool            `json:"clear_thinking,omitempty"`
+	Options       generateOptions  `json:"options,omitempty"`
 }
 
 type ollamaMessage struct {
@@ -141,16 +142,32 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 		Messages: ollamaMsgs,
 		Tools:    ollamaTools,
 		Stream:   false,
-		// Disable thinking, matching the /api/generate path (ollama.go).
-		// Reasoning-hybrid models (e.g. GLM, DeepSeek-R1, Qwen3) can absorb
-		// tool-call intent into a hidden reasoning channel instead of the
-		// structured tool_calls field when thinking is left at its default,
-		// producing a plain-text response with no tool call at all.
-		Think: boolPtr(false),
 		Options: generateOptions{
 			Temperature: req.Temperature,
 			NumPredict:  req.MaxTokens,
 		},
+	}
+	// GLM-5.3's Ollama model contract requires clear_thinking for chat. Keep
+	// thinking out of the returned provider response: only final content and
+	// native tool calls cross this boundary.
+	if isGLM53Cloud(req.Model) {
+		effort := strings.TrimSpace(req.ReasoningEffort)
+		if effort == "" {
+			effort = "low"
+		}
+		if effort != "low" && effort != "high" && effort != "max" {
+			return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: glm-5.3 reasoning effort %q is unsupported (want low, high, or max)", effort)
+		}
+		body.ClearThinking = boolPtr(true)
+		body.Think = effort
+	} else {
+		// Disable thinking for other reasoning-hybrid models so tool-call intent
+		// remains in the structured tool_calls field.
+		if effort := strings.TrimSpace(req.ReasoningEffort); effort != "" {
+			body.Think = effort
+		} else {
+			body.Think = boolPtr(false)
+		}
 	}
 
 	bodyBytes, err := json.Marshal(body)
@@ -261,6 +278,10 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 			"total_duration_ns": oResp.TotalDuration,
 		},
 	}, nil
+}
+
+func isGLM53Cloud(model string) bool {
+	return strings.EqualFold(strings.TrimSpace(model), "glm-5.3:cloud")
 }
 
 // isQuotaExhausted reports whether a 429 response body indicates an

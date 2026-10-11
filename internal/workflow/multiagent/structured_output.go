@@ -29,6 +29,7 @@ type PlannerOutput struct {
 	AcceptanceCriteria []string      `json:"acceptance_criteria"`
 	Risks              []string      `json:"risks,omitempty"`
 	Assumptions        []string      `json:"assumptions,omitempty"`
+	FanOut             *FanOutPlan   `json:"fan_out,omitempty"`
 	Handoff            OutputHandoff `json:"handoff"`
 }
 
@@ -131,6 +132,7 @@ type MemoryCandidateOutput struct {
 type decodedRoleOutput struct {
 	Outcome TransitionOutcome
 	Handoff *HandoffDraft
+	FanOut  *FanOutPlan
 }
 
 func decodeRoleOutput(role Role, raw string) (decodedRoleOutput, error) {
@@ -146,6 +148,7 @@ func decodeRoleOutput(role Role, raw string) (decodedRoleOutput, error) {
 		return decodedRoleOutput{
 			Outcome: OutcomePlanReady,
 			Handoff: handoffFromOutput(output.Handoff, nil),
+			FanOut:  cloneFanOutPlan(output.FanOut),
 		}, nil
 	case RoleDeveloper:
 		var output DeveloperOutput
@@ -317,6 +320,11 @@ func validatePlannerOutput(output PlannerOutput) error {
 	}
 	if err := validateRequiredStrings("acceptance_criteria", output.AcceptanceCriteria); err != nil {
 		return err
+	}
+	if output.FanOut != nil {
+		if err := output.FanOut.Validate(); err != nil {
+			return err
+		}
 	}
 	return validateOutputHandoff(output.Handoff)
 }

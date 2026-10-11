@@ -241,7 +241,7 @@ func (e *Engine) Drive(ctx context.Context, llm LLMFunc, tool ToolFunc, opts Dri
 				_ = SaveWorkflowState(e.state, opts.StateDir)
 				_ = SaveCurrentWorkflowState(e.state, opts.StateDir)
 			}
-			e.WaitForResume(ctx)
+			e.WaitForResume(ctx, opts.StateDir)
 			if e.state.Status == StatusBlocked {
 				return e.state, fmt.Errorf("workflow blocked at %s: %s", phaseName, e.state.PauseReason)
 			}
@@ -288,6 +288,9 @@ func (e *Engine) Drive(ctx context.Context, llm LLMFunc, tool ToolFunc, opts Dri
 			select {
 			case evt := <-e.externalEvent:
 				e.handleExternalEvent(evt, phaseName)
+				if err := e.persistAndAcknowledge(evt, opts.StateDir); err != nil {
+					return e.state, fmt.Errorf("persist external event: %w", err)
+				}
 			default:
 			}
 

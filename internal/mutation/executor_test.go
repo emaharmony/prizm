@@ -9,8 +9,48 @@ import (
 	"testing"
 
 	"github.com/emaharmony/prizm/internal/approval"
+	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/emaharmony/prizm/internal/tool"
 )
+
+func TestExecutorAppliesExactApprovedPatch(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+	for _, args := range [][]string{{"init", "-b", "main"}, {"config", "user.email", "test@prizm.local"}, {"config", "user.name", "Prizm Test"}} {
+		if _, err := gitx.RunCommand(ctx, root, "", "git", args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitx.RunCommand(ctx, root, "", "git", "add", "."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitx.RunCommand(ctx, root, "", "git", "commit", "-m", "base"); err != nil {
+		t.Fatal(err)
+	}
+	base, _ := gitx.CurrentSHA(ctx, root)
+	patch := "diff --git a/base.txt b/base.txt\n--- a/base.txt\n+++ b/base.txt\n@@ -1 +1 @@\n-base\n+changed\n"
+	plan, err := gitx.PlanPatch(ctx, root, patch, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := approval.NewStore(t.TempDir())
+	a := approval.NewApproval("run-patch", "exec-patch", "developer", "prizm", approval.MutationApplyPatch, "1 files", patch, approval.PolicyDecision{Decision: approval.DecisionRequiresApproval})
+	a.PatchPlan = &approval.PatchPlan{BaseSHA: plan.BaseSHA, BaseTree: plan.BaseTree, ExpectedTree: plan.ExpectedTree, PatchSHA256: plan.PatchSHA256, Paths: plan.Paths}
+	if err := store.Save(a); err != nil {
+		t.Fatal(err)
+	}
+	result, err := NewExecutor(root, store, root).ApplyWithRun(ctx, a.RunID, a.ApprovalID, "operator")
+	if err != nil || !result.Success {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	tree, _ := gitx.WorktreeTree(ctx, root)
+	if tree != plan.ExpectedTree {
+		t.Fatalf("tree=%q expected=%q", tree, plan.ExpectedTree)
+	}
+}
 
 func TestExecutorApplyApprovedWrites(t *testing.T) {
 	tmpDir := t.TempDir()

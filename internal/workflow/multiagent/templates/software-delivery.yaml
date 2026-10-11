@@ -97,8 +97,7 @@ spec:
         - search_files
         - project_overview
         - write_file_dry_run
-        - write_file_proposal
-        - create_directory_proposal
+        - apply_patch_proposal
       capabilities:
         - code
       allowedOutcomes:

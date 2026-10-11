@@ -146,7 +146,7 @@ func (e *Executor) ExecuteWithPolicy(ctx context.Context, toolName, agent, proje
 		// input alone, and the real invocation is deferred to approval time.
 		var result ToolResult
 		switch toolName {
-		case "write_file_proposal", "create_directory_proposal":
+		case "write_file_proposal", "create_directory_proposal", "apply_patch_proposal":
 			var err error
 			result, err = e.Registry.Execute(ctx, toolName, execInput)
 			if err != nil {
@@ -161,6 +161,10 @@ func (e *Executor) ExecuteWithPolicy(ctx context.Context, toolName, agent, proje
 		}
 		if result.Output == nil {
 			result.Output = map[string]any{}
+		}
+		if !result.Success {
+			e.emitEvent("prizm.tool.failed", map[string]any{"tool_name": toolName, "agent": agent, "project": project, "correlation_id": correlationID, "error": result.Error})
+			return result, nil
 		}
 
 		// Mark as pending_approval status
@@ -372,6 +376,20 @@ func (e *Executor) persistApproval(toolName, agent, project, correlationID, runI
 			Reason:   policyResult.Reason,
 		},
 	}
+	if mutationType == approval.MutationApplyPatch {
+		paths, err := stringSliceOutput(result.Output["paths"])
+		if err != nil {
+			return fmt.Errorf("persist patch approval: %w", err)
+		}
+		a.Content, _ = input["patch"].(string)
+		a.PatchPlan = &approval.PatchPlan{
+			BaseSHA: outputString(result.Output, "base_sha"), BaseTree: outputString(result.Output, "base_tree"),
+			ExpectedTree: outputString(result.Output, "expected_tree"), PatchSHA256: outputString(result.Output, "patch_sha256"), Paths: paths,
+		}
+		if a.PatchPlan.BaseSHA == "" || a.PatchPlan.BaseTree == "" || a.PatchPlan.ExpectedTree == "" || a.PatchPlan.PatchSHA256 == "" || len(paths) == 0 {
+			return fmt.Errorf("persist patch approval: incomplete patch plan")
+		}
+	}
 	if err := e.ApprovalStore.Save(a); err != nil {
 		return err
 	}
@@ -392,11 +410,35 @@ func (e *Executor) persistApproval(toolName, agent, project, correlationID, runI
 		"mutation_type":  mutationType,
 		"tool_name":      toolName,
 		"preview":        preview,
-		"content_length": len(content),
+		"content_length": len(a.Content),
 		"_channel_id":    channelID,
 	})
 
 	return nil
+}
+
+func outputString(output map[string]any, key string) string {
+	v, _ := output[key].(string)
+	return v
+}
+
+func stringSliceOutput(value any) ([]string, error) {
+	switch paths := value.(type) {
+	case []string:
+		return append([]string(nil), paths...), nil
+	case []any:
+		out := make([]string, len(paths))
+		for i, value := range paths {
+			path, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("path %d is not a string", i)
+			}
+			out[i] = path
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("paths are missing")
+	}
 }
 
 // describeToolCall derives a human-readable target label and preview for an

@@ -253,7 +253,7 @@ agents:
   - id: astraea
     role: orchestrator
     provider: ollama
-    model: "llama3.2"
+    model: "glm-5.3:cloud"
     primary: true
     context:
       - soul
@@ -279,7 +279,7 @@ agents:
   - id: forge
     role: coder
     provider: ollama
-    model: "llama3.2"
+    model: "glm-5.3:cloud"
     context:
       - agents
     capabilities:

@@ -93,6 +93,12 @@ func TestGeneratedConfigValidates(t *testing.T) {
 	}
 }
 
+func TestDefaultModelForOllama(t *testing.T) {
+	if got := defaultModelFor("ollama"); got != defaultOllamaCloudModel {
+		t.Fatalf("defaultModelFor(ollama) = %q, want %q", got, defaultOllamaCloudModel)
+	}
+}
+
 func TestWizardBuildSingleAgent(t *testing.T) {
 	ec := wizardBuild(wizardAnswers{
 		InstanceID:  "myprizm",

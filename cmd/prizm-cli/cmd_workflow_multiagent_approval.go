@@ -37,35 +37,59 @@ func (r approvalProposalResolver) ResolveProposals(_ context.Context, query mult
 		if proposalID == "" { // schema-v1 approval compatibility
 			proposalID = item.ApprovalID
 		}
-		artifact, artifactErr := canonicalProposalArtifact(item, r.workspace)
+		artifacts, artifactErr := canonicalProposalArtifacts(item, r.workspace)
 		if artifactErr != nil {
 			return nil, artifactErr
 		}
-		refs = append(refs, multiagent.ProposalReference{ProposalID: proposalID, ApprovalID: item.ApprovalID, Artifacts: []multiagent.ArtifactRef{artifact}})
+		refs = append(refs, multiagent.ProposalReference{ProposalID: proposalID, ApprovalID: item.ApprovalID, Artifacts: artifacts})
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].ProposalID < refs[j].ProposalID })
 	return refs, nil
 }
 
-func canonicalProposalArtifact(item *approval.Approval, workspace string) (multiagent.ArtifactRef, error) {
-	if item == nil || item.MutationType != approval.MutationWriteFile {
-		return multiagent.ArtifactRef{}, fmt.Errorf("proposal does not identify a canonical file artifact")
+func canonicalProposalArtifacts(item *approval.Approval, workspace string) ([]multiagent.ArtifactRef, error) {
+	if item == nil {
+		return nil, fmt.Errorf("proposal does not identify canonical file artifacts")
 	}
 	if workspace == "" {
-		return multiagent.ArtifactRef{}, fmt.Errorf("proposal workspace is required")
+		return nil, fmt.Errorf("proposal workspace is required")
 	}
+	paths := []string{item.TargetPath}
+	if item.MutationType == approval.MutationApplyPatch {
+		if item.PatchPlan == nil || len(item.PatchPlan.Paths) == 0 {
+			return nil, fmt.Errorf("patch proposal does not identify canonical file artifacts")
+		}
+		paths = item.PatchPlan.Paths
+	} else if item.MutationType != approval.MutationWriteFile {
+		return nil, fmt.Errorf("proposal does not identify canonical file artifacts")
+	}
+	artifacts := make([]multiagent.ArtifactRef, 0, len(paths))
 	// Proposal tools accept either a workspace-relative path or an absolute
 	// path already contained by the run workspace. Preserve that tool contract
 	// when deriving the canonical, workspace-relative artifact reference.
-	absolute, err := safety.ResolveAndContainMulti([]string{workspace}, item.TargetPath)
+	for _, target := range paths {
+		absolute, err := safety.ResolveAndContainMulti([]string{workspace}, target)
+		if err != nil {
+			return nil, fmt.Errorf("resolve proposal target: %w", err)
+		}
+		relative, err := filepath.Rel(workspace, absolute)
+		if err != nil || relative == "." || filepath.IsAbs(relative) {
+			return nil, fmt.Errorf("canonicalize proposal target %q", target)
+		}
+		artifacts = append(artifacts, multiagent.ArtifactRef{Kind: multiagent.ArtifactFile, URI: filepath.ToSlash(relative)})
+	}
+	return artifacts, nil
+}
+
+func canonicalProposalArtifact(item *approval.Approval, workspace string) (multiagent.ArtifactRef, error) {
+	artifacts, err := canonicalProposalArtifacts(item, workspace)
 	if err != nil {
-		return multiagent.ArtifactRef{}, fmt.Errorf("resolve proposal target: %w", err)
+		return multiagent.ArtifactRef{}, err
 	}
-	relative, err := filepath.Rel(workspace, absolute)
-	if err != nil || relative == "." || filepath.IsAbs(relative) {
-		return multiagent.ArtifactRef{}, fmt.Errorf("canonicalize proposal target %q", item.TargetPath)
+	if len(artifacts) != 1 {
+		return multiagent.ArtifactRef{}, fmt.Errorf("proposal identifies %d artifacts", len(artifacts))
 	}
-	return multiagent.ArtifactRef{Kind: multiagent.ArtifactFile, URI: filepath.ToSlash(relative)}, nil
+	return artifacts[0], nil
 }
 
 // approvalProposalLifecycle composes the existing approval store and mutation
@@ -130,13 +154,30 @@ func (l approvalProposalLifecycle) Apply(ctx context.Context, op multiagent.Prop
 	return l.withDiffEvidence(op, multiagent.ProposalApplyResult{Success: result.Success, TargetPath: result.TargetPath, Message: result.Message}), nil
 }
 
-func (l approvalProposalLifecycle) Reconcile(_ context.Context, op multiagent.ProposalOperation) (multiagent.ProposalReconciliation, multiagent.ProposalApplyResult, error) {
+func (l approvalProposalLifecycle) Reconcile(ctx context.Context, op multiagent.ProposalOperation) (multiagent.ProposalReconciliation, multiagent.ProposalApplyResult, error) {
 	item, err := l.load(op)
 	if err != nil {
 		return "", multiagent.ProposalApplyResult{}, err
 	}
 	result := multiagent.ProposalApplyResult{TargetPath: item.TargetPath}
 	switch item.MutationType {
+	case approval.MutationApplyPatch:
+		if item.PatchPlan == nil {
+			return multiagent.ProposalAmbiguous, result, nil
+		}
+		tree, treeErr := gitx.WorktreeTree(ctx, l.workspace)
+		if treeErr != nil {
+			return multiagent.ProposalAmbiguous, result, nil
+		}
+		switch tree {
+		case item.PatchPlan.ExpectedTree:
+			result.Success, result.Message = true, "approved patch tree present"
+			return multiagent.ProposalApplied, l.withDiffEvidence(op, result), nil
+		case item.PatchPlan.BaseTree:
+			return multiagent.ProposalNotApplied, result, nil
+		default:
+			return multiagent.ProposalAmbiguous, result, nil
+		}
 	case approval.MutationWriteFile:
 		path, resolveErr := safety.ResolveAndContainMulti([]string{l.workspace}, item.TargetPath)
 		if resolveErr != nil {
@@ -177,6 +218,11 @@ func (l approvalProposalLifecycle) Reconcile(_ context.Context, op multiagent.Pr
 func (l approvalProposalLifecycle) withDiffEvidence(op multiagent.ProposalOperation, result multiagent.ProposalApplyResult) multiagent.ProposalApplyResult {
 	diff, diffErr := gitx.RunCommand(context.Background(), l.workspace, "", "git", "diff", "--binary")
 	stat, statErr := gitx.RunCommand(context.Background(), l.workspace, "", "git", "diff", "--stat")
+	if item, err := l.store.Load(op.RunID, op.ApprovalID); err == nil && item.MutationType == approval.MutationApplyPatch && item.PatchPlan != nil {
+		diff = item.Content
+		diffErr = nil
+		stat, statErr = gitx.RunCommand(context.Background(), l.workspace, item.Content, "git", "apply", "--stat", "-")
+	}
 	if diffErr != nil || statErr != nil {
 		return result
 	}

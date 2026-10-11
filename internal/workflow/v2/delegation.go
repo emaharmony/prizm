@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/emaharmony/prizm/internal/event"
 )
 
 // defaultDelegationTimeout is the fallback deadline for any agent without a
@@ -71,12 +73,22 @@ type TaskPacket struct {
 	Type                string      `json:"type"` // "task_delegation"
 	TargetAgent         string      `json:"target_agent"`
 	TaskID              string      `json:"task_id"`
+	RunID               string      `json:"run_id,omitempty"`
+	CorrelationID       string      `json:"correlation_id,omitempty"`
+	DelegationID        string      `json:"delegation_id,omitempty"`
+	DeliveryKey         string      `json:"delivery_key,omitempty"`
 	Description         string      `json:"description"`
 	Context             TaskContext `json:"context"`
 	ExpectedDeliverable string      `json:"expected_deliverable"`
-	ValidationChecklist []string    `json:"validation_checklist"`
-	Priority            string      `json:"priority"`
-	Deadline            string      `json:"deadline"`
+	// FinalizationPrerequisiteTool, when set by trusted composition, must
+	// execute successfully before the runner may close the tool phase.
+	FinalizationPrerequisiteTool string `json:"finalization_prerequisite_tool,omitempty"`
+	// FinalResponseContract is the trusted role-owned schema reminder repeated
+	// on the final-only turn after long tool transcripts.
+	FinalResponseContract string   `json:"final_response_contract,omitempty"`
+	ValidationChecklist   []string `json:"validation_checklist"`
+	Priority              string   `json:"priority"`
+	Deadline              string   `json:"deadline"`
 	// RequiredCapability, when set, is the capability the target agent must hold
 	// to run this task (capability-aware routing). Empty = no requirement.
 	RequiredCapability string `json:"required_capability,omitempty"`
@@ -94,6 +106,8 @@ type TaskContext struct {
 // TaskCompletion is the response from a delegated task.
 type TaskCompletion struct {
 	TaskID        string              `json:"task_id"`
+	DelegationID  string              `json:"delegation_id,omitempty"`
+	DeliveryKey   string              `json:"delivery_key,omitempty"`
 	Status        string              `json:"status"` // completed|failed
 	OutputSummary string              `json:"output_summary"`
 	Artifacts     CompletionArtifacts `json:"artifacts"`
@@ -150,7 +164,7 @@ func (dm *DelegationManager) BuildTaskPacket(task PlanTask) TaskPacket {
 func (dm *DelegationManager) DelegateTask(ctx context.Context, task PlanTask, state *WorkflowState) (*DelegationState, TaskPacket, error) {
 	packet := dm.BuildTaskPacket(task)
 
-	delegationID := fmt.Sprintf("DEL-%s-%d", task.ID, time.Now().Unix())
+	delegationID := fmt.Sprintf("DEL-%s-%s", task.ID, event.NewID())
 	delegation := DelegationState{
 		DelegationID: delegationID,
 		TaskID:       task.ID,
@@ -158,6 +172,11 @@ func (dm *DelegationManager) DelegateTask(ctx context.Context, task PlanTask, st
 		Status:       "sent",
 		SentAt:       time.Now().UTC().Format(time.RFC3339),
 	}
+	delegation.DeliveryKey = deliveryKey(delegationID, 0)
+	packet.DelegationID = delegationID
+	packet.DeliveryKey = delegation.DeliveryKey
+	packet.RunID = state.RunID
+	packet.CorrelationID = state.CorrelationID
 
 	state.mu.Lock()
 	state.Delegations = append(state.Delegations, delegation)
@@ -171,12 +190,23 @@ func (dm *DelegationManager) DelegateTask(ctx context.Context, task PlanTask, st
 // HandleTaskCompletion processes a task completion from NATS.
 func (dm *DelegationManager) HandleTaskCompletion(completion TaskCompletion, state *WorkflowState) {
 	// Update delegation state
+	applied := false
 	state.mu.Lock()
 	for i, del := range state.Delegations {
 		if del.TaskID == completion.TaskID {
+			if completion.DelegationID != "" && completion.DelegationID != del.DelegationID {
+				continue
+			}
+			if completion.DeliveryKey != "" && completion.DeliveryKey != del.DeliveryKey {
+				continue
+			}
+			if !delegationOpen(del.Status) {
+				break
+			}
 			state.Delegations[i].Status = completion.Status
 			state.Delegations[i].CompletedAt = time.Now().UTC().Format(time.RFC3339)
 			state.Delegations[i].ResultSummary = completion.OutputSummary
+			applied = true
 			break
 		}
 	}
@@ -184,8 +214,11 @@ func (dm *DelegationManager) HandleTaskCompletion(completion TaskCompletion, sta
 
 	// Roll the sub-agent's token usage into the parent run's budget so delegated
 	// spend counts against global.max_total_tokens (it was previously invisible).
-	if completion.PromptTokens > 0 || completion.CompletionTokens > 0 {
+	if (applied || (completion.DelegationID == "" && completion.DeliveryKey == "")) && (completion.PromptTokens > 0 || completion.CompletionTokens > 0) {
 		state.AddTokens(completion.PromptTokens, completion.CompletionTokens)
+	}
+	if !applied {
+		return
 	}
 
 	// Update task status
@@ -197,6 +230,34 @@ func (dm *DelegationManager) HandleTaskCompletion(completion TaskCompletion, sta
 		},
 	}
 	state.UpdateTaskStatus(completion.TaskID, completion.Status, artifactsData)
+}
+
+// AcknowledgeTask records explicit worker acceptance for the current delivery.
+func (dm *DelegationManager) AcknowledgeTask(taskID, delegationID, key string, state *WorkflowState) bool {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	for i := range state.Delegations {
+		d := &state.Delegations[i]
+		if d.TaskID == taskID && d.DelegationID == delegationID && d.DeliveryKey == key && d.Status == "sent" {
+			d.Status = "acknowledged"
+			return true
+		}
+	}
+	return false
+}
+
+// ProgressTask advances an accepted delivery without allowing terminal or stale updates.
+func (dm *DelegationManager) ProgressTask(taskID, delegationID, key string, state *WorkflowState) bool {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	for i := range state.Delegations {
+		d := &state.Delegations[i]
+		if d.TaskID == taskID && d.DelegationID == delegationID && d.DeliveryKey == key && (d.Status == "acknowledged" || d.Status == "in_progress") {
+			d.Status = "in_progress"
+			return true
+		}
+	}
+	return false
 }
 
 // delegationOpen reports whether a delegation is still outstanding.
@@ -241,9 +302,19 @@ func (dm *DelegationManager) RetryDelegation(taskID string, state *WorkflowState
 	state.Delegations[idx].RetryCount++
 	state.Delegations[idx].Status = "sent"
 	state.Delegations[idx].SentAt = time.Now().UTC().Format(time.RFC3339)
+	state.Delegations[idx].DeliveryKey = deliveryKey(state.Delegations[idx].DelegationID, state.Delegations[idx].RetryCount)
+	key := state.Delegations[idx].DeliveryKey
+	delegationID := state.Delegations[idx].DelegationID
 	state.mu.Unlock()
 
-	return dm.BuildTaskPacket(*task), true
+	packet := dm.BuildTaskPacket(*task)
+	packet.DelegationID = delegationID
+	packet.DeliveryKey = key
+	return packet, true
+}
+
+func deliveryKey(delegationID string, retry int) string {
+	return fmt.Sprintf("%s:%d", delegationID, retry)
 }
 
 // CheckTimeouts checks for timed-out delegations and escalates.
