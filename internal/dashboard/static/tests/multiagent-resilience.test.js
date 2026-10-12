@@ -233,47 +233,43 @@ test('end-to-end streak simulation: one 404 keeps retrying, a second consecutive
 });
 
 // ===========================================================================
-// Matrix item 12: unsupported workflow-definition version -- visible warning
-// banner without blocking rendering, plus the existing unknown-node/edge
-// fallback behavior (M3) still holding.
+// Dashboard schema compatibility warnings plus data-driven workflow identity
+// and unknown-node/edge fallback behavior.
 // ===========================================================================
 
-test('checkSnapshotCompatibility: the real Phase 1 reference workflow (multi-agent-software-task, schema 1, workflow version 1) is compatible -- no false-positive warning', () => {
+test('checkSnapshotCompatibility: registered workflow identities and versions come from the stored definition', () => {
   const message = gm.checkSnapshotCompatibility({
-    workflow_id: 'multi-agent-software-task', schema_version: 1, workflow_version: 1
+    workflow_id: 'software-delivery', schema_version: 1, workflow_version: 5
   });
   assert.strictEqual(message, null);
 });
 
-test('checkSnapshotCompatibility: an unrecognized workflow_id produces a visible, non-blocking warning naming both the actual and expected id', () => {
+test('checkSnapshotCompatibility: arbitrary registered workflow IDs are not treated as frontend incompatibility', () => {
   const message = gm.checkSnapshotCompatibility({
     workflow_id: 'some-future-workflow', schema_version: 1, workflow_version: 1
   });
-  assert.ok(message, 'expected a warning message');
-  assert.ok(message.includes('some-future-workflow'));
-  assert.ok(message.includes(gm.EXPECTED_WORKFLOW_ID));
+  assert.strictEqual(message, null);
 });
 
 test('checkSnapshotCompatibility: a mismatched dashboard schema_version produces a warning', () => {
   const message = gm.checkSnapshotCompatibility({
-    workflow_id: gm.EXPECTED_WORKFLOW_ID, schema_version: 2, workflow_version: 1
+    workflow_id: 'software-delivery', schema_version: 2, workflow_version: 5
   });
   assert.ok(message);
   assert.ok(message.includes('schema version 2'));
 });
 
-test('checkSnapshotCompatibility: a mismatched workflow_version (a future revision of the reference workflow) produces a warning', () => {
+test('checkSnapshotCompatibility: registered workflow definition versions are rendered from their pinned definition', () => {
   const message = gm.checkSnapshotCompatibility({
-    workflow_id: gm.EXPECTED_WORKFLOW_ID, schema_version: 1, workflow_version: 2
+    workflow_id: 'software-delivery', schema_version: 1, workflow_version: 2
   });
-  assert.ok(message);
-  assert.ok(message.includes('workflow definition version 2'));
+  assert.strictEqual(message, null);
 });
 
 test('checkSnapshotCompatibility: missing/absent version fields never produce a false-positive warning (only an actual mismatch does)', () => {
   assert.strictEqual(gm.checkSnapshotCompatibility({}), null);
   assert.strictEqual(gm.checkSnapshotCompatibility(undefined), null);
-  assert.strictEqual(gm.checkSnapshotCompatibility({ workflow_id: gm.EXPECTED_WORKFLOW_ID }), null);
+  assert.strictEqual(gm.checkSnapshotCompatibility({ workflow_id: 'software-delivery' }), null);
 });
 
 test('buildGraphViewModel: an unrecognized node id falls back to a simple overflow row instead of crashing (M3 behavior, still holding)', () => {

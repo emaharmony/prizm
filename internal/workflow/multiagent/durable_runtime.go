@@ -111,6 +111,19 @@ func (r *DurableRuntime) Run(
 	ctx context.Context,
 	request RunRequest,
 ) (RunState, error) {
+	if _, err := r.Accept(ctx, request); err != nil {
+		return RunState{}, err
+	}
+	return r.RunAccepted(ctx, request.RunID)
+}
+
+// Accept atomically persists trusted request origin and run.created before
+// any provider or tool execution begins. Idempotent repeats return the first
+// accepted state without scheduling a second execution.
+func (r *DurableRuntime) Accept(
+	ctx context.Context,
+	request RunRequest,
+) (RunState, error) {
 	if strings.TrimSpace(request.RunID) == "" {
 		return RunState{}, errors.New("multiagent: run id is required")
 	}
@@ -124,7 +137,11 @@ func (r *DurableRuntime) Run(
 	defer claim.Release()
 
 	state := r.supervisor.newRunState(request)
-	r.supervisor.emitRun(event.EventMultiAgentRunStarted, state, "")
+	state.Status = RunStatusCreated
+	if state.RequestIdentity != nil {
+		state.RequestIdentity.AcceptedAt = r.now().UTC()
+	}
+	r.supervisor.emitRun(event.EventMultiAgentRunCreated, state, "")
 	record := DurableRun{
 		SchemaVersion: DurableRunSchemaVersion,
 		State:         state,
@@ -133,15 +150,63 @@ func (r *DurableRuntime) Run(
 	if err := record.Validate(r.supervisor.graph); err != nil {
 		return RunState{}, err
 	}
-	record, err = r.store.Create(ctx, record, r.buffer.snapshot())
+	events := r.buffer.snapshot()
+	created := true
+	if acceptor, ok := r.store.(IdempotentRunAcceptor); ok {
+		record, created, err = acceptor.AcceptRun(ctx, record, events)
+	} else {
+		record, err = r.store.Create(ctx, record, events)
+	}
 	if err != nil {
+		r.buffer.reset()
+		if errors.Is(err, ErrRunExists) && request.Identity != nil && request.Identity.IdempotencyKey != "" {
+			existing, loadErr := r.store.Load(ctx, request.RunID)
+			if loadErr == nil {
+				if acceptedRequestMatches(existing, state) {
+					return existing.State, nil
+				}
+				return existing.State, ErrRequestIdentityConflict
+			}
+		}
 		return RunState{}, err
 	}
 	r.buffer.reset()
+	if !created {
+		if !acceptedRequestMatches(record, state) {
+			return record.State, ErrRequestIdentityConflict
+		}
+		return record.State, nil
+	}
 	if err := r.dispatchOutbox(ctx, request.RunID); err != nil {
 		return record.State, err
 	}
-	return r.drive(ctx, record, false)
+	return record.State, nil
+}
+
+// RunAccepted starts only the revision-one pending checkpoint created by
+// Accept. Duplicate API deliveries cannot accidentally resume or replay work.
+func (r *DurableRuntime) RunAccepted(ctx context.Context, runID string) (RunState, error) {
+	record, err := r.store.Load(ctx, runID)
+	if err != nil {
+		return RunState{}, err
+	}
+	if err := record.Validate(r.supervisor.graph); err != nil {
+		return record.State, err
+	}
+	if record.Revision != 1 || record.Phase != CheckpointPendingRole || record.State.Status != RunStatusCreated {
+		return record.State, nil
+	}
+	return r.Resume(ctx, runID)
+}
+
+func acceptedRequestMatches(existing DurableRun, requested RunState) bool {
+	return existing.State.RunID == requested.RunID &&
+		existing.State.WorkflowID == requested.WorkflowID &&
+		existing.State.WorkflowVersion == requested.WorkflowVersion &&
+		existing.State.WorkflowFingerprint == requested.WorkflowFingerprint &&
+		existing.State.CurrentTask == requested.CurrentTask &&
+		existing.State.WorkspaceID == requested.WorkspaceID &&
+		equalRequestIdentity(existing.State.RequestIdentity, requested.RequestIdentity)
 }
 
 // Resume loads the persisted source of truth, obtains exclusive ownership, and
@@ -164,6 +229,38 @@ func (r *DurableRuntime) Resume(
 	if err := record.Validate(r.supervisor.graph); err != nil {
 		r.publishRecoveryFailure(ctx, runID, err)
 		return record.State, &RecoveryFailedError{RunID: runID, Cause: err}
+	}
+	// A scheduled retry is a safe role boundary. Honor a persisted operator
+	// pause before consuming that retry, including when the service recovery
+	// scanner calls Resume rather than an operator.
+	if record.Phase == CheckpointWaiting && record.Waiting != nil && record.Waiting.Kind == "role_retry" {
+		reason, requested, pauseErr := r.store.PauseRequest(ctx, runID)
+		if pauseErr != nil {
+			return record.State, pauseErr
+		}
+		if requested {
+			now := r.now().UTC()
+			record.State.Status = RunStatusPaused
+			record.State.UpdatedAt = now
+			record.Waiting = &WaitingState{Kind: "operator_pause", Reason: reason, SafeToRetry: true, Since: now}
+			r.supervisor.emitRun(event.EventMultiAgentRunPaused, record.State, reason)
+			record, err = r.checkpoint(ctx, record)
+			if err != nil {
+				return record.State, err
+			}
+			return record.State, waitingError(record)
+		}
+	}
+	if record.Revision == 1 && record.Phase == CheckpointPendingRole && record.State.Status == RunStatusCreated {
+		now := r.now().UTC()
+		record.State.Status = RunStatusRunning
+		record.State.UpdatedAt = now
+		r.supervisor.emitRun(event.EventMultiAgentRunStarted, record.State, "")
+		record, err = r.checkpoint(ctx, record)
+		if err != nil {
+			return record.State, err
+		}
+		return r.drive(ctx, record, false)
 	}
 	if record.PendingDelegationOutcomeAck != "" {
 		record, err = r.ackDelegationOutcome(ctx, record, record.PendingDelegationOutcomeAck)
@@ -276,11 +373,50 @@ func (r *DurableRuntime) Resume(
 			return record.State, err
 		}
 		now := r.now().UTC()
-		record.State.Status = RunStatusRunning
 		record.State.UpdatedAt = now
-		record.Waiting = nil
-		record.Phase = CheckpointPendingRole
+		if record.Retry != nil && !record.Retry.NextAt.IsZero() && record.Retry.Role == record.State.CurrentRole {
+			record.State.Status = RunStatusPaused
+			record.Waiting = &WaitingState{Kind: "role_retry", Reason: retryWaitReason(record.Retry), SafeToRetry: true, Since: now}
+			record.Phase = CheckpointWaiting
+		} else {
+			record.State.Status = RunStatusRunning
+			record.Waiting = nil
+			record.Phase = CheckpointPendingRole
+		}
 		r.supervisor.emitRun(event.EventMultiAgentRunResumed, record.State, "operator pause cleared")
+	}
+	if record.Phase == CheckpointRoleRunning && record.Retry != nil && record.Retry.ReplaySafe && !record.Retry.MutationPossible {
+		if record.Retry.RecoveryNumber >= record.Retry.MaxRecoveries {
+			returnState, terminalErr := r.persistRoleFailure(ctx, record, record.State.CurrentRole, ErrRetryBudgetExhausted)
+			return returnState.State, terminalErr
+		}
+		now := r.now().UTC()
+		roleState := record.State.RoleStates[record.State.CurrentRole]
+		roleConfig, _ := r.supervisor.graph.RoleConfig(record.State.CurrentRole)
+		if roleState.EnteredAt != nil && roleConfig.TimeBudget > 0 && roleConfig.TimeBudget != UnlimitedDuration && !now.Before(roleState.EnteredAt.Add(roleConfig.TimeBudget)) {
+			returnState, terminalErr := r.persistRoleFailure(ctx, record, record.State.CurrentRole, RetryDeadlineError{})
+			return returnState.State, terminalErr
+		}
+		record.Retry.RecoveryNumber++
+		record.Retry.Number++
+		record.Retry.AttemptID = retryAttemptID(record.Retry.VisitID, record.Retry.Number)
+		record.Retry.NextAt = now
+		record.Retry.FailureClass = "interrupted_safe_attempt"
+		record.Retry.FailureCode = "safe_attempt_interrupted"
+		record.Retry.ReplaySafe = true
+		roleState.Status = RoleStatusWaiting
+		roleState.LastError = record.Retry.FailureCode
+		roleState.UpdatedAt = now
+		record.State.RoleStates[record.State.CurrentRole] = roleState
+		record.State.Status = RunStatusPaused
+		record.State.UpdatedAt = now
+		record.Phase = CheckpointWaiting
+		record.Waiting = &WaitingState{Kind: "role_retry", Reason: retryWaitReason(record.Retry), SafeToRetry: true, Since: now}
+		r.emitRetry(event.EventMultiAgentRetryScheduled, record, *record.Retry)
+		record, err = r.checkpoint(ctx, record)
+		if err != nil {
+			return record.State, err
+		}
 	}
 
 	r.emitRecovery(event.EventMultiAgentRecoveryStarted, record.State, "")
@@ -462,6 +598,30 @@ func (r *DurableRuntime) drive(
 			}
 
 		case CheckpointWaiting:
+			if record.Waiting != nil && record.Waiting.Kind == "role_retry" {
+				if record.Retry == nil || !record.Retry.ReplaySafe || record.Retry.MutationPossible {
+					return record.State, waitingError(record)
+				}
+				if r.now().UTC().Before(record.Retry.NextAt) {
+					return record.State, waitingError(record)
+				}
+				record.State.Status = RunStatusRunning
+				record.State.UpdatedAt = r.now().UTC()
+				record.Retry.NextAt = time.Time{}
+				roleState := record.State.RoleStates[record.State.CurrentRole]
+				roleState.Status, roleState.LastError, roleState.UpdatedAt = RoleStatusRunning, "", record.State.UpdatedAt
+				record.State.RoleStates[record.State.CurrentRole] = roleState
+				record.Waiting = nil
+				record.Phase = CheckpointRoleRunning
+				r.emitRetry(event.EventMultiAgentRetryAttemptStarted, record, *record.Retry)
+				var err error
+				record, err = r.checkpoint(ctx, record)
+				if err != nil {
+					return record.State, err
+				}
+				canExecutePrepared = true
+				continue
+			}
 			if record.Waiting != nil && record.Waiting.Kind == "proposal_approval" {
 				var err error
 				record, err = r.advanceApprovedTask(ctx, record)
@@ -596,6 +756,13 @@ func (r *DurableRuntime) prepareRole(
 	roleState.LastExecutionKey = executionKey
 	record.State.RoleStates[role] = roleState
 	record.ActiveExecutionKey = executionKey
+	node, _ := r.supervisor.graph.Node(nodeID(role))
+	visitID := roleVisitID(record.State.RunID, role, roleState.Visits)
+	record.Retry = &RetryState{
+		VisitID: visitID, ExecutionKey: executionKey, Role: role,
+		AttemptID: retryAttemptID(visitID, 1), Number: 1,
+		MaxRecoveries: roleRetryLimit(node), ReplaySafe: true, MutationLedgerReady: true,
+	}
 	record.PendingTransition = nil
 	record.Waiting = nil
 	record.Phase = CheckpointRoleRunning
@@ -646,13 +813,60 @@ func (r *DurableRuntime) executePreparedRole(
 			}
 		}
 	}
+	retryHandle := newDurableRoleRetryHandle(ctx, r, record)
 	result, runErr := r.supervisor.runner.RunRole(ctx, RoleRunRequest{
 		Run:        r.supervisor.runView(record.State),
 		RoleConfig: cloneRoleConfig(roleConfig),
+		RecoveryFeedback: func() string {
+			if record.Retry != nil {
+				return record.Retry.RecoveryFeedback
+			}
+			return ""
+		}(),
+		RetryHandle: retryHandle,
+		ToolEventSink: func(diagnostic ToolDiagnostic) error {
+			if diagnostic.RunID == "" {
+				diagnostic.RunID = record.State.RunID
+			}
+			if diagnostic.TaskID == "" {
+				diagnostic.TaskID = record.State.CurrentTask.ID
+			}
+			if diagnostic.Role == "" {
+				diagnostic.Role = role
+			}
+			if diagnostic.ExecutionKey == "" {
+				diagnostic.ExecutionKey = record.ActiveExecutionKey
+			}
+			if diagnostic.AttemptID == "" {
+				diagnostic.AttemptID = retryHandle.CurrentAttempt().AttemptID
+			}
+			return retryHandle.RecordToolDiagnostic(diagnostic)
+		},
 	})
+	record = retryHandle.close()
 	finishedAt := r.now().UTC()
+	var retryDeadline time.Time
+	if entered := record.State.RoleStates[role].EnteredAt; entered != nil && roleConfig.TimeBudget > 0 && roleConfig.TimeBudget != UnlimitedDuration {
+		retryDeadline = entered.Add(roleConfig.TimeBudget)
+	}
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
+		record = accumulateFailedAttempt(record, result)
+		if record.Retry != nil {
+			retryState := *record.Retry
+			retryState.FailureClass = "cancellation"
+			retryState.FailureCode = "cancelled"
+			roleState := record.State.RoleStates[role]
+			roleState.LocalIterations += retryState.AccumulatedIterations
+			roleState.Retries += retryState.RecoveryNumber
+			roleState.TokenUsage = addTokenUsage(roleState.TokenUsage, retryState.AccumulatedUsage)
+			record.State.RoleStates[role] = roleState
+			record.State.BudgetUsage.TotalLocalIterations += retryState.AccumulatedIterations
+			record.State.BudgetUsage.Retries += retryState.RecoveryNumber
+			record.State.BudgetUsage.Tokens = addTokenUsage(record.State.BudgetUsage.Tokens, retryState.AccumulatedUsage)
+			appendRetryHistory(&record, &retryState)
+			record.Retry = nil
+		}
 		roleState := record.State.RoleStates[role]
 		roleState.Status = RoleStatusCancelled
 		roleState.LastError = boundedDiagnostic(ctxErr)
@@ -676,9 +890,18 @@ func (r *DurableRuntime) executePreparedRole(
 		return r.pauseForApproval(ctx, record, role, approvalErr)
 	}
 	if runErr != nil {
+		if record.Retry != nil && record.Retry.MutationPossible {
+			record = accumulateFailedAttempt(record, result)
+			return r.pauseUncertainExecution(ctx, record)
+		}
 		if r.runReflection(ctx, &record, ReflectionFailure, reflectionFailureInput(role, "", runErr, record.State)) {
+			record = archiveRetryForReflection(record, result, role, roleFailureCode(runErr), r.now().UTC())
 			return r.checkpoint(ctx, record)
 		}
+		if class, code, retryAfter, retryable := classifyRetryableRoleFailure(runErr); retryable {
+			return r.scheduleRoleRetry(ctx, record, role, result, runErr, class, code, retryAfter, retryDeadline)
+		}
+		record = accumulateFailedAttempt(record, result)
 		return r.persistRoleFailure(
 			ctx,
 			record,
@@ -686,10 +909,23 @@ func (r *DurableRuntime) executePreparedRole(
 			&RoleExecutionError{Role: role, Cause: runErr},
 		)
 	}
+	if record.Retry != nil && record.Retry.UnresolvedMutationFailure {
+		record = accumulateFailedAttempt(record, result)
+		return r.pauseUncertainExecution(ctx, record)
+	}
 	if err := validateRoleRunResult(r.supervisor.graph, result); err != nil {
+		if record.Retry != nil && record.Retry.MutationPossible {
+			record = accumulateFailedAttempt(record, result)
+			return r.pauseUncertainExecution(ctx, record)
+		}
 		if r.runReflection(ctx, &record, ReflectionFailure, reflectionFailureInput(role, result.Outcome, err, record.State)) {
+			record = archiveRetryForReflection(record, result, role, roleFailureCode(err), r.now().UTC())
 			return r.checkpoint(ctx, record)
 		}
+		if class, code, retryAfter, retryable := classifyRetryableRoleFailure(err); retryable {
+			return r.scheduleRoleRetry(ctx, record, role, result, err, class, code, retryAfter, retryDeadline)
+		}
+		record = accumulateFailedAttempt(record, result)
 		return r.persistRoleFailure(
 			ctx,
 			record,
@@ -697,7 +933,14 @@ func (r *DurableRuntime) executePreparedRole(
 			&RoleExecutionError{Role: role, Cause: err},
 		)
 	}
+	if record.Retry != nil {
+		result.Retries = record.Retry.RecoveryNumber
+		result.LocalIterations += record.Retry.AccumulatedIterations
+		result.TokenUsage = addTokenUsage(result.TokenUsage, record.Retry.AccumulatedUsage)
+	}
 	if len(result.Proposals) > 0 {
+		appendRetryHistory(&record, record.Retry)
+		record.Retry = nil
 		return r.pauseForProposals(ctx, record, role, result, startedAt, finishedAt)
 	}
 	return r.finishPreparedRole(ctx, record, role, roleConfig, result, startedAt, finishedAt)
@@ -714,13 +957,20 @@ func (r *DurableRuntime) finishPreparedRole(
 ) (DurableRun, error) {
 	transition, err := r.supervisor.graph.Resolve(role, result.Outcome)
 	if err != nil {
+		if record.Retry != nil && record.Retry.MutationPossible {
+			record = accumulateFailedAttempt(record, result)
+			return r.pauseUncertainExecution(ctx, record)
+		}
 		if r.runReflection(ctx, &record, ReflectionFailure, reflectionFailureInput(role, result.Outcome, err, record.State)) {
+			record = archiveRetryForReflection(record, result, role, roleFailureCode(err), r.now().UTC())
 			return r.checkpoint(ctx, record)
 		}
 		return r.persistRoleFailure(ctx, record, role, err)
 	}
 
 	r.supervisor.completeRole(&record.State, role, result, startedAt, finishedAt)
+	appendRetryHistory(&record, record.Retry)
+	record.Retry = nil
 	roleState := record.State.RoleStates[role]
 	roleState.LastExecutionKey = record.ActiveExecutionKey
 	record.State.RoleStates[role] = roleState
@@ -1233,10 +1483,27 @@ func (r *DurableRuntime) persistRoleFailure(
 	role Role,
 	cause error,
 ) (DurableRun, error) {
+	failureCode := roleFailureCode(cause)
+	if record.Retry != nil {
+		roleState := record.State.RoleStates[role]
+		roleState.LocalIterations += record.Retry.AccumulatedIterations
+		roleState.Retries += record.Retry.RecoveryNumber
+		roleState.TokenUsage = addTokenUsage(roleState.TokenUsage, record.Retry.AccumulatedUsage)
+		roleState.UpdatedAt = r.now().UTC()
+		roleState.CompletedAt = timePointer(roleState.UpdatedAt)
+		record.State.RoleStates[role] = roleState
+		record.State.BudgetUsage.TotalLocalIterations += record.Retry.AccumulatedIterations
+		record.State.BudgetUsage.Retries += record.Retry.RecoveryNumber
+		record.State.BudgetUsage.Tokens = addTokenUsage(record.State.BudgetUsage.Tokens, record.Retry.AccumulatedUsage)
+		// Keep provider/tool bodies out of terminal run state and events.
+		cause = errors.New(failureCode)
+		appendRetryHistory(&record, record.Retry)
+		record.Retry = nil
+	}
 	state, terminalErr := r.supervisor.failRole(record.State, role, cause)
 	record.State = state
 	record.Phase = CheckpointTerminal
-	record.Failure = persistedFailure("role_execution", terminalErr, r.now())
+	record.Failure = persistedFailure("role_execution", errors.New(failureCode), r.now())
 	record.PendingTransition = nil
 	record, checkpointErr := r.checkpoint(ctx, record)
 	if checkpointErr != nil {
@@ -1249,6 +1516,10 @@ func (r *DurableRuntime) checkpoint(
 	ctx context.Context,
 	record DurableRun,
 ) (DurableRun, error) {
+	if record.Phase == CheckpointTerminal {
+		appendRetryHistory(&record, record.Retry)
+		record.Retry = nil
+	}
 	if err := record.Validate(r.supervisor.graph); err != nil {
 		return record, err
 	}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/emaharmony/prizm/internal/workflow/multiagent"
@@ -78,6 +79,66 @@ func decodeDefinitionResponse(t *testing.T, w *httptest.ResponseRecorder) defini
 		t.Fatalf("decode response body %q: %v", w.Body.String(), err)
 	}
 	return resp
+}
+
+type recordingWorkflowRunStarter struct {
+	calls int
+	input json.RawMessage
+}
+
+func (s *recordingWorkflowRunStarter) StartRun(_ context.Context, _ string, _ int64, input json.RawMessage, _ *multiagent.RequestIdentity) (string, error) {
+	s.calls++
+	s.input = append(json.RawMessage(nil), input...)
+	return "run_test", nil
+}
+
+func TestAPI_MultiAgentRunRejectsInvalidOrScopeDroppingTaskInput(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "missing body"},
+		{name: "blank description", body: `{"description":"  \t "}`},
+		{name: "unknown objective key", body: `{"objective":"Add tests"}`},
+		{name: "misspelled constraints key", body: `{"description":"Add tests","constrants":["only test file"]}`},
+		{name: "multiple JSON objects", body: `{"description":"Add tests"}{"description":"ignored"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			starter := &recordingWorkflowRunStarter{}
+			s := NewServer(Config{WorkflowRunStarter: starter})
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/multiagent/definitions/software-delivery/versions/3/run", strings.NewReader(test.body))
+			w := httptest.NewRecorder()
+			s.handleRunVersion(w, req, "software-delivery", "3")
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
+			}
+			if starter.calls != 0 {
+				t.Fatalf("run starter calls=%d, want no run creation", starter.calls)
+			}
+		})
+	}
+}
+
+func TestAPI_MultiAgentRunAcceptsDocumentedTaskReference(t *testing.T) {
+	starter := &recordingWorkflowRunStarter{}
+	s := NewServer(Config{WorkflowRunStarter: starter})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/multiagent/definitions/software-delivery/versions/3/run", strings.NewReader(`{"id":"task-1","description":"Add the two authentication retry cases."}`))
+	w := httptest.NewRecorder()
+	s.handleRunVersion(w, req, "software-delivery", "3")
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s, want 202", w.Code, w.Body.String())
+	}
+	if starter.calls != 1 {
+		t.Fatalf("run starter calls=%d, want 1", starter.calls)
+	}
+	var task multiagent.TaskReference
+	if err := json.Unmarshal(starter.input, &task); err != nil {
+		t.Fatalf("decode forwarded task: %v", err)
+	}
+	if task.ID != "task-1" || task.Description != "Add the two authentication retry cases." {
+		t.Fatalf("forwarded task=%#v", task)
+	}
 }
 
 // --- POST /api/v1/multiagent/definitions/validate ---
@@ -362,15 +423,17 @@ type fakeWorkflowRunStarter struct {
 		workflowID string
 		version    int64
 		input      string
+		identity   *multiagent.RequestIdentity
 	}
 }
 
-func (f *fakeWorkflowRunStarter) StartRun(_ context.Context, workflowID string, version int64, input json.RawMessage) (string, error) {
+func (f *fakeWorkflowRunStarter) StartRun(_ context.Context, workflowID string, version int64, input json.RawMessage, identity *multiagent.RequestIdentity) (string, error) {
 	f.calls = append(f.calls, struct {
 		workflowID string
 		version    int64
 		input      string
-	}{workflowID, version, string(input)})
+		identity   *multiagent.RequestIdentity
+	}{workflowID, version, string(input), identity})
 	if f.err != nil {
 		return "", f.err
 	}
@@ -391,23 +454,70 @@ func TestAPI_MultiAgentDefinitionRun_Success(t *testing.T) {
 	starter := &fakeWorkflowRunStarter{runID: "run-started-1"}
 	s := NewServer(Config{Addr: ":0", WorkflowRunStarter: starter})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/multiagent/definitions/wf-a/versions/2/run", bytes.NewReader([]byte(`{"id":"task-1"}`)))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/multiagent/definitions/wf-a/versions/2/run", bytes.NewReader([]byte(`{"id":"task-1","description":"run the accepted workflow"}`)))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "test-run-key")
+	req.Header.Set("X-Prizm-Session-ID", "session-42")
 	w := httptest.NewRecorder()
 	s.mux.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", w.Code, w.Body.String())
 	}
 	var resp map[string]string
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp["run_id"] != "run-started-1" || resp["status"] != "started" {
-		t.Fatalf("response = %v, want run_id=run-started-1 status=started", resp)
+	if resp["run_id"] != "run-started-1" || resp["status"] != "accepted" {
+		t.Fatalf("response = %v, want run_id=run-started-1 status=accepted", resp)
 	}
 	if len(starter.calls) != 1 || starter.calls[0].workflowID != "wf-a" || starter.calls[0].version != 2 {
 		t.Fatalf("starter calls = %+v", starter.calls)
+	}
+	identity := starter.calls[0].identity
+	if identity == nil || identity.RequesterID != "api" || identity.SessionID != "session-42" || identity.IdempotencyKey != "test-run-key" || identity.ResultDestination != "dashboard" {
+		t.Fatalf("accepted identity = %+v", identity)
+	}
+}
+
+func TestAPI_MultiAgentDefinitionRun_IdempotencyConflictReturns409(t *testing.T) {
+	starter := &fakeWorkflowRunStarter{err: multiagent.ErrRequestIdentityConflict}
+	s := NewServer(Config{Addr: ":0", WorkflowRunStarter: starter})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/multiagent/definitions/wf-a/versions/2/run", bytes.NewReader([]byte(`{"id":"task-1","description":"run the accepted workflow"}`)))
+	req.Header.Set("Idempotency-Key", "same-key")
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want 409", w.Code, w.Body.String())
+	}
+}
+
+func TestAcceptedRequestIdentity_IsStableAndFixesDashboardDestination(t *testing.T) {
+	first := httptest.NewRequest(http.MethodPost, "/api/v1/multiagent/definitions/wf/versions/1/run", nil)
+	first.Header.Set("Idempotency-Key", "opaque-request-1")
+	second := httptest.NewRequest(http.MethodPost, first.URL.Path, nil)
+	second.Header.Set("Idempotency-Key", "opaque-request-1")
+	a, err := acceptedRequestIdentity(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := acceptedRequestIdentity(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.SessionID == "" || a.SessionID != b.SessionID || a.IdempotencyKey != b.IdempotencyKey {
+		t.Fatalf("fallback identity differs across duplicate request: first=%+v second=%+v", a, b)
+	}
+	if a.RequesterID != "api" || a.Source != "api" || a.ResultDestination != "dashboard" {
+		t.Fatalf("identity trusted origin/destination = %+v", a)
+	}
+}
+
+func TestAcceptedRequestIdentity_RejectsInvalidHeaders(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/run", nil)
+	req.Header.Set("Idempotency-Key", "bad\nkey")
+	if _, err := acceptedRequestIdentity(req); err == nil {
+		t.Fatal("expected invalid idempotency key to be rejected")
 	}
 }
 

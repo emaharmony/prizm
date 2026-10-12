@@ -119,6 +119,74 @@ func TestPlanAndApplyPatchRecountsIncorrectHunkCounts(t *testing.T) {
 	}
 }
 
+func TestPatchPlanningAndWorktreeTreeUseLinkedGitMetadataWhenOSTempIsUnavailable(t *testing.T) {
+	ctx := context.Background()
+	root := initRepo(t)
+	linked := filepath.Join(t.TempDir(), "linked-worktree")
+	if _, err := RunCommand(ctx, root, "", "git", "worktree", "add", "--detach", linked, "HEAD"); err != nil {
+		t.Fatalf("create linked worktree: %v", err)
+	}
+	base, err := CurrentSHA(ctx, linked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitDir, err := RunCommand(ctx, linked, "", "git", "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(strings.TrimSpace(gitDir), "index")
+	indexBefore, err := fileSHA256(indexPath)
+	if err != nil {
+		t.Fatalf("hash linked worktree index: %v", err)
+	}
+	blockedTemp := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blockedTemp, []byte("block temp directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(name, blockedTemp)
+	}
+
+	patch := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-hello\n+changed\n"
+	plan, err := PlanPatch(ctx, linked, patch, base)
+	if err != nil {
+		t.Fatalf("plan patch with unavailable OS temp: %v", err)
+	}
+	tree, err := WorktreeTree(ctx, linked)
+	if err != nil {
+		t.Fatalf("read linked worktree tree with unavailable OS temp: %v", err)
+	}
+	if tree != plan.BaseTree {
+		t.Fatalf("planning changed worktree tree: got %s want base %s", tree, plan.BaseTree)
+	}
+	if err := EnsureClean(ctx, linked); err != nil {
+		t.Fatalf("planning changed linked worktree status: %v", err)
+	}
+	indexAfter, err := fileSHA256(indexPath)
+	if err != nil {
+		t.Fatalf("hash linked worktree index after planning: %v", err)
+	}
+	if indexAfter != indexBefore {
+		t.Fatalf("planning modified linked worktree's real index: before=%s after=%s", indexBefore, indexAfter)
+	}
+	leftovers, err := filepath.Glob(filepath.Join(strings.TrimSpace(gitDir), "prizm-patch-index-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leftovers) != 0 {
+		t.Fatalf("temporary metadata indexes were not cleaned up: %v", leftovers)
+	}
+}
+
+func fileSHA256(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
 func TestPlanPatchRejectsUnsafeOrStaleInput(t *testing.T) {
 	root := initRepo(t)
 	ctx := context.Background()

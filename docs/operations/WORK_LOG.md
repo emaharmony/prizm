@@ -1400,3 +1400,104 @@ The full `go test ./...` rerun explicitly exited 0 with workspace-local `GOCACHE
 **Open risks:** the Linux CI action installs its moving `latest` Staticcheck release; local validation used v0.7.0 on Windows. Generated workspace cache and worktree directories remain untracked and are not part of the change.
 
 **Next action:** coordinator review, then confirm PR #87's Linux lint result against the committed cleanup.
+
+## 2026-10-11 — PR #87 Local Rebuild and Test Serve
+
+**Roadmap IDs:** R1 durable event/outbox runtime and governed execution; R8 autopatch/self-improvement remains dependent on R1 approval and provenance evidence.
+
+- Built the `cmd/prizm-cli` binary from `codex/r1-event-outbox` at `c30ca7f` using `.tmp-gocache` and `.tmp-gomodcache`. Started the rebuilt service from `.tmp-prizm-c30ca7f.exe` as PID `6700` on the configured loopback ports. The prior listener was verified as `D:\_projects_\prism\prizm.exe` before replacement. Startup logs are `logs/prizm-local-c30ca7f.out.log` and `logs/prizm-local-c30ca7f.err.log`.
+- Verified `GET http://127.0.0.1:8321/health` and `GET http://127.0.0.1:8322/api/v1/status` both return HTTP 200; health reports six configured agents and API status reports `running`.
+
+**Open risks:** Discord gateway access was denied by the host, so `discord_ready` is false. Blender MCP initialization failed; model context compression received HTTP 410 and used template extraction. These do not prevent local health/API readiness. The API is loopback-bound with no auth token configured. No provider completion was validated.
+
+**Next action:** user tests the local R1 flows via the API/dashboard; retry external integrations when their services are reachable.
+
+## 2026-10-11 — Live Real-Provider Task Smoke Blocked at API Gate
+
+**Roadmap IDs:** R1 durable observable task lifecycle; R8 requires R1 execution evidence.
+
+- Attempted a bounded read-only README question through `POST /api/v1/agents/scout/invoke`. The service returned HTTP 403 because `scout` has `invocable_via_api=false`; all six configured agents are opted out. The request was rejected before invocation creation, so there is no task/run ID or event trace.
+- The multi-agent API reports no registered definitions. The remaining workflow-start route publishes general project work, so it was not used for this read-only smoke.
+- Captured stable service evidence: PID 6700 and executable `.tmp-prizm-c30ca7f.exe` remained unchanged; health stayed `ok`; API status stayed `running`; task counts stayed at one failed, zero in-progress/completed. The failed task predates this attempt. No retry, timeout, or task termination occurred. Effective task/provider budgets are not exposed by the live status/config response.
+
+**Evidence and limitation:** the API fails closed before provider execution, so this attempt cannot establish provider capability or task-disappearance recovery. It does establish that the rejected request did not create a task that vanished.
+
+**Next action:** create an explicitly opted-in, read-only test entry point or register a bounded read-only workflow, then repeat and inspect its durable status and event trace. No configuration or task was created in this attempt.
+
+### Isolated live provider lifecycle follow-up (2026-10-11)
+
+- Used the supported `prizm graph run` CLI with a temporary one-role reviewer workflow, `forge` profile, and only `read_file` allowed. The source workspace was a disposable Git repository containing the project README; run artifacts and the workflow definition were isolated in a unique temporary path. The task requested one factual README summary and prohibited other tools or mutations.
+- Effective run ceilings: 2 transitions, 2,000 tokens, 2 local iterations, global retry ceiling 1 with role retries set to 0, 5-minute run duration, and 4-minute role duration. The run was created durably before provider execution as `run_01M4PWAZFPZPDS82VJF95VAGE6`.
+- The configured Ollama model call returned HTTP 429 on model turn 1. Durable inspection shows `run.started` (`evt_01M4PWAZV5WS1F6R86817TXCW4`), `role.entered` (`evt_01M4PWAZVARRSG0XM7ENV52VZJ`), and terminal `run.failed` (`evt_01M4PWB6AQYX862HTDA6734B78`) with the exact 429 failure reason. Status and report both show `failed`; role retries and token usage are zero. The task did not complete its read_file call, and no retry, timeout, or process termination occurred.
+- The main service stayed at PID 6700 and `.tmp-prizm-c30ca7f.exe`; health stayed `ok` and API status stayed `running` with unchanged task counters. This provides live evidence of durable terminal failure, not successful model work or recovery after process loss.
+
+**Next action:** after HTTP 429 clears, run one bounded read-only smoke again and inspect its terminal event and workspace state. No provider retry was sent during this session.
+
+### Isolated local Ollama lifecycle follow-up (2026-10-11)
+
+- Confirmed local `qwen3.5:9b` is installed and reachable, then ran one isolated `prizm graph run` with a minimal config containing only the local Ollama reviewer profile. No main service or user config changes were made. The reviewer was allowed only `read_file`; task token and iteration ceilings were unlimited, graph transitions capped at 2, the role had 0 retries (global retry ceiling 1), the graph deadline was 3 minutes, and the role deadline was 2 minutes.
+- Run `run_01M4PWEE6MX1FCE76G3WYANSKF` was durably created. The model emitted a `read_file` tool request, but execution failed; runtime logging records only `execution_error=true`, and the durable event trace omits the underlying tool error. The next model response was not valid JSON for the strict reviewer schema. Terminal status is `failed` with exact reason `multiagent: invalid structured output for role "reviewer": invalid character 'T' looking for beginning of value`.
+- Durable events: `run.started` (`evt_01M4PWEEE60V25QWRV6YETY9T8`), `role.entered` (`evt_01M4PWEEEAEPPE2629AAPSTPY3`), `run.failed` (`evt_01M4PWF669HAN44YZYBKJFDHZN`). No task retry, timeout, process termination, or disappearance occurred. Runtime logs show three model turns but durable failed-role state reports zero iterations and empty token usage. The main service remained PID 6700 and healthy, with unchanged task counters.
+
+**Evidence limit:** Prizm produced real local-model output and a read-file request, but this attempt did not read the README or complete the task. It supports explicit terminal-failure observability and identifies missing failed-attempt details; it does not support a successful-work claim.
+
+**Next action:** inspect the read-file tool request contract and improve persistence of tool failures and partial usage/iteration counts before one further bounded read-only acceptance run.
+
+### Successful no-tool local-provider lifecycle follow-up (2026-10-11)
+
+- Ran one isolated `prizm graph run` against local Ollama `qwen3.5:9b` through a temporary minimal configuration, leaving the long-running service and its configuration untouched. The one-visit reviewer had no tools enabled, zero role retries, and produced a valid structured final in one turn. Run ID: `run_01M4PWJHYXC7SH5E0N1PB47ZNT`.
+- `graph inspect` reported omitted token, local-iteration, and global retry caps as unlimited; explicit safety limits were 2 transitions, 3-minute graph deadline, and 2-minute role deadline. Durable status and report both show `completed`, outcome `review_approved`, terminal reason `review approved`, 1,689 prompt tokens, 37 completion tokens, one local iteration, zero retries, and about 2.45 seconds elapsed.
+- Event trace has run.started (`evt_01M4PWJJAPNGWRJ9GHEHQ6D0PV`), role.entered (`evt_01M4PWJJAZ41E1RP6T6S05WH1A`), role.completed (`evt_01M4PWJMQSYWHKPDE7GD5G72YX`), selected terminal transition (`evt_01M4PWJMR2JWC17K3F5MHKPKFN`), and run.completed (`evt_01M4PWJMR2JWC17K3F5PH17ZWH`). The CLI returned exit code 0; no retry, timeout, cancellation, or orphan graph process was observed. The isolated source workspace was clean.
+- After task completion, main service PID 6700 remained `.tmp-prizm-c30ca7f.exe`, same start time; loopback ports 8321 and 8322 remained listening under PID 6700, health returned `ok`, and API status returned `running`. One process enumeration method was denied, but `Get-Process` and netstat independently confirmed PID/path/listeners.
+
+**Evidence and limitation:** one real local provider generated an accepted final response and its graph reached durable successful terminal state. Since tools were disabled, this proves model-backed task completion but not file/tool work. The earlier real-provider read-file runs failed (cloud HTTP 429; local tool execution error and subsequent invalid structured output), so tool execution remains unverified. No process-kill/recovery behavior was exercised.
+
+**Next action:** resolve the read-file tool contract and preserve tool errors plus partial turn metrics in failed durable runs, then perform a bounded read-only tool run. Test process-loss recovery as a separate scenario.
+
+### Evidence correction: distinguish the original tool failure from investigator reruns (2026-10-11)
+
+The original local run `run_01M4PWEE6MX1FCE76G3WYANSKF` remains unchanged and has no detailed durable record of the first tool error; it ends with the strict-reviewer JSON decode failure and reports zero failed-attempt iterations/usage. In the distinct post-fix investigator rerun `run_01M4PWTKBPE493XNW2TFWN0RQA`, turn 1 failed because qwen supplied `start_line=0` (the tool requires a positive integer), and turn 2 successfully read 1,263 bytes; the graph still failed on the final reviewer output. Do not describe that separate retry as recovery or success of the original run. Other investigator runs were excluded: `run_01M4PWX2PA75F882QPZQ351ZAE` hit a context deadline after repeated reads, while `run_01M4PWWN4XSFYQKDHVHYF9ZPNT` completed without a read_file call. The no-tool run `run_01M4PWJHYXC7SH5E0N1PB47ZNT` remains the only completed task in this smoke series.
+
+### R1 durable-retry coding acceptance follow-up (2026-10-12)
+
+- Corrected built-in `software-delivery` defaults to leave aggregate retries and overall duration unlimited unless a definition explicitly authors a positive cap; per-role retry ceilings remain in place. Tests cover omission defaults and preservation of explicit caps. The previously terminal 30-minute `budget_exhausted` run was preserved; acceptance used a new immutable template version.
+- Added strict API task decoding: only documented `id`/`description` keys are accepted, and a nonblank description is required before run creation. Regression coverage checks unknown/misspelled keys, missing/blank descriptions, no starter invocation, and valid documented input.
+- Real-provider run `run_ab78d1b310fc9568fefc209851` (`ollama` / `glm-5.3:cloud`) followed plan → proposal → exact coordinator grant → apply → configured validation → review. The only isolated-worktree edit was the two accepted `TestIsRetryable` cases for 401 invalid API key and 403 forbidden (`retryable=false`). The persisted validation was `go test ./...`, exit 0, 107,322 ms, in `.tmp/glm-prism-clone-6de/.prizm/worktrees/run_ab78d1b310fc9568fefc209851`; stdout/stderr artifacts exist (5,647 bytes / 0 bytes). Roles completed and reviewer outcome was `review_approved`.
+- The run-scoped duplicate grant returned `decision_already_recorded`; run event cursor stayed fixed, applied-event count remained one, and exactly one dashboard completion event remained. Restarting the isolated service exercised report reconstruction from durable state. The report now shows the original task description and exact tester validation result without changing terminal events or model reviewer history.
+- Regression coverage added for bounded/safe validation evidence and latest tester results taking precedence over earlier failed validation attempts; raw process error text is excluded from event/report projections. Current checkout verification: default-parallel `go test ./... -count=1` passed; `go vet ./...` and `go build ./...` passed; all seven dashboard JavaScript tests passed. The clean `6de` baseline passed `go test ./... -count=1 -p 1`; an earlier parallel baseline run had one unexplained transient CLI test failure, so no cause is asserted.
+- Visual browser acceptance could not be completed: the child IAB blocked local navigation and installed headless Chrome did not return a DOM/screenshot within the bounded attempt. API report/snapshot evidence is verified, but no visual claim is made. Main PID 6700 and legacy PID 74312 were left untouched. R1 overall and its multi-task roadmap gate remain open; feature commit/PR awaits coordinator review.
+
+**Next action:** coordinator reviews the proposed feature diff and this evidence before authorizing branch, commit, push, and PR steps. Continue the remaining R1 acceptance scenarios and visual verification when the supported browser surface is available.
+
+### R1 final verification and browser capture correction (2026-10-12)
+
+- On `codex/durable-task-retries` based at fetched `origin/staging` `d7f76ef`, final default-parallel `go test ./... -count=1`, `go build ./...`, `go vet ./...`, and all seven `internal/dashboard/static/tests/*.test.js` passed. The old feature HEAD tree hash exactly matched staging, so the new branch carries the dirty feature changes without the prior history divergence. No commit, push, or PR was created.
+- Final safety tests caught a baseline Windows symlink resolution defect: `EvalSymlinks` returned Access is denied on the existing symlink, and the old resolver treated that as a missing parent. It also rebuilt multiple absent path components in reverse order. The containment function now rejects missing/unresolvable roots and unresolved existing parents, while walking upward only for absent components and appending them forward. Existing in-root target, nested absent target, missing-root rejection, symlink escape, and `internal/tool` fuzzy-root tests pass; the full parallel suite passes after the fix.
+- Safe validation evidence omits raw process error output and redacts credential-like argument values. Focused tests cover `--token value`, `--password=value`, `api_key=value`, and Authorization/Bearer values. The multiagent report regression checks durable objective fallback and latest tester validation facts.
+- The live accepted run `run_ab78d1b310fc9568fefc209851` remains complete/review-approved with the exact approved test-only patch and persisted passing `go test ./...` validation. Duplicate grant stays `decision_already_recorded`; no second apply/event or completion outbox entry was created. API report reconstruction preserved event/outbox history and the original task description.
+- Correction to the earlier visual note: a headless Chrome run did finish and produced `.tmp/dashboard-proof.png` plus DOM at `.tmp/dashboard-proof-dom.txt` from `http://127.0.0.1:20822/multiagent-run.html?run=run_ab78d1b310fc9568fefc209851`. The page shows Completed, terminal `review approved`, one task-completion timeline row, and no retry countdown text. The reference graph is empty. The report itself was verified via API, while the screenshot does not show the linked final report opened; the runs page’s `Open final report` link or a human UI check remains the final visual detail.
+
+**Next action:** coordinator decides whether this rendered run page plus API-backed report is sufficient for visual acceptance. Keep R1 overall open; do not claim remaining roadmap scenarios are all closed. Commit/push/PR remain pending explicit coordinator authorization.
+
+### Dashboard report route visual verification update (2026-10-12)
+
+- Headless Chrome rendered the run list at `http://127.0.0.1:20822/multiagent-runs.html`. The target `run_ab78d1b310fc9568fefc209851` row visibly shows `Completed` and an `Open final report` link. DOM confirms the exact report target `/api/v1/multiagent/runs/run_ab78d1b310fc9568fefc209851/report`.
+- The exact report target was opened in headless Chrome and rendered at `.tmp/dashboard-report.png`. The visible JSON contains the original objective, `go_test_all: passed (go test ./...)`, validation `passed`, exit code 0, test outcome `passed`, review outcome `review_approved`, and final status `completed`. The run-detail screenshot `.tmp/dashboard-proof.png` shows its Completed badge/terminal outcome and event timeline; its DOM contains no retry countdown fields. One completed row is visible for the target run in the run list.
+- This corrects the prior pending visual-report detail: the run page itself does not inline the full report, but the supported run-list report link and its served report render were verified. Captures are untracked files under `.tmp/`; they are excluded from source changes.
+
+**Next action:** hand the exact branch diff and acceptance evidence to the coordinator for final commit/push/PR authorization. R1 overall remains open pending other roadmap scenarios.
+
+### Commit and PR handoff (2026-10-12)
+
+- Commit `b798578f5b7ac175b94fed6d5f8036811625e3d8` is pushed on `codex/durable-task-retries`, based on `origin/staging` `d7f76efbd913b165bd695ff295a051e74cf828c2`.
+- PR [#89](https://github.com/emaharmony/prizm/pull/89) targets `staging`, open and non-draft. Initial CI snapshot: `lint-linux` and `test-linux` running; `test-windows` and `test-python` queued. Staged diff check and credential pattern scan passed; exactly 76 reviewed files, 6,148 additions and 294 deletions.
+- No merge was performed. The tracked worktree was clean after commit; pre-existing caches/temp directories remain untracked and excluded.
+
+**Next action:** CI follow-up on PR #89 resolved the deprecated `Temporary` classifier and three concrete gates; verify the newly pushed head's CI. Keep R1 overall open for remaining roadmap scenarios.
+
+### PR #89 CI corrections (2026-10-12)
+
+- CI reported Staticcheck SA1019 for `net.Error.Temporary`, ST1012 for the process-crash test sentinel, a Windows short-name versus canonical-path assertion, and Linux TempDir cleanup racing asynchronous recall metadata writes. The transient classifier now uses typed timeout/DNS fields and wrapped transport errno checks (`ECONNRESET`, `ECONNREFUSED`, `EPIPE`); unknown text remains nonretryable in durable execution. The test sentinel follows Go error naming. The Windows nested-path test compares against `EvalSymlinks(root)` plus forward components. Recall tracking now admits workers under a mutex-protected `WaitGroup` and has a lifecycle drain used before the scoped MarkdownStore test removes its temp directory.
+- Verification on this tree: `go test ./... -count=1`, `go build ./...`, `go vet ./...`, `staticcheck ./...`, seven dashboard JS tests, focused retry/safety/workflow/CLI regressions, and Windows compilation of `internal/retry` passed. The scoped prompt-memory test passed 30 consecutive runs before the full suite. No PR merge was performed; latest CI state is pending the follow-up push.
+
+**Next action:** push the reviewed CI correction commit to PR #89 and check CI for that exact head; continue to leave R1's other multi-task scenarios open.

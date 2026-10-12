@@ -2,12 +2,14 @@ package multiagent
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/validation"
 )
 
 func TestDefaultReferenceDefinitionResourceBudgetsAreUnlimited(t *testing.T) {
@@ -22,8 +24,16 @@ func TestDefaultReferenceDefinitionResourceBudgetsAreUnlimited(t *testing.T) {
 		definition.Budgets.MaxReviewerToDeveloperLoops != Unlimited ||
 		definition.Budgets.MaxRepeatedFailure != Unlimited ||
 		definition.Budgets.MaxTokens != Unlimited ||
-		definition.Budgets.MaxDuration != 45*time.Minute {
+		definition.Budgets.MaxDuration != UnlimitedDuration {
 		t.Fatalf("safety budgets = %#v", definition.Budgets)
+	}
+	for _, role := range definition.Roles {
+		if role.TimeBudget != UnlimitedDuration {
+			t.Fatalf("default %s role duration=%v, want unlimited", role.Role, role.TimeBudget)
+		}
+	}
+	if definition.Budgets.MaxRetries != Unlimited {
+		t.Fatalf("default aggregate retries=%d, want unlimited", definition.Budgets.MaxRetries)
 	}
 	wantVisits := map[Role]Limit{
 		RolePlanner: Unlimited, RoleDeveloper: Unlimited, RoleTester: Unlimited, RoleReviewer: Unlimited,
@@ -92,6 +102,66 @@ func TestReferenceOverridesOptIntoResourceLimits(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "must be distinct") {
 		t.Fatalf("expected self-review rejection, got %v", err)
+	}
+}
+
+func TestBuildReferenceRunReportUsesDurableTaskAndValidationEvidence(t *testing.T) {
+	state := RunState{
+		RunID:       "run-report-evidence",
+		Status:      RunStatusCompleted,
+		CurrentTask: TaskReference{ID: "task-report-evidence", Description: "verify the accepted task objective"},
+		RoleStates: map[Role]RoleState{
+			RoleTester: {Visits: 1, LastOutcome: OutcomeTestsPassed, ValidationStatus: "passed"},
+		},
+		LatestHandoff: &Handoff{
+			SourceRole: RoleTester,
+			ValidationResults: []validation.Result{{
+				Profile: "go_test_all", Status: "passed", ExitCode: 0,
+				Command: "go", Args: []string{"test", "./..."}, WorkingDir: "D:/worktree",
+			}},
+		},
+	}
+	events := []event.Event{
+		{Type: event.EventMultiAgentRoleCompleted, Payload: map[string]any{
+			"role": string(RoleTester), "validation_results": []validation.Result{{
+				Profile: "go_test_all", Status: "failed", ExitCode: 1,
+			}},
+		}},
+		{Type: event.EventMultiAgentRoleCompleted, Payload: map[string]any{
+			"role": string(RoleTester), "validation_results": []validation.Result{{
+				Profile: "go_test_all", Status: "passed", ExitCode: 0,
+				Command: "go", Args: []string{"test", "./..."}, WorkingDir: "D:/worktree",
+			}},
+		}},
+		{Type: event.EventMultiAgentRoleCompleted, Payload: map[string]any{"role": string(RoleReviewer)}},
+	}
+	report := BuildReferenceRunReport(ReferenceWorkflowInput{}, state, events)
+	if report.OriginalObjective != state.CurrentTask.Description {
+		t.Fatalf("objective = %q, want durable task description", report.OriginalObjective)
+	}
+	if report.TestOutcome != "passed" || len(report.ValidationResults) != 1 ||
+		report.ValidationResults[0].ExitCode != 0 ||
+		!reflect.DeepEqual(report.TestsExecuted, []string{"go_test_all: passed (go test ./...)"}) {
+		t.Fatalf("validation evidence = %#v; tests=%#v", report.ValidationResults, report.TestsExecuted)
+	}
+	events[1].Payload["validation_results"] = []validation.Result{{Profile: "go_test_all", Status: "failed", ExitCode: 1}}
+	report = BuildReferenceRunReport(ReferenceWorkflowInput{}, state, events)
+	if report.TestOutcome != "failed" {
+		t.Fatalf("contradictory validation summary = %q, want failed", report.TestOutcome)
+	}
+	safe, err := json.Marshal(SafeValidationEvidence(validation.Result{
+		Profile: "go_test_all", Status: "failed", Error: "sensitive process output",
+		Args: []string{
+			"test", "./...", "--token", "token-secret", "--password=password-secret",
+			"api_key=key-secret", "--authorization", "Bearer auth-secret", strings.Repeat("x", 300),
+		},
+	}))
+	if err != nil || strings.Contains(string(safe), "sensitive process output") ||
+		strings.Contains(string(safe), "token-secret") || strings.Contains(string(safe), "password-secret") ||
+		strings.Contains(string(safe), "key-secret") || strings.Contains(string(safe), "auth-secret") ||
+		!strings.Contains(string(safe), strings.Repeat("x", 256)) ||
+		!strings.Contains(string(safe), `"args":["test","./..."`) {
+		t.Fatalf("unsafe/unbounded validation projection: %s err=%v", safe, err)
 	}
 }
 

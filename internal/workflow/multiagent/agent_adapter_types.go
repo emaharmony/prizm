@@ -191,6 +191,8 @@ type AgentExecutionRequest struct {
 	MaxIterations                Limit
 	MaxTokens                    Limit
 	Deadline                     time.Time
+	RetryHandle                  RoleVisitRetryHandle `json:"-"`
+	ToolEventSink                ToolEventSink        `json:"-"`
 }
 
 // AgentExecutionResult is the transport-neutral result returned by the real
@@ -243,6 +245,21 @@ type StructuredOutputError struct {
 	Role  Role
 	Cause error
 }
+
+// SchemaCorrectionError marks a recoverable structured-output failure. Code
+// is deliberately a stable allowlisted identifier, never provider content.
+type SchemaCorrectionError struct {
+	Role     Role
+	Code     string
+	Fields   []string
+	Feedback string
+	Cause    error
+}
+
+func (e *SchemaCorrectionError) Error() string {
+	return "multiagent: structured output needs correction"
+}
+func (e *SchemaCorrectionError) Unwrap() error { return e.Cause }
 
 func (e *StructuredOutputError) Error() string {
 	return fmt.Sprintf("multiagent: invalid structured output for role %q: %v", e.Role, e.Cause)

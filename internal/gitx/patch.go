@@ -215,7 +215,7 @@ func ApplyPlannedPatch(ctx context.Context, root, patch string, plan PatchPlan) 
 // WorktreeTree returns the tree object for the current worktree, including
 // tracked modifications and untracked files, without changing the real index.
 func WorktreeTree(ctx context.Context, root string) (string, error) {
-	index, cleanup, err := temporaryIndex()
+	index, cleanup, err := temporaryIndex(ctx, root)
 	if err != nil {
 		return "", err
 	}
@@ -243,7 +243,7 @@ func CheckPatchDirection(ctx context.Context, root, patch string, reverse bool) 
 }
 
 func treeWithPatch(ctx context.Context, root, base, patch string) (string, error) {
-	index, cleanup, err := temporaryIndex()
+	index, cleanup, err := temporaryIndex(ctx, root)
 	if err != nil {
 		return "", err
 	}
@@ -345,13 +345,22 @@ func validatePatchPathParents(root, path string) error {
 	return nil
 }
 
-func temporaryIndex() (string, func(), error) {
-	f, err := os.CreateTemp("", "prizm-patch-index-*")
+func temporaryIndex(ctx context.Context, root string) (string, func(), error) {
+	gitDir, err := RunCommand(ctx, root, "", "git", "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve repository git directory for temporary index: %w", err)
+	}
+	gitDir = strings.TrimSpace(gitDir)
+	if gitDir == "" {
+		return "", nil, fmt.Errorf("resolve repository git directory for temporary index: empty path")
+	}
+	f, err := os.CreateTemp(gitDir, "prizm-patch-index-*")
 	if err != nil {
 		return "", nil, err
 	}
 	path := f.Name()
 	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
 		return "", nil, err
 	}
 	if err := os.Remove(path); err != nil {

@@ -1294,6 +1294,21 @@ func executeServe(args []string) {
 		graphWorkspace = "."
 	}
 	multiAgentController := newReferenceMultiAgentController(runDir, *configPath)
+	dashboardNotifications, notifyErr := newDashboardTaskNotificationService(runDir, cfg.Prizm.DataDir)
+	if notifyErr != nil {
+		fmt.Fprintf(os.Stderr, "Error starting durable task lifecycle service: %v\n", notifyErr)
+		return
+	}
+	lifecycleDone := make(chan struct{})
+	go func() {
+		defer close(lifecycleDone)
+		dashboardNotifications.Start(ctx, *configPath)
+	}()
+	defer func() {
+		cancel()
+		<-lifecycleDone
+		_ = dashboardNotifications.Close()
+	}()
 	var graphWorker *graphRoleWorker
 	restoreGraphPublisher := func() {}
 	if os.Getenv(graphRoleDelegationRequestedEnv) == "1" {

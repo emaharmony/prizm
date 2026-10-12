@@ -144,6 +144,8 @@ func (r *AgentRoleRunner) RunRole(
 		MaxIterations:         request.RoleConfig.MaxLocalIterations,
 		MaxTokens:             request.RoleConfig.TokenBudget,
 		Deadline:              deadline(startedAt, request.RoleConfig.TimeBudget),
+		RetryHandle:           request.RetryHandle,
+		ToolEventSink:         request.ToolEventSink,
 	}
 	if request.Run.CurrentRole == RoleDeveloper && r.proposals != nil {
 		baseSHA, baseErr := r.patchBase(ctx, workspace.Path)
@@ -156,7 +158,11 @@ func (r *AgentRoleRunner) RunRole(
 	}
 	execution, err := r.executor.ExecuteAgent(executionContext, executionRequest)
 	if err != nil {
-		return RoleRunResult{}, err
+		iterations := execution.LocalIterations
+		if iterations <= 0 {
+			iterations = 1
+		}
+		return RoleRunResult{TokenUsage: execution.Usage, LocalIterations: iterations, Metadata: ExecutionMetadata{ToolCalls: execution.ToolCalls, DeniedToolCalls: execution.DeniedToolCalls, Attempt: request.Run.Visit, StartedAt: startedAt, FinishedAt: r.now().UTC()}}, err
 	}
 	var proposals []ProposalReference
 	correctiveRetries := 0
@@ -425,6 +431,9 @@ func BuildRolePrompt(request RoleRunRequest) (string, error) {
 	)
 	if request.Run.CurrentRole == RoleDeveloper {
 		prompt += "\n\nDEVELOPER TOOL PROTOCOL: Before returning the developer role-schema JSON, emit exactly one separate JSON tool_request for apply_patch_proposal. Its input must contain the complete unified diff in patch and the exact observed git HEAD in base_sha. Do not combine the tool request with the role-schema JSON. After Prizm returns the tool result, return only the developer role-schema JSON."
+	}
+	if feedback := strings.TrimSpace(request.RecoveryFeedback); feedback != "" && len(feedback) <= 512 {
+		prompt += "\n\nRECOVERY CORRECTION: " + feedback
 	}
 	return prompt, nil
 }

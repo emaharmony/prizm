@@ -2,6 +2,8 @@ package tool
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -79,7 +81,7 @@ func (e *Executor) ExecuteWithPolicy(ctx context.Context, toolName, agent, proje
 		"project":        project,
 		"correlation_id": correlationID,
 		"run_id":         runID,
-		"input":          execInput,
+		"args":           safeInputSummary(execInput),
 	})
 
 	// V8: Evaluate central policy first (if configured)
@@ -163,7 +165,7 @@ func (e *Executor) ExecuteWithPolicy(ctx context.Context, toolName, agent, proje
 			result.Output = map[string]any{}
 		}
 		if !result.Success {
-			e.emitEvent("prizm.tool.failed", map[string]any{"tool_name": toolName, "agent": agent, "project": project, "correlation_id": correlationID, "error": result.Error})
+			e.emitEvent("prizm.tool.failed", map[string]any{"tool_name": toolName, "agent": agent, "project": project, "correlation_id": correlationID, "error_code": safeToolErrorCode(result.Error)})
 			return result, nil
 		}
 
@@ -177,12 +179,13 @@ func (e *Executor) ExecuteWithPolicy(ctx context.Context, toolName, agent, proje
 				"project":        project,
 				"correlation_id": correlationID,
 				"run_id":         runID,
-				"error":          err.Error(),
+				"error_code":     safeToolErrorCode(err.Error()),
 			})
 			return ToolResult{
-				Success: false,
-				Output:  nil,
-				Error:   fmt.Sprintf("approval request could not be saved: %v", err),
+				Success:       false,
+				Output:        nil,
+				Error:         fmt.Sprintf("approval request could not be saved: %v", err),
+				FailureEffect: FailureEffectUnknown,
 			}, nil
 		}
 
@@ -234,7 +237,7 @@ func (e *Executor) ExecuteWithPolicy(ctx context.Context, toolName, agent, proje
 			"agent":          agent,
 			"project":        project,
 			"correlation_id": correlationID,
-			"error":          err.Error(),
+			"error_code":     safeToolErrorCode(err.Error()),
 		})
 		return ToolResult{
 			Success: false,
@@ -282,16 +285,47 @@ func (e *Executor) ExecuteWithPolicy(ctx context.Context, toolName, agent, proje
 		}
 	}
 
-	// Emit tool.completed
-	e.emitEvent("prizm.tool.completed", map[string]any{
+	// Emit tool.completed. Tool errors can contain paths or returned data, so
+	// record only a fixed diagnostic class in the durable event stream.
+	completed := map[string]any{
 		"tool_name":      toolName,
 		"agent":          agent,
 		"project":        project,
 		"correlation_id": correlationID,
 		"success":        result.Success,
-	})
+	}
+	if toolName == "read_file" && !result.Success && result.Error != "" {
+		completed["error_code"] = safeToolErrorCode(result.Error)
+	}
+	e.emitEvent("prizm.tool.completed", completed)
 
 	return result, nil
+}
+
+// safeToolErrorCode maps an arbitrary tool error to an allowlisted event code.
+func safeToolErrorCode(message string) string {
+	message = strings.ToLower(message)
+	switch {
+	case strings.Contains(message, "permission denied"), strings.Contains(message, "access denied"):
+		return "permission_denied"
+	case strings.Contains(message, "not found"), strings.Contains(message, "does not exist"), strings.Contains(message, "no such file"):
+		return "not_found"
+	case strings.Contains(message, "invalid"), strings.Contains(message, "required"), strings.Contains(message, "must be"):
+		return "invalid_input"
+	default:
+		return "execution_error"
+	}
+}
+
+// safeInputSummary keeps tool.requested useful for correlation while keeping
+// argument values, paths, and file contents out of durable event payloads.
+func safeInputSummary(input map[string]any) map[string]any {
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return map[string]any{"field_count": len(input), "hash": "unavailable"}
+	}
+	hash := sha256.Sum256(encoded)
+	return map[string]any{"field_count": len(input), "hash": fmt.Sprintf("%x", hash[:])}
 }
 
 // emitEvent calls the configured emitter if it exists.

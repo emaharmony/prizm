@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,12 +90,36 @@ func TestInvalidApplyPatchProposalPersistsNoApproval(t *testing.T) {
 		}
 	})
 	result, err := exec.ExecuteWithPolicy(ctx, "apply_patch_proposal", "astraea", "prizm", "exec-1", map[string]any{"_run_id": "run-1", "patch": "malformed", "base_sha": base})
-	if err != nil || result.Success {
+	if err != nil || result.Success || result.FailureEffect != FailureEffectNoEffects {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
 	items, err := store.List("run-1")
 	if err != nil || len(items) != 0 || requested {
 		t.Fatalf("approvals=%d requested=%v err=%v", len(items), requested, err)
+	}
+}
+
+type failingPatchApprovalStore struct{}
+
+func (failingPatchApprovalStore) Save(*approval.Approval) error {
+	return errors.New("approval persistence failed")
+}
+
+func TestApplyPatchProposalApprovalPersistenceFailureRemainsAmbiguous(t *testing.T) {
+	root := patchProposalRepo(t)
+	base, err := gitx.CurrentSHA(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch := "diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+new\n"
+	reg := NewRegistry()
+	RegisterBuiltinsV4(reg, root, 1024*1024, "", root)
+	cfg := PolicyConfig{WorkspaceRoot: root, AllowedPaths: []string{root}, MaxFileSize: 1024 * 1024}
+	exec := NewExecutor(reg, &cfg)
+	exec.SetApprovalStore(failingPatchApprovalStore{})
+	result, err := exec.ExecuteWithPolicy(context.Background(), "apply_patch_proposal", "developer", "prizm", "exec-fail-save", map[string]any{"_run_id": "run-fail-save", "patch": patch, "base_sha": base})
+	if err != nil || result.Success || result.FailureEffect != FailureEffectUnknown {
+		t.Fatalf("persist failure certainty must fail closed: result=%#v err=%v", result, err)
 	}
 }
 

@@ -25,6 +25,8 @@ type MemoryInjector struct {
 	cache        *memorySearchCache
 	lastMemories []memory.Memory // V23: cached for citation verification
 	lastMu       sync.RWMutex    // protects lastMemories
+	recallMu     sync.Mutex
+	recallWG     sync.WaitGroup
 }
 
 // memorySearchCache caches recent search results keyed by query hash.
@@ -126,7 +128,7 @@ func (mi *MemoryInjector) InjectScopedMemories(ctx context.Context, facade *memo
 		return ""
 	}
 	mi.cache.set(cacheKey, results)
-	go mi.trackRecalls(results)
+	mi.trackRecallsAsync(results)
 	return mi.cacheAndFormat(results, "Relevant Memories", maxTokens)
 }
 
@@ -246,7 +248,7 @@ func (mi *MemoryInjector) injectPlannedSearch(ctx context.Context, userMessage s
 	mi.cache.set(cacheKey, results)
 
 	// V80: Track recall count for injected memories
-	go mi.trackRecalls(results)
+	mi.trackRecallsAsync(results)
 
 	log.Printf("[MEMORY-INJECTOR] search results detail: query=%q, count=%d", searchQuery, len(results))
 	for i, m := range results {
@@ -526,4 +528,22 @@ func (mi *MemoryInjector) trackRecalls(memories []memory.Memory) {
 			log.Printf("[MEMORY-INJECTOR] failed to track recall for %s: %v", m.ID, err)
 		}
 	}
+}
+
+func (mi *MemoryInjector) trackRecallsAsync(memories []memory.Memory) {
+	mi.recallMu.Lock()
+	mi.recallWG.Add(1)
+	mi.recallMu.Unlock()
+	go func() {
+		defer mi.recallWG.Done()
+		mi.trackRecalls(memories)
+	}()
+}
+
+// waitForPendingRecallWrites drains work admitted before the call. The mutex
+// serializes WaitGroup admission against Wait; tracked workers never take it.
+func (mi *MemoryInjector) waitForPendingRecallWrites() {
+	mi.recallMu.Lock()
+	defer mi.recallMu.Unlock()
+	mi.recallWG.Wait()
 }

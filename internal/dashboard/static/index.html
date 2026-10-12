@@ -47,16 +47,23 @@
     <div id="tasks" class="loading-state" aria-live="polite">Loading work queue…</div>
   </section>
 
+  <section class="section" aria-labelledby="durable-runs-heading">
+    <div class="section-heading"><div><h2 id="durable-runs-heading" class="section-title">Durable workflow runs</h2><p class="section-copy">Accepted work, scheduled retries, and saved terminal reports.</p></div><div><span id="durable-run-count" class="meta" aria-live="polite"></span> <a href="/multiagent-runs.html">View all</a></div></div>
+    <div id="durable-runs" class="loading-state" aria-live="polite" aria-busy="true">Loading workflow runs…</div>
+  </section>
+
   <section class="section split-grid" aria-label="Recent activity and agents">
     <div><div class="section-heading"><div><h2 class="section-title">Recent activity</h2><p class="section-copy">The latest task changes, with the important context kept visible.</p></div></div><div id="activity" class="activity-list"></div></div>
     <div><div class="section-heading"><div><h2 class="section-title">Agent roster</h2><p class="section-copy">Configured agents and their assigned capability.</p></div><a href="/editor.html">Open agent graph</a></div><div id="agents" class="agent-list"></div></div>
   </section>
 </main>
 <script src="/app.js"></script>
+<script src="/multiagent-live.js"></script>
 <script>
+  const live = window.PrizmMultiAgentLive;
 (() => {
   const ui = window.PrizmUI;
-  const state = { tasks: [], agents: [], approvals: [], status: null };
+  const state = { tasks: [], agents: [], approvals: [], status: null, durableRuns: [] };
   const $ = selector => document.querySelector(selector);
   const activeStatuses = new Set(['created', 'assigned', 'in_progress']);
   const failedStatuses = new Set(['failed', 'cancelled']);
@@ -113,6 +120,43 @@
     const target = $('#agents');
     target.innerHTML = state.agents.length ? state.agents.slice(0, 6).map(a => `<article class="agent-row"><div><strong>${ui.escape(a.name || a.id || a.ID || 'Unnamed agent')}</strong><p>${ui.escape(a.role || a.Role || 'agent')} · ${ui.escape(a.provider || a.Provider || 'provider')} · ${ui.escape(a.model || a.Model || 'default model')}</p></div></article>`).join('') : `<div class="empty-state"><strong>No agent details available</strong>The service has not reported a configured roster.</div>`;
   }
+  function renderDurableRuns() {
+    const target = $('#durable-runs');
+    target.removeAttribute('aria-busy');
+    const runs = [...state.durableRuns].sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0)).slice(0, 6);
+    $('#durable-run-count').textContent = `${state.durableRuns.length} run${state.durableRuns.length === 1 ? '' : 's'}`;
+    if (!runs.length) {
+      target.className = 'empty-state';
+      target.innerHTML = `<strong>No durable workflow runs yet</strong>Accepted workflow tasks will appear here automatically.`;
+      return;
+    }
+    target.className = '';
+    target.innerHTML = `<div class="table-wrap"><table class="data-table"><thead><tr><th>Workflow</th><th>Status</th><th>Retry / result</th><th>Updated</th></tr></thead><tbody>${runs.map(run => {
+      const status = live.displayRunStatus(run.status, run.retry_at, run.waiting_kind);
+      const retry = status === 'waiting_retry' && run.retry_at ? `<div>Retry at ${ui.escape(ui.formatTime(run.retry_at))} · ${Number(run.retries_remaining || 0)} remaining</div>` : '';
+      const failure = run.last_failure ? `<div class="meta">Last failure: ${ui.escape(run.last_failure)}</div>` : '';
+      const blocked = run.status === 'paused' && run.last_failure ? `<div>Automatic retry blocked</div>` : '';
+      const result = run.report_ref ? `<a href="/api/v1/multiagent/runs/${encodeURIComponent(run.run_id)}/report" target="_blank" rel="noopener">Open ${ui.escape(status)} report</a>` : `${retry}${blocked}${failure}`;
+      return `<tr><td data-label="Workflow"><a href="/multiagent-run.html?run=${encodeURIComponent(run.run_id)}">${ui.escape(run.workflow_id || run.run_id)}</a><div class="meta mono">${ui.escape(run.run_id)}</div></td><td data-label="Status">${ui.badge(status)}</td><td data-label="Retry / result">${result || '—'}</td><td data-label="Updated"><span title="${ui.escape(ui.formatTime(run.updated_at || run.created_at))}">${ui.escape(ui.relativeTime(run.updated_at || run.created_at))}</span></td></tr>`;
+    }).join('')}</tbody></table></div>`;
+  }
+  let durableRunsLoading = false;
+  async function loadDurableRuns() {
+    if (durableRunsLoading) return;
+    durableRunsLoading = true;
+    try {
+      const runs = await ui.request('/multiagent/runs');
+      state.durableRuns = Array.isArray(runs) ? runs : [];
+      renderDurableRuns();
+    } catch (error) {
+      const target = $('#durable-runs');
+      target.removeAttribute('aria-busy');
+      target.className = 'empty-state';
+      target.textContent = `Workflow run status is unavailable: ${error.message}`;
+    } finally {
+      durableRunsLoading = false;
+    }
+  }
   async function load() {
     $('#metrics').setAttribute('aria-busy', 'true');
     const [status, tasks, approvals, agents] = await Promise.allSettled([
@@ -125,12 +169,14 @@
     state.agents = agents.status === 'fulfilled' && Array.isArray(agents.value) ? agents.value : [];
     failures.length ? showBanner(`Some live data could not be loaded. Existing data may be incomplete. ${failures[0].reason.message}`) : clearBanner();
     renderMetrics(); renderAttention(); renderTasks(); renderActivity(); renderAgents();
+    loadDurableRuns();
     $('#last-updated').textContent = `Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
   }
   $('#refresh').addEventListener('click', load);
   $('#task-search').addEventListener('input', renderTasks);
   $('#status-filter').addEventListener('change', renderTasks);
   load();
+  window.setInterval(loadDurableRuns, 5000);
 })();
 </script>
 </body>

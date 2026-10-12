@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -126,6 +127,8 @@ func (s *Server) handleMultiAgentRunSub(w http.ResponseWriter, r *http.Request) 
 	switch {
 	case len(parts) == 2 && parts[1] == "snapshot":
 		s.handleMultiAgentSnapshot(w, r, parts[0])
+	case len(parts) == 2 && parts[1] == "report":
+		s.handleMultiAgentReport(w, r, parts[0])
 	case len(parts) == 3 && parts[1] == "events" && parts[2] == "stream":
 		s.handleMultiAgentEventStream(w, r, parts[0])
 	case len(parts) == 2 && parts[1] == "resume":
@@ -134,9 +137,165 @@ func (s *Server) handleMultiAgentRunSub(w http.ResponseWriter, r *http.Request) 
 		s.handleMultiAgentCancel(w, r, parts[0])
 	case len(parts) == 2 && parts[1] == "pause":
 		s.handleMultiAgentPause(w, r, parts[0])
+	case len(parts) == 3 && parts[1] == "proposals":
+		s.handleMultiAgentProposal(w, r, parts[0], parts[2])
+	case len(parts) == 4 && parts[1] == "proposals" && parts[3] == "approval":
+		s.handleMultiAgentProposalDecision(w, r, parts[0], parts[2])
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
+}
+
+func (s *Server) handleMultiAgentProposal(w http.ResponseWriter, r *http.Request, runID, proposalID string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.multiAgentController == nil {
+		writeJSONError(w, "multi-agent controller not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if !validMultiAgentRunID(runID) || !validMultiAgentOpaqueID(proposalID, "prop_") {
+		http.Error(w, "invalid run or proposal id", http.StatusBadRequest)
+		return
+	}
+	proposal, err := s.multiAgentController.Proposal(r.Context(), runID, proposalID)
+	if err != nil {
+		s.writeMultiAgentProposalDecisionError(w, err)
+		return
+	}
+	writeJSON(w, proposal)
+}
+
+type multiAgentProposalDecisionRequest struct {
+	ApprovalID string `json:"approval_id"`
+	Decision   string `json:"decision"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+// handleMultiAgentProposalDecision persists a decision against the exact
+// proposal recorded in the run's durable approval wait, then starts the
+// existing claimed Resume path. The generic /api/v1/approvals endpoint is for
+// delegation approvals and is intentionally not used here.
+func (s *Server) handleMultiAgentProposalDecision(w http.ResponseWriter, r *http.Request, runID, proposalID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.multiAgentController == nil {
+		writeJSONError(w, "multi-agent controller not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if !validMultiAgentRunID(runID) || !validMultiAgentOpaqueID(proposalID, "prop_") {
+		http.Error(w, "invalid run or proposal id", http.StatusBadRequest)
+		return
+	}
+	var req multiAgentProposalDecisionRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, s.maxRequestBytes))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeJSONError(w, "invalid proposal decision request", http.StatusBadRequest)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeJSONError(w, "proposal decision request must contain one JSON object", http.StatusBadRequest)
+		return
+	}
+	if !validMultiAgentOpaqueID(req.ApprovalID, "appr_") || (req.Decision != "grant" && req.Decision != "deny") || len(req.Reason) > 512 {
+		http.Error(w, "invalid proposal decision", http.StatusBadRequest)
+		return
+	}
+	resume, err := s.multiAgentController.DecideProposal(r.Context(), runID, proposalID, req.ApprovalID, req.Decision, req.Reason)
+	if err != nil {
+		s.writeMultiAgentProposalDecisionError(w, err)
+		return
+	}
+	if !resume {
+		w.WriteHeader(http.StatusAccepted)
+		writeJSON(w, map[string]string{"status": "decision_already_recorded"})
+		return
+	}
+	go func() {
+		if err := s.multiAgentController.Resume(s.resumeCtx, runID); err != nil && !errors.Is(err, multiagent.ErrRunClaimed) {
+			log.Printf("[WARN] resume after proposal decision failed for run %s: %v", runID, err)
+		}
+	}()
+	w.WriteHeader(http.StatusAccepted)
+	writeJSON(w, map[string]string{"status": "decision_recorded_and_resuming"})
+}
+
+func validMultiAgentOpaqueID(id, prefix string) bool {
+	if !strings.HasPrefix(id, prefix) || len(id) != len(prefix)+26 {
+		return false
+	}
+	for _, r := range id[len(prefix):] {
+		if !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) writeMultiAgentProposalDecisionError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, multiagent.ErrRunNotFound):
+		writeJSONError(w, "run not found", http.StatusNotFound)
+	case errors.Is(err, ErrProposalDecisionConflict), errors.Is(err, ErrProposalNotWaiting), errors.Is(err, multiagent.ErrRunClaimed):
+		writeJSONError(w, err.Error(), http.StatusConflict)
+	default:
+		writeJSONError(w, "could not record proposal decision", http.StatusInternalServerError)
+	}
+}
+
+// handleMultiAgentReport serves the stable report artifact only after a run
+// has reached a durable terminal state. The run ID is validated before it is
+// used in the path, and the file is the existing report written by the graph
+// runtime rather than a separate notification store.
+func (s *Server) handleMultiAgentReport(w http.ResponseWriter, r *http.Request, runID string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.multiAgentRunsConfigured() {
+		writeJSONError(w, "multi-agent run locator not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if !validMultiAgentRunID(runID) {
+		writeJSONError(w, "invalid run id", http.StatusBadRequest)
+		return
+	}
+	runtime, runStore, eventStore, err := s.multiAgentRuns.OpenInspection(r.Context(), runID)
+	if err != nil {
+		s.writeMultiAgentRunError(w, err)
+		return
+	}
+	defer runStore.Close()
+	defer eventStore.Close()
+	record, err := runtime.Inspect(r.Context(), runID)
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !record.State.Status.Terminal() {
+		writeJSONError(w, "run report is available after a terminal outcome", http.StatusConflict)
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(s.multiAgentRuns.Root, runID, "multiagent_report.json"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			writeJSONError(w, "run report is not ready", http.StatusNotFound)
+			return
+		}
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !json.Valid(data) {
+		writeJSONError(w, "run report is invalid", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 // handleMultiAgentSnapshot returns the complete dashboard read model

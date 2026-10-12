@@ -44,7 +44,9 @@
     RUN_CANCELLED:            'prizm.workflow.multi_agent.run.cancelled',
     RECOVERY_STARTED:         'prizm.workflow.multi_agent.recovery.started',
     RECOVERY_COMPLETED:       'prizm.workflow.multi_agent.recovery.completed',
-    RECOVERY_FAILED:          'prizm.workflow.multi_agent.recovery.failed'
+    RECOVERY_FAILED:          'prizm.workflow.multi_agent.recovery.failed',
+    DASHBOARD_TASK_COMPLETED: 'prizm.dashboard.task.completed',
+    DASHBOARD_TASK_FAILED:    'prizm.dashboard.task.failed'
   };
 
   var ALL_EVENT_TYPES = Object.keys(EVENT_TYPES).map(function (key) { return EVENT_TYPES[key]; });
@@ -303,6 +305,16 @@
     return !!hasOpenedOnce;
   }
 
+  // A durable retry wait keeps RunState.Status at its prior nonterminal
+  // value. Prefer the persisted retry/checkpoint fields when rendering the
+  // operator-facing lifecycle label so scheduled work never looks active.
+  function displayRunStatus(status, retryAt, waitingKind) {
+    if (waitingKind === 'role_retry' || (status === 'running' && !!retryAt)) {
+      return 'waiting_retry';
+    }
+    return status === 'created' ? 'accepted' : status;
+  }
+
   var api = {
     EVENT_TYPES: EVENT_TYPES,
     ALL_EVENT_TYPES: ALL_EVENT_TYPES,
@@ -317,7 +329,8 @@
     isNotFoundErrorMessage: isNotFoundErrorMessage,
     nextNotFoundStreak: nextNotFoundStreak,
     shouldTreatAsUnavailable: shouldTreatAsUnavailable,
-    shouldReconcileOnOpen: shouldReconcileOnOpen
+    shouldReconcileOnOpen: shouldReconcileOnOpen,
+    displayRunStatus: displayRunStatus
   };
 
   if (typeof module !== 'undefined' && module.exports) {

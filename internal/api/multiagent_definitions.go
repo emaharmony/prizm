@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
 
@@ -25,7 +28,7 @@ import (
 // the caller observes progress via the existing SSE stream — mirroring
 // MultiAgentController.Resume's documented contract.
 type WorkflowRunStarter interface {
-	StartRun(ctx context.Context, workflowID string, version int64, input json.RawMessage) (runID string, err error)
+	StartRun(ctx context.Context, workflowID string, version int64, input json.RawMessage, identity *multiagent.RequestIdentity) (runID string, err error)
 }
 
 // definitionRegistrationResponse is the JSON shape returned by both the
@@ -311,28 +314,80 @@ func (s *Server) handleRunVersion(w http.ResponseWriter, r *http.Request, workfl
 		return
 	}
 
-	var input json.RawMessage
-	if r.Body != nil && r.ContentLength != 0 {
-		data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.maxRequestBytes))
+	var data []byte
+	if r.Body != nil {
+		var err error
+		data, err = io.ReadAll(http.MaxBytesReader(w, r.Body, s.maxRequestBytes))
 		if err != nil {
 			writeJSONError(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if len(data) > 0 {
-			if !json.Valid(data) {
-				writeJSONError(w, "invalid JSON body", http.StatusBadRequest)
-				return
-			}
-			input = json.RawMessage(data)
-		}
 	}
+	_, err = decodeWorkflowRunTask(data)
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	input := json.RawMessage(data)
 
-	runID, err := s.workflowRunStarter.StartRun(r.Context(), workflowID, version, input)
+	identity, err := acceptedRequestIdentity(r)
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	runID, err := s.workflowRunStarter.StartRun(r.Context(), workflowID, version, input, identity)
 	if err != nil {
 		s.writeDefinitionRunError(w, err)
 		return
 	}
-	writeJSON(w, map[string]string{"run_id": runID, "status": "started"})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	writeJSON(w, map[string]string{"run_id": runID, "status": "accepted"})
+}
+
+func decodeWorkflowRunTask(data []byte) (multiagent.TaskReference, error) {
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return multiagent.TaskReference{}, errors.New("task description is required")
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	var task multiagent.TaskReference
+	if err := decoder.Decode(&task); err != nil {
+		return multiagent.TaskReference{}, errors.New("invalid task input: expected one JSON task object with only id and description")
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return multiagent.TaskReference{}, errors.New("invalid task input: expected exactly one task object")
+	}
+	if strings.TrimSpace(task.Description) == "" {
+		return multiagent.TaskReference{}, errors.New("task description is required")
+	}
+	return task, nil
+}
+
+// acceptedRequestIdentity records only trusted server origin plus opaque
+// caller correlation keys. The destination is fixed to the dashboard's
+// durable run/event projection; request bodies cannot choose a delivery path.
+func acceptedRequestIdentity(r *http.Request) (*multiagent.RequestIdentity, error) {
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if len(idempotencyKey) > 200 || strings.ContainsAny(idempotencyKey, "\r\n\x00") {
+		return nil, errors.New("invalid Idempotency-Key")
+	}
+	if idempotencyKey == "" {
+		idempotencyKey = "api-" + event.NewRunID()
+	}
+	sessionID := strings.TrimSpace(r.Header.Get("X-Prizm-Session-ID"))
+	if len(sessionID) > 200 || strings.ContainsAny(sessionID, "\r\n\x00") {
+		return nil, errors.New("invalid X-Prizm-Session-ID")
+	}
+	if sessionID == "" {
+		digest := sha256.Sum256([]byte(idempotencyKey))
+		sessionID = "sess_" + hex.EncodeToString(digest[:12])
+	}
+	return &multiagent.RequestIdentity{
+		RequesterID: "api", SessionID: sessionID, Source: "api",
+		ResultDestination: "dashboard", IdempotencyKey: idempotencyKey,
+	}, nil
 }
 
 // resolveDefinitionVersion validates workflowID/versionStr, loads the
@@ -425,6 +480,8 @@ func (s *Server) writeDefinitionRunError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, multiagent.ErrDefinitionNotFound):
 		writeJSONError(w, "definition not found", http.StatusNotFound)
+	case errors.Is(err, multiagent.ErrRunExists), errors.Is(err, multiagent.ErrRequestIdentityConflict):
+		writeJSONError(w, err.Error(), http.StatusConflict)
 	default:
 		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 	}

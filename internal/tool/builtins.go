@@ -447,14 +447,14 @@ func (t *ApplyPatchProposal) Execute(ctx context.Context, input map[string]any) 
 	patch, patchOK := input["patch"].(string)
 	base, baseOK := input["base_sha"].(string)
 	if !patchOK || strings.TrimSpace(patch) == "" {
-		return ToolResult{Success: false, Error: "required parameter 'patch' must be a non-empty string"}, nil
+		return ToolResult{Success: false, Error: "required parameter 'patch' must be a non-empty string", FailureEffect: FailureEffectNoEffects}, nil
 	}
 	if !baseOK || strings.TrimSpace(base) == "" {
-		return ToolResult{Success: false, Error: "required parameter 'base_sha' must be a non-empty string"}, nil
+		return ToolResult{Success: false, Error: "required parameter 'base_sha' must be a non-empty string", FailureEffect: FailureEffectNoEffects}, nil
 	}
 	plan, err := gitx.PlanPatch(ctx, t.WorkspaceRoot, patch, base)
 	if err != nil {
-		return ToolResult{Success: false, Error: err.Error()}, nil
+		return ToolResult{Success: false, Error: err.Error(), FailureEffect: FailureEffectNoEffects}, nil
 	}
 	roots := append([]string(nil), t.AllowedPaths...)
 	if len(roots) == 0 {
@@ -463,7 +463,7 @@ func (t *ApplyPatchProposal) Execute(ctx context.Context, input map[string]any) 
 	for _, path := range plan.Paths {
 		absolute := filepath.Join(t.WorkspaceRoot, filepath.FromSlash(path))
 		if _, err := safety.ResolveAndContainMulti(roots, absolute); err != nil {
-			return ToolResult{Success: false, Error: fmt.Sprintf("patch path %q is outside configured write roots: %v", path, err)}, nil
+			return ToolResult{Success: false, Error: fmt.Sprintf("patch path %q is outside configured write roots: %v", path, err), FailureEffect: FailureEffectNoEffects}, nil
 		}
 	}
 	return ToolResult{Success: true, Output: map[string]any{

@@ -12,14 +12,17 @@ import (
 // scriptBackend is a mock Backend that replays a scripted sequence of model
 // turns and records tool executions.
 type scriptBackend struct {
-	turns      []Turn
-	parse      Parser
-	toolErr    error
-	toolErrs   map[string]error
-	toolResult string
-	toolCalls  []string
-	messages   [][]v2.Message
-	allowances []ReplyAllowance
+	turns           []Turn
+	turnErrors      []error
+	parse           Parser
+	toolErr         error
+	toolErrs        map[string]error
+	toolErrOnce     map[string]error
+	toolBeforeError func(string)
+	toolResult      string
+	toolCalls       []string
+	messages        [][]v2.Message
+	allowances      []ReplyAllowance
 }
 
 func (b *scriptBackend) Bind(_ AgentRuntime) (LLMFunc, Parser, ToolExec, error) {
@@ -31,15 +34,29 @@ func (b *scriptBackend) Bind(_ AgentRuntime) (LLMFunc, Parser, ToolExec, error) 
 			return Turn{Text: "FINAL: done (ran out of script)"}, nil
 		}
 		t := b.turns[i]
+		var turnErr error
+		if i < len(b.turnErrors) {
+			turnErr = b.turnErrors[i]
+		}
 		i++
-		return t, nil
+		return t, turnErr
 	}
 	exec := func(_ context.Context, tool string, _ map[string]any) (string, error) {
 		b.toolCalls = append(b.toolCalls, tool)
 		if b.toolErr != nil {
 			return "", b.toolErr
 		}
+		if err := b.toolErrOnce[tool]; err != nil {
+			delete(b.toolErrOnce, tool)
+			if b.toolBeforeError != nil {
+				b.toolBeforeError(tool)
+			}
+			return "", err
+		}
 		if err := b.toolErrs[tool]; err != nil {
+			if b.toolBeforeError != nil {
+				b.toolBeforeError(tool)
+			}
 			return "", err
 		}
 		if b.toolResult != "" {
@@ -134,7 +151,7 @@ func TestLoopRunner_ImmediateFinal(t *testing.T) {
 	}
 }
 
-func TestLoopRunner_ToolFailureIsFedBackNotFatal(t *testing.T) {
+func TestLoopRunner_UnknownMutatingToolFailureStopsExecution(t *testing.T) {
 	backend := &scriptBackend{
 		parse: func(text string) Action {
 			if strings.HasPrefix(text, "TOOL") {
@@ -149,12 +166,13 @@ func TestLoopRunner_ToolFailureIsFedBackNotFatal(t *testing.T) {
 		},
 	}
 	r := NewLoopRunner(LoopRunnerConfig{Backend: backend})
-	res, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T3"}, AgentRuntime{AgentID: "chisel"})
-	if err != nil {
-		t.Fatalf("tool failure should not be fatal to the run: %v", err)
+	_, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T3"}, AgentRuntime{AgentID: "chisel"})
+	var safeFailure *SafeFailureError
+	if !errors.As(err, &safeFailure) || safeFailure.Tool != "mcp_blender_export" {
+		t.Fatalf("expected fail-closed tool error, got %v", err)
 	}
-	if !strings.Contains(res.Summary, "could not export") {
-		t.Errorf("summary = %q", res.Summary)
+	if len(backend.messages) != 1 || len(backend.toolCalls) != 1 {
+		t.Fatalf("ambiguous failure continued to a new provider turn: turns=%d tools=%v", len(backend.messages), backend.toolCalls)
 	}
 }
 
@@ -410,11 +428,81 @@ func TestLoopRunnerRequiredToolFailureDoesNotSatisfyPrerequisite(t *testing.T) {
 	}}
 	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 4, MaxTokens: 45_000, FinalReplyReserveTokens: 8192})
 	_, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T-failed-prerequisite", FinalizationPrerequisiteTool: "write_file_proposal"}, AgentRuntime{AgentID: "developer"})
-	if err == nil || !strings.Contains(err.Error(), "required tool") {
+	if err == nil || !strings.Contains(err.Error(), "tool=write_file_proposal") || strings.Contains(err.Error(), "proposal rejected") {
 		t.Fatalf("err=%v", err)
 	}
 	if len(backend.messages) != 2 {
 		t.Fatalf("provider calls=%d, want 2", len(backend.messages))
+	}
+}
+
+func TestLoopRunnerRetriesSafePrerequisiteFailureBeforeFinal(t *testing.T) {
+	patch := "diff --git a/proposed.txt b/proposed.txt\nnew file mode 100644\n--- /dev/null\n+++ b/proposed.txt\n@@ -0,0 +1 @@\n+proposal\n"
+	backend := &scriptBackend{
+		turns: []Turn{
+			{Text: "bad proposal", PromptTokens: 50, CompletionTokens: 20},
+			{Text: "read source", PromptTokens: 50, CompletionTokens: 20},
+			{Text: "corrected proposal", PromptTokens: 50, CompletionTokens: 20},
+			{Text: "final response", PromptTokens: 50, CompletionTokens: 20},
+		},
+		toolErrOnce: map[string]error{"apply_patch_proposal": &CorrectableToolError{Code: "patch_validation_failed"}},
+		toolResult:  `{"canonical_path":"README.md","sha256":"safe-hash","start_line":1,"end_line":1}`,
+		parse: func(text string) Action {
+			switch text {
+			case "bad proposal", "corrected proposal":
+				return Action{Tool: "apply_patch_proposal", Input: map[string]any{"patch": patch, "base_sha": "trusted-base"}}
+			case "read source":
+				return Action{Tool: "read_file", Input: map[string]any{"path": "README.md"}}
+			case "final response":
+				return Action{Final: true, Content: "proposal saved"}
+			default:
+				return Action{}
+			}
+		},
+	}
+	runner := NewLoopRunner(LoopRunnerConfig{Backend: backend})
+	result, err := runner.Run(context.Background(), v2.TaskPacket{TaskID: "T-correctable-prerequisite", FinalizationPrerequisiteTool: "apply_patch_proposal"}, AgentRuntime{AgentID: "developer"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Summary != "proposal saved" {
+		t.Fatalf("summary=%q, want successful final after proposal", result.Summary)
+	}
+	if got, want := strings.Join(backend.toolCalls, ","), "apply_patch_proposal,read_file,apply_patch_proposal"; got != want {
+		t.Fatalf("tool calls=%q, want %q", got, want)
+	}
+	if len(backend.toolCalls) != 3 || len(backend.messages) != 4 {
+		t.Fatalf("tool calls=%d provider turns=%d, want 3 and 4", len(backend.toolCalls), len(backend.messages))
+	}
+	if !strings.Contains(backend.messages[1][len(backend.messages[1])-1].Content, "failed validation before an approval was saved") {
+		t.Fatalf("safe correction feedback missing from follow-up: %#v", backend.messages[1])
+	}
+	if strings.Contains(backend.messages[3][len(backend.messages[3])-1].Content, "required tool") {
+		t.Fatalf("final response was not offered after successful proposal: %#v", backend.messages[3])
+	}
+}
+
+func TestLoopRunnerStopsAfterAmbiguousMutatingToolFailure(t *testing.T) {
+	approvalPersisted := false
+	backend := &scriptBackend{parse: lineParser, toolErrs: map[string]error{"write_file_proposal": errors.New("approval save may have completed")}, toolBeforeError: func(tool string) {
+		if tool == "write_file_proposal" {
+			approvalPersisted = true
+		}
+	}, turns: []Turn{
+		{Text: "TOOL write_file_proposal", PromptTokens: 4200, CompletionTokens: 100},
+		{Text: "FINAL: valid-looking completion", PromptTokens: 1000, CompletionTokens: 50},
+	}}
+	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 4, MaxTokens: 45_000, FinalReplyReserveTokens: 8192})
+	_, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T-ambiguous-mutation"}, AgentRuntime{AgentID: "legacy-role"})
+	var safeFailure *SafeFailureError
+	if !errors.As(err, &safeFailure) || safeFailure.Tool != "write_file_proposal" {
+		t.Fatalf("expected fail-closed safe tool failure, got %v", err)
+	}
+	if len(backend.messages) != 1 || strings.Join(backend.toolCalls, ",") != "write_file_proposal" {
+		t.Fatalf("ambiguous tool failure continued execution: provider turns=%d tools=%v", len(backend.messages), backend.toolCalls)
+	}
+	if !approvalPersisted {
+		t.Fatal("fake approval persistence was not exercised")
 	}
 }
 
@@ -683,7 +771,7 @@ func TestLoopRunner_DefaultTokenBudget(t *testing.T) {
 func TestLoopRunner_BindError(t *testing.T) {
 	r := NewLoopRunner(LoopRunnerConfig{Backend: bindErrBackend{}})
 	_, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T6"}, AgentRuntime{AgentID: "x"})
-	if err == nil || !strings.Contains(err.Error(), "bind agent") {
+	if err == nil || !strings.Contains(err.Error(), "backend_bind_failed") || strings.Contains(err.Error(), "no provider for model") {
 		t.Fatalf("expected bind error, got %v", err)
 	}
 }

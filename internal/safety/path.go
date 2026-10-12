@@ -12,6 +12,7 @@ package safety
 
 import (
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -37,7 +38,9 @@ func IsWithinRoot(absPath, absRoot string) bool {
 	// Resolve symlinks in root
 	resolvedRoot, err := filepath.EvalSymlinks(absRoot)
 	if err != nil {
-		resolvedRoot = absRoot
+		// A missing or unresolvable root cannot establish a trustworthy
+		// containment boundary.
+		return false
 	}
 	resolvedRoot = filepath.Clean(resolvedRoot)
 
@@ -82,10 +85,16 @@ func resolveNonExistentPath(absPath string) string {
 		resolved, err := filepath.EvalSymlinks(dir)
 		if err == nil {
 			// Found an existing parent — reconstruct the path
-			for i := len(components) - 1; i >= 0; i-- {
+			for i := 0; i < len(components); i++ {
 				resolved = filepath.Join(resolved, components[i])
 			}
 			return filepath.Clean(resolved)
+		}
+		if _, statErr := os.Lstat(dir); statErr == nil || !os.IsNotExist(statErr) {
+			// An existing path that cannot be resolved is ambiguous (for
+			// example, an inaccessible symlink). Fail closed instead of
+			// treating it as an ordinary nonexistent path component.
+			return ""
 		}
 
 		// Parent doesn't exist either — keep going up

@@ -486,5 +486,99 @@ func handoffFromOutput(output OutputHandoff, artifacts []ArtifactRef) *HandoffDr
 }
 
 func structuredError(role Role, err error) error {
-	return &StructuredOutputError{Role: role, Cause: err}
+	code, feedback, fields := safeSchemaCorrection(role, err)
+	return &SchemaCorrectionError{
+		Role: role, Code: code, Fields: fields, Feedback: feedback,
+		Cause: &StructuredOutputError{Role: role, Cause: err},
+	}
+}
+
+func safeSchemaCorrection(role Role, err error) (string, string, []string) {
+	var syntax *json.SyntaxError
+	if errors.As(err, &syntax) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return "invalid_json_syntax", canonicalSchemaFeedback(role, "invalid_json_syntax", nil), nil
+	}
+	message := strings.ToLower(err.Error())
+	fields := schemaFields(role)
+	missing := make([]string, 0, 4)
+	for _, field := range fields {
+		if strings.Contains(message, field) && strings.Contains(message, "required") {
+			missing = append(missing, field)
+		}
+	}
+	if len(missing) > 0 {
+		return "missing_required_fields", canonicalSchemaFeedback(role, "missing_required_fields", missing), missing
+	}
+	var typeError *json.UnmarshalTypeError
+	if errors.As(err, &typeError) {
+		field := strings.ToLower(typeError.Field)
+		field = strings.Split(field, "[")[0]
+		field = strings.Split(field, ".")[0]
+		for _, allowed := range fields {
+			if field == allowed {
+				problemFields := []string{allowed}
+				return "invalid_field_type", canonicalSchemaFeedback(role, "invalid_field_type", problemFields), problemFields
+			}
+		}
+		return "invalid_field_type", canonicalSchemaFeedback(role, "invalid_field_type", nil), nil
+	}
+	if strings.Contains(message, "invalid") || strings.Contains(message, "must be") || strings.Contains(message, "cannot") {
+		return "invalid_field_value", canonicalSchemaFeedback(role, "invalid_field_value", nil), nil
+	}
+	return "invalid_structured_output", canonicalSchemaFeedback(role, "invalid_structured_output", nil), nil
+}
+
+func canonicalSchemaFeedback(role Role, code string, fields []string) string {
+	switch code {
+	case "invalid_json_syntax":
+		return "The previous response was not valid JSON syntax. Return exactly one JSON object matching the required role schema."
+	case "missing_required_fields":
+		allowed := schemaFields(role)
+		if len(fields) == 0 {
+			return "The previous JSON omitted required fields. Add the missing fields listed by the required role schema and return exactly one JSON object."
+		}
+		for _, field := range fields {
+			found := false
+			for _, candidate := range allowed {
+				if field == candidate {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return "The previous JSON omitted required fields. Add the missing fields listed by the required role schema and return exactly one JSON object."
+			}
+		}
+		return "Missing required field(s): " + strings.Join(fields, ", ") + ". Add them to the next response. Follow the required role schema shown in the task instructions and return exactly one JSON object."
+	case "invalid_field_type":
+		if len(fields) == 1 {
+			for _, allowed := range schemaFields(role) {
+				if fields[0] == allowed {
+					return "Field " + allowed + " has the wrong JSON type. Match its type and structure to the required role schema, then return exactly one JSON object."
+				}
+			}
+		}
+		return "A field has the wrong JSON type. Check field types in the required role schema and return exactly one JSON object."
+	case "invalid_field_value", "invalid_structured_output":
+		return "The previous response did not match the required JSON structure. Check field types and allowed values in the required role schema, then return exactly one valid response."
+	default:
+		return ""
+	}
+}
+
+func schemaFields(role Role) []string {
+	switch role {
+	case RolePlanner:
+		return []string{"schema_version", "understanding", "implementation_plan", "task_breakdown", "acceptance_criteria", "risks", "assumptions", "handoff"}
+	case RoleDeveloper:
+		return []string{"schema_version", "summary", "commands_executed", "known_limitations", "changed_artifacts", "handoff"}
+	case RoleTester:
+		return []string{"schema_version", "result", "tests_executed", "failure_evidence", "reproduction", "handoff"}
+	case RoleReviewer:
+		return []string{"schema_version", "decision", "findings", "required_corrections", "evidence", "handoff"}
+	case RoleReflector:
+		return []string{"schema_version", "verdict", "confidence", "failure_class", "evidence", "lesson_candidate", "replan_requested", "replan_reason"}
+	default:
+		return nil
+	}
 }

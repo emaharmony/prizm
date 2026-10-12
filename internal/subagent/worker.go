@@ -31,6 +31,7 @@ type AgentRuntime struct {
 	Capabilities        []string
 	RunID               string
 	TaskID              string
+	CorrelationID       string
 	ExecutionKey        string
 	AllowedTools        []string
 	EnforceAllowedTools bool
@@ -39,6 +40,10 @@ type AgentRuntime struct {
 	// Worker from its WorktreeProvider). Empty = the shared/default root. The
 	// backend points file/git tools at it.
 	WorkDir string
+	// RetryHooks and ToolEventSink are provided by the durable runtime when this
+	// runner is executing a graph role. They remain nil for legacy/v2 workers.
+	RetryHooks    RetryHooks
+	ToolEventSink ToolEventSink
 }
 
 // AgentResolver resolves an agent id to its runtime. ok is false when the id is
@@ -59,6 +64,9 @@ type RunResult struct {
 	Iterations       int
 	ToolCalls        int
 	DeniedToolCalls  int
+	RecoveryAttempts int
+	Corrections      int
+	LastRecoveryCode string
 }
 
 // TaskRunner executes one delegated task for a resolved agent. Implementations
@@ -107,6 +115,12 @@ func (w *Worker) Handle(ctx context.Context, packet v2.TaskPacket) v2.TaskComple
 	runtime, ok := w.resolver.Resolve(packet.TargetAgent)
 	if !ok {
 		return failed(packet.TaskID, fmt.Sprintf("unknown agent %q", packet.TargetAgent))
+	}
+	runtime.RunID = packet.RunID
+	runtime.TaskID = packet.TaskID
+	runtime.CorrelationID = packet.CorrelationID
+	if runtime.ExecutionKey == "" {
+		runtime.ExecutionKey = packet.DeliveryKey
 	}
 
 	// Capability-aware routing: a task delegated to an agent that lacks the

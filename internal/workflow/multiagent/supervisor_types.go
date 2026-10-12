@@ -194,8 +194,11 @@ type RunView struct {
 
 // RoleRunRequest is the complete, read-only input for one role visit.
 type RoleRunRequest struct {
-	Run        RunView
-	RoleConfig RoleConfig
+	Run              RunView
+	RoleConfig       RoleConfig
+	RecoveryFeedback string               `json:"-"`
+	RetryHandle      RoleVisitRetryHandle `json:"-"`
+	ToolEventSink    ToolEventSink        `json:"-"`
 }
 
 // HandoffDraft contains role-produced context without routing authority.
@@ -329,6 +332,7 @@ type RunRequest struct {
 	RunID       string
 	Task        TaskReference
 	WorkspaceID string
+	Identity    *RequestIdentity
 }
 
 // ResolvedTransition is a supervisor-selected edge or terminal result.
