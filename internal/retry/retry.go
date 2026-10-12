@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -39,6 +40,23 @@ func ParseRetryAfter(value string, now time.Time) time.Duration {
 		return 0
 	}
 	return date.Sub(now)
+}
+
+// IsTransientNetworkError recognizes typed timeout and DNS failures without
+// relying on net.Error.Temporary, whose classification is deprecated.
+func IsTransientNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var network net.Error
+	if errors.As(err, &network) && network.Timeout() {
+		return true
+	}
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr) && (dnsErr.IsTimeout || dnsErr.IsTemporary)
 }
 
 // RetryConfig controls exponential backoff retry behavior.
@@ -112,8 +130,7 @@ func IsRetryable(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
-	var network net.Error
-	if errors.As(err, &network) && (network.Timeout() || network.Temporary()) {
+	if IsTransientNetworkError(err) {
 		return true
 	}
 	msg := strings.ToLower(err.Error())

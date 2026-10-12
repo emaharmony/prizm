@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -23,6 +25,11 @@ func TestIsRetryable(t *testing.T) {
 		{"401 invalid api key", fmt.Errorf("provider returned 401: invalid api key"), false},
 		{"403 forbidden", fmt.Errorf("provider returned 403: forbidden"), false},
 		{"timeout", fmt.Errorf("connection timeout"), true},
+		{"wrapped connection reset", &net.OpError{Op: "read", Net: "tcp", Err: fmt.Errorf("transport: %w", syscall.ECONNRESET)}, true},
+		{"wrapped connection refused", &net.OpError{Op: "dial", Net: "tcp", Err: fmt.Errorf("transport: %w", syscall.ECONNREFUSED)}, true},
+		{"wrapped broken pipe", &net.OpError{Op: "write", Net: "tcp", Err: fmt.Errorf("transport: %w", syscall.EPIPE)}, true},
+		{"temporary DNS failure", &net.DNSError{Err: "temporary DNS failure", IsTemporary: true}, true},
+		{"permanent DNS miss", &net.DNSError{Err: "name not found", IsNotFound: true}, false},
 		{"context deadline", context.DeadlineExceeded, true},
 		{"context canceled", context.Canceled, true},
 		{"generic error", fmt.Errorf("something went wrong"), false},

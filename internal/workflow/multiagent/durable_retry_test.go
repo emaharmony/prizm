@@ -125,6 +125,9 @@ func TestRetryClassificationAndPolicyDefaults(t *testing.T) {
 	if _, _, _, ok := classifyRetryableRoleFailure(&net.DNSError{Err: "timeout", IsTimeout: true}); !ok {
 		t.Fatal("network reset should retry")
 	}
+	if _, _, _, ok := classifyRetryableRoleFailure(&net.DNSError{Err: "temporary DNS failure", IsTemporary: true}); !ok {
+		t.Fatal("temporary DNS error should retry")
+	}
 	if _, _, _, ok := classifyRetryableRoleFailure(errors.New("provider said 503 in its output")); ok {
 		t.Fatal("arbitrary output text must not be classified transient")
 	}
@@ -553,7 +556,7 @@ func TestSafeInterruptedRoleAttemptsRestartWithFreshChargedAttempt(t *testing.T)
 		request.RunID = "run-crash-after-readonly-tool"
 		func() {
 			defer func() {
-				if recovered := recover(); recovered != simulatedProcessCrash {
+				if recovered := recover(); recovered != errSimulatedProcessCrash {
 					t.Fatalf("expected simulated process crash, got %v", recovered)
 				}
 			}()
@@ -571,7 +574,7 @@ func TestSafeInterruptedRoleAttemptsRestartWithFreshChargedAttempt(t *testing.T)
 	})
 }
 
-var simulatedProcessCrash = errors.New("simulated process crash")
+var errSimulatedProcessCrash = errors.New("simulated process crash")
 
 type persistThenFailCheckpointStore struct {
 	DurableRunStore
@@ -609,7 +612,7 @@ func (r *readonlyCrashOnceRunner) RunRole(ctx context.Context, request RoleRunRe
 		if err := request.ToolEventSink(ToolDiagnostic{AttemptID: attempt.AttemptID, Tool: "read_file", Status: "completed", Sequence: 1, ObservationHash: "readonly-result", NoProgressEligible: true}); err != nil {
 			return RoleRunResult{}, err
 		}
-		panic(simulatedProcessCrash)
+		panic(errSimulatedProcessCrash)
 	}
 	if request.Run.CurrentRole == RolePlanner {
 		attempt := request.RetryHandle.CurrentAttempt()

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net"
 	"strings"
 	"sync"
 	"time"
@@ -489,8 +488,7 @@ func durableTransientError(err error) bool {
 	if errors.As(err, &typed) {
 		return typed.Retryable
 	}
-	var network net.Error
-	return errors.As(err, &network) && (network.Timeout() || network.Temporary())
+	return retry.IsTransientNetworkError(err)
 }
 
 func (r *DurableRuntime) scheduleRoleRetry(ctx context.Context, record DurableRun, role Role, result RoleRunResult, failure error, class, code string, retryAfter time.Duration, deadline time.Time) (DurableRun, error) {

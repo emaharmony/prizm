@@ -221,4 +221,4 @@ The run list was rendered from `http://127.0.0.1:20822/multiagent-runs.html`. It
 
 Feature commit `b798578f5b7ac175b94fed6d5f8036811625e3d8` is pushed on `codex/durable-task-retries` from `origin/staging` `d7f76efbd913b165bd695ff295a051e74cf828c2`. Pull request [#89](https://github.com/emaharmony/prizm/pull/89) targets `staging`; it is open and not a draft. At handoff, CI jobs `lint-linux` and `test-linux` were running, with `test-windows` and `test-python` queued. The tracked worktree is clean; pre-existing caches and temporary directories remain untracked and are excluded. No merge was performed.
 
-**Next action:** review CI results and address any demonstrated failures; R1 overall and its additional roadmap scenarios remain open.
+**Next action:** CI follow-up on PR #89 resolved the deprecated `Temporary` classifier and three concrete gates; verify the newly pushed head's CI. R1 overall and its additional roadmap scenarios remain open.

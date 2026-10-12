@@ -1493,4 +1493,11 @@ The original local run `run_01M4PWEE6MX1FCE76G3WYANSKF` remains unchanged and ha
 - PR [#89](https://github.com/emaharmony/prizm/pull/89) targets `staging`, open and non-draft. Initial CI snapshot: `lint-linux` and `test-linux` running; `test-windows` and `test-python` queued. Staged diff check and credential pattern scan passed; exactly 76 reviewed files, 6,148 additions and 294 deletions.
 - No merge was performed. The tracked worktree was clean after commit; pre-existing caches/temp directories remain untracked and excluded.
 
-**Next action:** check CI and resolve any demonstrated failures. Keep R1 overall open for remaining roadmap scenarios.
+**Next action:** CI follow-up on PR #89 resolved the deprecated `Temporary` classifier and three concrete gates; verify the newly pushed head's CI. Keep R1 overall open for remaining roadmap scenarios.
+
+### PR #89 CI corrections (2026-10-12)
+
+- CI reported Staticcheck SA1019 for `net.Error.Temporary`, ST1012 for the process-crash test sentinel, a Windows short-name versus canonical-path assertion, and Linux TempDir cleanup racing asynchronous recall metadata writes. The transient classifier now uses typed timeout/DNS fields and wrapped transport errno checks (`ECONNRESET`, `ECONNREFUSED`, `EPIPE`); unknown text remains nonretryable in durable execution. The test sentinel follows Go error naming. The Windows nested-path test compares against `EvalSymlinks(root)` plus forward components. Recall tracking now admits workers under a mutex-protected `WaitGroup` and has a lifecycle drain used before the scoped MarkdownStore test removes its temp directory.
+- Verification on this tree: `go test ./... -count=1`, `go build ./...`, `go vet ./...`, `staticcheck ./...`, seven dashboard JS tests, focused retry/safety/workflow/CLI regressions, and Windows compilation of `internal/retry` passed. The scoped prompt-memory test passed 30 consecutive runs before the full suite. No PR merge was performed; latest CI state is pending the follow-up push.
+
+**Next action:** push the reviewed CI correction commit to PR #89 and check CI for that exact head; continue to leave R1's other multi-task scenarios open.

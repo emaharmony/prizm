@@ -62,8 +62,13 @@ func TestIsWithinRoot_NestedPath(t *testing.T) {
 	if !IsWithinRoot(nested, root) {
 		t.Errorf("IsWithinRoot nested path = false, want true")
 	}
-	if resolved := resolveNonExistentPath(nested); resolved != filepath.Clean(nested) {
-		t.Errorf("resolveNonExistentPath(%q) = %q, want %q", nested, resolved, filepath.Clean(nested))
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantResolved := filepath.Join(resolvedRoot, "a", "b", "c", "file.txt")
+	if resolved := resolveNonExistentPath(nested); resolved != wantResolved {
+		t.Errorf("resolveNonExistentPath(%q) = %q, want %q", nested, resolved, wantResolved)
 	}
 }
 

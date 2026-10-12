@@ -52,6 +52,7 @@ func TestScopedPromptInjectionDoesNotCrossScopeOrCache(t *testing.T) {
 	if got := injector.InjectScopedMemories(context.Background(), facade, scopeB, "alpha scoped", 1, 400); strings.Contains(got, "allowed") {
 		t.Fatalf("cache or search leaked project-a result: %q", got)
 	}
+	injector.waitForPendingRecallWrites()
 }
 
 func TestRemembranceContextRequiresCompleteScopeMetadata(t *testing.T) {
