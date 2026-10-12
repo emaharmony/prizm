@@ -97,6 +97,61 @@ func TestShippedTemplatesLoadValidateCompile(t *testing.T) {
 	}
 }
 
+func TestSoftwareDeliveryDefaultsLeaveAggregateBudgetsUnlimitedAndPreserveAuthoredCaps(t *testing.T) {
+	definition, index, loadDiags, err := LoadDefinition(filepath.Join("templates", "software-delivery.yaml"))
+	if err != nil || loadDiags.HasErrors() {
+		t.Fatalf("load shipped workflow: diagnostics=%v err=%v", loadDiags, err)
+	}
+	graph, diagnostics, err := Compile(definition, index, CompileOptions{})
+	if err != nil || diagnostics.HasErrors() {
+		t.Fatalf("compile shipped workflow: diagnostics=%v err=%v", diagnostics, err)
+	}
+	developer, ok := compiledRoleNode(graph, RoleDeveloper)
+	if !ok || roleRetryLimit(developer) != 10 || graph.Budgets().MaxRetries != Unlimited {
+		t.Fatalf("shipped defaults developer_retry=%d global=%d", roleRetryLimit(developer), graph.Budgets().MaxRetries)
+	}
+	if graph.Budgets().MaxDuration != UnlimitedDuration {
+		t.Fatalf("shipped default duration=%v, want unlimited", graph.Budgets().MaxDuration)
+	}
+	for _, node := range graph.Nodes() {
+		if node.Kind == "role" && node.RoleConfig.TimeBudget != UnlimitedDuration {
+			t.Fatalf("shipped %s role duration=%v, want unlimited", node.Role, node.RoleConfig.TimeBudget)
+		}
+	}
+
+	for i := range definition.Spec.Nodes {
+		if definition.Spec.Nodes[i].ID == "developer" && definition.Spec.Nodes[i].Retry != nil {
+			definition.Spec.Nodes[i].Retry.MaxRetries = 2
+		}
+	}
+	globalCap := SchemaLimit(4)
+	definition.Spec.Budgets.MaxRetries = &globalCap
+	definition.Spec.Budgets.MaxDuration = "30m"
+	for i := range definition.Spec.Nodes {
+		if definition.Spec.Nodes[i].ID == "developer" {
+			definition.Spec.Nodes[i].DurationBudget = "5m"
+		}
+	}
+	overridden, overrideDiags, err := Compile(definition, index, CompileOptions{})
+	if err != nil || overrideDiags.HasErrors() {
+		t.Fatalf("compile authored caps: diagnostics=%v err=%v", overrideDiags, err)
+	}
+	developer, ok = compiledRoleNode(overridden, RoleDeveloper)
+	if !ok || roleRetryLimit(developer) != 2 || overridden.Budgets().MaxRetries != 4 ||
+		overridden.Budgets().MaxDuration.String() != "30m0s" || developer.RoleConfig.TimeBudget.String() != "5m0s" {
+		t.Fatalf("authored caps lost: developer_retry=%d global=%d", roleRetryLimit(developer), overridden.Budgets().MaxRetries)
+	}
+}
+
+func compiledRoleNode(graph *CompiledGraph, role Role) (CompiledNode, bool) {
+	for _, node := range graph.Nodes() {
+		if node.Role == role {
+			return node, true
+		}
+	}
+	return CompiledNode{}, false
+}
+
 // TestShippedTemplatesScenariosPass is the scenario half of the regression
 // proof: every scenario in every matching fixture must pass against the
 // template's compiled graph, with zero scenario-runner setup errors.

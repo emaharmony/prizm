@@ -1,6 +1,7 @@
 package multiagent
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -61,8 +62,8 @@ func (i ReferenceWorkflowInput) Validate() error {
 	return nil
 }
 
-// DefaultReferenceDefinition returns the fixed Phase 1 graph and conservative
-// safety limits. Call ApplyReferenceOverrides before execution.
+// DefaultReferenceDefinition returns the fixed Phase 1 graph. Omitted resource
+// limits are unlimited; Call ApplyReferenceOverrides to opt into explicit caps.
 func DefaultReferenceDefinition() Definition {
 	role := func(
 		name Role,
@@ -74,7 +75,7 @@ func DefaultReferenceDefinition() Definition {
 		tools []string,
 	) RoleConfig {
 		retryConfig := retry.DefaultRetryConfig()
-		retryConfig.MaxRetries = 1
+		retryConfig.MaxRetries = maxRoleRecoveryRetries
 		return RoleConfig{
 			Role:               name,
 			AgentRef:           agentRef,
@@ -91,14 +92,13 @@ func DefaultReferenceDefinition() Definition {
 		"list_dir", "read_file", "read_project", "search_files",
 		"project_overview", "git_status", "git_log", "git_diff",
 	}
-	planner := role(RolePlanner, "planner", Unlimited, Unlimited, 10*time.Minute, "plan", readTools)
+	planner := role(RolePlanner, "planner", Unlimited, Unlimited, UnlimitedDuration, "plan", readTools)
 	developerTools := append(append([]string(nil), readTools...),
 		"write_file_dry_run", "apply_patch_proposal")
-	developer := role(RoleDeveloper, "developer", Unlimited, Unlimited, 30*time.Minute, "code", developerTools)
-	developer.Retry.MaxRetries = 2
-	tester := role(RoleTester, "tester", Unlimited, Unlimited, 15*time.Minute, "test", readTools)
+	developer := role(RoleDeveloper, "developer", Unlimited, Unlimited, UnlimitedDuration, "code", developerTools)
+	tester := role(RoleTester, "tester", Unlimited, Unlimited, UnlimitedDuration, "test", readTools)
 	tester.ValidationProfiles = []string{"go_test_all"}
-	reviewer := role(RoleReviewer, "reviewer", Unlimited, Unlimited, 10*time.Minute, "review", readTools)
+	reviewer := role(RoleReviewer, "reviewer", Unlimited, Unlimited, UnlimitedDuration, "review", readTools)
 
 	return Definition{
 		ID:      ReferenceWorkflowID,
@@ -123,12 +123,12 @@ func DefaultReferenceDefinition() Definition {
 				RoleReviewer:  Unlimited,
 			},
 			MaxLocalIterations:          Unlimited,
-			MaxRetries:                  4,
+			MaxRetries:                  Unlimited,
 			MaxTokens:                   Unlimited,
 			MaxRepeatedFailure:          Unlimited,
 			MaxTesterToDeveloperLoops:   Unlimited,
 			MaxReviewerToDeveloperLoops: Unlimited,
-			MaxDuration:                 45 * time.Minute,
+			MaxDuration:                 UnlimitedDuration,
 		},
 	}
 }
@@ -208,7 +208,7 @@ func ApplyReferenceOverrides(
 			problems = append(problems, "max_duration must be a Go duration such as 30m")
 		case duration <= 0:
 			problems = append(problems, "max_duration must be positive")
-		case duration > definition.Budgets.MaxDuration:
+		case definition.Budgets.MaxDuration != UnlimitedDuration && duration > definition.Budgets.MaxDuration:
 			problems = append(problems, fmt.Sprintf(
 				"max_duration %s exceeds safety ceiling %s",
 				duration, definition.Budgets.MaxDuration,
@@ -319,6 +319,7 @@ type ReferenceRunReport struct {
 	ImplementationSummary string                `json:"implementation_summary"`
 	Artifacts             []ArtifactRef         `json:"artifacts"`
 	TestsExecuted         []string              `json:"tests_executed"`
+	ValidationResults     []ValidationEvidence  `json:"validation_results,omitempty"`
 	TestOutcome           string                `json:"test_outcome"`
 	ReviewOutcome         TransitionOutcome     `json:"review_outcome,omitempty"`
 	LoopHistory           []ReferenceLoopEntry  `json:"loop_history"`
@@ -357,21 +358,65 @@ func BuildReferenceRunReport(
 	tester := state.RoleStates[RoleTester]
 	reviewer := state.RoleStates[RoleReviewer]
 
+	objective := strings.TrimSpace(input.Objective)
+	if objective == "" {
+		objective = strings.TrimSpace(state.CurrentTask.Description)
+	}
+	var validationResults []ValidationEvidence
+	if state.LatestHandoff != nil && state.LatestHandoff.SourceRole == RoleTester {
+		for _, result := range state.LatestHandoff.ValidationResults {
+			validationResults = append(validationResults, SafeValidationEvidence(result))
+		}
+	}
+	// Role-completed events preserve each tester visit's exact validation
+	// result. Prefer the latest tester event so an earlier failed retry cannot
+	// override a later successful validation, even if a reviewer handoff is
+	// newer than the tester handoff in the checkpoint.
+	for _, evt := range events {
+		if evt.Type != event.EventMultiAgentRoleCompleted || payloadString(evt.Payload, "role") != string(RoleTester) {
+			continue
+		}
+		if raw, exists := evt.Payload["validation_results"]; exists {
+			encoded, err := json.Marshal(raw)
+			if err == nil {
+				var results []ValidationEvidence
+				if json.Unmarshal(encoded, &results) == nil {
+					validationResults = append(validationResults[:0:0], results...)
+				}
+			}
+		}
+	}
+	testOutcome := firstNonEmpty(tester.ValidationStatus, string(tester.LastOutcome))
+	if len(validationResults) > 0 {
+		testOutcome = "passed"
+		for _, result := range validationResults {
+			if result.Status != "passed" {
+				testOutcome = "failed"
+				break
+			}
+		}
+	}
 	report := ReferenceRunReport{
 		RunID:             state.RunID,
-		OriginalObjective: strings.TrimSpace(input.Objective),
+		OriginalObjective: objective,
 		PlanSummary: fmt.Sprintf(
 			"Planner completed %d visit(s) with outcome %s.", planner.Visits, planner.LastOutcome),
 		ImplementationSummary: fmt.Sprintf(
 			"Developer completed %d visit(s) with outcome %s.", developer.Visits, developer.LastOutcome),
-		TestOutcome:     firstNonEmpty(tester.ValidationStatus, string(tester.LastOutcome)),
-		ReviewOutcome:   reviewer.LastOutcome,
-		BudgetUsage:     state.BudgetUsage,
-		FinalStatus:     state.Status,
-		TerminalOutcome: cloneTerminalOutcome(state.TerminalOutcome),
+		TestOutcome:       testOutcome,
+		ValidationResults: validationResults,
+		ReviewOutcome:     reviewer.LastOutcome,
+		BudgetUsage:       state.BudgetUsage,
+		FinalStatus:       state.Status,
+		TerminalOutcome:   cloneTerminalOutcome(state.TerminalOutcome),
 	}
 	if tester.Visits > 0 {
-		report.TestsExecuted = []string{"configured validation profiles"}
+		for _, result := range validationResults {
+			report.TestsExecuted = append(report.TestsExecuted, fmt.Sprintf("%s: %s (%s %s)", result.Profile, result.Status, result.Command, strings.Join(result.Args, " ")))
+		}
+		if len(report.TestsExecuted) == 0 {
+			report.TestsExecuted = []string{"tester role validation (command details unavailable)"}
+		}
 	}
 	seenArtifacts := make(map[string]bool)
 	for _, role := range Phase1Roles() {

@@ -12,10 +12,34 @@ package retry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
+	"net"
+	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
+
+// ParseRetryAfter accepts the HTTP delta-seconds and HTTP-date forms.
+func ParseRetryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	date, err := http.ParseTime(value)
+	if err != nil || !date.After(now) {
+		return 0
+	}
+	return date.Sub(now)
+}
 
 // RetryConfig controls exponential backoff retry behavior.
 type RetryConfig struct {
@@ -42,14 +66,24 @@ func DefaultRetryConfig() RetryConfig {
 type RetryableError struct {
 	Err       error
 	Retryable bool
+	After     time.Duration
 }
 
-func (e *RetryableError) Error() string { return e.Err.Error() }
-func (e *RetryableError) Unwrap() error { return e.Err }
+func (e *RetryableError) Error() string             { return e.Err.Error() }
+func (e *RetryableError) Unwrap() error             { return e.Err }
+func (e *RetryableError) RetryAfter() time.Duration { return e.After }
 
 // NewRetryableError creates a retryable error.
 func NewRetryableError(err error) *RetryableError {
 	return &RetryableError{Err: err, Retryable: true}
+}
+
+// NewRetryableErrorAfter attaches a provider-requested minimum delay.
+func NewRetryableErrorAfter(err error, after time.Duration) *RetryableError {
+	if after < 0 {
+		after = 0
+	}
+	return &RetryableError{Err: err, Retryable: true, After: after}
 }
 
 // NewNonRetryableError creates a non-retryable error.
@@ -65,13 +99,24 @@ func IsRetryable(err error) bool {
 	if err == nil {
 		return false
 	}
-	if re, ok := err.(*RetryableError); ok {
+	var re *RetryableError
+	if errors.As(err, &re) {
 		return re.Retryable
 	}
-	if err == context.DeadlineExceeded || err == context.Canceled {
+	if errors.Is(err, context.Canceled) {
+		// Preserve the shared legacy classifier contract. Durable role
+		// execution rejects cancellation explicitly before consulting this
+		// generic provider/stage policy.
 		return true
 	}
-	msg := err.Error()
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var network net.Error
+	if errors.As(err, &network) && (network.Timeout() || network.Temporary()) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
 	for _, pattern := range []string{"503", "429", "timeout", "connection refused", "connection reset", "temporary failure", "rate limit"} {
 		if contains(msg, pattern) {
 			return true

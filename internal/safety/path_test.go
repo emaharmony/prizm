@@ -44,6 +44,13 @@ func TestIsWithinRoot_SamePath(t *testing.T) {
 	}
 }
 
+func TestIsWithinRoot_MissingRootFailsClosed(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing-root")
+	if IsWithinRoot(filepath.Join(root, "child"), root) {
+		t.Fatal("IsWithinRoot accepted a child under a missing containment root")
+	}
+}
+
 // TestIsWithinRoot_NestedPath verifies that deeply nested paths that don't
 // exist yet still pass containment — the function walks up to find the
 // nearest existing ancestor and resolves from there.
@@ -54,6 +61,9 @@ func TestIsWithinRoot_NestedPath(t *testing.T) {
 	// file.txt doesn't exist, but root does — should still pass
 	if !IsWithinRoot(nested, root) {
 		t.Errorf("IsWithinRoot nested path = false, want true")
+	}
+	if resolved := resolveNonExistentPath(nested); resolved != filepath.Clean(nested) {
+		t.Errorf("resolveNonExistentPath(%q) = %q, want %q", nested, resolved, filepath.Clean(nested))
 	}
 }
 

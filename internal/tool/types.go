@@ -37,10 +37,25 @@ type ParamSpec struct {
 
 // ToolResult is the universal result type returned by every tool execution.
 type ToolResult struct {
-	Success bool           `json:"success"`
-	Output  map[string]any `json:"output"`
-	Error   string         `json:"error,omitempty"`
+	Success       bool                  `json:"success"`
+	Output        map[string]any        `json:"output"`
+	Error         string                `json:"error,omitempty"`
+	FailureEffect FailureEffectBoundary `json:"-"`
 }
+
+// FailureEffectBoundary describes the side-effect certainty of a failed
+// governed tool operation. It is internal execution metadata and is never
+// returned to a model or external caller.
+type FailureEffectBoundary string
+
+const (
+	// FailureEffectUnknown is the safe default: an error may have happened
+	// after an externally visible effect began.
+	FailureEffectUnknown FailureEffectBoundary = "unknown"
+	// FailureEffectNoEffects proves validation failed before any persisted or
+	// external effect was attempted.
+	FailureEffectNoEffects FailureEffectBoundary = "no_effects"
+)
 
 // PolicyDecision represents the outcome of a policy evaluation for a tool call.
 type PolicyDecision string

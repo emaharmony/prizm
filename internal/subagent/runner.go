@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/emaharmony/prizm/internal/gitx"
 	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
@@ -51,10 +53,11 @@ type LLMFunc func(ctx context.Context, messages []v2.Message, allowance ReplyAll
 // Action is the parsed intent of a model turn: either a final answer or a tool
 // call. This matches the two outcomes v2's phase parser produces.
 type Action struct {
-	Final   bool
-	Content string
-	Tool    string
-	Input   map[string]any
+	Final          bool
+	Content        string
+	Tool           string
+	Input          map[string]any
+	CorrectionCode string
 }
 
 // Parser turns raw model text into an Action (final vs tool call).
@@ -135,7 +138,7 @@ func NewLoopRunner(cfg LoopRunnerConfig) *LoopRunner {
 func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime AgentRuntime) (RunResult, error) {
 	llm, parse, exec, err := r.backend.Bind(runtime)
 	if err != nil {
-		return RunResult{}, fmt.Errorf("bind agent %q: %w", runtime.AgentID, err)
+		return RunResult{}, &SafeFailureError{Code: "backend_bind_failed"}
 	}
 
 	messages := []v2.Message{
@@ -184,13 +187,51 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 	prerequisiteSatisfied := !prerequisiteRequired
 	lastPromptTokens, lastCompletionTokens := 0, 0
 	finalPromptGrowthTokens := 0
+	recoveryAttempts, corrections := 0, 0
+	lastRecoveryCode := ""
+	progressObservations := map[string]struct{}{}
+	lastNoProgressHash := ""
+	localNoProgressStreak := 0
 	coverage := newSourceCoverage(runtime.WorkDir)
 	// usage snapshots the accumulated token counts onto any RunResult (success or
 	// failure) so delegated spend is never lost from the parent budget.
 	usage := func(r RunResult) RunResult {
 		r.PromptTokens, r.CompletionTokens = totalPrompt, totalCompletion
 		r.Iterations, r.ToolCalls, r.DeniedToolCalls = iterations, toolCalls, deniedToolCalls
+		r.RecoveryAttempts, r.Corrections, r.LastRecoveryCode = recoveryAttempts, corrections, lastRecoveryCode
 		return r
+	}
+	recordCorrection := func(expectedAttemptID, errorClass, code string, feedback ...string) error {
+		corrections++
+		lastRecoveryCode = code
+		if runtime.RetryHooks == nil {
+			return nil
+		}
+		var err error
+		if len(feedback) > 0 && feedback[0] != "" {
+			err = runtime.RetryHooks.RecordCorrectionFeedback(expectedAttemptID, errorClass, code, feedback[0])
+		} else {
+			err = runtime.RetryHooks.RecordCorrection(expectedAttemptID, errorClass, code)
+		}
+		if err != nil {
+			return err
+		}
+		attempt, err := runtime.RetryHooks.ConsumeRecovery(expectedAttemptID, code)
+		if err != nil {
+			return err
+		}
+		recoveryAttempts++
+		if attempt.NextAt.IsZero() || !attempt.NextAt.After(time.Now()) {
+			return nil
+		}
+		timer := time.NewTimer(time.Until(attempt.NextAt))
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return nil
+		}
 	}
 	armFinalization := func(turn, used, promptTokens, completionTokens, promptGrowthTokens int) {
 		finalOnly = true
@@ -258,14 +299,23 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 		} else if finalOnly {
 			phase, allowanceTokens = TurnPhaseFinal, finalReplyTokens
 		}
-		turn, err := llm(ctx, messages, ReplyAllowance{Phase: phase, MaxTokens: allowanceTokens})
-		if err != nil {
-			return usage(RunResult{}), fmt.Errorf("model turn %d: %w", i+1, err)
+		modelAttemptID := ""
+		if runtime.RetryHooks != nil {
+			modelAttemptID = runtime.RetryHooks.CurrentAttempt().AttemptID
 		}
+		turn, err := llm(ctx, messages, ReplyAllowance{Phase: phase, MaxTokens: allowanceTokens})
 		iterations = i + 1
 		totalPrompt += turn.PromptTokens
 		totalCompletion += turn.CompletionTokens
 		lastPromptTokens, lastCompletionTokens = turn.PromptTokens, turn.CompletionTokens
+		if err != nil {
+			failure := &SafeFailureError{Code: "provider_turn_failed"}
+			var retryAfter interface{ RetryAfter() time.Duration }
+			if errors.As(err, &retryAfter) {
+				failure.RetryAfterDelay = retryAfter.RetryAfter()
+			}
+			return usage(RunResult{}), failure
+		}
 		messages = append(messages, v2.Message{Role: "assistant", Content: turn.Text})
 		usedTokens := totalPrompt + totalCompletion
 		if maxTokens > 0 && usedTokens >= maxTokens {
@@ -280,6 +330,12 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 			if !prerequisiteSatisfied {
 				return usage(RunResult{Artifacts: artifacts.result()}), fmt.Errorf("task %q returned a final answer before required tool %q", packet.TaskID, packet.FinalizationPrerequisiteTool)
 			}
+			if runtime.RetryHooks != nil {
+				finalHash := sha256.Sum256([]byte(strings.TrimSpace(action.Content)))
+				if err := runtime.RetryHooks.RecordProgress(modelAttemptID, "valid_final", "role:"+safeIdentifier(runtime.Role), fmt.Sprintf("%x", finalHash[:])); err != nil {
+					return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "progress_checkpoint_failed"}
+				}
+			}
 			return usage(RunResult{Summary: strings.TrimSpace(action.Content), Artifacts: artifacts.result()}), nil
 		}
 		if finalOnly {
@@ -290,8 +346,19 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 			if prerequisiteOnly {
 				return usage(RunResult{Artifacts: artifacts.result()}), fmt.Errorf("task %q did not request required tool %q during prerequisite finalization", packet.TaskID, packet.FinalizationPrerequisiteTool)
 			}
-			// Neither final nor a tool call — nudge and continue.
-			messages = append(messages, v2.Message{Role: "user", Content: "Respond with a tool call or a final answer."})
+			// Invalid structured tool input is a recoverable correction and shares
+			// the durable role-visit allowance with failures from other layers.
+			feedback := "Respond with a tool call or a final answer."
+			if action.CorrectionCode != "" {
+				if err := recordCorrection(modelAttemptID, "schema", action.CorrectionCode); err != nil {
+					if ctx.Err() != nil {
+						return usage(RunResult{Artifacts: artifacts.result()}), ctx.Err()
+					}
+					return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "schema_recovery_failed"}
+				}
+				feedback = "The response did not match the required tool or final-response schema. Correct the structure and try again."
+			}
+			messages = append(messages, v2.Message{Role: "user", Content: feedback})
 			growth := len(finalInstruction)
 			instruction, finalizationErr := considerFinalization(i+1, usedTokens, turn.PromptTokens, turn.CompletionTokens, growth)
 			if finalizationErr != nil {
@@ -330,7 +397,7 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 			patch, _ := action.Input["patch"].(string)
 			missing, coverageErr := coverage.missingPatchContext(patch)
 			if coverageErr != nil {
-				return usage(RunResult{Artifacts: artifacts.result()}), fmt.Errorf("task %q proposal context is invalid: %w", packet.TaskID, coverageErr)
+				return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "invalid_proposal_context"}
 			}
 			if len(missing) > 0 {
 				if prerequisiteOnly {
@@ -353,29 +420,142 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 		}
 
 		artifacts.record(action.Tool, action.Input)
+		toolAttemptID := ""
+		if runtime.RetryHooks != nil {
+			toolAttemptID = runtime.RetryHooks.CurrentAttempt().AttemptID
+		}
+		toolStarted := time.Now()
+		mutationID := mutationIdentity(runtime.ExecutionKey, toolAttemptID, action.Tool, toolCalls)
+		baseDiagnostic := ToolDiagnostic{
+			RunID: safeIdentifier(runtime.RunID), TaskID: safeIdentifier(runtime.TaskID),
+			CorrelationID: safeIdentifier(runtime.CorrelationID),
+			Role:          safeIdentifier(runtime.Role), ExecutionKey: safeIdentifier(runtime.ExecutionKey),
+			AttemptID: safeIdentifier(toolAttemptID), MutationID: mutationID, Tool: safeIdentifier(action.Tool),
+			Sequence: toolCalls, SafeRef: "tool:" + safeIdentifier(action.Tool),
+			MutationPossible: mutationPossible(action.Tool),
+		}
+		if runtime.ToolEventSink != nil {
+			started := baseDiagnostic
+			started.Type = "prizm.tool.started"
+			started.Status = "started"
+			if err := runtime.ToolEventSink(started); err != nil {
+				return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "tool_diagnostic_checkpoint_failed"}
+			}
+		}
 		result, terr := exec(ctx, action.Tool, action.Input)
-		log.Printf("[SUBAGENT] task=%s turn=%d tool=%q execution_error=%t result_bytes=%d",
-			packet.TaskID, i+1, action.Tool, terr != nil, len(result))
+		toolErrorCode := ""
 		if terr != nil {
+			toolErrorCode = safeToolErrorCode(terr)
+		}
+		var correctable *CorrectableToolError
+		noEffectsProven := terr != nil && action.Tool == "apply_patch_proposal" && action.Tool == packet.FinalizationPrerequisiteTool && errors.As(terr, &correctable)
+		toolHash := toolObservationHash(action.Tool, action.Input, result, toolErrorCode)
+		log.Printf("[SUBAGENT] task=%s turn=%d tool=%q execution_error=%t error_code=%q result_bytes=%d",
+			packet.TaskID, i+1, safeIdentifier(action.Tool), terr != nil, toolErrorCode, len(result))
+		if runtime.ToolEventSink != nil {
+			completed := baseDiagnostic
+			completed.Type = "prizm.tool.completed"
+			completed.Status = "completed"
+			if terr != nil {
+				completed.Status = "failed"
+			}
+			completed.ErrorCode = toolErrorCode
+			completed.NoEffectsProven = noEffectsProven
+			completed.Duration = time.Since(toolStarted)
+			completed.ObservationHash = toolHash
+			completed.NoProgressEligible = isRepeatableToolObservation(action.Tool)
+			if err := runtime.ToolEventSink(completed); err != nil {
+				return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "tool_diagnostic_checkpoint_failed"}
+			}
+		}
+		if terr != nil {
+			if noEffectsProven {
+				if runtime.RetryHooks != nil {
+					if err := runtime.RetryHooks.ConfirmNoEffects(toolAttemptID, mutationID); err != nil {
+						return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "no_effects_checkpoint_failed"}
+					}
+				}
+				if err := recordCorrection(toolAttemptID, "tool", correctable.Code, patchCorrectionFeedback()); err != nil {
+					if ctx.Err() != nil {
+						return usage(RunResult{Artifacts: artifacts.result()}), ctx.Err()
+					}
+					return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "tool_recovery_failed"}
+				}
+				messages = append(messages, v2.Message{Role: "user", Content: patchCorrectionFeedback()})
+				// A typed validation failure proves this proposal had no effect.
+				// Leave the prerequisite unsatisfied and return to the ordinary
+				// tool phase so the role can read or repair its proposal before
+				// trying again. Only a successful required tool may enter final-only.
+				prerequisiteOnly = false
+				continue
+			}
+			// A failed mutating (or unclassified) tool may have taken effect
+			// before returning its error. Never let a later model turn convert
+			// that ambiguous outcome into apparent success.
+			if mutationPossible(action.Tool) {
+				return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: safeToolErrorCode(terr), Tool: action.Tool}
+			}
 			if prerequisiteOnly {
-				return usage(RunResult{Artifacts: artifacts.result()}), fmt.Errorf("task %q required tool %q failed: %w", packet.TaskID, action.Tool, terr)
+				return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: safeToolErrorCode(terr), Tool: action.Tool}
 			}
 			// A tool failure is fed back so the agent can adapt, not fatal.
+			if err := recordCorrection(toolAttemptID, "tool", "tool_execution_error"); err != nil {
+				if ctx.Err() != nil {
+					return usage(RunResult{Artifacts: artifacts.result()}), ctx.Err()
+				}
+				return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "tool_recovery_failed"}
+			}
 			messages = append(messages, v2.Message{Role: "user", Content: withBudgetNotice(fmt.Sprintf("Tool %q failed: %v. Try another approach or give your final answer.", action.Tool, terr), maxIterations-i-1, remainingTokens(maxTokens, usedTokens))})
 		} else {
 			messages = append(messages, v2.Message{Role: "user", Content: withBudgetNotice(truncate(fmt.Sprintf("Tool %q result:\n%s", action.Tool, result), maxToolFeedbackBytes), maxIterations-i-1, remainingTokens(maxTokens, usedTokens))})
+			if runtime.RetryHooks != nil && isNewProgressToolObservation(action.Tool, toolHash, progressObservations) {
+				if err := runtime.RetryHooks.RecordProgress(toolAttemptID, progressKind(action.Tool), "tool:"+safeIdentifier(action.Tool), toolHash); err != nil {
+					return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "progress_checkpoint_failed"}
+				}
+			}
 			if action.Tool == "read_file" && packet.FinalizationPrerequisiteTool == "apply_patch_proposal" {
 				if recordErr := coverage.recordRead(result); recordErr != nil {
-					return usage(RunResult{Artifacts: artifacts.result()}), fmt.Errorf("task %q received invalid read_file coverage metadata: %w", packet.TaskID, recordErr)
+					return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "invalid_read_coverage"}
 				}
+			}
+		}
+		if isRepeatableToolObservation(action.Tool) {
+			repeatCount := 0
+			if runtime.RetryHooks != nil {
+				var countErr error
+				repeatCount, countErr = runtime.RetryHooks.NoProgressCount(toolAttemptID, toolHash)
+				if countErr != nil {
+					return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "no_progress_checkpoint_failed"}
+				}
+			} else {
+				if toolHash == lastNoProgressHash {
+					localNoProgressStreak++
+				} else {
+					lastNoProgressHash, localNoProgressStreak = toolHash, 1
+				}
+				repeatCount = localNoProgressStreak
+			}
+			if repeatCount == 6 {
+				return usage(RunResult{Artifacts: artifacts.result()}), &NoProgressError{RepeatedObservations: repeatCount}
+			}
+			if repeatCount >= 3 {
+				if err := recordCorrection(toolAttemptID, "no_progress", "repeated_tool_observation"); err != nil {
+					if ctx.Err() != nil {
+						return usage(RunResult{Artifacts: artifacts.result()}), ctx.Err()
+					}
+					return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "no_progress_recovery_failed"}
+				}
+				messages = append(messages, v2.Message{Role: "user", Content: "This tool call produced the same observation repeatedly. Change the tool arguments or use a different approach before continuing."})
 			}
 		}
 		growth := len(messages[len(messages)-1].Content)
 		if prerequisiteOnly {
 			prerequisiteOnly = false
-			prerequisiteSatisfied = true
-			armFinalization(i+1, usedTokens, turn.PromptTokens, turn.CompletionTokens, growth)
-			messages = append(messages, v2.Message{Role: "user", Content: finalInstruction})
+			if terr == nil {
+				prerequisiteSatisfied = true
+				armFinalization(i+1, usedTokens, turn.PromptTokens, turn.CompletionTokens, growth)
+				messages = append(messages, v2.Message{Role: "user", Content: finalInstruction})
+			}
 		} else if action.Tool == packet.FinalizationPrerequisiteTool && terr == nil {
 			prerequisiteSatisfied = true
 		}

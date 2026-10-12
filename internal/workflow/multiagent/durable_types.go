@@ -188,6 +188,8 @@ type DurableRun struct {
 	ActiveExecutionKey          string               `json:"active_execution_key,omitempty"`
 	LastCompletedExecutionKey   string               `json:"last_completed_execution_key,omitempty"`
 	Waiting                     *WaitingState        `json:"waiting,omitempty"`
+	Retry                       *RetryState          `json:"retry,omitempty"`
+	RetryHistory                []RetryState         `json:"retry_history,omitempty"`
 	DelegationJoin              *DelegationJoinState `json:"delegation_join,omitempty"`
 	ApprovedTask                *ApprovedTaskState   `json:"approved_task,omitempty"`
 	ProposalResults             []ProposalProgress   `json:"proposal_results,omitempty"`
@@ -216,8 +218,8 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 
 	switch r.Phase {
 	case CheckpointPendingRole:
-		if r.State.Status != RunStatusRunning {
-			problems = append(problems, "pending_role checkpoint requires running run state")
+		if r.State.Status != RunStatusRunning && r.State.Status != RunStatusCreated {
+			problems = append(problems, "pending_role checkpoint requires running or accepted state")
 		}
 		if r.PendingTransition != nil || r.Waiting != nil || r.ApprovedTask != nil {
 			problems = append(problems, "pending_role checkpoint cannot contain transition or waiting state")
@@ -277,6 +279,48 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 	}
 	if r.DelegationJoin != nil && (r.Phase != CheckpointWaiting || r.Waiting == nil || r.Waiting.Kind != "delegation_join") {
 		problems = append(problems, "delegation_join state requires a delegation_join waiting checkpoint")
+	}
+	if r.Retry != nil {
+		roleState := r.State.RoleStates[r.Retry.Role]
+		if r.Retry.Role != r.State.CurrentRole || roleState.Visits < 1 ||
+			r.Retry.VisitID != roleVisitID(r.State.RunID, r.Retry.Role, roleState.Visits) ||
+			r.Retry.ExecutionKey == "" || r.Retry.ExecutionKey != r.ActiveExecutionKey ||
+			r.Retry.AttemptID == "" || r.Retry.Number < 1 ||
+			r.Retry.RecoveryNumber < 0 || r.Retry.Number != r.Retry.RecoveryNumber+1 ||
+			r.Retry.MaxRecoveries < 0 || r.Retry.MaxRecoveries > maxRoleRecoveryRetries ||
+			r.Retry.RecoveryNumber > r.Retry.MaxRecoveries {
+			problems = append(problems, "retry checkpoint identity or counters are invalid")
+		}
+		if len(r.Retry.Observations) > 64 || r.Retry.ConsecutiveNoProgress < 0 || r.Retry.ConsecutiveNoProgress > 64 {
+			problems = append(problems, "retry no-progress ledger exceeds its bound")
+		}
+		for _, observation := range r.Retry.Observations {
+			if observation.Hash == "" || observation.Count < 1 || observation.Count > 64 {
+				problems = append(problems, "retry observation count is invalid")
+			}
+		}
+		if r.Phase != CheckpointRoleRunning && (r.Phase != CheckpointWaiting || r.Waiting == nil) {
+			problems = append(problems, fmt.Sprintf("retry state requires role_running or waiting checkpoint (phase=%q waiting=%t)", r.Phase, r.Waiting != nil))
+		}
+		if r.Retry.MutationPossible && r.Phase == CheckpointWaiting && r.Waiting != nil && r.Waiting.Kind == "role_retry" {
+			problems = append(problems, "ambiguous mutation cannot be checkpointed for automatic retry")
+		}
+		if len(r.Retry.UnsafeMutationIDs) > 128 || len(r.Retry.ProvenNoEffectIDs) > 128 {
+			problems = append(problems, "retry mutation ledger exceeds bounded action count")
+		}
+		for _, mutationID := range append(append([]string(nil), r.Retry.UnsafeMutationIDs...), r.Retry.ProvenNoEffectIDs...) {
+			if safeMutationID(mutationID) == "" {
+				problems = append(problems, "retry mutation ledger contains a non-hash action id")
+				break
+			}
+		}
+	}
+	if len(r.RetryHistory) > 32 {
+		problems = append(problems, "retry history exceeds bounded visit count")
+	}
+	if r.Waiting != nil && r.Waiting.Kind == "role_retry" &&
+		(r.Retry == nil || !r.Waiting.SafeToRetry || r.Retry.NextAt.IsZero()) {
+		problems = append(problems, "role retry wait requires a safe scheduled retry checkpoint")
 	}
 
 	if len(problems) != 0 {
@@ -352,6 +396,17 @@ type DurableRunStore interface {
 	PauseRequest(context.Context, string) (string, bool, error)
 	ClearPauseRequest(context.Context, string) error
 	Close() error
+}
+
+// IdempotentRunAcceptor atomically creates an accepted run and, when present,
+// binds its idempotency key to the durable record.
+type IdempotentRunAcceptor interface {
+	AcceptRun(context.Context, DurableRun, []event.Event) (DurableRun, bool, error)
+}
+
+// NonterminalRunLister supplies bounded startup-recovery candidates.
+type NonterminalRunLister interface {
+	ListNonterminalRuns(context.Context, int) ([]DurableRun, error)
 }
 
 // EventPublisher is the narrow canonical event-store operation used by outbox

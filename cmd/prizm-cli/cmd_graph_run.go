@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/workflow/multiagent"
@@ -185,9 +187,31 @@ func prepareGraphRun(
 	task multiagent.TaskReference,
 ) (runID string, rt *referenceRuntime, err error) {
 	runID = event.NewRunID()
-	workspacePath, workspaceID, sourceWorkspacePath, err := isolatedReferenceWorkspace(context.Background(), workspace, runID)
+	return prepareGraphRunWithID(runID, runDir, dbPath, configPath, workspace, reg)
+}
+
+func prepareGraphRunWithID(
+	runID, runDir, dbPath, configPath, workspace string,
+	reg multiagent.RegisteredDefinition,
+) (string, *referenceRuntime, error) {
+	manifest, err := prepareGraphRunManifestWithID(runID, runDir, dbPath, workspace, reg)
 	if err != nil {
 		return "", nil, err
+	}
+	rt, err := openLiveReferenceRuntime(runDir, configPath, manifest)
+	if err != nil {
+		return "", nil, err
+	}
+	return runID, rt, nil
+}
+
+func prepareGraphRunManifestWithID(
+	runID, runDir, dbPath, workspace string,
+	reg multiagent.RegisteredDefinition,
+) (referenceWorkflowManifest, error) {
+	workspacePath, workspaceID, sourceWorkspacePath, err := isolatedReferenceWorkspace(context.Background(), workspace, runID)
+	if err != nil {
+		return referenceWorkflowManifest{}, err
 	}
 	manifest := referenceWorkflowManifest{
 		SchemaVersion:       referenceManifestSchemaVersion,
@@ -201,13 +225,9 @@ func prepareGraphRun(
 		SourceWorkspacePath: sourceWorkspacePath,
 	}
 	if err := writeReferenceManifest(runDir, manifest); err != nil {
-		return "", nil, err
+		return referenceWorkflowManifest{}, err
 	}
-	rt, err = openLiveReferenceRuntime(runDir, configPath, manifest)
-	if err != nil {
-		return "", nil, err
-	}
-	return runID, rt, nil
+	return manifest, nil
 }
 
 // graphRunStarter implements the API's narrow WorkflowRunStarter seam
@@ -217,6 +237,7 @@ func prepareGraphRun(
 // existing referenceMultiAgentController.
 type graphRunStarter struct {
 	runDir, dbPath, configPath, workspace string
+	startMu                               sync.Mutex
 }
 
 // newGraphRunStarter builds the starter `prism serve` wires into
@@ -239,7 +260,10 @@ func (g *graphRunStarter) StartRun(
 	workflowID string,
 	version int64,
 	input json.RawMessage,
+	identity *multiagent.RequestIdentity,
 ) (string, error) {
+	g.startMu.Lock()
+	defer g.startMu.Unlock()
 	store, err := multiagent.NewDefinitionStore(g.dbPath)
 	if err != nil {
 		return "", err
@@ -262,31 +286,98 @@ func (g *graphRunStarter) StartRun(
 			return "", fmt.Errorf("decode run input: %w", err)
 		}
 	}
-	if strings.TrimSpace(task.ID) == "" {
-		task.ID = "task_" + event.NewRunID()
+	if identity == nil {
+		return "", errors.New("accepted request identity is required")
 	}
-
-	runID, rt, err := prepareGraphRun(g.runDir, g.dbPath, g.configPath, g.workspace, reg, task)
+	runID := stableRequestRunID(identity)
+	if strings.TrimSpace(task.ID) == "" {
+		task.ID = "task_" + runID
+	}
+	if _, statErr := os.Stat(referenceManifestPath(g.runDir, runID)); statErr == nil {
+		manifest, loadErr := loadReferenceManifest(g.runDir, runID)
+		if loadErr != nil {
+			return "", loadErr
+		}
+		if manifest.WorkflowID != reg.WorkflowID || manifest.WorkflowVersion != reg.Version {
+			return "", multiagent.ErrRequestIdentityConflict
+		}
+		rt, openErr := openReferenceRuntimeWithInteraction(g.runDir, manifest, unavailableRoleRunner{}, nil, nil)
+		if openErr != nil {
+			return "", openErr
+		}
+		record, acceptErr := rt.runtime.Accept(ctx, multiagent.RunRequest{RunID: runID, Task: task, WorkspaceID: rt.workspaceID, Identity: identity})
+		if acceptErr != nil {
+			_ = rt.close()
+			return "", acceptErr
+		}
+		_ = rt.close()
+		if !record.Status.Terminal() {
+			go driveAcceptedGraphRun(g.runDir, runID, g.configPath)
+		}
+		return record.RunID, nil
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return "", statErr
+	}
+	manifest, err := prepareGraphRunManifestWithID(runID, g.runDir, g.dbPath, g.workspace, reg)
 	if err != nil {
 		return "", err
 	}
-	go func() {
-		defer rt.close()
-		// context.Background(): this run must outlive the HTTP
-		// request/response cycle that started it — the caller observes
-		// progress via the existing SSE stream, matching how
-		// referenceMultiAgentController.Resume already detaches Resume().
-		state, runErr := rt.runtime.Run(context.Background(), multiagent.RunRequest{RunID: runID, Task: task, WorkspaceID: rt.workspaceID})
-		if state.RunID != "" && state.Status.Terminal() {
-			manifest, manifestErr := loadReferenceManifest(g.runDir, runID)
-			if manifestErr == nil {
-				manifestErr = finalizeTerminalReferenceRun(context.Background(), g.runDir, &manifest, rt, state)
-			}
-			runErr = errors.Join(runErr, manifestErr)
+	acceptingRuntime, err := openReferenceRuntimeWithInteraction(g.runDir, manifest, unavailableRoleRunner{}, nil, nil)
+	if err != nil {
+		return "", err
+	}
+	record, err := acceptingRuntime.runtime.Accept(ctx, multiagent.RunRequest{RunID: runID, Task: task, WorkspaceID: manifest.WorkspaceID, Identity: identity})
+	_ = acceptingRuntime.close()
+	if err != nil {
+		return "", err
+	}
+	go driveAcceptedGraphRun(g.runDir, runID, g.configPath)
+	return record.RunID, nil
+}
+
+
+func stableRequestRunID(identity *multiagent.RequestIdentity) string {
+	key := strings.Join([]string{
+		strings.TrimSpace(identity.RequesterID),
+		strings.TrimSpace(identity.SessionID),
+		strings.TrimSpace(identity.IdempotencyKey),
+	}, "\x00")
+	digest := sha256.Sum256([]byte(key))
+	return fmt.Sprintf("run_%x", digest[:13])
+}
+
+func driveAcceptedGraphRun(runDir, runID, configPath string) {
+	manifest, err := loadReferenceManifest(runDir, runID)
+	if err != nil {
+		log.Printf("[WARN] graph run %s manifest unavailable: %v", runID, err)
+		return
+	}
+	rt, err := openLiveReferenceRuntime(runDir, configPath, manifest)
+	if err != nil {
+		// An accepted request must reach a durable outcome even when provider
+		// setup is unavailable. The inspection runner supplies a deterministic
+		// execution-unavailable failure through the normal runtime transition.
+		rt, err = openReferenceRuntimeWithInteraction(runDir, manifest, unavailableRoleRunner{}, nil, nil)
+		if err != nil {
+			log.Printf("[WARN] graph run %s cannot persist setup failure: %v", runID, err)
+			return
 		}
-		if runErr != nil {
-			log.Printf("[WARN] graph run %s ended: %v", runID, runErr)
+	}
+	defer rt.close()
+	_, runErr := rt.runtime.RunAccepted(context.Background(), runID)
+	record, inspectErr := rt.runtime.Inspect(context.Background(), runID)
+	state := record.State
+	if inspectErr != nil {
+		runErr = errors.Join(runErr, inspectErr)
+	}
+	if state.RunID != "" && state.Status.Terminal() {
+		manifest, manifestErr := loadReferenceManifest(runDir, runID)
+		if manifestErr == nil {
+			manifestErr = finalizeTerminalReferenceRun(context.Background(), runDir, &manifest, rt, state)
 		}
-	}()
-	return runID, nil
+		runErr = errors.Join(runErr, manifestErr)
+	}
+	if runErr != nil {
+		log.Printf("[WARN] graph run %s ended: %v", runID, runErr)
+	}
 }

@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -108,6 +109,54 @@ func TestExecutorPathTraversalDenied(t *testing.T) {
 	}
 	if events[1] != "prizm.tool.denied" {
 		t.Errorf("second event should be denied, got %s", events[1])
+	}
+}
+
+func TestExecutorReadFileFailureIncludesBoundedDiagnostic(t *testing.T) {
+	root := "."
+	reg := NewRegistry()
+	RegisterBuiltins(reg, root, 1024*1024)
+	cfg := PolicyConfig{WorkspaceRoot: root, MaxFileSize: 1024 * 1024}
+	exec := NewExecutor(reg, &cfg)
+	var completed map[string]any
+	var requested map[string]any
+	var emitted []string
+	exec.SetEmitter(func(eventType, _ string, payload map[string]any) {
+		emitted = append(emitted, eventType)
+		if eventType == "prizm.tool.requested" {
+			requested = payload
+		}
+		if eventType == "prizm.tool.completed" {
+			completed = payload
+		}
+	})
+
+	result, err := exec.ExecuteWithPolicy(context.Background(), "read_file", "lumi", "prizm", "corr_test", map[string]any{"path": "."})
+	if err != nil {
+		t.Fatalf("read_file failure should be returned as a tool result: %v", err)
+	}
+	if result.Success {
+		t.Fatal("read_file for a missing file unexpectedly succeeded")
+	}
+	if completed == nil || completed["success"] != false {
+		t.Fatalf("completed event = %#v, want failed completion; events=%v result=%#v", completed, emitted, result)
+	}
+	code, ok := completed["error_code"].(string)
+	if !ok || code != "execution_error" {
+		t.Fatalf("completed error_code = %#v, want allowlisted execution_error", completed["error_code"])
+	}
+	if _, includesRawError := completed["error"]; includesRawError {
+		t.Fatalf("completed event must not include the raw tool error: %#v", completed)
+	}
+	if _, includesContent := completed["content"]; includesContent {
+		t.Fatalf("completed event must not include file content: %#v", completed)
+	}
+	if requested == nil || requested["input"] != nil {
+		t.Fatalf("requested event retained raw tool input: %#v", requested)
+	}
+	args, ok := requested["args"].(map[string]any)
+	if !ok || args["field_count"] != 1 || len(fmt.Sprint(args["hash"])) != 64 {
+		t.Fatalf("requested args summary = %#v, want field count and opaque hash", requested["args"])
 	}
 }
 

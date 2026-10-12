@@ -2,6 +2,7 @@ package multiagent
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -67,6 +68,11 @@ CREATE TABLE IF NOT EXISTS multiagent_cancellations (
     reason TEXT NOT NULL,
     requested_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS multiagent_acceptance_keys (
+    key_hash TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS multiagent_pause_requests (
     run_id TEXT PRIMARY KEY,
     reason TEXT NOT NULL,
@@ -78,6 +84,102 @@ CREATE TABLE IF NOT EXISTS multiagent_pause_requests (
 		return nil, fmt.Errorf("multiagent store: create schema: %w", err)
 	}
 	return &SQLiteDurableRunStore{db: db}, nil
+}
+
+// AcceptRun atomically creates a run and binds an optional idempotency key.
+// A matching existing key returns its original durable run without emitting
+// a second run.started event.
+func (s *SQLiteDurableRunStore) AcceptRun(
+	ctx context.Context,
+	record DurableRun,
+	events []event.Event,
+) (DurableRun, bool, error) {
+	key := ""
+	if identity := record.State.RequestIdentity; identity != nil && identity.IdempotencyKey != "" {
+		sum := sha256.Sum256([]byte(identity.IdempotencyKey))
+		key = fmt.Sprintf("%x", sum[:])
+	}
+	if key == "" {
+		created, err := s.Create(ctx, record, events)
+		return created, err == nil, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return DurableRun{}, false, fmt.Errorf("multiagent store: begin accept: %w", err)
+	}
+	defer tx.Rollback()
+	var existingRunID string
+	err = tx.QueryRowContext(ctx, `SELECT run_id FROM multiagent_acceptance_keys WHERE key_hash = ?`, key).Scan(&existingRunID)
+	if err == nil {
+		var data string
+		if err := tx.QueryRowContext(ctx, `SELECT record_json FROM multiagent_runs WHERE run_id = ?`, existingRunID).Scan(&data); err != nil {
+			return DurableRun{}, false, fmt.Errorf("multiagent store: load idempotent acceptance: %w", err)
+		}
+		var existing DurableRun
+		if err := json.Unmarshal([]byte(data), &existing); err != nil {
+			return DurableRun{}, false, fmt.Errorf("multiagent store: decode idempotent acceptance: %w", err)
+		}
+		return existing, false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return DurableRun{}, false, fmt.Errorf("multiagent store: lookup idempotency key: %w", err)
+	}
+
+	record.Revision = 1
+	data, err := json.Marshal(record)
+	if err != nil {
+		return DurableRun{}, false, fmt.Errorf("multiagent store: marshal accept: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO multiagent_runs(run_id, schema_version, revision, record_json, updated_at) VALUES(?, ?, ?, ?, ?)`,
+		record.State.RunID, record.SchemaVersion, record.Revision, string(data), record.State.UpdatedAt.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return DurableRun{}, false, fmt.Errorf("multiagent store: insert accepted run: %w", err)
+	}
+	if err := enqueueEvents(ctx, tx, record.State.RunID, record.Revision, events); err != nil {
+		return DurableRun{}, false, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO multiagent_acceptance_keys(key_hash, run_id, created_at) VALUES(?, ?, ?)`, key, record.State.RunID, record.State.CreatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+		return DurableRun{}, false, fmt.Errorf("multiagent store: bind idempotency key: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return DurableRun{}, false, fmt.Errorf("multiagent store: commit accept: %w", err)
+	}
+	return record, true, nil
+}
+
+// ListNonterminalRuns returns a bounded, deterministic page of nonterminal
+// records for startup recovery enumeration.
+func (s *SQLiteDurableRunStore) ListNonterminalRuns(ctx context.Context, limit int) ([]DurableRun, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT record_json FROM multiagent_runs ORDER BY updated_at, run_id`)
+	if err != nil {
+		return nil, fmt.Errorf("multiagent store: list runs: %w", err)
+	}
+	defer rows.Close()
+	var records []DurableRun
+	for rows.Next() {
+		var data string
+		if err := rows.Scan(&data); err != nil {
+			return nil, fmt.Errorf("multiagent store: scan run: %w", err)
+		}
+		var record DurableRun
+		if err := json.Unmarshal([]byte(data), &record); err != nil {
+			return nil, fmt.Errorf("multiagent store: decode listed run: %w", err)
+		}
+		if !record.State.Status.Terminal() {
+			records = append(records, record)
+			if len(records) == limit {
+				break
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("multiagent store: iterate runs: %w", err)
+	}
+	return records, nil
 }
 
 // Create atomically inserts revision one and its lifecycle events.

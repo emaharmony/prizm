@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/emaharmony/prizm/internal/event"
 )
@@ -82,6 +83,29 @@ func TestRunLocatorListRunsReturnsSeededRuns(t *testing.T) {
 	}
 	if got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
 		t.Fatalf("summary timestamps = %+v, want both populated", got)
+	}
+}
+
+func TestScheduledRetryAtExcludesActiveAndAmbiguousAttempts(t *testing.T) {
+	due := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	record := DurableRun{
+		State: RunState{Status: RunStatusPaused}, Phase: CheckpointWaiting,
+		Waiting: &WaitingState{Kind: "role_retry"}, Retry: &RetryState{NextAt: due},
+	}
+	if got := scheduledRetryAt(record); got == nil || !got.Equal(due) {
+		t.Fatalf("scheduled retry due=%v, want %v", got, due)
+	}
+	record.Phase = CheckpointRoleRunning
+	record.State.Status = RunStatusRunning
+	record.Waiting = nil
+	if got := scheduledRetryAt(record); got != nil {
+		t.Fatalf("active attempt advertised retry_at=%v", got)
+	}
+	record.Phase = CheckpointWaiting
+	record.State.Status = RunStatusPaused
+	record.Waiting = &WaitingState{Kind: "execution_reconciliation"}
+	if got := scheduledRetryAt(record); got != nil {
+		t.Fatalf("ambiguous attempt advertised retry_at=%v", got)
 	}
 }
 

@@ -4,7 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
+	"sync"
 
+	"github.com/emaharmony/prizm/internal/api"
+	"github.com/emaharmony/prizm/internal/approval"
 	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
 
@@ -18,6 +22,7 @@ import (
 type referenceMultiAgentController struct {
 	runDir     string
 	configPath string
+	decisionMu sync.Mutex
 }
 
 // newReferenceMultiAgentController builds the controller `prism serve` wires
@@ -54,6 +59,148 @@ func (c *referenceMultiAgentController) Pause(ctx context.Context, runID, reason
 	defer eventStore.Close()
 	_, err = runtime.Pause(ctx, runID, reason)
 	return err
+}
+
+// Proposal returns only the proposal tied to this run's current persisted wait.
+// It opens the inspection runtime only and never constructs a provider or
+// executes a role.
+func (c *referenceMultiAgentController) Proposal(ctx context.Context, runID, proposalID string) (api.MultiAgentProposal, error) {
+	_, item, err := c.loadWaitingProposal(ctx, runID, proposalID, "")
+	if err != nil {
+		return api.MultiAgentProposal{}, err
+	}
+	view := api.MultiAgentProposal{
+		RunID: runID, ProposalID: proposalID, ApprovalID: item.ApprovalID,
+		Status: item.Status, MutationType: item.MutationType, TargetPath: item.TargetPath,
+	}
+	if item.PatchPlan != nil {
+		view.BaseSHA = item.PatchPlan.BaseSHA
+		view.Paths = append([]string(nil), item.PatchPlan.Paths...)
+	}
+	if item.MutationType == approval.MutationApplyPatch {
+		view.Patch = item.Content
+	}
+	return view, nil
+}
+
+// DecideProposal records a decision only for the exact proposal and approval
+// in the run's current durable proposal wait. The lock serializes decisions
+// within the serving process; Resume's normal durable claim serializes any
+// subsequent execution across API, scheduler, and restarted processes.
+func (c *referenceMultiAgentController) DecideProposal(ctx context.Context, runID, proposalID, approvalID, decision, reason string) (bool, error) {
+	c.decisionMu.Lock()
+	defer c.decisionMu.Unlock()
+
+	record, item, err := c.loadProposalRecord(ctx, runID, proposalID, approvalID)
+	if err != nil {
+		return false, err
+	}
+	activeWait := record.State.Status == multiagent.RunStatusPaused && record.Phase == multiagent.CheckpointWaiting &&
+		record.Waiting != nil && record.Waiting.Kind == "proposal_approval" &&
+		record.Waiting.ProposalID == proposalID && record.Waiting.ApprovalID == approvalID && record.ApprovedTask != nil
+	requestedStatus := approval.StatusApproved
+	if decision == "deny" {
+		requestedStatus = approval.StatusDenied
+	} else if decision != "grant" {
+		return false, api.ErrProposalDecisionConflict
+	}
+	if item.Status == requestedStatus && !activeWait {
+		// The exact decision is already durable and this run has moved beyond
+		// its approval wait. Never resume a completed or independently paused
+		// run just because a caller repeated its old decision.
+		return false, nil
+	}
+	if !activeWait {
+		return false, api.ErrProposalNotWaiting
+	}
+	switch decision {
+	case "grant":
+		if item.Status == approval.StatusApproved {
+			return true, nil // same decision at the wait boundary resumes safely
+		}
+		if item.Status != approval.StatusPending {
+			return false, api.ErrProposalDecisionConflict
+		}
+		if err := item.Approve("dashboard-operator"); err != nil {
+			return false, api.ErrProposalDecisionConflict
+		}
+	case "deny":
+		if item.Status == approval.StatusDenied {
+			return true, nil // same decision at the wait boundary resumes safely
+		}
+		if item.Status != approval.StatusPending {
+			return false, api.ErrProposalDecisionConflict
+		}
+		denial := strings.TrimSpace(reason)
+		if denial == "" {
+			denial = "denied by dashboard operator"
+		}
+		if len(denial) > 512 {
+			return false, api.ErrProposalDecisionConflict
+		}
+		if err := item.Deny("dashboard-operator", denial); err != nil {
+			return false, api.ErrProposalDecisionConflict
+		}
+	default:
+		return false, api.ErrProposalDecisionConflict
+	}
+	if err := approval.NewStore(c.runDir).Save(item); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (c *referenceMultiAgentController) loadWaitingProposal(ctx context.Context, runID, proposalID, approvalID string) (multiagent.DurableRun, *approval.Approval, error) {
+	record, item, err := c.loadProposalRecord(ctx, runID, proposalID, approvalID)
+	if err != nil {
+		return record, nil, err
+	}
+	if record.State.Status != multiagent.RunStatusPaused || record.Phase != multiagent.CheckpointWaiting ||
+		record.Waiting == nil || record.Waiting.Kind != "proposal_approval" || record.ApprovedTask == nil ||
+		record.Waiting.ProposalID != proposalID || record.Waiting.ApprovalID != item.ApprovalID {
+		return record, nil, api.ErrProposalNotWaiting
+	}
+	return record, item, nil
+}
+
+func (c *referenceMultiAgentController) loadProposalRecord(ctx context.Context, runID, proposalID, approvalID string) (multiagent.DurableRun, *approval.Approval, error) {
+	locator := multiagent.RunLocator{Root: c.runDir}
+	runtime, runStore, eventStore, err := locator.OpenInspection(ctx, runID)
+	if err != nil {
+		return multiagent.DurableRun{}, nil, err
+	}
+	defer runStore.Close()
+	defer eventStore.Close()
+	record, err := runtime.Inspect(ctx, runID)
+	if err != nil {
+		return record, nil, err
+	}
+	matched := false
+	var storedApprovalID string
+	if record.ApprovedTask != nil {
+		for _, progress := range record.ApprovedTask.Proposals {
+			if progress.RunID == runID && progress.ProposalID == proposalID && (approvalID == "" || progress.ApprovalID == approvalID) {
+				matched, storedApprovalID = true, progress.ApprovalID
+				break
+			}
+		}
+	}
+	if !matched {
+		for _, progress := range record.ProposalResults {
+			if progress.RunID == runID && progress.ProposalID == proposalID && (approvalID == "" || progress.ApprovalID == approvalID) {
+				matched, storedApprovalID = true, progress.ApprovalID
+				break
+			}
+		}
+	}
+	if !matched {
+		return record, nil, api.ErrProposalDecisionConflict
+	}
+	item, err := approval.NewStore(c.runDir).Load(runID, storedApprovalID)
+	if err != nil || item.RunID != runID || item.ProposalID != proposalID || item.ApprovalID != storedApprovalID || (approvalID != "" && item.ApprovalID != approvalID) {
+		return record, nil, api.ErrProposalDecisionConflict
+	}
+	return record, item, nil
 }
 
 // Resume needs live agent wiring, since DurableRuntime.Resume actually

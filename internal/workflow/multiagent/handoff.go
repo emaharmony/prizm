@@ -45,6 +45,91 @@ type Issue struct {
 	Blocking bool   `json:"blocking"`
 }
 
+// ValidationEvidence is the bounded, safe subset of a validation result that
+// may be copied into canonical events and terminal reports. Raw error text is
+// intentionally excluded.
+type ValidationEvidence struct {
+	Profile    string   `json:"profile"`
+	Status     string   `json:"status"`
+	ExitCode   int      `json:"exit_code"`
+	DurationMs int64    `json:"duration_ms"`
+	Command    string   `json:"command,omitempty"`
+	Args       []string `json:"args,omitempty"`
+	WorkingDir string   `json:"working_dir,omitempty"`
+	StdoutPath string   `json:"stdout_path,omitempty"`
+	StderrPath string   `json:"stderr_path,omitempty"`
+}
+
+// SafeValidationEvidence bounds persisted validation metadata and omits the
+// result's Error field, which may contain untrusted process output.
+func SafeValidationEvidence(result validation.Result) ValidationEvidence {
+	return ValidationEvidence{
+		Profile:    boundedEvidenceString(result.Profile, 128),
+		Status:     boundedEvidenceString(result.Status, 32),
+		ExitCode:   result.ExitCode,
+		DurationMs: result.DurationMs,
+		Command:    boundedEvidenceString(result.Command, 256),
+		Args:       safeValidationArgs(result.Args),
+		WorkingDir: boundedEvidenceString(result.WorkingDir, 1024),
+		StdoutPath: boundedEvidenceString(result.StdoutPath, 1024),
+		StderrPath: boundedEvidenceString(result.StderrPath, 1024),
+	}
+}
+
+func boundedEvidenceString(value string, max int) string {
+	if len(value) > max {
+		return value[:max]
+	}
+	return value
+}
+
+func safeValidationArgs(values []string) []string {
+	const maxArgs = 20
+	if len(values) > maxArgs {
+		values = values[:maxArgs]
+	}
+	result := make([]string, len(values))
+	redactNext := false
+	for i, value := range values {
+		value = boundedEvidenceString(value, 256)
+		if redactNext {
+			result[i] = "[REDACTED]"
+			redactNext = false
+			continue
+		}
+		key := value
+		if split := strings.IndexByte(key, '='); split >= 0 {
+			key = key[:split]
+		}
+		normalized := strings.ToLower(strings.NewReplacer("-", "", "_", "", ".", "").Replace(strings.TrimLeft(key, "-")))
+		if sensitiveValidationArgumentKey(normalized) {
+			if strings.Contains(value, "=") {
+				result[i] = key + "=[REDACTED]"
+			} else {
+				result[i] = value
+				redactNext = true
+			}
+			continue
+		}
+		lower := strings.ToLower(value)
+		if strings.Contains(lower, "bearer ") || strings.Contains(lower, "authorization:") || strings.Contains(lower, "api_key=") || strings.Contains(lower, "apikey=") {
+			result[i] = "[REDACTED]"
+			continue
+		}
+		result[i] = value
+	}
+	return result
+}
+
+func sensitiveValidationArgumentKey(key string) bool {
+	for _, marker := range []string{"token", "password", "passwd", "pwd", "secret", "credential", "apikey", "accesskey", "authorization", "bearer"} {
+		if strings.Contains(key, marker) {
+			return true
+		}
+	}
+	return key == "auth" || strings.HasSuffix(key, "auth")
+}
+
 // Handoff is the structured contract passed between logical roles.
 // Notes are supplemental; routing depends on typed roles and Outcome.
 type Handoff struct {

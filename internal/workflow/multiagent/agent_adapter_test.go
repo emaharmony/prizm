@@ -165,8 +165,12 @@ func TestPlannerContractRequiresStringListElements(t *testing.T) {
 		t.Fatalf("planner prompt omits list element types: %s", prompt)
 	}
 	_, err = decodeRoleOutput(RolePlanner, `{"schema_version":1,"understanding":"x","implementation_plan":["x"],"task_breakdown":[{"owner":"developer"}],"acceptance_criteria":["x"],"handoff":{"objective":"x","reason":"x"}}`)
-	if err == nil || !strings.Contains(err.Error(), "task_breakdown") {
-		t.Fatalf("object task breakdown element accepted: %v", err)
+	var correction *SchemaCorrectionError
+	if !errors.As(err, &correction) || correction.Code != "invalid_field_type" || len(correction.Fields) != 1 || correction.Fields[0] != "task_breakdown" || !strings.Contains(correction.Feedback, "Field task_breakdown") {
+		t.Fatalf("object task breakdown correction=%#v err=%v", correction, err)
+	}
+	if strings.Contains(correction.Feedback, "owner") || strings.Contains(correction.Feedback, "developer") {
+		t.Fatalf("feedback contains raw response details: %q", correction.Feedback)
 	}
 }
 

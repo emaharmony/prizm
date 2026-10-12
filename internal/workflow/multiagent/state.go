@@ -59,9 +59,10 @@ type TerminalOutcome struct {
 // multi-agent run. PR2 defines the contract; persistence mechanics arrive in
 // the recovery phase.
 type RunState struct {
-	SchemaVersion int    `json:"schema_version"`
-	RunID         string `json:"run_id"`
-	WorkflowID    string `json:"workflow_id"`
+	SchemaVersion   int              `json:"schema_version"`
+	RunID           string           `json:"run_id"`
+	RequestIdentity *RequestIdentity `json:"request_identity,omitempty"`
+	WorkflowID      string           `json:"workflow_id"`
 	// WorkflowVersion is, going forward, a registry-assigned internal
 	// version (CompiledGraph.RegistryVersion) rather than a user-facing
 	// number — see CompiledGraph.registryVersion's doc (compiler.go). It
@@ -115,6 +116,23 @@ type RunState struct {
 // never hard-fails on that half of the check.
 func (s RunState) Validate(graph *CompiledGraph) error {
 	var problems []string
+	if identity := s.RequestIdentity; identity != nil {
+		if identity.AcceptedAt.IsZero() {
+			problems = append(problems, "state request_identity.accepted_at is required")
+		}
+		for name, value := range map[string]string{
+			"requester_id": identity.RequesterID, "session_id": identity.SessionID,
+			"source": identity.Source, "result_destination": identity.ResultDestination,
+			"idempotency_key": identity.IdempotencyKey,
+		} {
+			if len(value) > 256 {
+				problems = append(problems, fmt.Sprintf("state request_identity.%s exceeds 256 characters", name))
+			}
+			if strings.ContainsAny(value, "\r\n\x00") {
+				problems = append(problems, fmt.Sprintf("state request_identity.%s contains invalid characters", name))
+			}
+		}
+	}
 	if s.SchemaVersion != RunStateSchemaVersion {
 		problems = append(problems, fmt.Sprintf("state schema_version must be %d", RunStateSchemaVersion))
 	}

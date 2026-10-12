@@ -21,7 +21,7 @@ function test(name, fn) {
 
 // ---- Event type vocabulary ------------------------------------------------
 
-test('ALL_EVENT_TYPES lists exactly the 19 canonical multi-agent event types from internal/event/multiagent.go', () => {
+test('ALL_EVENT_TYPES lists the 19 canonical multi-agent and 2 dashboard task events', () => {
   const want = [
     'prizm.workflow.multi_agent.run.created',
     'prizm.workflow.multi_agent.run.started',
@@ -41,10 +41,22 @@ test('ALL_EVENT_TYPES lists exactly the 19 canonical multi-agent event types fro
     'prizm.workflow.multi_agent.run.cancelled',
     'prizm.workflow.multi_agent.recovery.started',
     'prizm.workflow.multi_agent.recovery.completed',
-    'prizm.workflow.multi_agent.recovery.failed'
+    'prizm.workflow.multi_agent.recovery.failed',
+    'prizm.dashboard.task.completed',
+    'prizm.dashboard.task.failed'
   ];
-  assert.strictEqual(live.ALL_EVENT_TYPES.length, 19);
+  assert.strictEqual(live.ALL_EVENT_TYPES.length, 21);
   assert.deepStrictEqual(live.ALL_EVENT_TYPES.slice().sort(), want.slice().sort());
+});
+
+test('displayRunStatus shows a persisted retry wait instead of an active run', () => {
+  assert.strictEqual(live.displayRunStatus('running', '2026-10-12T03:40:00Z'), 'waiting_retry');
+  assert.strictEqual(live.displayRunStatus('paused', null, 'role_retry'), 'waiting_retry');
+  assert.strictEqual(live.displayRunStatus('paused', '2026-10-12T03:40:00Z', 'execution_reconciliation'), 'paused', 'stale retry metadata must not hide an ambiguous paused state');
+  assert.strictEqual(live.displayRunStatus('paused', null, 'execution_reconciliation'), 'paused');
+  assert.strictEqual(live.displayRunStatus('created'), 'accepted');
+  assert.strictEqual(live.displayRunStatus('running'), 'running');
+  assert.strictEqual(live.displayRunStatus('completed', '2026-10-12T03:40:00Z'), 'completed');
 });
 
 // ---- Id builders ------------------------------------------------------

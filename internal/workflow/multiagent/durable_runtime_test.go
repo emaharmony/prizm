@@ -44,7 +44,7 @@ func TestDurableRuntimeNormalRoundTripAndTerminalResume(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 	if stored.Phase != CheckpointTerminal ||
-		stored.Revision != 13 ||
+		stored.Revision != 14 ||
 		stored.LastCompletedExecutionKey != "run-durable-happy:reviewer:1" ||
 		stored.State.WorkspaceID != "workspace-durable" {
 		t.Fatalf("stored envelope = %#v", stored)
@@ -89,7 +89,7 @@ func TestDurableRuntimeRecoversCompletedRoleWithoutReexecution(t *testing.T) {
 	runner := happyDurableRunner()
 	failing := &checkpointFailureStore{
 		DurableRunStore: env.store,
-		failCheckpoint:  3,
+		failCheckpoint:  4,
 	}
 	runtime := newDurableRuntimeForTest(
 		t, validDefinition(), runner, failing, env.claimer, env.events)
@@ -146,7 +146,8 @@ func TestDurableRuntimeRecoversBetweenRolesDuringCorrectionLoop(t *testing.T) {
 	}}
 	failing := &checkpointFailureStore{
 		DurableRunStore: env.store,
-		failCheckpoint:  10,
+		// Acceptance now has a distinct durable started-state checkpoint.
+		failCheckpoint: 11,
 	}
 	runtime := newDurableRuntimeForTest(
 		t, validDefinition(), runner, failing, env.claimer, env.events)
@@ -660,9 +661,13 @@ func (c *memoryExecutionClaim) Release() error {
 type panickingRoleRunner struct{}
 
 func (*panickingRoleRunner) RunRole(
-	context.Context,
-	RoleRunRequest,
+	_ context.Context,
+	request RoleRunRequest,
 ) (RoleRunResult, error) {
+	attempt := request.RetryHandle.CurrentAttempt()
+	if err := request.ToolEventSink(ToolDiagnostic{AttemptID: attempt.AttemptID, Tool: "write_file", Status: "started", MutationID: "stable-mutation-before-crash", MutationPossible: true}); err != nil {
+		return RoleRunResult{}, err
+	}
 	panic("simulated process crash")
 }
 

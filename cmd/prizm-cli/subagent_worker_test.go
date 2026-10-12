@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -298,6 +299,45 @@ func TestParseSubAgentActionAcceptsStrictRoleJSON(t *testing.T) {
 	action = parseSubAgentAction(roleWithToolJSON)
 	if !action.Final || action.Tool != "" || action.Content != roleWithToolJSON {
 		t.Fatalf("direct role JSON with embedded tool JSON = %#v", action)
+	}
+}
+
+func TestParseSubAgentActionMarksMalformedToolInputForCorrection(t *testing.T) {
+	for _, input := range []string{
+		`{"type":"tool_request","tool":"apply_patch_proposal","input":{"patch":"diff"}}`,
+		`{"type":"tool_request","tool":"read_file","input":[]}`,
+	} {
+		action := parseSubAgentAction(input)
+		if action.Final || action.Tool != "" || action.CorrectionCode != "malformed_tool_input" {
+			t.Fatalf("input %q produced %#v, want malformed-tool correction", input, action)
+		}
+	}
+}
+
+func TestSubAgentToolFailureOnlyMarksProvenPatchValidationAsCorrectable(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		result   tool.ToolResult
+		want     bool
+	}{
+		{name: "patch plan validation", toolName: "apply_patch_proposal", result: tool.ToolResult{Error: "private details", FailureEffect: tool.FailureEffectNoEffects}, want: true},
+		{name: "approval persistence remains ambiguous", toolName: "apply_patch_proposal", result: tool.ToolResult{Error: "private details", FailureEffect: tool.FailureEffectUnknown}},
+		{name: "policy denial remains non-corrective", toolName: "apply_patch_proposal", result: tool.ToolResult{Error: "private details"}},
+		{name: "other tool no-effect metadata is not enough", toolName: "write_file_proposal", result: tool.ToolResult{Error: "private details", FailureEffect: tool.FailureEffectNoEffects}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := subAgentToolFailure(tc.toolName, tc.result)
+			var correctable *subagent.CorrectableToolError
+			got := errors.As(err, &correctable)
+			if got != tc.want {
+				t.Fatalf("correctable=%t err_type=%T", got, err)
+			}
+			if got && correctable.Code != "patch_validation_failed" {
+				t.Fatalf("correction code=%q", correctable.Code)
+			}
+		})
 	}
 }
 

@@ -103,6 +103,8 @@ type CoreIdentityInterface interface {
 
 // Server provides the Prizm HTTP API.
 type Server struct {
+	resumeCtx   contextctx.Context
+	resumeStop  contextctx.CancelFunc
 	addr        string
 	orch        *orchestrator.Orchestrator
 	store       *task.Store
@@ -276,7 +278,10 @@ type AutoPatchStarter interface {
 
 // NewServer creates a new API server.
 func NewServer(cfg Config) *Server {
+	resumeCtx, resumeStop := contextctx.WithCancel(contextctx.Background())
 	s := &Server{
+		resumeCtx:          resumeCtx,
+		resumeStop:         resumeStop,
 		addr:               cfg.Addr,
 		orch:               cfg.Orch,
 		store:              cfg.Store,
@@ -391,6 +396,7 @@ func (s *Server) routes() {
 
 // Start starts the API server with timeouts and panic recovery.
 func (s *Server) Start() error {
+	defer s.resumeStop()
 	log.Printf("[API] starting on %s", s.addr)
 
 	if s.authToken == "" {
@@ -479,7 +485,13 @@ func requiresAuth(r *http.Request) bool {
 	}
 	return r.URL.Path == "/api/v1/events/stream" ||
 		(strings.HasPrefix(r.URL.Path, "/api/v1/multiagent/runs/") &&
-			strings.HasSuffix(r.URL.Path, "/events/stream"))
+			(strings.HasSuffix(r.URL.Path, "/events/stream") ||
+				(r.Method == http.MethodGet && (strings.HasSuffix(r.URL.Path, "/report") || isMultiAgentProposalReadPath(r.URL.Path)))))
+}
+
+func isMultiAgentProposalReadPath(path string) bool {
+	parts := strings.Split(strings.TrimPrefix(path, "/api/v1/multiagent/runs/"), "/")
+	return len(parts) == 3 && parts[1] == "proposals"
 }
 
 // authorized validates the bearer token in constant time. Browsers using

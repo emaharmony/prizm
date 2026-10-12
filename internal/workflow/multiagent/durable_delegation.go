@@ -455,6 +455,8 @@ func (r *DurableRuntime) completeDelegationJoin(ctx context.Context, record Dura
 	record.State.RoleStates[role] = rs
 	record.Phase = CheckpointRoleRunning
 	if len(merged.Proposals) > 0 {
+		appendRetryHistory(&record, record.Retry)
+		record.Retry = nil
 		return r.pauseForProposals(ctx, record, role, merged, join.ParentStartedAt, join.ParentFinishedAt)
 	}
 	return r.finishPreparedRole(ctx, record, role, cfg, merged, join.ParentStartedAt, join.ParentFinishedAt)

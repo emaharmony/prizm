@@ -72,12 +72,20 @@ func subAgentRepoRoot(cfg *orchestrator.Config) string {
 // callbacks, reusing the same text-generation + JSON-contract parsing the gated
 // loop uses.
 type subAgentBackend struct {
-	providers       *provider.ProviderRegistry
-	exec            *tool.Executor // shared executor (no worktree isolation)
-	toolReg         *tool.Registry // shared registry, source for non-root tools
-	protectedBranch string         // branch git_commit/git_push in worktree executors must refuse to write to
-	approvalStore   tool.ApprovalStorer
-	worktreeRoot    string // canonical <repo>/.prizm/worktrees root for native-tool providers
+	providers            *provider.ProviderRegistry
+	exec                 *tool.Executor // shared executor (no worktree isolation)
+	toolReg              *tool.Registry // shared registry, source for non-root tools
+	protectedBranch      string         // branch git_commit/git_push in worktree executors must refuse to write to
+	approvalStore        tool.ApprovalStorer
+	worktreeRoot         string // canonical <repo>/.prizm/worktrees root for native-tool providers
+	toolEventSinkFactory subagent.ToolEventSinkFactory
+}
+
+// SetToolEventSinkFactory wires a durable per-task event sink into this worker
+// adapter. The factory receives only trusted task identity and must not be
+// used to forward prompts, arguments, or tool output.
+func (b *subAgentBackend) SetToolEventSinkFactory(factory subagent.ToolEventSinkFactory) {
+	b.toolEventSinkFactory = factory
 }
 
 // subAgentWorktreeMaxFileSize matches serve's builtin file-size cap.
@@ -124,6 +132,9 @@ func (b *subAgentBackend) executorFor(workDir string) *tool.Executor {
 }
 
 func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, subagent.Parser, subagent.ToolExec, error) {
+	if rt.ToolEventSink == nil && b.toolEventSinkFactory != nil {
+		rt.ToolEventSink = b.toolEventSinkFactory(rt)
+	}
 	prov, err := b.providers.Get(rt.Model)
 	if err != nil {
 		return nil, nil, nil, err
@@ -218,11 +229,8 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 		if xerr != nil {
 			return "", xerr
 		}
-		if !res.Success {
-			if res.Error != "" {
-				return "", fmt.Errorf("%s", res.Error)
-			}
-			return "", fmt.Errorf("tool %s failed", toolName)
+		if failure := subAgentToolFailure(toolName, res); failure != nil {
+			return "", failure
 		}
 		if toolName == "read_file" {
 			encoded, marshalErr := json.Marshal(res.Output)
@@ -238,6 +246,19 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 	}
 
 	return llm, parse, execFn, nil
+}
+
+func subAgentToolFailure(toolName string, result tool.ToolResult) error {
+	if result.Success {
+		return nil
+	}
+	if toolName == "apply_patch_proposal" && result.FailureEffect == tool.FailureEffectNoEffects {
+		return &subagent.CorrectableToolError{Code: "patch_validation_failed"}
+	}
+	if result.Error != "" {
+		return fmt.Errorf("%s", result.Error)
+	}
+	return fmt.Errorf("tool %s failed", toolName)
 }
 
 const (
@@ -310,14 +331,17 @@ func parseSubAgentAction(text string) subagent.Action {
 			if content, ok := v2.ParseCanonicalFinalText(trimmed); ok {
 				return subagent.Action{Final: true, Content: content}
 			}
-			return subagent.Action{}
+			return subagent.Action{CorrectionCode: "invalid_final_schema"}
+		}
+		if kind == "tool_request" {
+			return subagent.Action{CorrectionCode: "malformed_tool_input"}
 		}
 		if kind != "" {
-			return subagent.Action{}
+			return subagent.Action{CorrectionCode: "invalid_response_schema"}
 		}
 		return subagent.Action{Final: true, Content: trimmed}
 	}
-	return subagent.Action{}
+	return subagent.Action{CorrectionCode: "invalid_response_schema"}
 }
 
 func logSubAgentResponseShape(envelope map[string]json.RawMessage, kind string) {
@@ -423,7 +447,7 @@ func (p *subAgentPublisher) outcome(status event.OutcomeStatus, sequence int64, 
 // startSubAgentWorker subscribes the generic sub-agent worker to the delegation
 // subject. Feature-flagged via PRIZM_SUBAGENT_WORKER (empty = off) so it is a
 // no-op until explicitly enabled — no behavior change to existing deployments.
-func startSubAgentWorker(nc *nats.Conn, providers *provider.ProviderRegistry, exec *tool.Executor, toolReg *tool.Registry, cfg *orchestrator.Config) {
+func startSubAgentWorker(nc *nats.Conn, providers *provider.ProviderRegistry, exec *tool.Executor, toolReg *tool.Registry, cfg *orchestrator.Config, eventSinkFactory ...subagent.ToolEventSinkFactory) {
 	if os.Getenv("PRIZM_SUBAGENT_WORKER") == "" {
 		return
 	}
@@ -444,6 +468,9 @@ func startSubAgentWorker(nc *nats.Conn, providers *provider.ProviderRegistry, ex
 		worktreeRoot = filepath.Join(root, ".prizm", "worktrees")
 	}
 	backend := &subAgentBackend{providers: providers, exec: exec, toolReg: toolReg, protectedBranch: cfg.ProtectedBranch(), worktreeRoot: worktreeRoot}
+	if len(eventSinkFactory) > 0 {
+		backend.SetToolEventSinkFactory(eventSinkFactory[0])
+	}
 	runner := subagent.NewLoopRunner(subagent.LoopRunnerConfig{
 		Backend: backend,
 		// Per-agent tool scoping: keep each sub-agent in its role lane (only

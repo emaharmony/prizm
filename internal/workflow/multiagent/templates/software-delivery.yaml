@@ -39,7 +39,7 @@ apiVersion: prism.dev/v1alpha1
 kind: MultiAgentWorkflow
 metadata:
   name: software-delivery
-  version: "1.0.0"
+  version: "1.1.0"
   description: >-
     Plan, implement, test, and review a software change, with correction loops
     back to the developer when tests fail or review requests changes. Authors
@@ -51,8 +51,8 @@ metadata:
 spec:
   entryNode: planner
   budgets:
-    maxRetries: 4
-    maxDuration: 30m
+    # Per-node retry settings govern recovery; no aggregate run retry cap is implicit.
+    # Omitted duration limits are unlimited; authors can opt into a positive cap.
   defaults:
     failure:
       defaultOnUnhandledOutcome: fail
@@ -72,7 +72,6 @@ spec:
         - plan
       allowedOutcomes:
         - plan_ready
-      durationBudget: 10m
 
     - id: developer
       type: role
@@ -95,9 +94,8 @@ spec:
       allowedOutcomes:
         - implementation_ready
         - blocked
-      durationBudget: 30m
       retry:
-        maxRetries: 2
+        maxRetries: 10
         baseDelay: 1s
         maxDelay: 10s
 
@@ -117,7 +115,6 @@ spec:
       allowedOutcomes:
         - tests_passed
         - tests_failed
-      durationBudget: 15m
       validation:
         profiles:
           - go_test_all
@@ -138,7 +135,6 @@ spec:
       allowedOutcomes:
         - review_approved
         - changes_requested
-      durationBudget: 10m
 
     - id: completed
       type: terminal

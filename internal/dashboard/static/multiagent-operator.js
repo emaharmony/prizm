@@ -101,6 +101,7 @@
   var WAITING_KIND_LABELS = {
     operator_pause: 'Paused by operator',
     approval: 'Waiting on approval',
+    role_retry: 'Waiting to retry',
     execution_reconciliation: 'Reconciling execution state'
   };
 

@@ -33,7 +33,9 @@
 </main>
 
 <script src="/app.js"></script>
+<script src="/multiagent-live.js"></script>
 <script>
+  const live = window.PrizmMultiAgentLive;
 (() => {
   const ui = window.PrizmUI;
   const $ = selector => document.querySelector(selector);
@@ -72,37 +74,50 @@
     target.className = '';
     const sorted = [...runs].sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0));
     target.innerHTML = `<div class="table-wrap"><table class="data-table">
-      <thead><tr><th>Run</th><th>Workflow</th><th>Status</th><th>Created</th><th>Updated</th></tr></thead>
+      <thead><tr><th>Run</th><th>Workflow</th><th>Status</th><th>Result / recovery</th><th>Created</th><th>Updated</th></tr></thead>
       <tbody>${sorted.map(run => `
         <tr>
           <td data-label="Run"><a href="/multiagent-run.html?run=${encodeURIComponent(run.run_id)}" class="mono">${ui.escape(run.run_id)}</a></td>
           <td data-label="Workflow">${ui.escape(run.workflow_id || '—')}</td>
-          <td data-label="Status">${ui.badge(run.status)}</td>
+          <td data-label="Status">${ui.badge(live.displayRunStatus(run.status, run.retry_at, run.waiting_kind))}</td>
+          <td data-label="Result / recovery">${run.report_ref ? `<a href="/api/v1/multiagent/runs/${encodeURIComponent(run.run_id)}/report" target="_blank" rel="noopener">Open final report</a>` : `${run.waiting_kind === 'role_retry' && run.retry_at ? `<div>Retry at ${ui.escape(ui.formatTime(run.retry_at))} · ${Number(run.retries_remaining || 0)} remaining</div>` : ''}${run.status === 'paused' && run.last_failure && run.waiting_kind !== 'role_retry' ? '<div>Automatic retry blocked</div>' : ''}${run.last_failure ? `<div class="meta">Last failure: ${ui.escape(run.last_failure)}</div>` : ''}`}</td>
           <td data-label="Created"><span title="${ui.escape(ui.formatTime(run.created_at))}">${ui.escape(ui.relativeTime(run.created_at))}</span></td>
           <td data-label="Updated"><span title="${ui.escape(ui.formatTime(run.updated_at))}">${ui.escape(ui.relativeTime(run.updated_at))}</span></td>
         </tr>`).join('')}</tbody>
     </table></div>`;
   }
 
-  async function load() {
+  let loading = false;
+  async function load(quiet = false) {
+    if (loading) return;
+    loading = true;
     const target = $('#runs');
-    target.className = 'loading-state';
-    target.setAttribute('aria-busy', 'true');
-    target.textContent = 'Loading runs…';
-    banner('');
-    $('#run-count').textContent = '';
+    if (!quiet) {
+      target.className = 'loading-state';
+      target.setAttribute('aria-busy', 'true');
+      target.textContent = 'Loading runs…';
+      banner('');
+      $('#run-count').textContent = '';
+    }
     try {
       const runs = await ui.request('/multiagent/runs');
       const list = Array.isArray(runs) ? runs : [];
       $('#run-count').textContent = `${list.length} run${list.length === 1 ? '' : 's'}`;
       renderRuns(list);
     } catch (err) {
-      renderError(err.message);
+      if (quiet && target.textContent.trim()) banner('Run list refresh failed. The last saved results remain visible; retrying automatically.', 'warn');
+      else renderError(err.message);
+    } finally {
+      loading = false;
     }
   }
 
   $('#refresh').addEventListener('click', load);
   load();
+  // The server-side lifecycle scanner persists terminal run state and its
+  // dashboard event. Refresh this overview from the durable run projection so
+  // completion appears here even if no run-detail stream is open.
+  window.setInterval(() => load(true), 5000);
 })();
 </script>
 </body>
