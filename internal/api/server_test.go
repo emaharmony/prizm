@@ -20,6 +20,18 @@ import (
 	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 )
 
+func TestPublicInvocationResponseSanitizesPrivateReasoning(t *testing.T) {
+	got := publicInvocationResponse("Visible <think>PRIVATE_CANARY</think> text\n```diff\n-<think>literal patch data</think>\n+kept\n```")
+	if strings.Contains(got, "PRIVATE_CANARY") || !strings.Contains(got, "<think>literal patch data</think>") {
+		t.Fatalf("sanitization leaked private reasoning or changed fenced content: %q", got)
+	}
+
+	got = publicInvocationResponse("Visible <think>PRIVATE_CANARY")
+	if got != "The model did not return a public answer." {
+		t.Fatalf("unterminated private block was not failed closed: %q", got)
+	}
+}
+
 type fakeAutoPatchStarter struct {
 	enabled bool
 	err     error

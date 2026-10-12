@@ -56,7 +56,11 @@ func renderWorkflowPreview(cfg *v2.WorkflowConfig, source string) string {
 
 	// Budgets / global guards.
 	b.WriteString("Budgets\n")
-	fmt.Fprintf(&b, "  max iterations:  %d\n", cfg.Global.MaxTotalIterations)
+	iterationLabel := "unlimited"
+	if cfg.Global.MaxTotalIterations > 0 {
+		iterationLabel = fmt.Sprintf("%d", cfg.Global.MaxTotalIterations)
+	}
+	fmt.Fprintf(&b, "  max iterations:  %s\n", iterationLabel)
 	if cfg.Global.MaxTotalTime != "" {
 		fmt.Fprintf(&b, "  max time:        %s\n", cfg.Global.MaxTotalTime)
 	}
@@ -66,7 +70,7 @@ func renderWorkflowPreview(cfg *v2.WorkflowConfig, source string) string {
 	case maxTokens == v2.UnlimitedTokens:
 		tokLabel = "unlimited"
 	case maxTokens <= 0:
-		tokLabel = tracker.HumanInt(v2.DefaultRunTokenCeiling)
+		tokLabel = "unlimited"
 	}
 	fmt.Fprintf(&b, "  max tokens:      %s\n", tokLabel)
 	repeat := cfg.Global.MaxRepeatedToolCalls
@@ -85,7 +89,11 @@ func renderWorkflowPreview(cfg *v2.WorkflowConfig, source string) string {
 				fmt.Fprintf(&b, "(≥%.2g)", p.Gate.Threshold)
 			}
 		}
-		fmt.Fprintf(&b, " · max %d iter · %d tools", p.MaxIterations, len(p.AllowedTools))
+		phaseIterations := "unlimited"
+		if p.MaxIterations > 0 {
+			phaseIterations = fmt.Sprintf("%d", p.MaxIterations)
+		}
+		fmt.Fprintf(&b, " · max %s iter · %d tools", phaseIterations, len(p.AllowedTools))
 		if p.Verification != nil && p.Verification.Profile != "" {
 			block := ""
 			if p.Verification.Blocking {

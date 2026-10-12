@@ -216,7 +216,21 @@ func EvaluatePolicyForAgent(cfg PolicyConfig, toolName, agentID string, input ma
 		return evaluateDirectoryProposalPolicy(cfg, toolName, input)
 
 	case "apply_patch_proposal":
-		return PolicyResult{Decision: PolicyDenied, Reason: "apply_patch_proposal is not implemented (V5 candidate)"}
+		if agentID != "" && !cfg.CanAgentProposeWrites(agentID) {
+			return PolicyResult{Decision: PolicyDenied, Reason: fmt.Sprintf("agent %q is not allowed to propose patch mutations; route write requests through the orchestrator", agentID)}
+		}
+		patch, patchOK := input["patch"].(string)
+		base, baseOK := input["base_sha"].(string)
+		if !patchOK || strings.TrimSpace(patch) == "" {
+			return PolicyResult{Decision: PolicyDenied, Reason: "apply_patch_proposal requires a non-empty string 'patch' parameter"}
+		}
+		if !baseOK || strings.TrimSpace(base) == "" {
+			return PolicyResult{Decision: PolicyDenied, Reason: "apply_patch_proposal requires a non-empty string 'base_sha' parameter"}
+		}
+		if len(patch) > 1024*1024 {
+			return PolicyResult{Decision: PolicyDenied, Reason: "patch exceeds maximum size of 1MB"}
+		}
+		return PolicyResult{Decision: PolicyRequiresApproval, Reason: "apply_patch_proposal requires explicit approval to apply the atomic patch"}
 
 	case "write_file":
 		if cfg.AutoApproveMutations {

@@ -29,6 +29,11 @@ const (
 
 	// Name is the provider identifier.
 	Name = "anthropic"
+
+	// protocolDefaultMaxTokens is an API-required generation allowance used only
+	// when a caller requests an uncapped response. It is a provider protocol
+	// ceiling, not a Prizm run or workflow token budget.
+	protocolDefaultMaxTokens = 64_000
 )
 
 // Provider calls Anthropic's Messages API using raw HTTP.
@@ -123,10 +128,14 @@ type anthropicUsage struct {
 // Generate calls the Anthropic Messages API synchronously.
 func (p *Provider) Generate(ctx context.Context, req provider.GenerateRequest) (provider.GenerateResponse, error) {
 	start := time.Now()
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = protocolDefaultMaxTokens
+	}
 
 	anthReq := messagesRequest{
 		Model:       req.Model,
-		MaxTokens:   req.MaxTokens,
+		MaxTokens:   maxTokens,
 		Messages:    []anthropicMessage{{Role: "user", Content: req.Prompt}},
 		Temperature: req.Temperature,
 	}

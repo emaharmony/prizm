@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/emaharmony/prizm/internal/validation"
 )
 
@@ -20,6 +21,7 @@ type AgentRoleRunner struct {
 	approvals  ApprovalChecker
 	validation ValidationRunner
 	proposals  ProposalResolver
+	patchBase  func(context.Context, string) (string, error)
 	events     EventSink
 	now        func() time.Time
 }
@@ -37,6 +39,7 @@ type AgentRoleRunnerOptions struct {
 	Approvals  ApprovalChecker
 	Validation ValidationRunner
 	Proposals  ProposalResolver
+	PatchBase  func(context.Context, string) (string, error)
 	Clock      func() time.Time
 }
 
@@ -55,6 +58,10 @@ func NewAgentRoleRunner(options AgentRoleRunnerOptions) (*AgentRoleRunner, error
 	if now == nil {
 		now = time.Now
 	}
+	patchBase := options.PatchBase
+	if patchBase == nil {
+		patchBase = gitx.CurrentSHA
+	}
 	return &AgentRoleRunner{
 		profiles:   options.Profiles,
 		executor:   options.Executor,
@@ -62,6 +69,7 @@ func NewAgentRoleRunner(options AgentRoleRunnerOptions) (*AgentRoleRunner, error
 		approvals:  options.Approvals,
 		validation: options.Validation,
 		proposals:  options.Proposals,
+		patchBase:  patchBase,
 		now:        now,
 	}, nil
 }
@@ -110,6 +118,10 @@ func (r *AgentRoleRunner) RunRole(
 	if err != nil {
 		return RoleRunResult{}, err
 	}
+	finalResponseContract, err := roleSchemaInstruction(request.Run.CurrentRole)
+	if err != nil {
+		return RoleRunResult{}, err
+	}
 	startedAt := r.now().UTC()
 	executionContext := ctx
 	cancelExecution := func() {}
@@ -118,19 +130,29 @@ func (r *AgentRoleRunner) RunRole(
 	}
 	defer cancelExecution()
 	executionRequest := AgentExecutionRequest{
-		RunID:                request.Run.RunID,
-		TaskID:               request.Run.Task.ID,
-		ExecutionKey:         request.Run.ExecutionKey,
-		Role:                 request.Run.CurrentRole,
-		Visit:                request.Run.Visit,
-		Profile:              profile,
-		Prompt:               prompt,
-		Workspace:            workspace,
-		AllowedTools:         append([]string(nil), request.RoleConfig.AllowedTools...),
-		RequiredCapabilities: append([]string(nil), request.RoleConfig.Capabilities...),
-		MaxIterations:        request.RoleConfig.MaxLocalIterations,
-		MaxTokens:            request.RoleConfig.TokenBudget,
-		Deadline:             deadline(startedAt, request.RoleConfig.TimeBudget),
+		RunID:                 request.Run.RunID,
+		TaskID:                request.Run.Task.ID,
+		ExecutionKey:          request.Run.ExecutionKey,
+		Role:                  request.Run.CurrentRole,
+		Visit:                 request.Run.Visit,
+		Profile:               profile,
+		Prompt:                prompt,
+		Workspace:             workspace,
+		AllowedTools:          append([]string(nil), request.RoleConfig.AllowedTools...),
+		RequiredCapabilities:  append([]string(nil), request.RoleConfig.Capabilities...),
+		FinalResponseContract: finalResponseContract,
+		MaxIterations:         request.RoleConfig.MaxLocalIterations,
+		MaxTokens:             request.RoleConfig.TokenBudget,
+		Deadline:              deadline(startedAt, request.RoleConfig.TimeBudget),
+	}
+	if request.Run.CurrentRole == RoleDeveloper && r.proposals != nil {
+		baseSHA, baseErr := r.patchBase(ctx, workspace.Path)
+		if baseErr != nil {
+			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "resolve trusted patch base: " + baseErr.Error()}
+		}
+		executionRequest.Prompt += fmt.Sprintf("\n\nTRUSTED PATCH BASE: Use this exact base_sha in apply_patch_proposal: %s", baseSHA)
+		executionRequest.AllowedTools = governedDeveloperTools(executionRequest.AllowedTools)
+		executionRequest.FinalizationPrerequisiteTool = "apply_patch_proposal"
 	}
 	execution, err := r.executor.ExecuteAgent(executionContext, executionRequest)
 	if err != nil {
@@ -168,7 +190,7 @@ func (r *AgentRoleRunner) RunRole(
 		}
 		executionRequest.MaxIterations = remainingIterations
 		executionRequest.MaxTokens = remainingTokens
-		executionRequest.Prompt += fmt.Sprintf("\n\nCORRECTION: Your previous response did not persist a mutation proposal. Previous output follows:\n%s\n\nYour NEXT response must be ONLY one JSON tool_request for write_file_proposal. Do not include the developer role JSON in that response. After the tool result, return ONLY the required developer role JSON. This is your only corrective turn.", execution.Output)
+		executionRequest.Prompt += fmt.Sprintf("\n\nCORRECTION: Your previous response did not persist a mutation proposal. Previous output follows:\n%s\n\nYour NEXT response must be ONLY one JSON tool_request for apply_patch_proposal containing the complete unified diff and exact base_sha. Do not include the developer role JSON in that response. After the tool result, return ONLY the required developer role JSON. This is your only corrective turn.", execution.Output)
 		correctiveRetries = 1
 		corrected, correctErr := r.executor.ExecuteAgent(executionContext, executionRequest)
 		if correctErr != nil {
@@ -264,7 +286,33 @@ func (r *AgentRoleRunner) RunRole(
 			FinishedAt:       finishedAt,
 		},
 		Proposals: proposals,
+		FanOut:    cloneFanOutPlan(decoded.FanOut),
 	}, nil
+}
+
+func governedDeveloperTools(configured []string) []string {
+	allowed := map[string]bool{
+		"echo": true, "list_dir": true, "read_file": true, "read_project": true,
+		"search_files": true, "project_overview": true, "git_status": true,
+		"git_log": true, "git_diff": true, "git_branch_list": true,
+		"write_file_dry_run": true, "web_search": true, "memory_search": true,
+		"use_skill": true, "apply_patch_proposal": true,
+	}
+	out := make([]string, 0, len(configured)+1)
+	seenPatch := false
+	for _, name := range configured {
+		if !allowed[name] {
+			continue
+		}
+		if name == "apply_patch_proposal" {
+			seenPatch = true
+		}
+		out = append(out, name)
+	}
+	if !seenPatch {
+		out = append(out, "apply_patch_proposal")
+	}
+	return out
 }
 
 // ValidateApprovedRole validates a saved developer result after its exact
@@ -376,7 +424,7 @@ func BuildRolePrompt(request RoleRunRequest) (string, error) {
 		schema,
 	)
 	if request.Run.CurrentRole == RoleDeveloper {
-		prompt += "\n\nDEVELOPER TOOL PROTOCOL: Before returning the developer role-schema JSON, emit exactly one separate JSON tool_request for write_file_proposal. Do not combine the tool request with the role-schema JSON. After Prizm returns the tool result, return only the developer role-schema JSON."
+		prompt += "\n\nDEVELOPER TOOL PROTOCOL: Before returning the developer role-schema JSON, emit exactly one separate JSON tool_request for apply_patch_proposal. Its input must contain the complete unified diff in patch and the exact observed git HEAD in base_sha. Do not combine the tool request with the role-schema JSON. After Prizm returns the tool result, return only the developer role-schema JSON."
 	}
 	return prompt, nil
 }
@@ -531,13 +579,13 @@ func remainingLimit(limit Limit, used int) (Limit, bool) {
 func roleSchemaInstruction(role Role) (string, error) {
 	switch role {
 	case RolePlanner:
-		return `JSON schema: {"schema_version":1,"understanding":"...","implementation_plan":["..."],"task_breakdown":["..."],"acceptance_criteria":["..."],"risks":["..."],"assumptions":["..."],"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"file","uri":"path"}],"unresolved_issues":[{"id":"issue-1","summary":"...","blocking":false}],"notes":"..."}}. Use [] when there is no evidence or unresolved issue.`, nil
+		return `JSON schema: {"schema_version":1,"understanding":"...","implementation_plan":["..."],"task_breakdown":["..."],"acceptance_criteria":["..."],"risks":["..."],"assumptions":["..."],"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"file","uri":"path"}],"unresolved_issues":[{"id":"issue-1","summary":"...","blocking":false}],"notes":"..."}}. Every element of implementation_plan, task_breakdown, acceptance_criteria, risks, and assumptions must be a JSON string, never an object or array. Use [] when there is no evidence or unresolved issue.`, nil
 	case RoleDeveloper:
 		return `JSON schema: {"schema_version":1,"summary":"...","commands_executed":["..."],"known_limitations":["..."],"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"file","uri":"path"}],"unresolved_issues":[{"id":"issue-1","summary":"...","blocking":false}],"notes":"..."}}. After a write proposal, omit changed_artifacts: Prizm derives that field from the persisted proposal. Use [] when there is no evidence or unresolved issue.`, nil
 	case RoleTester:
 		return `JSON schema: {"schema_version":1,"result":"passed|failed","tests_executed":[{"name":"...","status":"passed|failed|timeout|error","evidence":[{"kind":"validation","uri":"path"}]}],"failure_evidence":[],"reproduction":["..."],"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"validation","uri":"path"}],"unresolved_issues":[{"id":"issue-1","summary":"...","blocking":false}],"notes":"..."}}. You must execute at least one allowed validation and include it in the non-empty tests_executed array. If validation cannot run, report it as an error or timeout; never omit tests_executed. Use [] when there is no evidence or unresolved issue.`, nil
 	case RoleReviewer:
-		return `JSON schema: {"schema_version":1,"decision":"approved|changes_requested","findings":[{"severity":"info|low|medium|high|critical","summary":"...","evidence":[]}],"required_corrections":["..."],"evidence":[],"handoff":{"objective":"...","reason":"...","evidence":[],"unresolved_issues":[],"notes":"..."}}. Omit handoff when approved.`, nil
+		return `JSON schema: {"schema_version":1,"decision":"approved|changes_requested","findings":[{"severity":"info|low|medium|high|critical","summary":"...","evidence":[{"kind":"validation","uri":"path"}]}],"required_corrections":["..."],"evidence":[{"kind":"validation","uri":"path"}],"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"validation","uri":"path"}],"unresolved_issues":[],"notes":"..."}}. Every evidence item must be an object with kind and uri; use [] when there is no evidence. Omit handoff when approved.`, nil
 	case RoleReflector:
 		return `JSON schema: {"schema_version":1,"verdict":"success|partial|failure|uncertain","confidence":0.0,"failure_class":"none|policy|tool|environment|model|verification|unknown","evidence":[],"lesson_candidate":{"summary":"...","content":"...","category":"decision|feedback|project|reference","topics":[]},"replan_requested":false,"replan_reason":"..."}`, nil
 	default:

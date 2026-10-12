@@ -1,9 +1,10 @@
 # software-delivery.yaml is Prism's shipped, developer-authored equivalent of
 # the Phase 1 built-in reference workflow (DefaultReferenceDefinition in
 # reference_workflow.go): Planner -> Developer -> Tester -> Reviewer, with two
-# bounded correction loops (tester -> developer on a failed test run,
-# reviewer -> developer on requested changes). It reuses Phase 1's exact role
-# names and outcome vocabulary ("planner"/"developer"/"tester"/"reviewer",
+# correction loops (tester -> developer on a failed test run, reviewer ->
+# developer on requested changes) that are unlimited unless explicitly capped.
+# It reuses Phase 1's exact role names and outcome vocabulary
+# ("planner"/"developer"/"tester"/"reviewer",
 # "plan_ready"/"implementation_ready"/"tests_passed"/"tests_failed"/
 # "review_approved"/"changes_requested") so the two are easy to compare
 # side by side, even though nothing in this schema requires matching that
@@ -15,7 +16,7 @@
 # (dev-to-tester, tester-to-reviewer) THAT ARE NOT CORRECTION LOOPS.
 #
 # Why: `prism graph validate`'s cycle rule finds every strongly-connected
-# component (Tarjan's algorithm) and requires a bounded `loop:` policy on
+# component (Tarjan's algorithm) and requires a `loop:` policy on
 # EVERY edge inside a cyclic component — not just the intuitive "this edge
 # goes backwards" edges. Because tester can route back to developer
 # (tests_failed) and reviewer can also route back to developer
@@ -30,32 +31,26 @@
 # docs/architecture/decisions/0002-graph-defined-workflows.md and
 # docs/workflows/loops-and-cycles.md for the full rationale.
 #
-# The two forward edges are given a generous maxTraversals (999) with
-# onExhausted: fail: they are not meant to ever actually bind in practice —
-# the real bounds on how many times developer/tester/reviewer can be
-# re-entered come from each node's own maxVisits and from the two genuine
-# correction loops' tight traversal limits below. 999 is simply "large enough
-# that spec.budgets.maxTransitions (40) will always be hit first if something
-# has gone wrong," not a meaningful business rule of its own.
+# Every edge in the cycle uses maxTraversals: -1 to satisfy graph validation
+# while leaving traversal counts unlimited. Workflow authors can opt into a
+# finite edge limit with a positive maxTraversals value; omitted node and run
+# budgets likewise do not add an implicit loop ceiling.
 apiVersion: prism.dev/v1alpha1
 kind: MultiAgentWorkflow
 metadata:
   name: software-delivery
   version: "1.0.0"
   description: >-
-    Plan, implement, test, and review a software change, with bounded
-    correction loops back to the developer when tests fail or review
-    requests changes. The shipped analog of Prism's Phase 1 built-in
-    multi-agent-software-task reference workflow.
+    Plan, implement, test, and review a software change, with correction loops
+    back to the developer when tests fail or review requests changes. Authors
+    can set explicit traversal limits. This is the shipped analog of Prism's
+    Phase 1 built-in multi-agent-software-task reference workflow.
   labels:
     category: software-delivery
     phase: "3"
 spec:
   entryNode: planner
   budgets:
-    maxTransitions: 40
-    maxTokens: 200000
-    maxLocalIterations: 24
     maxRetries: 4
     maxDuration: 30m
   defaults:
@@ -77,9 +72,6 @@ spec:
         - plan
       allowedOutcomes:
         - plan_ready
-      maxVisits: 1
-      localIterations: 3
-      tokenBudget: 8000
       durationBudget: 10m
 
     - id: developer
@@ -97,16 +89,12 @@ spec:
         - search_files
         - project_overview
         - write_file_dry_run
-        - write_file_proposal
-        - create_directory_proposal
+        - apply_patch_proposal
       capabilities:
         - code
       allowedOutcomes:
         - implementation_ready
         - blocked
-      maxVisits: 4
-      localIterations: 8
-      tokenBudget: 30000
       durationBudget: 30m
       retry:
         maxRetries: 2
@@ -129,9 +117,6 @@ spec:
       allowedOutcomes:
         - tests_passed
         - tests_failed
-      maxVisits: 3
-      localIterations: 5
-      tokenBudget: 12000
       durationBudget: 15m
       validation:
         profiles:
@@ -153,9 +138,6 @@ spec:
       allowedOutcomes:
         - review_approved
         - changes_requested
-      maxVisits: 2
-      localIterations: 4
-      tokenBudget: 10000
       durationBudget: 10m
 
     - id: completed
@@ -184,7 +166,7 @@ spec:
       when:
         outcome: implementation_ready
       loop:
-        maxTraversals: 999
+        maxTraversals: -1
         onExhausted: fail
       label: implementation ready
 
@@ -197,17 +179,15 @@ spec:
         outcome: blocked
       label: cannot proceed
 
-    # Genuine correction loop: tester sends work back to developer. Bounded
-    # tightly (2) so that, together with the initial visit and the reviewer
-    # correction loop's own limit (1), developer's total possible entries
-    # (1 + 2 + 1 = 4) exactly matches developer's own maxVisits above.
+    # Genuine correction loop: tester sends work back to developer. The
+    # unlimited default can be capped by setting a positive maxTraversals.
     - id: tester-to-dev
       from: tester
       to: developer
       when:
         outcome: tests_failed
       loop:
-        maxTraversals: 2
+        maxTraversals: -1
         onExhausted: fail
       label: tests failed
 
@@ -218,18 +198,19 @@ spec:
       when:
         outcome: tests_passed
       loop:
-        maxTraversals: 999
+        maxTraversals: -1
         onExhausted: fail
       label: tests passed
 
-    # Genuine correction loop: reviewer sends work back to developer.
+    # Genuine correction loop: reviewer sends work back to developer. The
+    # unlimited default can be capped by setting a positive maxTraversals.
     - id: reviewer-to-dev
       from: reviewer
       to: developer
       when:
         outcome: changes_requested
       loop:
-        maxTraversals: 1
+        maxTraversals: -1
         onExhausted: fail
       label: changes requested
 

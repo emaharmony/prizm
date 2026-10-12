@@ -51,6 +51,7 @@ type CheckResult struct {
 var CodeMutationTools = map[string]bool{
 	"write_file":                true,
 	"write_file_proposal":       true,
+	"apply_patch_proposal":      true,
 	"create_directory":          true,
 	"create_directory_proposal": true,
 	"edit_file":                 true,

@@ -170,6 +170,7 @@ type DelegationState struct {
 	ResultSummary     string `json:"result_summary,omitempty"`
 	NATSCorrelationID string `json:"nats_correlation_id,omitempty"`
 	RetryCount        int    `json:"retry_count,omitempty"`
+	DeliveryKey       string `json:"delivery_key,omitempty"`
 }
 
 // FeedbackState tracks both feedback gates.

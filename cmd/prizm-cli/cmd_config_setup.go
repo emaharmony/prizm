@@ -206,7 +206,7 @@ func defaultModelFor(provider string) string {
 	case "gemini":
 		return "gemini-2.0-flash"
 	case "ollama":
-		return "llama3.1"
+		return defaultOllamaCloudModel
 	default:
 		return ""
 	}

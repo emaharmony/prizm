@@ -82,30 +82,15 @@ func TestRunChatLoop_FinalResponse(t *testing.T) {
 
 func TestCLIConfig(t *testing.T) {
 	cfg := CLIConfig()
-	if cfg.MaxIterations <= 0 {
-		t.Error("CLIConfig should have positive MaxIterations")
-	}
-	if cfg.NudgeAfter <= 0 {
-		t.Error("CLIConfig should have positive NudgeAfter")
-	}
-	if cfg.ForceFinalAfter <= 0 {
-		t.Error("CLIConfig should have positive ForceFinalAfter")
-	}
-	if cfg.MaxIterations >= DefaultConfig().MaxIterations {
-		t.Error("CLIConfig should have fewer iterations than DefaultConfig")
+	if cfg.MaxIterations != 0 || cfg.NudgeAfter != 0 || cfg.ForceFinalAfter != 0 {
+		t.Fatalf("CLI defaults should be unlimited and unforced: %+v", cfg)
 	}
 }
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.MaxIterations != 100 {
-		t.Errorf("expected MaxIterations=100, got %d", cfg.MaxIterations)
-	}
-	if cfg.NudgeAfter != 50 {
-		t.Errorf("expected NudgeAfter=50, got %d", cfg.NudgeAfter)
-	}
-	if cfg.ForceFinalAfter != 80 {
-		t.Errorf("expected ForceFinalAfter=80, got %d", cfg.ForceFinalAfter)
+	if cfg.MaxIterations != 0 || cfg.NudgeAfter != 0 || cfg.ForceFinalAfter != 0 {
+		t.Fatalf("defaults should be unlimited and unforced: %+v", cfg)
 	}
 }
 

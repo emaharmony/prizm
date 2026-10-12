@@ -29,9 +29,6 @@ metadata:
 spec:
   entryNode: writer
   budgets:
-    maxTransitions: 10
-    maxTokens: 50000
-    maxLocalIterations: 12
     maxRetries: 2
     maxDuration: 15m
   defaults:
@@ -50,14 +47,11 @@ spec:
         - search_files
         - project_overview
         - write_file_dry_run
-        - write_file_proposal
+        - apply_patch_proposal
       capabilities:
         - write
       allowedOutcomes:
         - draft_ready
-      maxVisits: 1
-      localIterations: 4
-      tokenBudget: 10000
       durationBudget: 5m
 
     - id: technical-reviewer
@@ -76,9 +70,6 @@ spec:
       allowedOutcomes:
         - technically_accurate
         - needs_revision
-      maxVisits: 1
-      localIterations: 3
-      tokenBudget: 10000
       durationBudget: 5m
 
     - id: editor
@@ -93,15 +84,12 @@ spec:
         - search_files
         - project_overview
         - write_file_dry_run
-        - write_file_proposal
+        - apply_patch_proposal
       capabilities:
         - edit
       allowedOutcomes:
         - ready_to_publish
         - needs_more_edits
-      maxVisits: 1
-      localIterations: 4
-      tokenBudget: 10000
       durationBudget: 5m
 
     - id: published

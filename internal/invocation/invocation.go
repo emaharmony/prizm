@@ -144,8 +144,8 @@ func ParseResult(content string) map[string]any {
 	return map[string]any{"text": content}
 }
 
-// DefaultMaxTokens is used when a request doesn't specify max_tokens.
-const DefaultMaxTokens = 512
+// DefaultMaxTokens leaves response length to the provider when omitted.
+const DefaultMaxTokens = 0
 
 // ValidateRequest returns an error if the request is missing required
 // fields.

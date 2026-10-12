@@ -81,10 +81,7 @@ func (cc *conversationContext) runToolLoopAgentic(
 	iterationCount := 0
 
 	// V73: Context budget management
-	contextTokens := 202752 // glm-5.1:cloud default
-	if agentCtxTokens, ok := getModelContextTokens(agentCfg.Model); ok {
-		contextTokens = agentCtxTokens
-	}
+	contextTokens := contextTokensForAgentModel(agentCfg.Model)
 	ctxBudget := defaultContextBudget(contextTokens)
 	ctxBudget.compressThreshold = 0.50 // Compress at 50% to leave room for LLM response + tool results
 	ctxBudget.warnThreshold = 0.40     // Warn at 40%
@@ -320,6 +317,7 @@ func isWriteTool(name string) bool {
 	writeTools := map[string]bool{
 		"write_file":                true,
 		"write_file_proposal":       true,
+		"apply_patch_proposal":      true,
 		"write_file_dry_run":        true,
 		"create_directory":          true,
 		"create_directory_proposal": true,

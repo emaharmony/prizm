@@ -36,19 +36,19 @@ type QueryPlanner struct {
 type QueryPlanResult struct {
 	Intent             string   `json:"intent"`
 	Keywords           []string `json:"keywords"`
-	SearchType         string   `json:"search_type"`        // "keyword", "semantic", "hybrid"
-	RecencyPreference  string   `json:"recency_preference"` // "recent", "all_time"
+	SearchType         string   `json:"search_type"`         // "keyword", "semantic", "hybrid"
+	RecencyPreference  string   `json:"recency_preference"`  // "recent", "all_time"
 	AlternativeQueries []string `json:"alternative_queries"` // 2-3 alternative search queries for semantic questions
 	RawResponse        string   `json:"-"`                   // for logging
 }
 
 // QueryPlanConfig holds configuration for the query planner.
 type QueryPlanConfig struct {
-	Enabled  bool          `yaml:"enabled" json:"enabled"`
-	Model    string        `yaml:"model" json:"model"`
-	OllamaURL string       `yaml:"ollama_url" json:"ollama_url"`
-	Timeout  time.Duration `yaml:"timeout" json:"timeout"`
-	Fallback string        `yaml:"fallback" json:"fallback"` // "heuristic" or "raw"
+	Enabled   bool          `yaml:"enabled" json:"enabled"`
+	Model     string        `yaml:"model" json:"model"`
+	OllamaURL string        `yaml:"ollama_url" json:"ollama_url"`
+	Timeout   time.Duration `yaml:"timeout" json:"timeout"`
+	Fallback  string        `yaml:"fallback" json:"fallback"` // "heuristic" or "raw"
 }
 
 // DefaultQueryPlanConfig returns sensible defaults.
@@ -65,12 +65,12 @@ func DefaultQueryPlanConfig() QueryPlanConfig {
 // NewQueryPlanner creates a new query planner from config.
 func NewQueryPlanner(cfg QueryPlanConfig) *QueryPlanner {
 	return &QueryPlanner{
-		model:     cfg.Model,
-		ollamaURL: cfg.OllamaURL,
-		timeout:   cfg.Timeout,
-		enabled:   cfg.Enabled,
+		model:      cfg.Model,
+		ollamaURL:  cfg.OllamaURL,
+		timeout:    cfg.Timeout,
+		enabled:    cfg.Enabled,
 		httpClient: &http.Client{Timeout: cfg.Timeout},
-		cache:     make(map[string]*QueryPlanResult),
+		cache:      make(map[string]*QueryPlanResult),
 	}
 }
 
@@ -169,7 +169,6 @@ User message: %s`, msgCount, age.Round(time.Second), userMessage)
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-
 	resp, err := qp.httpClient.Post(qp.ollamaURL+"/api/generate", "application/json", bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("ollama request: %w", err)
@@ -182,7 +181,6 @@ User message: %s`, msgCount, age.Round(time.Second), userMessage)
 
 	var ollamaResp struct {
 		Response string `json:"response"`
-		Thinking string `json:"thinking"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
@@ -190,23 +188,26 @@ User message: %s`, msgCount, age.Round(time.Second), userMessage)
 
 	raw := strings.TrimSpace(ollamaResp.Response)
 	if raw == "" {
-		raw = strings.TrimSpace(ollamaResp.Thinking)
-	}
-	if raw == "" {
-		return nil, fmt.Errorf("empty ollama response")
+		return nil, fmt.Errorf("no public answer in ollama response")
 	}
 
-	// Strip thinking/reasoning prefix if present
-	raw = stripThinkingPrefix(raw)
-
-	// Extract JSON from response (model might include surrounding text)
+	// Parse valid structured output before redaction so literal tags inside JSON
+	// fields are data, not mistaken for a private-reasoning container.
 	result, err := parseQueryPlanJSON(raw)
 	if err != nil {
-		log.Printf("[QUERY-PLANNER] failed to parse LLM response: %v, raw: %s", err, TruncateStr(raw, 200))
-		return nil, fmt.Errorf("parse response: %w", err)
+		raw = stripThinkingPrefix(raw)
+		if raw == "" {
+			return nil, fmt.Errorf("parse response: no public answer")
+		}
+		result, err = parseQueryPlanJSON(raw)
+		if err != nil {
+			log.Printf("[QUERY-PLANNER] failed to parse LLM response: %v", err)
+			return nil, fmt.Errorf("parse response: %w", err)
+		}
 	}
 
-	result.RawResponse = raw
+	// Raw provider output is intentionally not retained in memory planner state.
+	result.RawResponse = ""
 	return result, nil
 }
 
@@ -227,8 +228,8 @@ func (qp *QueryPlanner) heuristicFallback(userMessage string, msgCount int, age 
 
 	return &QueryPlanResult{
 		Intent:            "heuristic extraction from user message",
-		Keywords:         keywords,
-		SearchType:       searchType,
+		Keywords:          keywords,
+		SearchType:        searchType,
 		RecencyPreference: recency,
 	}
 }
@@ -304,6 +305,25 @@ func parseQueryPlanJSON(raw string) (*QueryPlanResult, error) {
 	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
 		return nil, fmt.Errorf("unmarshal JSON: %w", err)
 	}
+	// These fields are user-facing in planner diagnostics. Sanitize them only
+	// after decoding so JSON quoting and any structured data remain intact.
+	var err error
+	result.Intent, err = sanitizePlannerText(result.Intent)
+	if err != nil {
+		return nil, fmt.Errorf("sanitize query plan: no public answer")
+	}
+	for i := range result.Keywords {
+		result.Keywords[i], err = sanitizePlannerText(result.Keywords[i])
+		if err != nil {
+			return nil, fmt.Errorf("sanitize query plan: no public answer")
+		}
+	}
+	for i := range result.AlternativeQueries {
+		result.AlternativeQueries[i], err = sanitizePlannerText(result.AlternativeQueries[i])
+		if err != nil {
+			return nil, fmt.Errorf("sanitize query plan: no public answer")
+		}
+	}
 
 	// Validate required fields
 	if len(result.Keywords) == 0 {
@@ -321,19 +341,44 @@ func parseQueryPlanJSON(raw string) (*QueryPlanResult, error) {
 	return &result, nil
 }
 
+func sanitizePlannerText(text string) (string, error) {
+	lower := strings.ToLower(text)
+	var out strings.Builder
+	start := 0
+	for i := 0; i < len(text); {
+		if !strings.HasPrefix(lower[i:], "<think>") {
+			i++
+			continue
+		}
+		endRel := strings.Index(lower[i+len("<think>"):], "</think>")
+		if endRel < 0 {
+			return "", fmt.Errorf("unterminated private reasoning")
+		}
+		out.WriteString(text[start:i])
+		i += len("<think>") + endRel + len("</think>")
+		start = i
+	}
+	out.WriteString(text[start:])
+	return strings.TrimSpace(out.String()), nil
+}
+
 // stripThinkingPrefix removes <think>...</think> blocks and reasoning prefixes
 // that some models include in their output.
 func stripThinkingPrefix(s string) string {
-	// Remove <think>...</think> blocks (used by some models)
+	// Remove case-insensitive <think>...</think> blocks (used by some models).
 	for {
-		startTag := strings.Index(s, "<think>")
+		lower := strings.ToLower(s)
+		startTag := strings.Index(lower, "<think>")
 		if startTag < 0 {
 			break
 		}
-		endTag := strings.Index(s, "</think>")
+		endRel := strings.Index(lower[startTag+len("<think>"):], "</think>")
+		endTag := -1
+		if endRel >= 0 {
+			endTag = startTag + len("<think>") + endRel
+		}
 		if endTag < 0 {
-			s = s[:startTag]
-			break
+			return ""
 		}
 		s = s[:startTag] + s[endTag+len("</think>"):]
 	}
@@ -359,6 +404,7 @@ func stripThinkingPrefix(s string) string {
 
 	return s
 }
+
 // messageKey creates a cache key from a message.
 func messageKey(msg string) string {
 	words := strings.Fields(strings.ToLower(msg))

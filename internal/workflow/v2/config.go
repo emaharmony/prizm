@@ -22,15 +22,15 @@ type WorkflowConfig struct {
 	FastPath          *FastPathConfig `json:"fast_path,omitempty"`
 }
 
-// DefaultRunTokenCeiling is the default prompt+completion ceiling for one
-// Natural Gates workflow run.
-const DefaultRunTokenCeiling = 2_000_000
+// DefaultRunTokenCeiling is retained for source compatibility. Omitted token
+// budgets are unlimited; callers opt into a ceiling with a positive value.
+const DefaultRunTokenCeiling = UnlimitedTokens
 
 // DefaultMaxTotalTokens is kept as a compatibility alias for older callers.
 const DefaultMaxTotalTokens = DefaultRunTokenCeiling
 
 // UnlimitedTokens is the explicit "no ceiling" sentinel for max_total_tokens.
-// Semantics: -1 = unlimited, 0 = DefaultRunTokenCeiling, any positive = that cap.
+// Semantics: -1 or omitted 0 = unlimited, any positive = that cap.
 // Values below -1 are invalid (rejected at load) so a typo cannot silently disable
 // the budget.
 const UnlimitedTokens = -1
@@ -38,7 +38,7 @@ const UnlimitedTokens = -1
 type GlobalConfig struct {
 	MaxTotalIterations   int    `json:"max_total_iterations"`
 	MaxTotalTime         string `json:"max_total_time"`
-	MaxTotalTokens       int    `json:"max_total_tokens,omitempty"`        // ceiling on prompt+completion tokens; -1 = unlimited, 0 = DefaultRunTokenCeiling, >0 = that cap
+	MaxTotalTokens       int    `json:"max_total_tokens,omitempty"`        // ceiling on prompt+completion tokens; -1 or omitted 0 = unlimited, >0 = that cap
 	MaxRepeatedToolCalls int    `json:"max_repeated_tool_calls,omitempty"` // abort a phase after this many identical tool calls; 0 = default (6)
 	StatePersistenceDir  string `json:"state_persistence_dir"`
 	EventEmission        bool   `json:"event_emission"`
@@ -200,17 +200,14 @@ func validateTokenBudgets(cfg *WorkflowConfig) error {
 	return nil
 }
 
-// NormalizeTokenBudgets applies finite token defaults to loaded workflow configs.
-// A zero global cap means "use the built-in default cap" so omitted fields do not
-// run open-ended. The explicit unlimited opt-out is -1 (UnlimitedTokens), which is
-// left untouched here; any other negative is invalid and rejected by
-// validateTokenBudgets on the load path.
+// NormalizeTokenBudgets normalizes omitted budgets to the unlimited sentinel.
+// Positive persisted budgets remain binding and values below -1 remain invalid.
 func NormalizeTokenBudgets(cfg *WorkflowConfig) {
 	if cfg == nil {
 		return
 	}
 	if cfg.Global.MaxTotalTokens == 0 {
-		cfg.Global.MaxTotalTokens = DefaultRunTokenCeiling
+		cfg.Global.MaxTotalTokens = UnlimitedTokens
 	}
 }
 
@@ -434,9 +431,9 @@ func DefaultConfig() *WorkflowConfig {
 		Version:     2,
 		Description: "7-phase gated loop: PROBE → RESEARCH → PLAN → FEEDBACK_PRE → EXECUTION → FEEDBACK_POST → REPORT",
 		Global: GlobalConfig{
-			MaxTotalIterations:   600,                    // 10x default for autonomous loops
-			MaxTotalTime:         "30m",                  // increased from 60m for autonomous loops
-			MaxTotalTokens:       DefaultRunTokenCeiling, // default ceiling for autonomous loops
+			MaxTotalIterations:   0,     // omitted means unlimited
+			MaxTotalTime:         "30m", // increased from 60m for autonomous loops
+			MaxTotalTokens:       UnlimitedTokens,
 			MaxRepeatedToolCalls: 6,
 			StatePersistenceDir:  "runs/gated-loop",
 			EventEmission:        true,
@@ -448,21 +445,21 @@ func DefaultConfig() *WorkflowConfig {
 		Phases: []PhaseConfig{
 			{
 				Name: "PROBE", Type: "probe", Description: "Reduce assumptions by asking questions and searching",
-				MaxIterations: 8,
+				MaxIterations: 0,
 				AllowedTools:  []string{"read_file", "list_dir", "search_files", "project_overview", "git_status", "git_log", "git_branch_list", "web_search", "memory_search", "collect_reference_images"},
 				Gate:          GateConfig{Type: "assumption_threshold", Threshold: 2.0},
 				Fallback:      FallbackConfig{OnMaxIterations: "proceed_with_open_assumptions", Blocks: false},
 			},
 			{
 				Name: "RESEARCH", Type: "research", Description: "Increase confidence by searching the web, memory, and the codebase",
-				MaxIterations: 8,
+				MaxIterations: 0,
 				AllowedTools:  []string{"read_file", "list_dir", "search_files", "project_overview", "git_status", "git_log", "web_search", "memory_search", "collect_reference_images"},
 				Gate:          GateConfig{Type: "confidence_threshold", Threshold: 0.7},
 				Fallback:      FallbackConfig{OnMaxIterations: "proceed_with_partial_confidence", Blocks: false},
 			},
 			{
 				Name: "PLAN", Type: "plan", Description: "Create a structured plan with tasks and resource assignments",
-				MaxIterations: 8,
+				MaxIterations: 0,
 				AllowedTools:  []string{"read_file", "list_dir", "search_files", "project_overview", "git_status", "git_log", "git_branch_list", "git_checkout", "memory_search"},
 				Gate: GateConfig{Type: "plan_completeness", Threshold: 0.5,
 					Weights: map[string]float64{"tasks_identified": 0.5, "resources_assigned": 0.5}},
@@ -470,14 +467,14 @@ func DefaultConfig() *WorkflowConfig {
 			},
 			{
 				Name: "FEEDBACK_PRE", Type: "feedback_pre", Description: "Pause for plan approval before execution",
-				MaxIterations: 1,
+				MaxIterations: 0,
 				AllowedTools:  []string{},
 				Gate:          GateConfig{Type: "approval", Approvers: []string{"ema"}, Mode: "require_any"},
 				Fallback:      FallbackConfig{OnMaxIterations: "auto_approve", Blocks: false},
 			},
 			{
 				Name: "EXECUTION", Type: "execution", Description: "Write code with branch protection, read budget, and commit/push enforcement",
-				MaxIterations: 250,
+				MaxIterations: 0,
 				AllowedTools:  []string{"read_file", "write_file", "create_directory", "list_dir", "search_files", "git_status", "git_log", "git_diff", "git_add", "git_commit", "git_push", "git_branch_list", "git_checkout", "project_overview", "run_validation", "delegate"},
 				Gate:          GateConfig{Type: "task_completion", Mode: "partial_allowed"},
 				Verification:  &VerificationConfig{Profile: "go_test_all", Blocking: true},
@@ -485,14 +482,14 @@ func DefaultConfig() *WorkflowConfig {
 			},
 			{
 				Name: "FEEDBACK_POST", Type: "feedback_post", Description: "Pause for post-execution review; loops back to EXECUTION on changes requested",
-				MaxIterations: 1,
+				MaxIterations: 0,
 				AllowedTools:  []string{},
 				Gate:          GateConfig{Type: "review_pass", RequiredReviewers: []string{"ema"}, MaxWarn: 2},
 				Fallback:      FallbackConfig{OnMaxIterations: "wait", Blocks: true},
 			},
 			{
 				Name: "REPORT", Type: "report", Description: "Produce a final report with proof of work",
-				MaxIterations: 30,
+				MaxIterations: 0,
 				AllowedTools:  []string{"read_file", "git_log", "git_status"},
 				Gate:          GateConfig{Type: "report_completeness"},
 				Fallback:      FallbackConfig{OnMaxIterations: "auto_generate", Blocks: false},

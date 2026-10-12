@@ -337,24 +337,20 @@ Rules:
 
 	var result struct {
 		Response string `json:"response"`
-		Thinking string `json:"thinking"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", fmt.Errorf("decode response: %w", err)
 	}
 
-	// Some models (nemotron) put output in "thinking" when response is empty
-	// qwen3.5 includes thinking process in the response — strip it
 	compressed := strings.TrimSpace(result.Response)
 	if compressed == "" {
-		compressed = strings.TrimSpace(result.Thinking)
-	}
-	if compressed == "" {
-		return "", fmt.Errorf("empty ollama response")
+		return "", fmt.Errorf("no public answer in ollama response")
 	}
 
-	// Strip reasoning/thinking prefix that some models include
-	compressed = stripThinkingPrefix(compressed)
+	compressed, err = PublicResponseText(compressed)
+	if err != nil || compressed == "" {
+		return "", fmt.Errorf("no public answer in ollama response")
+	}
 
 	return compressed, nil
 }
@@ -373,38 +369,4 @@ func (ca *ContextAgent) InvalidateCache() {
 	ca.mu.Lock()
 	ca.cached = nil
 	ca.mu.Unlock()
-}
-
-// stripThinkingPrefix removes reasoning/thinking prefixes that some models
-// include in their output. qwen3.5 typically starts with "Thinking Process:" or similar.
-func stripThinkingPrefix(s string) string {
-	// Common reasoning prefixes
-	prefixes := []string{
-		"Thinking Process:",
-		"Thinking process:",
-		"Thought process:",
-		"Let me think about this.",
-		"Let me analyze",
-	}
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(s, prefix) {
-			// Find the end of the thinking section — typically marked by a double newline
-			// or a clear section header like "##" or "**"
-			after := s[len(prefix):]
-			// Skip any leading whitespace/newlines after the prefix
-			after = strings.TrimLeft(after, " \n\t")
-			// Look for a section break that indicates real content starts
-			for _, marker := range []string{"\n## ", "\n**", "\n- ", "\n1."} {
-				if idx := strings.Index(after, marker); idx >= 0 {
-					return after[idx+1:] // skip the leading newline
-				}
-			}
-			// If no section break found, try to find where the thinking ends
-			// by looking for a blank line separator
-			if idx := strings.Index(after, "\n\n"); idx >= 0 {
-				return after[idx+2:]
-			}
-		}
-	}
-	return s
 }

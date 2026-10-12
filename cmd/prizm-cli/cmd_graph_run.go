@@ -74,7 +74,7 @@ func executeGraphRun(args []string) error {
 	fmt.Printf("Run ID: %s\n", runID)
 	fmt.Printf("Artifacts: %s\n", filepath.Join(*runDir, runID))
 
-	state, runErr := rt.runtime.Run(context.Background(), multiagent.RunRequest{RunID: runID, Task: task})
+	state, runErr := rt.runtime.Run(context.Background(), multiagent.RunRequest{RunID: runID, Task: task, WorkspaceID: rt.workspaceID})
 	if state.RunID != "" && state.Status.Terminal() {
 		manifest, manifestErr := loadReferenceManifest(*runDir, runID)
 		if manifestErr == nil {
@@ -276,7 +276,7 @@ func (g *graphRunStarter) StartRun(
 		// request/response cycle that started it — the caller observes
 		// progress via the existing SSE stream, matching how
 		// referenceMultiAgentController.Resume already detaches Resume().
-		state, runErr := rt.runtime.Run(context.Background(), multiagent.RunRequest{RunID: runID, Task: task})
+		state, runErr := rt.runtime.Run(context.Background(), multiagent.RunRequest{RunID: runID, Task: task, WorkspaceID: rt.workspaceID})
 		if state.RunID != "" && state.Status.Terminal() {
 			manifest, manifestErr := loadReferenceManifest(g.runDir, runID)
 			if manifestErr == nil {

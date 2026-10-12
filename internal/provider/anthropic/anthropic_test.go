@@ -2,6 +2,7 @@ package anthropic_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -32,7 +33,15 @@ func TestProvider_DefaultBaseURL(t *testing.T) {
 }
 
 func TestProvider_Generate_Success(t *testing.T) {
+	var requestMaxTokens int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			MaxTokens int `json:"max_tokens"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		requestMaxTokens = request.MaxTokens
 		if r.Header.Get("x-api-key") != "test-key" {
 			t.Errorf("x-api-key = %q, want test-key", r.Header.Get("x-api-key"))
 		}
@@ -71,6 +80,9 @@ func TestProvider_Generate_Success(t *testing.T) {
 	}
 	if resp.OutputTokens != 8 {
 		t.Errorf("OutputTokens = %d, want 8", resp.OutputTokens)
+	}
+	if requestMaxTokens != 64_000 {
+		t.Errorf("request max_tokens = %d, want provider protocol allowance 64000", requestMaxTokens)
 	}
 }
 

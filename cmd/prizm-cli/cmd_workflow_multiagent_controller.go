@@ -95,3 +95,20 @@ func (c *referenceMultiAgentController) Resume(ctx context.Context, runID string
 	}()
 	return nil
 }
+
+// resumeSync is used by the serve-owned graph worker. Keeping the runtime open
+// until Resume returns lets deadline and outcome supervisors serialize a run
+// locally while the durable run claimer arbitrates across processes.
+func (c *referenceMultiAgentController) resumeSync(ctx context.Context, runID string) error {
+	manifest, err := loadReferenceManifest(c.runDir, runID)
+	if err != nil {
+		return err
+	}
+	rt, err := openLiveReferenceRuntime(c.runDir, c.configPath, manifest)
+	if err != nil {
+		return fmt.Errorf("multiagent: open live runtime for run %q: %w", runID, err)
+	}
+	defer rt.close()
+	_, err = rt.runtime.Resume(ctx, runID)
+	return err
+}

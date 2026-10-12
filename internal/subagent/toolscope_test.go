@@ -131,7 +131,7 @@ type scopeBackend struct {
 }
 
 func (b *scopeBackend) Bind(_ AgentRuntime) (LLMFunc, Parser, ToolExec, error) {
-	llm := func(_ context.Context, _ []v2.Message) (Turn, error) {
+	llm := func(_ context.Context, _ []v2.Message, _ ReplyAllowance) (Turn, error) {
 		if b.i >= len(b.turns) {
 			return Turn{Text: "FINAL: done"}, nil
 		}

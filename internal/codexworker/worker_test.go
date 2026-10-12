@@ -100,10 +100,10 @@ func TestRunTaskBuildsExecCommandAndCapturesLastMessage(t *testing.T) {
 			if lastPath == "" {
 				t.Fatal("missing --output-last-message")
 			}
-			if err := os.WriteFile(lastPath, []byte("done\n\nChanged files: none"), 0644); err != nil {
+			if err := os.WriteFile(lastPath, []byte("<think>PRIVATE_CANARY</think>\ndone\n\nChanged files: none"), 0644); err != nil {
 				t.Fatalf("write last message: %v", err)
 			}
-			return RunResult{ExitCode: 0, Stdout: "stdout"}, nil
+			return RunResult{ExitCode: 0, Stdout: "<think>PRIVATE_CANARY</think>stdout", Stderr: "<think>PRIVATE_CANARY</think>stderr"}, nil
 		},
 	}
 	worker, err := NewWithRunner(Config{
@@ -130,6 +130,15 @@ func TestRunTaskBuildsExecCommandAndCapturesLastMessage(t *testing.T) {
 	}
 	if result["final_message"] != "done\n\nChanged files: none" {
 		t.Fatalf("final message = %q", result["final_message"])
+	}
+	for _, name := range []string{"stdout.txt", "stderr.txt", "last-message.md"} {
+		data, readErr := os.ReadFile(filepath.Join(dataDir, "task-1", name))
+		if readErr != nil {
+			t.Fatalf("read %s artifact: %v", name, readErr)
+		}
+		if strings.Contains(string(data), "PRIVATE_CANARY") {
+			t.Fatalf("private reasoning persisted in %s: %q", name, data)
+		}
 	}
 	if len(fake.calls) != 2 {
 		t.Fatalf("calls = %d", len(fake.calls))

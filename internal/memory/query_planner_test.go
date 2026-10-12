@@ -1,17 +1,22 @@
 package memory
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestExtractKeywords(t *testing.T) {
 	tests := []struct {
-		name     string
-		message  string
-		wantMin  int // minimum expected keywords
-		contains []string
+		name        string
+		message     string
+		wantMin     int // minimum expected keywords
+		contains    []string
 		notContains []string
 	}{
 		{
@@ -24,38 +29,38 @@ func TestExtractKeywords(t *testing.T) {
 			notContains: []string{"i"},
 		},
 		{
-			name:     "naming question",
-			message:  "why was I named Lumi?",
-			wantMin:  2,
-			contains: []string{"named", "lumi"},
+			name:        "naming question",
+			message:     "why was I named Lumi?",
+			wantMin:     2,
+			contains:    []string{"named", "lumi"},
 			notContains: []string{"why", "was", "i"},
 		},
 		{
-			name:     "technical question",
-			message:  "how does the memory search system work?",
-			wantMin:  3,
-			contains: []string{"memory", "search", "system", "work"},
+			name:        "technical question",
+			message:     "how does the memory search system work?",
+			wantMin:     3,
+			contains:    []string{"memory", "search", "system", "work"},
 			notContains: []string{"how", "does", "the"},
 		},
 		{
-			name:     "decision question",
-			message:  "what did we decide about the memory architecture?",
-			wantMin:  3,
-			contains: []string{"decide", "memory", "architecture"},
+			name:        "decision question",
+			message:     "what did we decide about the memory architecture?",
+			wantMin:     3,
+			contains:    []string{"decide", "memory", "architecture"},
 			notContains: []string{"what", "did", "we", "about", "the"},
 		},
 		{
-			name:     "short query",
-			message:  "Ema preferences",
-			wantMin:  2,
-			contains: []string{"ema", "preferences"},
+			name:        "short query",
+			message:     "Ema preferences",
+			wantMin:     2,
+			contains:    []string{"ema", "preferences"},
 			notContains: []string{},
 		},
 		{
-			name:     "punctuation handling",
-			message:  "what's the status of Prizm???",
-			wantMin:  2,
-			contains: []string{"status", "prizm"},
+			name:        "punctuation handling",
+			message:     "what's the status of Prizm???",
+			wantMin:     2,
+			contains:    []string{"status", "prizm"},
 			notContains: []string{"what's", "???"},
 		},
 	}
@@ -97,8 +102,8 @@ func TestParseQueryPlanJSON(t *testing.T) {
 		check   func(*QueryPlanResult) error
 	}{
 		{
-			name: "clean JSON",
-			raw:  `{"intent":"identity question","keywords":["identity","origin","name","lumi"],"search_type":"semantic","recency_preference":"all_time"}`,
+			name:    "clean JSON",
+			raw:     `{"intent":"identity question","keywords":["identity","origin","name","lumi"],"search_type":"semantic","recency_preference":"all_time"}`,
 			wantErr: false,
 			check: func(r *QueryPlanResult) error {
 				if len(r.Keywords) != 4 {
@@ -111,8 +116,8 @@ func TestParseQueryPlanJSON(t *testing.T) {
 			},
 		},
 		{
-			name: "JSON in markdown fence",
-			raw:  "```json\n{\"intent\":\"test\",\"keywords\":[\"foo\"],\"search_type\":\"keyword\",\"recency_preference\":\"recent\"}\n```",
+			name:    "JSON in markdown fence",
+			raw:     "```json\n{\"intent\":\"test\",\"keywords\":[\"foo\"],\"search_type\":\"keyword\",\"recency_preference\":\"recent\"}\n```",
 			wantErr: false,
 			check: func(r *QueryPlanResult) error {
 				if len(r.Keywords) != 1 {
@@ -122,8 +127,8 @@ func TestParseQueryPlanJSON(t *testing.T) {
 			},
 		},
 		{
-			name: "JSON with surrounding text",
-			raw:  "Here is the plan:\n{\"intent\":\"test\",\"keywords\":[\"bar\"],\"search_type\":\"hybrid\"}\nDone.",
+			name:    "JSON with surrounding text",
+			raw:     "Here is the plan:\n{\"intent\":\"test\",\"keywords\":[\"bar\"],\"search_type\":\"hybrid\"}\nDone.",
 			wantErr: false,
 			check: func(r *QueryPlanResult) error {
 				if len(r.Keywords) != 1 {
@@ -143,8 +148,8 @@ func TestParseQueryPlanJSON(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "defaults for missing fields",
-			raw:  `{"intent":"test","keywords":["test"]}`,
+			name:    "defaults for missing fields",
+			raw:     `{"intent":"test","keywords":["test"]}`,
 			wantErr: false,
 			check: func(r *QueryPlanResult) error {
 				if r.SearchType != "hybrid" {
@@ -215,7 +220,7 @@ func TestQueryPlannerCache(t *testing.T) {
 
 func TestStripThinkingPrefix(t *testing.T) {
 	tests := []struct {
-		name string
+		name  string
 		input string
 		want  string
 	}{
@@ -243,6 +248,59 @@ func TestStripThinkingPrefix(t *testing.T) {
 				t.Errorf("stripThinkingPrefix() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestQueryPlannerIgnoresPrivateThinkingField(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"response": "",
+			"thinking": "PRIVATE_CANARY " + `{"intent":"private","keywords":["secret"]}`,
+		})
+	}))
+	defer server.Close()
+
+	planner := NewQueryPlanner(QueryPlanConfig{Enabled: true, Model: "test", OllamaURL: server.URL, Timeout: time.Second})
+	_, err := planner.callLLM(context.Background(), "public query", 1, 0)
+	if err == nil || !strings.Contains(err.Error(), "no public answer") || strings.Contains(err.Error(), "PRIVATE_CANARY") {
+		t.Fatalf("expected privacy-safe failure, got %v", err)
+	}
+}
+
+func TestQueryPlannerDoesNotRetainRawResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"response": `<think>PRIVATE_CANARY</think>{"intent":"public","keywords":["safe"]}`,
+		})
+	}))
+	defer server.Close()
+
+	planner := NewQueryPlanner(QueryPlanConfig{Enabled: true, Model: "test", OllamaURL: server.URL, Timeout: time.Second})
+	result, err := planner.callLLM(context.Background(), "public query", 1, 0)
+	if err != nil {
+		t.Fatalf("callLLM error: %v", err)
+	}
+	if result.RawResponse != "" || result.Intent != "public" {
+		t.Fatalf("raw response retained or result invalid: %#v", result)
+	}
+}
+
+func TestQueryPlannerSanitizesStructuredPublicFields(t *testing.T) {
+	result, err := parseQueryPlanJSON(`{"intent":"<think>PRIVATE_CANARY</think>identity question","keywords":["<think>PRIVATE_CANARY</think>identity"],"alternative_queries":["<think>PRIVATE_CANARY</think>name history"]}`)
+	if err != nil {
+		t.Fatalf("parse query plan: %v", err)
+	}
+	for _, got := range []string{result.Intent, result.Keywords[0], result.AlternativeQueries[0]} {
+		if strings.Contains(got, "PRIVATE_CANARY") {
+			t.Fatalf("private reasoning leaked in parsed query plan: %#v", result)
+		}
+	}
+}
+
+func TestQueryPlannerRejectsIncompleteReasoningInStructuredFields(t *testing.T) {
+	_, err := parseQueryPlanJSON(`{"intent":"identity <think>PRIVATE_CANARY","keywords":["identity"]}`)
+	if err == nil || strings.Contains(err.Error(), "PRIVATE_CANARY") {
+		t.Fatalf("expected privacy-safe parse failure, got %v", err)
 	}
 }
 

@@ -24,8 +24,10 @@ import (
 // orchestrator config without importing it here.
 type AgentRuntime struct {
 	AgentID             string
+	Role                string
 	Provider            string
 	Model               string
+	ReasoningEffort     string
 	Capabilities        []string
 	RunID               string
 	TaskID              string

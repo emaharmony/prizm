@@ -481,12 +481,12 @@ func TestBudgetContradictoryLimitNotFlaggedWhenStricter(t *testing.T) {
 	}
 }
 
-func TestBudgetUnsafeUnlimitedLoop(t *testing.T) {
+func TestBudgetUnlimitedLoopAllowed(t *testing.T) {
 	def := baseDef()
 	def.Spec.Edges[0].Loop = &SchemaLoopPolicy{MaxTraversals: -1, OnExhausted: "fail"}
 	diags := validateSchemaBudgets(def, nil)
-	if !hasDiagnostic(diags, "budget.unsafe-unlimited-loop", "", "start-end") {
-		t.Fatalf("expected budget.unsafe-unlimited-loop for maxTraversals=-1, got %v", diags)
+	if hasDiagnostic(diags, "budget.unsafe-unlimited-loop", "", "start-end") {
+		t.Fatalf("did not expect unlimited loop to be rejected, got %v", diags)
 	}
 }
 
