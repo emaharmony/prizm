@@ -1486,3 +1486,11 @@ The original local run `run_01M4PWEE6MX1FCE76G3WYANSKF` remains unchanged and ha
 - This corrects the prior pending visual-report detail: the run page itself does not inline the full report, but the supported run-list report link and its served report render were verified. Captures are untracked files under `.tmp/`; they are excluded from source changes.
 
 **Next action:** hand the exact branch diff and acceptance evidence to the coordinator for final commit/push/PR authorization. R1 overall remains open pending other roadmap scenarios.
+
+### Commit and PR handoff (2026-10-12)
+
+- Commit `b798578f5b7ac175b94fed6d5f8036811625e3d8` is pushed on `codex/durable-task-retries`, based on `origin/staging` `d7f76efbd913b165bd695ff295a051e74cf828c2`.
+- PR [#89](https://github.com/emaharmony/prizm/pull/89) targets `staging`, open and non-draft. Initial CI snapshot: `lint-linux` and `test-linux` running; `test-windows` and `test-python` queued. Staged diff check and credential pattern scan passed; exactly 76 reviewed files, 6,148 additions and 294 deletions.
+- No merge was performed. The tracked worktree was clean after commit; pre-existing caches/temp directories remain untracked and excluded.
+
+**Next action:** check CI and resolve any demonstrated failures. Keep R1 overall open for remaining roadmap scenarios.
