@@ -1387,3 +1387,16 @@ affected focused checks.
 The full `go test ./...` rerun explicitly exited 0 with workspace-local `GOCACHE`, `GOMODCACHE`, `TMP`, and `TEMP`: 88 packages passed, 5 had no test files, and 0 failed. This resolves the earlier pending full-suite note. `go build ./...` and `go vet ./...` passed earlier with workspace-local caches.
 
 **Next action:** coordinator review and commit preparation for the validated local changes.
+
+## 2026-10-11 — PR #87 Staticcheck U1000 Cleanup
+
+**Roadmap IDs:** R1 runtime execution behavior and governed proposal handling; R8 autopatch/self-improvement remains dependent on R1 approval and provenance.
+
+- Removed the unused singular `canonicalProposalArtifact` wrapper; multi-artifact proposals continue through `canonicalProposalArtifacts`.
+- Removed the obsolete unphased `canAffordPrerequisiteAndFinal`; the runner continues using phased budget checks and preserves its unlimited/no-cap default.
+
+**Evidence:** `staticcheck ./...` (local 2026.1/v0.7.0), `go vet ./...`, `go build ./...`, `go test ./internal/subagent ./cmd/prizm-cli -count=1`, and `git diff --check` pass. Staticcheck used a workspace-local cache after the default user cache denied writes.
+
+**Open risks:** the Linux CI action installs its moving `latest` Staticcheck release; local validation used v0.7.0 on Windows. Generated workspace cache and worktree directories remain untracked and are not part of the change.
+
+**Next action:** coordinator review, then confirm PR #87's Linux lint result against the committed cleanup.

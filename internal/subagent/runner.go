@@ -458,13 +458,6 @@ func phaseReplyTokens(configured, fallback int) int {
 	return fallback
 }
 
-func canAffordPrerequisiteAndFinal(maxTokens, usedTokens, lastPromptTokens, lastCompletionTokens, replyReserveTokens, promptGrowthTokens, futureGrowthReserve int) bool {
-	if maxTokens <= 0 || replyReserveTokens <= 0 {
-		return true
-	}
-	return maxTokens-usedTokens >= prerequisiteAndFinalEstimate(lastPromptTokens, lastCompletionTokens, replyReserveTokens, promptGrowthTokens, futureGrowthReserve)
-}
-
 func shouldEnterPrerequisite(maxTokens, usedTokens, lastPromptTokens, lastCompletionTokens, replyReserveTokens, promptGrowthTokens, futureGrowthReserve int) bool {
 	if maxTokens <= 0 || replyReserveTokens <= 0 {
 		return false

@@ -81,17 +81,6 @@ func canonicalProposalArtifacts(item *approval.Approval, workspace string) ([]mu
 	return artifacts, nil
 }
 
-func canonicalProposalArtifact(item *approval.Approval, workspace string) (multiagent.ArtifactRef, error) {
-	artifacts, err := canonicalProposalArtifacts(item, workspace)
-	if err != nil {
-		return multiagent.ArtifactRef{}, err
-	}
-	if len(artifacts) != 1 {
-		return multiagent.ArtifactRef{}, fmt.Errorf("proposal identifies %d artifacts", len(artifacts))
-	}
-	return artifacts[0], nil
-}
-
 // approvalProposalLifecycle composes the existing approval store and mutation
 // executor behind the workflow-owned durable sequencing contract.
 type approvalProposalLifecycle struct {

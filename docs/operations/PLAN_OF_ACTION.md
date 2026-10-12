@@ -132,3 +132,15 @@ A full `go test ./...` attempt exposed stale CLI manifest expectations (60k inst
 The pending full-suite rerun is complete: `go test ./...` exited 0 using workspace-local `GOCACHE`, `GOMODCACHE`, `TMP`, and `TEMP`; 88 packages passed, 5 had no test files, and none failed. This resolves the prior pending validation note. `go build ./...` and `go vet ./...` also passed earlier with workspace-local caches.
 
 **Next action:** proceed with coordinator review and commit preparation for the validated local changes.
+
+### Staticcheck U1000 cleanup handoff (2026-10-11)
+
+**Roadmap IDs:** R1 runtime execution behavior and governed proposal handling; R8 remains dependent on R1 approval and provenance.
+
+Removed two unreferenced compatibility helpers flagged by Linux CI: the singular proposal-artifact wrapper and the superseded unphased prerequisite-budget check. The plural artifact resolver and phased budget checks remain in place, including the no-cap behavior.
+
+**Evidence:** local `staticcheck ./...` (2026.1/v0.7.0), `go vet ./...`, `go build ./...`, `go test ./internal/subagent ./cmd/prizm-cli -count=1`, and `git diff --check` pass. The default Staticcheck cache was inaccessible, so its cache was redirected to a workspace-local directory.
+
+**Open risks:** the CI action resolves its `latest` Staticcheck version on Linux; local validation used v0.7.0 on Windows.
+
+**Next action:** coordinator review, then confirm PR #87's Linux lint job against this commit.
