@@ -103,6 +103,11 @@ walkthrough see [Getting Started](./docs/getting-started/GETTING_STARTED.md) and
 - **Verified gated dev loop** — `PROBE → RESEARCH → PLAN → FEEDBACK_PRE →
   EXECUTION → FEEDBACK_POST → REPORT`, with objective build/test
   verification before a phase can complete.
+- **Durable multi-agent runs (R1)** — an event outbox with idempotency keys and lease-based
+  retries carries every approved proposal through apply, validation, and restart; interrupted
+  runs reconcile instead of dropping silently.
+- **Scoped memory (R2)** — memory capture, retrieval, and supersession are scoped to
+  user/project/task, with idempotent Recall sync and a local fallback that reconciles later.
 - **Multi-agent delegation and sub-agents** — capability-based routing,
   bounded tool loops, worktree-per-subagent isolation.
 - **Local-first persistence** — embedded NATS JetStream + SQLite, no
@@ -876,7 +881,7 @@ prizm/
 │   ├── prizm-cli/          # Main CLI binary (serve, run, chat, doctor, config, workflow, etc.)
 │   ├── prizm-bus/          # Standalone NATS bus binary
 │   └── prizm-agent/        # Standalone agent binary
-├── internal/               # All core packages (~57 domains)
+├── internal/               # All core packages (~69 domains)
 │   ├── action/             # Event-triggered actions
 │   ├── adapter/            # Adapter contract
 │   ├── agent/              # Agent registry and lifecycle

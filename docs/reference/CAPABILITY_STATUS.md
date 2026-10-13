@@ -29,6 +29,9 @@ guarantee — always confirm against the source and `prizm --help`.
 | Run inspection (`runs`, `cost`, `trace`, `watch`) | Preview | Artifacts: events.jsonl, prompt.md, output.md, summary.json |
 | Config tooling (`config`, `doctor`, `config wizard`) | Preview | Validate/summarize `prizm.yaml` |
 | Multi-agent delegation | Experimental | Requires configured agents + provider |
+| Durable multi-agent runs (R1 recovery) | Experimental | Durable outbox, idempotent grants, restart-safe report reconstruction; single live acceptance run completed (see [Work Log](../operations/WORK_LOG.md)) |
+| Scoped memory lifecycle (R2) | Experimental | Memory capture/retrieval/supersession scoped to user/project/task; Recall idempotency + local fallback (see [memory design](../design/memory-store.md)) |
+| Freewill intention contracts | Experimental | Policy-only contracts behind `freewill.enabled` (default false); no execution authority, scheduler, or provider path yet — see [ADR 0003](../architecture/decisions/0003-freewill-intention-contracts.md) |
 | Providers (Ollama/OpenAI/Anthropic/Gemini/Claude Code) | Experimental | API-backed providers need credentials |
 | Scheduler (cron jobs) | Experimental | Disabled by default |
 | MCP tool servers | Experimental | Disabled by default; probe before enabling |
