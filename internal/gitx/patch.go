@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,7 +14,67 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 )
+
+// WorktreeInspectionStage and Category are fixed diagnostics for a failed
+// read-only tree inspection. They intentionally omit paths and command output.
+type WorktreeInspectionStage string
+type WorktreeInspectionCategory string
+
+const (
+	InspectResolveGitDir WorktreeInspectionStage = "gitdir_discovery"
+	InspectCreateIndex   WorktreeInspectionStage = "temp_index_create"
+	InspectCloseIndex    WorktreeInspectionStage = "temp_index_close"
+	InspectRemoveIndex   WorktreeInspectionStage = "temp_index_remove"
+	InspectReadTree      WorktreeInspectionStage = "read_tree"
+	InspectAddWorktree   WorktreeInspectionStage = "stage_worktree"
+	InspectWriteTree     WorktreeInspectionStage = "write_tree"
+
+	InspectCancelled     WorktreeInspectionCategory = "cancelled"
+	InspectPermission    WorktreeInspectionCategory = "permission"
+	InspectUnavailable   WorktreeInspectionCategory = "unavailable"
+	InspectCommandFailed WorktreeInspectionCategory = "command_failed"
+	InspectIOFailed      WorktreeInspectionCategory = "io_failed"
+)
+
+type WorktreeInspectionError struct {
+	Stage    WorktreeInspectionStage
+	Category WorktreeInspectionCategory
+	ExitCode int
+	cause    error
+}
+
+func (e *WorktreeInspectionError) Error() string { return "git worktree inspection failed" }
+func (e *WorktreeInspectionError) Unwrap() error { return e.cause }
+
+func worktreeInspectionError(ctx context.Context, stage WorktreeInspectionStage, err error) error {
+	if err == nil {
+		return nil
+	}
+	category := InspectIOFailed
+	exitCode := 0
+	switch {
+	case errors.Is(ctx.Err(), context.Canceled), errors.Is(ctx.Err(), context.DeadlineExceeded):
+		category = InspectCancelled
+	case errors.Is(err, fs.ErrPermission), errors.Is(err, syscall.EACCES), errors.Is(err, syscall.EPERM):
+		category = InspectPermission
+	case errors.Is(err, exec.ErrNotFound), errors.Is(err, fs.ErrNotExist):
+		category = InspectUnavailable
+	default:
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			category = InspectCommandFailed
+			exitCode = exitErr.ExitCode()
+		} else {
+			var pathErr *os.PathError
+			if errors.As(err, &pathErr) && errors.Is(pathErr.Err, fs.ErrNotExist) {
+				category = InspectUnavailable
+			}
+		}
+	}
+	return &WorktreeInspectionError{Stage: stage, Category: category, ExitCode: exitCode, cause: err}
+}
 
 // PatchPlan is the immutable result of validating a unified diff against an
 // exact repository state. ExpectedTree identifies the complete tree produced
@@ -221,13 +283,16 @@ func WorktreeTree(ctx context.Context, root string) (string, error) {
 	}
 	defer cleanup()
 	if _, err := runGitWithIndex(ctx, root, index, "read-tree", "HEAD"); err != nil {
-		return "", err
+		return "", worktreeInspectionError(ctx, InspectReadTree, err)
 	}
 	if _, err := runGitWithIndex(ctx, root, index, "add", "--all", "--", "."); err != nil {
-		return "", err
+		return "", worktreeInspectionError(ctx, InspectAddWorktree, err)
 	}
 	out, err := runGitWithIndex(ctx, root, index, "write-tree")
-	return strings.TrimSpace(out), err
+	if err != nil {
+		return "", worktreeInspectionError(ctx, InspectWriteTree, err)
+	}
+	return strings.TrimSpace(out), nil
 }
 
 // CheckPatchDirection checks whether the exact patch applies in the requested
@@ -348,23 +413,23 @@ func validatePatchPathParents(root, path string) error {
 func temporaryIndex(ctx context.Context, root string) (string, func(), error) {
 	gitDir, err := RunCommand(ctx, root, "", "git", "rev-parse", "--absolute-git-dir")
 	if err != nil {
-		return "", nil, fmt.Errorf("resolve repository git directory for temporary index: %w", err)
+		return "", nil, worktreeInspectionError(ctx, InspectResolveGitDir, err)
 	}
 	gitDir = strings.TrimSpace(gitDir)
 	if gitDir == "" {
-		return "", nil, fmt.Errorf("resolve repository git directory for temporary index: empty path")
+		return "", nil, worktreeInspectionError(ctx, InspectResolveGitDir, errors.New("empty git directory"))
 	}
 	f, err := os.CreateTemp(gitDir, "prizm-patch-index-*")
 	if err != nil {
-		return "", nil, err
+		return "", nil, worktreeInspectionError(ctx, InspectCreateIndex, err)
 	}
 	path := f.Name()
 	if err := f.Close(); err != nil {
 		_ = os.Remove(path)
-		return "", nil, err
+		return "", nil, worktreeInspectionError(ctx, InspectCloseIndex, err)
 	}
 	if err := os.Remove(path); err != nil {
-		return "", nil, err
+		return "", nil, worktreeInspectionError(ctx, InspectRemoveIndex, err)
 	}
 	return path, func() { _ = os.Remove(path) }, nil
 }

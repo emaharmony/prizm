@@ -103,13 +103,34 @@ type ProposalOperation struct {
 
 // ProposalApplyResult is bounded application evidence retained in the run.
 type ProposalApplyResult struct {
-	Success       bool                  `json:"success"`
-	TargetPath    string                `json:"target_path,omitempty"`
-	Message       string                `json:"message,omitempty"`
-	DiffPath      string                `json:"diff_path,omitempty"`
-	DiffStat      string                `json:"diff_stat,omitempty"`
-	ReconcileCode ProposalReconcileCode `json:"reconcile_code,omitempty"`
-	ObservedTree  string                `json:"observed_tree,omitempty"`
+	Success            bool                  `json:"success"`
+	TargetPath         string                `json:"target_path,omitempty"`
+	Message            string                `json:"message,omitempty"`
+	DiffPath           string                `json:"diff_path,omitempty"`
+	DiffStat           string                `json:"diff_stat,omitempty"`
+	ReconcileCode      ProposalReconcileCode `json:"reconcile_code,omitempty"`
+	ObservedTree       string                `json:"observed_tree,omitempty"`
+	InspectionStage    string                `json:"inspection_stage,omitempty"`
+	InspectionCategory string                `json:"inspection_category,omitempty"`
+	InspectionExitCode int                   `json:"inspection_exit_code,omitempty"`
+}
+
+func validInspectionStage(stage string) bool {
+	switch stage {
+	case "gitdir_discovery", "temp_index_create", "temp_index_close", "temp_index_remove", "read_tree", "stage_worktree", "write_tree":
+		return true
+	default:
+		return false
+	}
+}
+
+func validInspectionCategory(category string) bool {
+	switch category {
+	case "cancelled", "permission", "unavailable", "command_failed", "io_failed":
+		return true
+	default:
+		return false
+	}
 }
 
 // ProposalReconcileCode is a bounded diagnostic from the trusted tree checker.

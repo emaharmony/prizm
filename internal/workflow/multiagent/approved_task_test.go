@@ -300,6 +300,31 @@ func TestValidProposalReconcileCodeAcceptsObservedTreesAndKnownFailures(t *testi
 	}
 }
 
+func TestSafeProposalReconcileResultKeepsOnlyBoundedInspectionDiagnostic(t *testing.T) {
+	result := safeProposalReconcileResult(ProposalApplyResult{
+		ReconcileCode:   ProposalReconcileInspectFailed,
+		InspectionStage: "stage_worktree", InspectionCategory: "command_failed", InspectionExitCode: 128,
+		ObservedTree: strings.Repeat("a", 40), Message: "private command output", TargetPath: "private/path",
+	})
+	if result.InspectionStage != "stage_worktree" || result.InspectionCategory != "command_failed" || result.InspectionExitCode != 128 || result.Message != "" || result.TargetPath != "" {
+		t.Fatalf("bounded diagnostic projection=%#v", result)
+	}
+	malicious := safeProposalReconcileResult(ProposalApplyResult{
+		ReconcileCode: ProposalReconcileInspectFailed, InspectionStage: "C:/private/path",
+		InspectionCategory: "permission denied: private file", InspectionExitCode: 999,
+	})
+	if malicious.InspectionStage != "" || malicious.InspectionCategory != "" || malicious.InspectionExitCode != 0 {
+		t.Fatalf("unsafe diagnostic fields survived: %#v", malicious)
+	}
+	nonCommand := safeProposalReconcileResult(ProposalApplyResult{
+		ReconcileCode: ProposalReconcileInspectFailed, InspectionStage: "read_tree",
+		InspectionCategory: "permission", InspectionExitCode: 13,
+	})
+	if nonCommand.InspectionStage != "read_tree" || nonCommand.InspectionCategory != "permission" || nonCommand.InspectionExitCode != 0 {
+		t.Fatalf("non-command failure retained exit status: %#v", nonCommand)
+	}
+}
+
 func approvedTaskRunner() *scriptedRunner {
 	runner := happyDurableRunner()
 	result := runner.scripts[RoleDeveloper][0].result

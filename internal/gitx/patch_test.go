@@ -4,11 +4,44 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestWorktreeTreeReportsBoundedGitDirectoryFailureStage(t *testing.T) {
+	root := t.TempDir()
+	initRepo := exec.Command("git", "init", "--quiet", root)
+	if output, err := initRepo.CombinedOutput(); err != nil {
+		t.Fatalf("initialize empty repository: %v (%d output bytes)", err, len(output))
+	}
+	_, err := WorktreeTree(context.Background(), root)
+	var inspection *WorktreeInspectionError
+	if !errors.As(err, &inspection) {
+		t.Fatalf("error type=%T, want WorktreeInspectionError", err)
+	}
+	if inspection.Stage != InspectReadTree || inspection.Category != InspectCommandFailed || inspection.ExitCode == 0 {
+		t.Fatalf("inspection=%#v", inspection)
+	}
+	if strings.Contains(err.Error(), root) {
+		t.Fatal("public error leaked the inspected path")
+	}
+}
+
+func TestWorktreeTreeReportsMissingGitWithoutEchoingExecutablePath(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	_, err := WorktreeTree(context.Background(), t.TempDir())
+	var inspection *WorktreeInspectionError
+	if !errors.As(err, &inspection) || inspection.Stage != InspectResolveGitDir || inspection.Category != InspectUnavailable {
+		t.Fatalf("inspection=%#v error=%v", inspection, err)
+	}
+	if strings.Contains(err.Error(), "git.exe") || strings.Contains(err.Error(), "PATH") {
+		t.Fatalf("missing executable diagnostic leaked host details: %v", err)
+	}
+}
 
 func TestPatchSourceRangesTreatsRemovedHeaderLikeLineAsHunkContent(t *testing.T) {
 	patch := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n" +

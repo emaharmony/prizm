@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -161,6 +162,14 @@ func (l approvalProposalLifecycle) Reconcile(ctx context.Context, op multiagent.
 				result.ReconcileCode = multiagent.ProposalReconcileContextCancelled
 			} else {
 				result.ReconcileCode = multiagent.ProposalReconcileInspectFailed
+			}
+			var inspectErr *gitx.WorktreeInspectionError
+			if errors.As(treeErr, &inspectErr) {
+				result.InspectionStage = string(inspectErr.Stage)
+				result.InspectionCategory = string(inspectErr.Category)
+				if inspectErr.Category == gitx.InspectCommandFailed {
+					result.InspectionExitCode = inspectErr.ExitCode
+				}
 			}
 			return multiagent.ProposalAmbiguous, result, nil
 		}

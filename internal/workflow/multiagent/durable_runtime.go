@@ -1608,6 +1608,13 @@ func (r *DurableRuntime) emitProposalReconcileFailure(operation ProposalOperatio
 	if validGitTreeID(result.ObservedTree) {
 		payload["observed_tree"] = result.ObservedTree
 	}
+	if validInspectionStage(result.InspectionStage) && validInspectionCategory(result.InspectionCategory) {
+		payload["inspection_stage"] = result.InspectionStage
+		payload["inspection_category"] = result.InspectionCategory
+		if result.InspectionCategory == "command_failed" && result.InspectionExitCode >= 0 && result.InspectionExitCode <= 255 {
+			payload["inspection_exit_code"] = result.InspectionExitCode
+		}
+	}
 	r.buffer.Emit(event.NewEvent(event.EventProposalApplyFailed, durableEventSource, payload).
 		WithCorrelationID(operation.ApplyKey).WithMetadata(event.EventMetadata{RunID: operation.RunID}))
 }
@@ -1629,6 +1636,13 @@ func safeProposalReconcileResult(result ProposalApplyResult) ProposalApplyResult
 	}
 	if validGitTreeID(result.ObservedTree) {
 		safe.ObservedTree = result.ObservedTree
+	}
+	if validInspectionStage(result.InspectionStage) && validInspectionCategory(result.InspectionCategory) {
+		safe.InspectionStage = result.InspectionStage
+		safe.InspectionCategory = result.InspectionCategory
+		if result.InspectionCategory == "command_failed" && result.InspectionExitCode >= 0 && result.InspectionExitCode <= 255 {
+			safe.InspectionExitCode = result.InspectionExitCode
+		}
 	}
 	return safe
 }
