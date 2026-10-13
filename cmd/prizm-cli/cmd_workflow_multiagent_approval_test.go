@@ -94,9 +94,9 @@ func TestPatchProposalResolvesManyArtifactsAndReconcilesTrees(t *testing.T) {
 	}
 	lifecycle := newApprovalProposalLifecycle(store, workspace, t.TempDir())
 	op := multiagent.ProposalOperation{RunID: item.RunID, ProposalID: item.ProposalID, ApprovalID: item.ApprovalID, ApplyKey: "apply-patch", ExecutionKey: item.CorrelationID}
-	status, _, err := lifecycle.Reconcile(ctx, op)
-	if err != nil || status != multiagent.ProposalNotApplied {
-		t.Fatalf("base status=%q err=%v", status, err)
+	status, baseResult, err := lifecycle.Reconcile(ctx, op)
+	if err != nil || status != multiagent.ProposalNotApplied || baseResult.ReconcileCode != multiagent.ProposalReconcileBaseTree || baseResult.ObservedTree != plan.BaseTree {
+		t.Fatalf("base status=%q result=%#v err=%v", status, baseResult, err)
 	}
 	if err := item.Approve("operator"); err != nil {
 		t.Fatal(err)
@@ -112,16 +112,16 @@ func TestPatchProposalResolvesManyArtifactsAndReconcilesTrees(t *testing.T) {
 	if err != nil || string(data) != patch {
 		t.Fatalf("evidence is not exact approved patch: err=%v", err)
 	}
-	status, _, err = lifecycle.Reconcile(ctx, op)
-	if err != nil || status != multiagent.ProposalApplied {
-		t.Fatalf("applied status=%q err=%v", status, err)
+	status, appliedResult, err := lifecycle.Reconcile(ctx, op)
+	if err != nil || status != multiagent.ProposalApplied || appliedResult.ReconcileCode != multiagent.ProposalReconcileExpectedTree || appliedResult.ObservedTree != plan.ExpectedTree {
+		t.Fatalf("applied status=%q result=%#v err=%v", status, appliedResult, err)
 	}
 	if err := os.WriteFile(filepath.Join(workspace, "unrelated.txt"), []byte("drift"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	status, _, err = lifecycle.Reconcile(ctx, op)
-	if err != nil || status != multiagent.ProposalAmbiguous {
-		t.Fatalf("drift status=%q err=%v", status, err)
+	status, driftResult, err := lifecycle.Reconcile(ctx, op)
+	if err != nil || status != multiagent.ProposalAmbiguous || driftResult.ReconcileCode != multiagent.ProposalReconcileTreeMismatch || driftResult.ObservedTree == "" || driftResult.ObservedTree == plan.ExpectedTree || driftResult.ObservedTree == plan.BaseTree {
+		t.Fatalf("drift status=%q result=%#v err=%v", status, driftResult, err)
 	}
 }
 

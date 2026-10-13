@@ -1,6 +1,10 @@
 package event
 
 func init() {
+	Schemas[EventProposalApplyFailed] = Schema{
+		Required: []string{"run_id", "proposal_id", "approval_id", "apply_key", "execution_key", "workspace_id", "reason"},
+		Optional: []string{"reconcile_code", "observed_tree"},
+	}
 	// Register multi-agent payload contracts with the existing opt-in event
 	// validator. This extends the canonical schema map rather than creating a
 	// second validation or event system.

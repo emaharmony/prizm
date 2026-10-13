@@ -103,12 +103,27 @@ type ProposalOperation struct {
 
 // ProposalApplyResult is bounded application evidence retained in the run.
 type ProposalApplyResult struct {
-	Success    bool   `json:"success"`
-	TargetPath string `json:"target_path,omitempty"`
-	Message    string `json:"message,omitempty"`
-	DiffPath   string `json:"diff_path,omitempty"`
-	DiffStat   string `json:"diff_stat,omitempty"`
+	Success       bool                  `json:"success"`
+	TargetPath    string                `json:"target_path,omitempty"`
+	Message       string                `json:"message,omitempty"`
+	DiffPath      string                `json:"diff_path,omitempty"`
+	DiffStat      string                `json:"diff_stat,omitempty"`
+	ReconcileCode ProposalReconcileCode `json:"reconcile_code,omitempty"`
+	ObservedTree  string                `json:"observed_tree,omitempty"`
 }
+
+// ProposalReconcileCode is a bounded diagnostic from the trusted tree checker.
+// It intentionally excludes raw Git errors, paths, and file contents.
+type ProposalReconcileCode string
+
+const (
+	ProposalReconcilePlanMissing      ProposalReconcileCode = "patch_plan_missing"
+	ProposalReconcileInspectFailed    ProposalReconcileCode = "worktree_inspection_failed"
+	ProposalReconcileContextCancelled ProposalReconcileCode = "context_cancelled"
+	ProposalReconcileExpectedTree     ProposalReconcileCode = "expected_tree_present"
+	ProposalReconcileBaseTree         ProposalReconcileCode = "base_tree_present"
+	ProposalReconcileTreeMismatch     ProposalReconcileCode = "tree_mismatch"
+)
 
 // ProposalLifecycle composes existing approval and mutation authorities. The
 // workflow owns sequencing; the implementation owns approval and application
@@ -373,6 +388,11 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 					proposal.ApplyKey != proposalApplyKey(r.State.RunID, proposal.ProposalID) ||
 					(proposal.Phase != "waiting" && proposal.Phase != "applying" && proposal.Phase != "applied") {
 					problems = append(problems, "approved_task contains an invalid proposal checkpoint")
+					break
+				}
+				if result := proposal.Result; result != nil && result.ReconcileCode != "" &&
+					(!validProposalReconcileCode(result.ReconcileCode) || result.ObservedTree != "" && !validGitTreeID(result.ObservedTree)) {
+					problems = append(problems, "approved_task contains an invalid reconciliation diagnostic")
 					break
 				}
 			}

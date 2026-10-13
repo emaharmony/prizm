@@ -1425,9 +1425,11 @@ func (r *DurableRuntime) advanceApprovedTask(ctx context.Context, record Durable
 				}
 				continue
 			case ProposalAmbiguous:
+				result = safeProposalReconcileResult(result)
+				progress.Result = &result
 				record.Waiting = proposalWaitingState(*progress, "proposal application outcome is ambiguous", false, r.now().UTC())
 				record.Failure = persistedFailure("uncertain_proposal_application", errors.New(record.Waiting.Reason), r.now())
-				r.emitProposal(event.EventProposalApplyFailed, progress.ProposalOperation, record.Waiting.Reason)
+				r.emitProposalReconcileFailure(progress.ProposalOperation, record.Waiting.Reason, result)
 				return r.checkpoint(ctx, record)
 			case ProposalNotApplied:
 				// Safe to retry the stable apply key.
@@ -1594,6 +1596,53 @@ func (r *DurableRuntime) emitProposal(eventType string, operation ProposalOperat
 	}
 	r.buffer.Emit(event.NewEvent(eventType, durableEventSource, payload).
 		WithCorrelationID(operation.ApplyKey).WithMetadata(event.EventMetadata{RunID: operation.RunID}))
+}
+
+func (r *DurableRuntime) emitProposalReconcileFailure(operation ProposalOperation, reason string, result ProposalApplyResult) {
+	payload := map[string]any{"run_id": operation.RunID, "proposal_id": operation.ProposalID,
+		"approval_id": operation.ApprovalID, "apply_key": operation.ApplyKey,
+		"workspace_id": operation.WorkspaceID, "execution_key": operation.ExecutionKey, "reason": reason}
+	if validProposalReconcileCode(result.ReconcileCode) {
+		payload["reconcile_code"] = string(result.ReconcileCode)
+	}
+	if validGitTreeID(result.ObservedTree) {
+		payload["observed_tree"] = result.ObservedTree
+	}
+	r.buffer.Emit(event.NewEvent(event.EventProposalApplyFailed, durableEventSource, payload).
+		WithCorrelationID(operation.ApplyKey).WithMetadata(event.EventMetadata{RunID: operation.RunID}))
+}
+
+func validProposalReconcileCode(code ProposalReconcileCode) bool {
+	switch code {
+	case ProposalReconcilePlanMissing, ProposalReconcileInspectFailed, ProposalReconcileContextCancelled,
+		ProposalReconcileExpectedTree, ProposalReconcileBaseTree, ProposalReconcileTreeMismatch:
+		return true
+	default:
+		return false
+	}
+}
+
+func safeProposalReconcileResult(result ProposalApplyResult) ProposalApplyResult {
+	safe := ProposalApplyResult{}
+	if validProposalReconcileCode(result.ReconcileCode) {
+		safe.ReconcileCode = result.ReconcileCode
+	}
+	if validGitTreeID(result.ObservedTree) {
+		safe.ObservedTree = result.ObservedTree
+	}
+	return safe
+}
+
+func validGitTreeID(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, r := range value {
+		if !(r >= '0' && r <= '9') && !(r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *DurableRuntime) emitProposalResult(eventType string, operation ProposalOperation, result ProposalApplyResult) {

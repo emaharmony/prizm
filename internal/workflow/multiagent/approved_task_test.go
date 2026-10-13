@@ -147,13 +147,14 @@ func TestDurableApprovedTaskRealAtomicPatchRestartThroughValidation(t *testing.T
 }
 
 type fakeProposalLifecycle struct {
-	mu         sync.Mutex
-	decisions  map[string]ProposalDecision
-	reasons    map[string]string
-	applyCalls []ProposalOperation
-	reconciled ProposalReconciliation
-	applyFails int
-	onApply    func()
+	mu              sync.Mutex
+	decisions       map[string]ProposalDecision
+	reasons         map[string]string
+	applyCalls      []ProposalOperation
+	reconciled      ProposalReconciliation
+	reconcileResult ProposalApplyResult
+	applyFails      int
+	onApply         func()
 }
 
 func (f *fakeProposalLifecycle) Decision(_ context.Context, op ProposalOperation) (ProposalDecision, string, error) {
@@ -219,7 +220,84 @@ func (f *fakeProposalLifecycle) Reconcile(_ context.Context, _ ProposalOperation
 	if f.reconciled == "" {
 		return ProposalNotApplied, ProposalApplyResult{}, nil
 	}
-	return f.reconciled, ProposalApplyResult{Success: f.reconciled == ProposalApplied, TargetPath: "feature.txt"}, nil
+	result := f.reconcileResult
+	result.Success = f.reconciled == ProposalApplied
+	if result.TargetPath == "" {
+		result.TargetPath = "feature.txt"
+	}
+	return f.reconciled, result, nil
+}
+
+func TestDurableApprovedTaskPersistsSafeReconcileFailure(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	lifecycle := &fakeProposalLifecycle{decisions: map[string]ProposalDecision{"approval-1": ProposalPending}, reconciled: ProposalNotApplied}
+	runtime := newDurableRuntimeForTest(t, validDefinition(), approvedTaskRunner(), env.store, env.claimer, env.events,
+		DurableRuntimeOptions{Proposals: lifecycle})
+	request := testRunRequest()
+	request.RunID = "run-proposal-safe-reconcile-failure"
+	state, err := runtime.Run(context.Background(), request)
+	var waiting *RunWaitingError
+	if !errors.As(err, &waiting) || state.Status != RunStatusPaused {
+		t.Fatalf("initial approval wait state=%q err=%v", state.Status, err)
+	}
+	lifecycle.decisions["approval-1"] = ProposalGranted
+	lifecycle.reconciled = ProposalAmbiguous
+	lifecycle.reconcileResult = ProposalApplyResult{ReconcileCode: ProposalReconcileTreeMismatch, ObservedTree: strings.Repeat("a", 40), Message: "PRIVATE_OUTPUT", TargetPath: "PRIVATE_PATH"}
+	state, err = runtime.Resume(context.Background(), request.RunID)
+	if !errors.As(err, &waiting) || state.Status != RunStatusPaused {
+		t.Fatalf("ambiguous reconciliation state=%q err=%v", state.Status, err)
+	}
+	record, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil || record.ApprovedTask == nil || record.ApprovedTask.Proposals[0].Result == nil ||
+		record.ApprovedTask.Proposals[0].Result.ReconcileCode != ProposalReconcileTreeMismatch ||
+		record.ApprovedTask.Proposals[0].Result.ObservedTree != strings.Repeat("a", 40) ||
+		record.ApprovedTask.Proposals[0].Result.Message != "" || record.ApprovedTask.Proposals[0].Result.TargetPath != "" ||
+		record.Waiting == nil || record.Waiting.SafeToRetry {
+		t.Fatalf("safe reconcile state=%#v err=%v", record, err)
+	}
+	events, err := env.events.Query(context.Background(), event.EventFilter{RunID: request.RunID, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, evt := range events {
+		if evt.Type != event.EventProposalApplyFailed {
+			continue
+		}
+		found = true
+		if err := event.Validate(evt); err != nil {
+			t.Fatalf("reconcile event violates schema: %v", err)
+		}
+		if evt.Payload["reconcile_code"] != string(ProposalReconcileTreeMismatch) ||
+			evt.Payload["observed_tree"] != strings.Repeat("a", 40) || evt.Payload["reason"] != "proposal application outcome is ambiguous" {
+			t.Fatalf("unexpected safe reconcile event payload: %#v", evt.Payload)
+		}
+		for _, forbidden := range []string{"raw_error", "stdout", "stderr", "patch", "content", "PRIVATE_OUTPUT", "PRIVATE_PATH"} {
+			if _, exists := evt.Payload[forbidden]; exists {
+				t.Fatalf("reconcile event leaked %q", forbidden)
+			}
+		}
+	}
+	if !found || len(lifecycle.applyCalls) != 0 {
+		t.Fatalf("ambiguous result emitted=%t apply_calls=%d", found, len(lifecycle.applyCalls))
+	}
+}
+
+func TestValidProposalReconcileCodeAcceptsObservedTreesAndKnownFailures(t *testing.T) {
+	for _, code := range []ProposalReconcileCode{ProposalReconcilePlanMissing, ProposalReconcileInspectFailed,
+		ProposalReconcileContextCancelled, ProposalReconcileExpectedTree, ProposalReconcileBaseTree, ProposalReconcileTreeMismatch} {
+		if !validProposalReconcileCode(code) {
+			t.Errorf("known reconcile code %q rejected", code)
+		}
+	}
+	if validProposalReconcileCode(ProposalReconcileCode("raw-error-text")) {
+		t.Fatal("unrecognized reconcile code accepted")
+	}
+	unsafe := safeProposalReconcileResult(ProposalApplyResult{ReconcileCode: ProposalReconcileCode("private error text"),
+		ObservedTree: "not-a-tree-id", Message: "private output", TargetPath: "private/path"})
+	if unsafe != (ProposalApplyResult{}) {
+		t.Fatalf("unsafe reconciliation fields survived projection: %#v", unsafe)
+	}
 }
 
 func approvedTaskRunner() *scriptedRunner {
