@@ -1713,3 +1713,45 @@ No commit, push, PR creation, or merge has occurred for this candidate yet.
 **Next action:** coordinator reviews the candidate code, tests, and this
 handoff. If approved, create a draft PR against current staging and continue the
 R1 failure diagnosis without changing immutable runs or weakening governance.
+## 2026-10-13 — FW-001 intention contract groundwork
+
+**Roadmap IDs:** R1, FW-001. **Branch/base:** `codex/fw001-intention-contracts`,
+created in an isolated clean staging worktree at
+`e2a4421018acca7940f4d6806d5a3c2cf59a92b9`.
+
+- Added `internal/freewill` as a pure contract domain with a bounded-package
+  justification in ADR 0003. `IntentionRequest` requires proposal identity,
+  agent origin, candidate source, title/goal/reason summary, requested
+  capabilities, project/workspace scope, idempotency/correlation IDs, and an
+  optional resource budget. Strict JSON decoding rejects unknown fields,
+  including authority-bearing keys; errors do not echo request content.
+- Added `CandidateIntention` structural validation and a descriptive transition
+  validator for disabled, sleeping, waking, selecting, proposed,
+  approval_pending, denied, paused, running, and halted. The validator checks
+  edges only and does not grant approval or execution authority.
+- Added independent `freewill.enabled` and
+  `freewill.scheduling.enabled` config flags. Both default false, round-trip
+  independently, and have no runtime consumer in this change. No provider,
+  policy, approval, persistence, transport, scheduler, tool, or execution path
+  was added. ADR 0003 records the Freedom/Freewill distinction, threat model,
+  package justification, authority boundary, and future control ownership.
+- Focused `go test ./internal/freewill ./internal/orchestrator` passed.
+  Repository-wide default-parallel `go test ./...` passed with captured exit
+  marker `.tmp/fw001-gates/go-test-all.exit` equal to `0`; `go build ./...`,
+  `go vet ./...`, and `staticcheck ./...` also exited `0` using worktree-local
+  Go caches. `git diff --check` passed after documentation updates.
+- R1 remains open. PR #91 is a separate open draft checkpoint; its latest
+  real-provider parallel Factory attempt failed at fan-in before implementation
+  proposal, apply, configured validation, or final review. Do not count this
+  FW-001 slice as R1 acceptance or a 9/10 result. The dirty primary checkout
+  and separate Recall worktree were not changed.
+
+**Publication:** commit `8ca67fbc9e9b3f2a896b53a81c96244951830a21` contains the
+12-file FW-001 contract slice. PR [#92](https://github.com/emaharmony/prizm/pull/92)
+targets `staging`, is open/non-draft/mergeable, and was opened with
+`lint-linux`, `test-linux`, and `test-python` in progress and `test-windows`
+queued. These are an opening snapshot, not a final CI result.
+
+**Next action:** monitor PR #92 checks and address any failures. After that
+review checkpoint, FW-002 (deduplicated bounded wake producer) is the next
+eligible Freewill task; FW-P2 stays blocked on R1 and FW-G2.

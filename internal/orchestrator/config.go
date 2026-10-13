@@ -55,6 +55,10 @@ type Config struct {
 	// FactoryMonitor configures local Roblox Factory status notifications.
 	FactoryMonitor FactoryMonitorConfig `yaml:"factory_monitor"`
 
+	// Freewill declares the experimental intention-contract feature switches.
+	// These switches are schema only; this configuration does not start a loop.
+	Freewill FreewillConfig `yaml:"freewill"`
+
 	// Shell configures the shell tool access control for free mode.
 	Shell ShellConfig `yaml:"shell"`
 
@@ -100,6 +104,18 @@ type Config struct {
 	// approval. Separate from any mutation auto-approve — remote tools are
 	// higher-trust-risk, so enabling autonomous MCP execution is an explicit choice.
 	MCPAutoApprove bool `yaml:"mcp_auto_approve"`
+}
+
+// FreewillConfig contains feature-off-by-default Freewill configuration.
+// Enabling these flags alone does not activate scheduling or execution.
+type FreewillConfig struct {
+	Enabled    bool                     `yaml:"enabled"`
+	Scheduling FreewillSchedulingConfig `yaml:"scheduling"`
+}
+
+// FreewillSchedulingConfig is a separate opt-in switch for future wake work.
+type FreewillSchedulingConfig struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 // MCPServerConfig declares one external MCP (Model Context Protocol) tool server.
@@ -1119,6 +1135,10 @@ func DefaultConfig() *Config {
 			Root:              `D:\_projects_\roblox-factory`,
 			PollSeconds:       30,
 			StuckAfterMinutes: 30,
+		},
+		Freewill: FreewillConfig{
+			Enabled:    false,
+			Scheduling: FreewillSchedulingConfig{Enabled: false},
 		},
 		Shell: ShellConfig{
 			Defaults: ShellDefaults{

@@ -28,7 +28,8 @@ This is a *document-and-source-structure review*, **not** an execution of the fu
 | [`internal/commitments/`](https://github.com/emaharmony/prizm/tree/staging/internal/commitments) | Existing commitment records and follow-up delivery can help, but Freewill needs additional proposals/acceptance/revision/priority semantics. |
 | [`internal/workflow/multiagent/`](https://github.com/emaharmony/prizm/tree/staging/internal/workflow/multiagent) | Durable authored/compiled workflows exist; use them for task execution rather than inventing another workflow executor. |
 | [PR #87](https://github.com/emaharmony/prizm/pull/87) | At review time GitHub reported **merged**, improving R1 implementation. Merged != acceptance of every real-provider and restart gate. |
-| [PR #86](https://github.com/emaharmony/prizm/pull/86) | At review time GitHub reported **open**, covering R6 Recall reconciliation. Design local-only durable capture first; treat remote reconciliation as a later integration gate. |
+| [PR #86](https://github.com/emaharmony/prizm/pull/86) | The Recall reconciliation PR is merged. Deployed-service and public scoped-route acceptance remain separate R6 gates; do not infer them from merge status. |
+| [PR #91](https://github.com/emaharmony/prizm/pull/91) | Open draft R1 implementation checkpoint. Its real-provider parallel Factory acceptance did not complete; R1 and every 9/10 gate remain open. |
 
 **Documentation divergence to resolve:** The old `PROJECT-CONTEXT.md` describes a pre-M1 / main-only state, whereas the current roadmap and plan describe newer R1 work on `staging`. Use the current roadmap, plan, source, and tested commit as the implementation baseline; update stale orientation docs through the normal repo process.
 
@@ -127,9 +128,16 @@ This is the detailed **FW track** underneath the authoritative [`PRIZM_ROADMAP.m
 ### FW-P0 — Contracts, threat model, and repo alignment
 
 **Requires:** G0; immediately startable.  
-**Build:** Spec-to-code mapping; state machine (`disabled`, `idle`, `waking`, `selecting`, `proposed`, `awaiting_approval`, `active`, `checkpointing`, `paused`, `completed`, `denied`, `halted`); typed `IntentionRequest`, choice rationale summary, wake source and envelope contracts; architecture decision distinguishing Freedom from Freewill.  
+**Build:** Spec-to-code mapping; state machine (`disabled`, `sleeping`, `waking`, `selecting`, `proposed`, `approval_pending`, `denied`, `paused`, `running`, `halted`); typed `IntentionRequest` and `CandidateIntention`; separate feature and scheduling flags off by default; threat model and architecture decision distinguishing Freedom from Freewill.
 **Tests:** Schema validation, state-transition invariants, disabled-by-default regression tests.  
 **Done when:** A developer can implement next milestone without defining missing authority or lifecycle semantics.
+
+**Implementation checkpoint (2026-10-13):** FW-001 contracts and config schema
+are implemented on `codex/fw001-intention-contracts` from staging
+`e2a4421018acca7940f4d6806d5a3c2cf59a92b9`. See ADR 0003 for package
+justification, transition rules, and threats. This is an unmerged contract
+checkpoint, not a running feature; flags remain off and R1 acceptance remains
+open.
 
 ### FW-P1 — Read-only Decision Loop (first demonstrable Freewill)
 

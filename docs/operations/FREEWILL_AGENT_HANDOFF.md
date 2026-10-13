@@ -82,3 +82,27 @@ At session end, update `docs/operations/PLAN_OF_ACTION.md` with the active
 R/FW IDs, and append a factual `docs/operations/WORK_LOG.md` entry stating
 branch, tested SHA, observed outcomes, unresolved risks, and the **single next
 eligible task**. Never overwrite unrelated handoffs or older historical logs.
+
+## FW-001 contract implementation checkpoint (2026-10-13)
+
+The FW-001 contract slice is implemented on `codex/fw001-intention-contracts`
+from staging base `e2a4421018acca7940f4d6806d5a3c2cf59a92b9`. It adds pure
+request/candidate contracts, structural transition validation, separate
+feature/scheduling config flags that both default off, and ADR 0003 with the
+package justification and threat model. The package does not connect to policy,
+approval, persistence, transport, a scheduler, providers, tools, or execution.
+Focused and full repository checks passed, and coordinator review approved the
+implementation. The FW-001 review PR has no runtime behavior or execution
+path added.
+
+The review-ready checkpoint is [PR #92](https://github.com/emaharmony/prizm/pull/92),
+head `8ca67fbc9e9b3f2a896b53a81c96244951830a21` against `staging`. At opening it
+was non-draft and mergeable; CI was still running or queued.
+
+R1 remains open: PR #91 is an open draft, and its latest real-provider parallel
+Factory attempt failed before proposal, apply, configured validation, or final
+review. This is not evidence that the R1 9/10 gate passed. After FW-001 checks
+and review, the next eligible Freewill task is FW-002 (deduplicated, bounded
+wake producer), subject to its provider/scheduler prerequisites, after this
+FW-001 review checkpoint. FW-P2 remains blocked on verified R1 acceptance and
+FW-G2.
