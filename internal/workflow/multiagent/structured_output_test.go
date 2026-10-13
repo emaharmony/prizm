@@ -2,6 +2,7 @@ package multiagent
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -122,6 +123,29 @@ func TestDecodeRoleOutput(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStructuredOutputCorrectionFeedbackIsSpecificAndSafe(t *testing.T) {
+	t.Run("syntax", func(t *testing.T) {
+		_, err := decodeRoleOutput(RolePlanner, `{"provider_private_canary":`)
+		var correction *SchemaCorrectionError
+		if !errors.As(err, &correction) || correction.Code != "invalid_json_syntax" || !strings.Contains(correction.Feedback, "valid JSON syntax") {
+			t.Fatalf("correction=%#v err=%v", correction, err)
+		}
+		if strings.Contains(correction.Feedback, "provider_private_canary") {
+			t.Fatalf("feedback leaked response content: %q", correction.Feedback)
+		}
+	})
+	t.Run("missing required fields", func(t *testing.T) {
+		_, err := decodeRoleOutput(RolePlanner, `{"schema_version":1,"understanding":"PRIVATE_CANARY"}`)
+		var correction *SchemaCorrectionError
+		if !errors.As(err, &correction) || correction.Code != "missing_required_fields" || !strings.Contains(correction.Feedback, "implementation_plan") {
+			t.Fatalf("correction=%#v err=%v", correction, err)
+		}
+		if strings.Contains(correction.Feedback, "PRIVATE_CANARY") {
+			t.Fatalf("feedback leaked response content: %q", correction.Feedback)
+		}
+	})
 }
 
 func TestDecodeRoleOutputRejectsMalformedOrAmbiguousResults(t *testing.T) {

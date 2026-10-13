@@ -110,10 +110,10 @@ func (p *ResponsesProvider) Generate(ctx context.Context, req provider.GenerateR
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return provider.GenerateResponse{}, retry.NewRetryableError(fmt.Errorf("openai responses: rate limited (429)"))
+		return provider.GenerateResponse{}, retry.NewRetryableErrorAfter(fmt.Errorf("openai responses: rate limited (429)"), retry.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now()))
 	}
 	if resp.StatusCode == http.StatusServiceUnavailable {
-		return provider.GenerateResponse{}, retry.NewRetryableError(fmt.Errorf("openai responses: service unavailable (503)"))
+		return provider.GenerateResponse{}, retry.NewRetryableErrorAfter(fmt.Errorf("openai responses: service unavailable (503)"), retry.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now()))
 	}
 	if resp.StatusCode == http.StatusBadGateway {
 		return provider.GenerateResponse{}, retry.NewRetryableError(fmt.Errorf("openai responses: bad gateway (502)"))

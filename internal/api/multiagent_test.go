@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/emaharmony/prizm/internal/cost"
 	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/retry"
 	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
 
@@ -26,6 +28,39 @@ import (
 // because that helper is not exported across the package boundary.
 type fixedOutcomeRunner struct {
 	outcomes map[multiagent.Role]multiagent.TransitionOutcome
+}
+
+type retryOnceOutcomeRunner struct {
+	failed bool
+}
+
+func (r *retryOnceOutcomeRunner) RunRole(ctx context.Context, req multiagent.RoleRunRequest) (multiagent.RoleRunResult, error) {
+	if req.RoleConfig.Role == multiagent.RolePlanner && !r.failed {
+		r.failed = true
+		return multiagent.RoleRunResult{}, retry.NewRetryableError(fmt.Errorf("provider unavailable"))
+	}
+	return happyOutcomeRunner().RunRole(ctx, req)
+}
+
+type inspectionRuntimeController struct{ root string }
+
+func (c inspectionRuntimeController) Resume(context.Context, string) error { return nil }
+func (c inspectionRuntimeController) DecideProposal(context.Context, string, string, string, string, string) (bool, error) {
+	return true, nil
+}
+func (c inspectionRuntimeController) Proposal(_ context.Context, runID, proposalID string) (MultiAgentProposal, error) {
+	return MultiAgentProposal{RunID: runID, ProposalID: proposalID, ApprovalID: "appr_test", Status: "pending", MutationType: "apply_patch", Patch: "diff"}, nil
+}
+func (c inspectionRuntimeController) Pause(context.Context, string, string) error { return nil }
+func (c inspectionRuntimeController) Cancel(ctx context.Context, runID, reason string) error {
+	runtime, runStore, eventStore, err := (multiagent.RunLocator{Root: c.root}).OpenInspection(ctx, runID)
+	if err != nil {
+		return err
+	}
+	defer runStore.Close()
+	defer eventStore.Close()
+	_, err = runtime.Cancel(ctx, runID, reason)
+	return err
 }
 
 func (f fixedOutcomeRunner) RunRole(_ context.Context, req multiagent.RoleRunRequest) (multiagent.RoleRunResult, error) {
@@ -137,6 +172,55 @@ func seedMultiAgentRun(t *testing.T, root, runID string) multiagent.RunState {
 	return state
 }
 
+func seedRetryWaitingRun(t *testing.T, root, runID string) (multiagent.RunState, *retryOnceOutcomeRunner) {
+	t.Helper()
+	definition := multiagent.DefaultReferenceDefinition()
+	graph, err := multiagent.CompatAdaptDefinition(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runStore, err := multiagent.NewSQLiteDurableRunStore(filepath.Join(root, runID, "multiagent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventStore, err := event.NewSQLiteEventStore(filepath.Join(root, runID, "multiagent.db"))
+	if err != nil {
+		_ = runStore.Close()
+		t.Fatal(err)
+	}
+	runner := &retryOnceOutcomeRunner{}
+	runtime, err := multiagent.NewDurableRuntime(graph, runner, runStore, multiagent.FileRunClaimer{Root: root}, eventStore, multiagent.DurableRuntimeOptions{})
+	if err != nil {
+		_ = runStore.Close()
+		_ = eventStore.Close()
+		t.Fatal(err)
+	}
+	state, runErr := runtime.Run(context.Background(), multiagent.RunRequest{
+		RunID: runID, Task: multiagent.TaskReference{ID: "task_" + runID, Description: "cancel scheduled retry"},
+		Identity: &multiagent.RequestIdentity{RequesterID: "api", SessionID: "session-cancel", Source: "api", ResultDestination: "dashboard", IdempotencyKey: "cancel-retry-key"},
+	})
+	var waiting *multiagent.RunWaitingError
+	if !errors.As(runErr, &waiting) || state.Status != multiagent.RunStatusPaused {
+		_ = runStore.Close()
+		_ = eventStore.Close()
+		t.Fatalf("seed retry state=%s err=%v, want paused retry", state.Status, runErr)
+	}
+	if err := runStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := eventStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(multiAgentManifest{SchemaVersion: 1, RunID: runID, WorkflowID: definition.ID, Definition: definition})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, runID, "multiagent_manifest.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return state, runner
+}
+
 // loadAllEventsDirect opens its own short-lived event store connection on
 // the seeded run's database to establish ground truth for stream ordering
 // assertions, independent of whatever the handler under test does. It is
@@ -170,17 +254,30 @@ func newMultiAgentTestServer(t *testing.T, root string) *Server {
 // package cannot import package main), it only records what was called and
 // returns whatever error the test configured.
 type fakeMultiAgentController struct {
-	resumeErr error
-	cancelErr error
-	pauseErr  error
+	resumeErr      error
+	cancelErr      error
+	pauseErr       error
+	decisionErr    error
+	proposalErr    error
+	decisionResume bool
+	resumeStarted  chan context.Context
+	resumeRelease  chan struct{}
 
-	resumeCalls []string
-	cancelCalls []struct{ runID, reason string }
-	pauseCalls  []struct{ runID, reason string }
+	resumeCalls   []string
+	cancelCalls   []struct{ runID, reason string }
+	pauseCalls    []struct{ runID, reason string }
+	decisionCalls []struct{ runID, proposalID, approvalID, decision, reason string }
+	proposalCalls []struct{ runID, proposalID string }
 }
 
-func (f *fakeMultiAgentController) Resume(_ context.Context, runID string) error {
+func (f *fakeMultiAgentController) Resume(ctx context.Context, runID string) error {
 	f.resumeCalls = append(f.resumeCalls, runID)
+	if f.resumeStarted != nil {
+		f.resumeStarted <- ctx
+	}
+	if f.resumeRelease != nil {
+		<-f.resumeRelease
+	}
 	return f.resumeErr
 }
 
@@ -194,8 +291,22 @@ func (f *fakeMultiAgentController) Pause(_ context.Context, runID, reason string
 	return f.pauseErr
 }
 
+func (f *fakeMultiAgentController) DecideProposal(_ context.Context, runID, proposalID, approvalID, decision, reason string) (bool, error) {
+	f.decisionCalls = append(f.decisionCalls, struct{ runID, proposalID, approvalID, decision, reason string }{runID, proposalID, approvalID, decision, reason})
+	return f.decisionResume, f.decisionErr
+}
+
+func (f *fakeMultiAgentController) Proposal(_ context.Context, runID, proposalID string) (MultiAgentProposal, error) {
+	f.proposalCalls = append(f.proposalCalls, struct{ runID, proposalID string }{runID, proposalID})
+	if f.proposalErr != nil {
+		return MultiAgentProposal{}, f.proposalErr
+	}
+	return MultiAgentProposal{RunID: runID, ProposalID: proposalID, ApprovalID: "appr_01M4Q70M8WYSDE7NXNP3C84WTG", Status: "pending", MutationType: "apply_patch", BaseSHA: "abc123", Paths: []string{"internal/retry/retry_test.go"}, Patch: "reviewable diff"}, nil
+}
+
 func newMultiAgentControlTestServer(t *testing.T, root string, controller *fakeMultiAgentController) *Server {
 	t.Helper()
+	controller.decisionResume = true
 	return NewServer(Config{
 		Addr:                 ":0",
 		MultiAgentRuns:       multiagent.RunLocator{Root: root},
@@ -300,6 +411,149 @@ func TestAPI_MultiAgentResume_MethodNotAllowed(t *testing.T) {
 	}
 }
 
+func TestAPI_MultiAgentProposalDecision_GrantDenyAndDuplicate(t *testing.T) {
+	for _, decision := range []string{"grant", "deny"} {
+		t.Run(decision, func(t *testing.T) {
+			controller := &fakeMultiAgentController{resumeStarted: make(chan context.Context, 2)}
+			s := newMultiAgentControlTestServer(t, t.TempDir(), controller)
+			body := `{"approval_id":"appr_01M4Q70M8WYSDE7NXNP3C84WTG","decision":"` + decision + `","reason":"reviewed"}`
+			path := "/api/v1/multiagent/runs/run-1/proposals/prop_01M4Q70M8WN3BFKV15527FRN9S/approval"
+			for range 2 { // repeat the same decision; the controller owns idempotence
+				req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+				w := httptest.NewRecorder()
+				s.mux.ServeHTTP(w, req)
+				if w.Code != http.StatusAccepted {
+					t.Fatalf("decision returned %d: %s", w.Code, w.Body.String())
+				}
+			}
+			for range 2 {
+				select {
+				case <-controller.resumeStarted:
+				case <-time.After(time.Second):
+					t.Fatal("proposal decision was not resumed asynchronously")
+				}
+			}
+			if len(controller.decisionCalls) != 2 {
+				t.Fatalf("decision calls = %d, want 2", len(controller.decisionCalls))
+			}
+			got := controller.decisionCalls[0]
+			if got.runID != "run-1" || got.proposalID != "prop_01M4Q70M8WN3BFKV15527FRN9S" || got.approvalID != "appr_01M4Q70M8WYSDE7NXNP3C84WTG" || got.decision != decision || got.reason != "reviewed" {
+				t.Fatalf("decision request = %+v", got)
+			}
+		})
+	}
+}
+
+func TestAPI_MultiAgentProposalDecisionReturns202BeforeResumeAndIgnoresRequestCancellation(t *testing.T) {
+	controller := &fakeMultiAgentController{resumeStarted: make(chan context.Context, 1), resumeRelease: make(chan struct{})}
+	s := newMultiAgentControlTestServer(t, t.TempDir(), controller)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	path := "/api/v1/multiagent/runs/run-1/proposals/prop_01M4Q70M8WN3BFKV15527FRN9S/approval"
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"approval_id":"appr_01M4Q70M8WYSDE7NXNP3C84WTG","decision":"grant"}`)).WithContext(ctx)
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("decision returned %d: %s", w.Code, w.Body.String())
+	}
+	select {
+	case resumeCtx := <-controller.resumeStarted:
+		if err := resumeCtx.Err(); err != nil {
+			t.Fatalf("resume inherited canceled request context: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("resume was not queued")
+	}
+	close(controller.resumeRelease)
+}
+
+func TestAPI_MultiAgentProposalDecision_MismatchAndBadInput(t *testing.T) {
+	controller := &fakeMultiAgentController{decisionErr: ErrProposalDecisionConflict}
+	s := newMultiAgentControlTestServer(t, t.TempDir(), controller)
+	path := "/api/v1/multiagent/runs/run-1/proposals/prop_01M4Q70M8WN3BFKV15527FRN9S/approval"
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"approval_id":"appr_01M4Q70M8WYSDE7NXNP3C84WTG","decision":"grant"}`))
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict || len(controller.resumeCalls) != 0 {
+		t.Fatalf("mismatch status/calls = %d/%d, want 409/0: %s", w.Code, len(controller.resumeCalls), w.Body.String())
+	}
+
+	for _, tc := range []struct{ path, body string }{
+		{"/api/v1/multiagent/runs/run-1/proposals/bad/approval", `{"approval_id":"appr_1","decision":"grant"}`},
+		{path, `{"approval_id":"appr_1","decision":"grant","unexpected":true}`},
+		{path, `{"approval_id":"appr_1","decision":"other"}`},
+	} {
+		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+		w := httptest.NewRecorder()
+		s.mux.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("bad input %q status = %d, want 400", tc.body, w.Code)
+		}
+	}
+}
+
+func TestAPI_MultiAgentProposalDecisionDoesNotResumeOnPersistenceFailureOrRecordedDuplicate(t *testing.T) {
+	path := "/api/v1/multiagent/runs/run-1/proposals/prop_01M4Q70M8WN3BFKV15527FRN9S/approval"
+	body := `{"approval_id":"appr_01M4Q70M8WYSDE7NXNP3C84WTG","decision":"grant"}`
+
+	controller := &fakeMultiAgentController{decisionErr: fmt.Errorf("persist: %w", os.ErrPermission)}
+	s := newMultiAgentControlTestServer(t, t.TempDir(), controller)
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError || len(controller.resumeCalls) != 0 {
+		t.Fatalf("persistence failure status/resumes = %d/%d, want 500/0", w.Code, len(controller.resumeCalls))
+	}
+
+	controller = &fakeMultiAgentController{decisionResume: false}
+	s = newMultiAgentControlTestServer(t, t.TempDir(), controller)
+	controller.decisionResume = false
+	req = httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	w = httptest.NewRecorder()
+	s.mux.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted || len(controller.resumeCalls) != 0 {
+		t.Fatalf("recorded duplicate status/resumes = %d/%d, want 202/0", w.Code, len(controller.resumeCalls))
+	}
+}
+
+func TestAPI_LegacyApprovalGrantRouteRemainsSeparate(t *testing.T) {
+	controller := &fakeMultiAgentController{}
+	s := newMultiAgentControlTestServer(t, t.TempDir(), controller)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/approvals/appr_01M4Q70M8WYSDE7NXNP3C84WTG/grant", nil)
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, req)
+	if len(controller.decisionCalls) != 0 || len(controller.resumeCalls) != 0 {
+		t.Fatalf("legacy grant route incorrectly dispatched proposal decision")
+	}
+}
+
+func TestAPI_MultiAgentProposalInspectionIsReadOnlyAndAuthGated(t *testing.T) {
+	controller := &fakeMultiAgentController{}
+	s := NewServer(Config{Addr: ":0", AuthToken: "secret", MultiAgentRuns: multiagent.RunLocator{Root: t.TempDir()}, MultiAgentController: controller})
+	path := "/api/v1/multiagent/runs/run-1/proposals/prop_01M4Q70M8WN3BFKV15527FRN9S"
+	unauthorized := httptest.NewRequest(http.MethodGet, path, nil)
+	w := httptest.NewRecorder()
+	s.authMiddleware(s.mux).ServeHTTP(w, unauthorized)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized proposal GET status = %d, want 401", w.Code)
+	}
+
+	authorized := httptest.NewRequest(http.MethodGet, path, nil)
+	authorized.Header.Set("Authorization", "Bearer secret")
+	w = httptest.NewRecorder()
+	s.authMiddleware(s.mux).ServeHTTP(w, authorized)
+	if w.Code != http.StatusOK {
+		t.Fatalf("authorized proposal GET status = %d: %s", w.Code, w.Body.String())
+	}
+	view := decodeJSONBody(t, w)
+	if view["patch"] != "reviewable diff" || view["base_sha"] != "abc123" {
+		t.Fatalf("proposal view omitted review evidence: %#v", view)
+	}
+	if len(controller.proposalCalls) != 1 || len(controller.decisionCalls) != 0 || len(controller.resumeCalls) != 0 {
+		t.Fatalf("read-only inspection side effects: proposals=%d decisions=%d resumes=%d", len(controller.proposalCalls), len(controller.decisionCalls), len(controller.resumeCalls))
+	}
+}
+
 // --- POST /api/v1/multiagent/runs/{id}/cancel ---
 
 func TestAPI_MultiAgentCancel_Unconfigured(t *testing.T) {
@@ -333,6 +587,48 @@ func TestAPI_MultiAgentCancel_SuccessWithReason(t *testing.T) {
 		controller.cancelCalls[0].runID != "run-cancel-1" ||
 		controller.cancelCalls[0].reason != "operator requested stop" {
 		t.Fatalf("cancel calls = %+v", controller.cancelCalls)
+	}
+}
+
+func TestAPI_MultiAgentCancel_ScheduledRetry(t *testing.T) {
+	root := t.TempDir()
+	const runID = "run-cancel-scheduled-retry"
+	_, runner := seedRetryWaitingRun(t, root, runID)
+	server := NewServer(Config{
+		Addr: ":0", MultiAgentRuns: multiagent.RunLocator{Root: root},
+		MultiAgentController: inspectionRuntimeController{root: root},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/multiagent/runs/"+runID+"/cancel", strings.NewReader(`{"reason":"operator stop"}`))
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("cancel scheduled retry status=%d body=%s", w.Code, w.Body.String())
+	}
+	if runner.failed == false {
+		t.Fatal("retry fixture did not enter its scheduled retry wait")
+	}
+	runtime, runStore, eventStore, err := (multiagent.RunLocator{Root: root}).OpenInspection(context.Background(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runStore.Close()
+	defer eventStore.Close()
+	record, err := runtime.Inspect(context.Background(), runID)
+	if err != nil || record.State.Status != multiagent.RunStatusCancelled || record.State.CancellationReason != "operator stop" {
+		t.Fatalf("cancelled retry record=%#v err=%v", record, err)
+	}
+	if runner.failed && record.State.RoleStates[multiagent.RolePlanner].Visits != 1 {
+		t.Fatalf("cancelled retry was re-executed: planner visits=%d", record.State.RoleStates[multiagent.RolePlanner].Visits)
+	}
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/multiagent/runs", nil)
+	listResp := httptest.NewRecorder()
+	server.mux.ServeHTTP(listResp, listReq)
+	var summaries []multiagent.RunSummary
+	if err := json.Unmarshal(listResp.Body.Bytes(), &summaries); err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries) != 1 || summaries[0].Status != multiagent.RunStatusCancelled || summaries[0].ReportRef != "multiagent_report.json" {
+		t.Fatalf("dashboard terminal projection = %+v", summaries)
 	}
 }
 
@@ -538,6 +834,52 @@ func TestAPI_MultiAgentRuns_Populated(t *testing.T) {
 	}
 	if len(runs) != 1 || runs[0].RunID != state.RunID || runs[0].Status != state.Status {
 		t.Fatalf("runs = %+v, want one entry matching %+v", runs, state)
+	}
+}
+
+func TestAPI_MultiAgentReport_ServesOnlyTerminalReport(t *testing.T) {
+	root := t.TempDir()
+	state := seedMultiAgentRun(t, root, "run-report-1")
+	reportPath := filepath.Join(root, state.RunID, "multiagent_report.json")
+	if err := os.WriteFile(reportPath, []byte(`{"run_id":"run-report-1","final_status":"completed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := newMultiAgentTestServer(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/multiagent/runs/"+state.RunID+"/report", nil)
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !json.Valid(w.Body.Bytes()) || !strings.Contains(w.Body.String(), `"final_status":"completed"`) {
+		t.Fatalf("report response status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPI_MultiAgentReport_UsesConfiguredBearerAuth(t *testing.T) {
+	root := t.TempDir()
+	state := seedMultiAgentRun(t, root, "run-report-auth")
+	if err := os.WriteFile(filepath.Join(root, state.RunID, "multiagent_report.json"), []byte(`{"run_id":"run-report-auth"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := NewServer(Config{
+		Addr:           ":0",
+		AuthToken:      "secret-token",
+		MultiAgentRuns: multiagent.RunLocator{Root: root},
+	})
+	h := s.authMiddleware(s.mux)
+	path := "/api/v1/multiagent/runs/" + state.RunID + "/report"
+
+	unauthorized := httptest.NewRecorder()
+	h.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, path, nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized report status=%d body=%s, want 401", unauthorized.Code, unauthorized.Body.String())
+	}
+
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request.Header.Set("Authorization", "Bearer secret-token")
+	authorized := httptest.NewRecorder()
+	h.ServeHTTP(authorized, request)
+	if authorized.Code != http.StatusOK || !json.Valid(authorized.Body.Bytes()) {
+		t.Fatalf("authorized report status=%d body=%s, want valid 200", authorized.Code, authorized.Body.String())
 	}
 }
 

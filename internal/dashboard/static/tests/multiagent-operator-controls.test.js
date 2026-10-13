@@ -116,6 +116,7 @@ test('a null/empty snapshot is treated as an unrecognized status: nothing runnin
 test('waitingKindLabel: known kinds get a purpose-built label', () => {
   assert.strictEqual(op.waitingKindLabel('operator_pause'), 'Paused by operator');
   assert.strictEqual(op.waitingKindLabel('approval'), 'Waiting on approval');
+  assert.strictEqual(op.waitingKindLabel('role_retry'), 'Waiting to retry');
   assert.strictEqual(op.waitingKindLabel('execution_reconciliation'), 'Reconciling execution state');
 });
 

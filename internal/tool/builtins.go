@@ -20,6 +20,8 @@ package tool
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -28,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/emaharmony/prizm/internal/safety"
 )
 
@@ -161,8 +164,10 @@ func (t *ReadFileTool) Description() string {
 func (t *ReadFileTool) Schema() ToolSchema {
 	return ToolSchema{
 		Input: map[string]ParamSpec{
-			"path":      {Type: "string", Description: "Path to the file. Use an absolute path for projects outside the workspace, or a path relative to the workspace root", Required: true},
-			"max_lines": {Type: "integer", Description: "Maximum number of lines to return. Useful for previewing large files without loading the entire content into context. 0 or omitted means no limit.", Required: false},
+			"path":       {Type: "string", Description: "Path to the file. Use an absolute path for projects outside the workspace, or a path relative to the workspace root", Required: true},
+			"start_line": {Type: "integer", Description: "One-based first line to return. Defaults to 1.", Required: false},
+			"max_lines":  {Type: "integer", Description: "Maximum number of lines to return. Useful for previewing large files without loading the entire content into context. 0 or omitted means no limit.", Required: false},
+			"max_bytes":  {Type: "integer", Description: "Maximum UTF-8 bytes of complete source lines to return. A single line larger than this bound fails instead of being truncated.", Required: false},
 		},
 		Output: ParamSpec{Type: "string", Description: "The file contents"},
 	}
@@ -228,28 +233,111 @@ func (t *ReadFileTool) Execute(ctx context.Context, input map[string]any) (ToolR
 	}
 
 	content := string(data)
-
-	// Apply max_lines truncation if specified
-	if maxLinesVal, ok := input["max_lines"]; ok {
-		if maxLines, ok := maxLinesVal.(float64); ok && maxLines > 0 {
-			lines := strings.Split(content, "\n")
-			totalLines := len(lines)
-			maxLinesInt := int(maxLines)
-			if totalLines > maxLinesInt {
-				content = strings.Join(lines[:maxLinesInt], "\n")
-				content += fmt.Sprintf("\n\n... (%d more lines, use read_file with a larger max_lines or without max_lines to see the rest)", totalLines-maxLinesInt)
-			}
+	lines := strings.Split(content, "\n")
+	totalLines := len(lines)
+	startLine, err := optionalPositiveInt(input, "start_line", 1)
+	if err != nil || startLine > totalLines {
+		if err == nil {
+			err = fmt.Errorf("start_line %d exceeds total lines %d", startLine, totalLines)
 		}
+		return ToolResult{Success: false, Error: err.Error()}, nil
+	}
+	maxLines, err := optionalNonNegativeInt(input, "max_lines", 0)
+	if err != nil {
+		return ToolResult{Success: false, Error: err.Error()}, nil
+	}
+	maxBytes, err := optionalNonNegativeInt(input, "max_bytes", 0)
+	if err != nil {
+		return ToolResult{Success: false, Error: err.Error()}, nil
+	}
+	end := totalLines
+	if maxLines > 0 && startLine-1+maxLines < end {
+		end = startLine - 1 + maxLines
+	}
+	selected := lines[startLine-1 : end]
+	if maxBytes > 0 {
+		used := 0
+		kept := 0
+		for i, line := range selected {
+			lineBytes := len([]byte(line))
+			if i > 0 {
+				lineBytes++
+			}
+			if used+lineBytes > maxBytes {
+				if kept == 0 {
+					return ToolResult{Success: false, Error: fmt.Sprintf("line %d is %d bytes and exceeds max_bytes %d", startLine, len([]byte(line)), maxBytes)}, nil
+				}
+				break
+			}
+			used += lineBytes
+			kept++
+		}
+		selected = selected[:kept]
+		end = startLine - 1 + kept
+	}
+	content = strings.Join(selected, "\n")
+	legacyNotice := maxBytes == 0 && startLine == 1
+	if legacyNotice && end < totalLines {
+		content += fmt.Sprintf("\n\n... (%d more lines, use read_file with a larger max_lines or without max_lines to see the rest)", totalLines-end)
+	}
+	sum := sha256.Sum256(data)
+	canonicalPath := filepath.ToSlash(pathVal)
+	if rel, relErr := filepath.Rel(t.WorkspaceRoot, resolvedPath); relErr == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		canonicalPath = filepath.ToSlash(rel)
 	}
 
 	return ToolResult{
 		Success: true,
 		Output: map[string]any{
-			"path":    pathVal,
-			"content": content,
-			"size":    len(data),
+			"path":           pathVal,
+			"canonical_path": canonicalPath,
+			"content":        content,
+			"size":           len(data),
+			"sha256":         hex.EncodeToString(sum[:]),
+			"start_line":     startLine,
+			"end_line":       end,
+			"total_lines":    totalLines,
+			"has_more":       end < totalLines,
 		},
 	}, nil
+}
+
+func optionalPositiveInt(input map[string]any, key string, fallback int) (int, error) {
+	value, ok := input[key]
+	if !ok {
+		return fallback, nil
+	}
+	n, ok := numericInt(value)
+	if !ok || n <= 0 {
+		return 0, fmt.Errorf("parameter %q must be a positive integer", key)
+	}
+	return n, nil
+}
+
+func optionalNonNegativeInt(input map[string]any, key string, fallback int) (int, error) {
+	value, ok := input[key]
+	if !ok {
+		return fallback, nil
+	}
+	n, ok := numericInt(value)
+	if !ok || n < 0 {
+		return 0, fmt.Errorf("parameter %q must be a non-negative integer", key)
+	}
+	return n, nil
+}
+
+func numericInt(value any) (int, bool) {
+	switch n := value.(type) {
+	case int:
+		return n, true
+	case float64:
+		if n != float64(int(n)) {
+			return 0, false
+		}
+		return int(n), true
+	default:
+		return 0, false
+	}
 }
 
 // WriteFileDryRunTool previews what a file write would look like. It does NOT
@@ -335,6 +423,55 @@ type WriteFileProposal struct {
 	AllowedPaths  []string
 	// Emit is called to emit events.
 	Emit func(eventType, source string, payload map[string]any)
+}
+
+// ApplyPatchProposal validates one bounded unified diff against an exact clean
+// Git state. Execute is non-mutating; the patch is applied only by the mutation
+// executor after the persisted approval is granted.
+type ApplyPatchProposal struct {
+	WorkspaceRoot string
+	AllowedPaths  []string
+}
+
+func (t *ApplyPatchProposal) Name() string { return "apply_patch_proposal" }
+func (t *ApplyPatchProposal) Description() string {
+	return "Proposes one atomic multi-file unified diff for approval. Requires the exact current base SHA and does not modify the worktree."
+}
+func (t *ApplyPatchProposal) Schema() ToolSchema {
+	return ToolSchema{Input: map[string]ParamSpec{
+		"patch":    {Type: "string", Description: "Complete unified diff for all requested file changes", Required: true},
+		"base_sha": {Type: "string", Description: "Exact git HEAD SHA the patch was prepared against", Required: true},
+	}, Output: ParamSpec{Type: "object", Description: "Approval identity, exact patch plan, and changed paths"}}
+}
+func (t *ApplyPatchProposal) Execute(ctx context.Context, input map[string]any) (ToolResult, error) {
+	patch, patchOK := input["patch"].(string)
+	base, baseOK := input["base_sha"].(string)
+	if !patchOK || strings.TrimSpace(patch) == "" {
+		return ToolResult{Success: false, Error: "required parameter 'patch' must be a non-empty string", FailureEffect: FailureEffectNoEffects}, nil
+	}
+	if !baseOK || strings.TrimSpace(base) == "" {
+		return ToolResult{Success: false, Error: "required parameter 'base_sha' must be a non-empty string", FailureEffect: FailureEffectNoEffects}, nil
+	}
+	plan, err := gitx.PlanPatch(ctx, t.WorkspaceRoot, patch, base)
+	if err != nil {
+		return ToolResult{Success: false, Error: err.Error(), FailureEffect: FailureEffectNoEffects}, nil
+	}
+	roots := append([]string(nil), t.AllowedPaths...)
+	if len(roots) == 0 {
+		roots = []string{t.WorkspaceRoot}
+	}
+	for _, path := range plan.Paths {
+		absolute := filepath.Join(t.WorkspaceRoot, filepath.FromSlash(path))
+		if _, err := safety.ResolveAndContainMulti(roots, absolute); err != nil {
+			return ToolResult{Success: false, Error: fmt.Sprintf("patch path %q is outside configured write roots: %v", path, err), FailureEffect: FailureEffectNoEffects}, nil
+		}
+	}
+	return ToolResult{Success: true, Output: map[string]any{
+		"mutation_type": "apply_patch", "target_path": fmt.Sprintf("%d files", len(plan.Paths)),
+		"paths": plan.Paths, "base_sha": plan.BaseSHA, "base_tree": plan.BaseTree,
+		"expected_tree": plan.ExpectedTree, "patch_sha256": plan.PatchSHA256,
+		"preview": fmt.Sprintf("Atomic patch changing %d files at %s", len(plan.Paths), plan.BaseSHA),
+	}}, nil
 }
 
 // ApprovalProxy wraps an approval.Approval for storage.
@@ -951,6 +1088,7 @@ func RegisterBuiltinsV4(registry *Registry, workspaceRoot string, maxFileSize in
 func RegisterBuiltinsV4WithRoots(registry *Registry, workspaceRoot string, maxFileSize int64, readRoots, writeRoots []string, protectedBranch string) *Registry {
 	RegisterBuiltinsWithRoots(registry, workspaceRoot, maxFileSize, readRoots, writeRoots)
 	registry.Register(&WriteFileProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
+	registry.Register(&ApplyPatchProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
 	registry.Register(&CreateDirectoryProposal{WorkspaceRoot: workspaceRoot, AllowedPaths: writeRoots})
 
 	if protectedBranch == "" {

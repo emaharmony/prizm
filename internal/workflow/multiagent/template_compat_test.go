@@ -97,6 +97,61 @@ func TestShippedTemplatesLoadValidateCompile(t *testing.T) {
 	}
 }
 
+func TestSoftwareDeliveryDefaultsLeaveAggregateBudgetsUnlimitedAndPreserveAuthoredCaps(t *testing.T) {
+	definition, index, loadDiags, err := LoadDefinition(filepath.Join("templates", "software-delivery.yaml"))
+	if err != nil || loadDiags.HasErrors() {
+		t.Fatalf("load shipped workflow: diagnostics=%v err=%v", loadDiags, err)
+	}
+	graph, diagnostics, err := Compile(definition, index, CompileOptions{})
+	if err != nil || diagnostics.HasErrors() {
+		t.Fatalf("compile shipped workflow: diagnostics=%v err=%v", diagnostics, err)
+	}
+	developer, ok := compiledRoleNode(graph, RoleDeveloper)
+	if !ok || roleRetryLimit(developer) != 10 || graph.Budgets().MaxRetries != Unlimited {
+		t.Fatalf("shipped defaults developer_retry=%d global=%d", roleRetryLimit(developer), graph.Budgets().MaxRetries)
+	}
+	if graph.Budgets().MaxDuration != UnlimitedDuration {
+		t.Fatalf("shipped default duration=%v, want unlimited", graph.Budgets().MaxDuration)
+	}
+	for _, node := range graph.Nodes() {
+		if node.Kind == "role" && node.RoleConfig.TimeBudget != UnlimitedDuration {
+			t.Fatalf("shipped %s role duration=%v, want unlimited", node.Role, node.RoleConfig.TimeBudget)
+		}
+	}
+
+	for i := range definition.Spec.Nodes {
+		if definition.Spec.Nodes[i].ID == "developer" && definition.Spec.Nodes[i].Retry != nil {
+			definition.Spec.Nodes[i].Retry.MaxRetries = 2
+		}
+	}
+	globalCap := SchemaLimit(4)
+	definition.Spec.Budgets.MaxRetries = &globalCap
+	definition.Spec.Budgets.MaxDuration = "30m"
+	for i := range definition.Spec.Nodes {
+		if definition.Spec.Nodes[i].ID == "developer" {
+			definition.Spec.Nodes[i].DurationBudget = "5m"
+		}
+	}
+	overridden, overrideDiags, err := Compile(definition, index, CompileOptions{})
+	if err != nil || overrideDiags.HasErrors() {
+		t.Fatalf("compile authored caps: diagnostics=%v err=%v", overrideDiags, err)
+	}
+	developer, ok = compiledRoleNode(overridden, RoleDeveloper)
+	if !ok || roleRetryLimit(developer) != 2 || overridden.Budgets().MaxRetries != 4 ||
+		overridden.Budgets().MaxDuration.String() != "30m0s" || developer.RoleConfig.TimeBudget.String() != "5m0s" {
+		t.Fatalf("authored caps lost: developer_retry=%d global=%d", roleRetryLimit(developer), overridden.Budgets().MaxRetries)
+	}
+}
+
+func compiledRoleNode(graph *CompiledGraph, role Role) (CompiledNode, bool) {
+	for _, node := range graph.Nodes() {
+		if node.Role == role {
+			return node, true
+		}
+	}
+	return CompiledNode{}, false
+}
+
 // TestShippedTemplatesScenariosPass is the scenario half of the regression
 // proof: every scenario in every matching fixture must pass against the
 // template's compiled graph, with zero scenario-runner setup errors.
@@ -139,6 +194,98 @@ func TestShippedTemplatesScenariosPass(t *testing.T) {
 						})
 					}
 				})
+			}
+		})
+	}
+}
+
+// TestShippedTemplateExplicitLoopBudgetsExhaustAtLimit proves the shipped
+// correction loops are unlimited by default while a workflow author can opt
+// into an exact traversal ceiling. It reuses each finite script from
+// TestShippedTemplatesScenariosPass against a copy with only that edge capped.
+func TestShippedTemplateExplicitLoopBudgetsExhaustAtLimit(t *testing.T) {
+	cases := []struct {
+		name         string
+		workflowFile string
+		scenarioFile string
+		edgeID       string
+		limit        int
+		budgetName   string
+		visits       map[string]int
+		traversals   map[string]int
+	}{
+		{
+			name:         "software-delivery tester correction",
+			workflowFile: filepath.Join("templates", "software-delivery.yaml"),
+			scenarioFile: filepath.Join("testdata", "template-scenarios", "software-delivery-loop-exhaustion.yaml"),
+			edgeID:       "tester-to-dev",
+			limit:        2,
+			budgetName:   "max_tester_to_developer_loops",
+			visits:       map[string]int{"planner": 1, "developer": 3, "tester": 3},
+			traversals:   map[string]int{"edge:tester:tests_failed": 2},
+		},
+		{
+			name:         "security-review reviewer correction",
+			workflowFile: filepath.Join("templates", "security-review.yaml"),
+			scenarioFile: filepath.Join("testdata", "template-scenarios", "security-review-loop-exhaustion.yaml"),
+			edgeID:       "reviewer-to-impl",
+			limit:        3,
+			budgetName:   "max_edge:security-reviewer:issues_found_loops",
+			visits:       map[string]int{"implementer": 4, "security-scanner": 4, "security-reviewer": 4},
+			traversals:   map[string]int{"edge:security-reviewer:issues_found": 3},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			def, idx, loadDiags, err := LoadDefinition(tc.workflowFile)
+			if err != nil {
+				t.Fatalf("LoadDefinition(%s): %v", tc.workflowFile, err)
+			}
+			if loadDiags.HasErrors() {
+				t.Fatalf("LoadDefinition(%s) produced error diagnostics: %s", tc.workflowFile, loadDiags.Error())
+			}
+
+			var correctionEdge *SchemaEdge
+			for i := range def.Spec.Edges {
+				if def.Spec.Edges[i].ID == tc.edgeID {
+					correctionEdge = &def.Spec.Edges[i]
+					break
+				}
+			}
+			if correctionEdge == nil || correctionEdge.Loop == nil {
+				t.Fatalf("correction edge %q is missing its loop policy", tc.edgeID)
+			}
+			if correctionEdge.Loop.MaxTraversals != -1 {
+				t.Fatalf("default %s maxTraversals = %d, want -1 (unlimited)", tc.edgeID, correctionEdge.Loop.MaxTraversals)
+			}
+			correctionEdge.Loop.MaxTraversals = tc.limit
+
+			graph, compileDiags, err := Compile(def, idx, CompileOptions{})
+			if err != nil {
+				t.Fatalf("Compile(%s with explicit loop limit): %v (diagnostics: %s)", tc.workflowFile, err, compileDiags.Error())
+			}
+			sf, err := LoadScenarioFile(tc.scenarioFile)
+			if err != nil {
+				t.Fatalf("LoadScenarioFile(%s): %v", tc.scenarioFile, err)
+			}
+			if len(sf.Scenarios) != 1 {
+				t.Fatalf("scenario file %s has %d scenarios, want 1", tc.scenarioFile, len(sf.Scenarios))
+			}
+			scenario := sf.Scenarios[0]
+			scenario.Expect = ScenarioExpectation{
+				FinalStatus:    "budget_exhausted",
+				LoopExhausted:  tc.budgetName,
+				NodeVisits:     tc.visits,
+				EdgeTraversals: tc.traversals,
+			}
+			result, err := RunScenario(context.Background(), graph, scenario)
+			if err != nil {
+				t.Fatalf("RunScenario(%s :: %s): %v", tc.scenarioFile, scenario.Name, err)
+			}
+			if !result.Passed {
+				t.Fatalf("scenario %s :: %s failed with explicit maxTraversals %d:\n%s", tc.scenarioFile, scenario.Name, tc.limit, joinFailures(result.Failures))
 			}
 		})
 	}

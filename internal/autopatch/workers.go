@@ -79,20 +79,19 @@ func (w *LocalAgentWorker) Run(ctx context.Context, req WorkerRequest) (WorkerRe
 		Project:     "prizm",
 		Task:        req.Description,
 		Temperature: 0.1,
-		MaxTokens:   4096,
+		MaxTokens:   0, // no output-token ceiling unless the caller configures one
 	})
 	if err != nil {
 		return WorkerResult{Worker: w.Name()}, err
 	}
-	rawPath := filepath.Join(req.ArtifactDir, "local-agent-response.txt")
-	_ = os.WriteFile(rawPath, []byte(resp.Text), 0644)
-
 	diff, err := extractDiff(resp.Text)
 	if err != nil {
-		return WorkerResult{Worker: w.Name(), Artifacts: []string{rawPath}}, err
+		return WorkerResult{Worker: w.Name()}, err
 	}
-	diffPath := filepath.Join(req.ArtifactDir, "local-agent.patch")
-	_ = os.WriteFile(diffPath, []byte(diff), 0644)
+	rawPath, diffPath, err := writeLocalAgentArtifacts(req.ArtifactDir, diff)
+	if err != nil {
+		return WorkerResult{Worker: w.Name()}, err
+	}
 
 	if _, err := runCommand(ctx, req.Worktree, diff, "git", "apply", "--check", "-"); err != nil {
 		return WorkerResult{Worker: w.Name(), Artifacts: []string{rawPath, diffPath}}, fmt.Errorf("generated patch failed git apply --check: %w", err)
@@ -105,6 +104,19 @@ func (w *LocalAgentWorker) Run(ctx context.Context, req WorkerRequest) (WorkerRe
 		Diagnosis: "Local agent generated a patch diff.",
 		Artifacts: []string{rawPath, diffPath},
 	}, nil
+}
+
+func writeLocalAgentArtifacts(artifactDir, diff string) (string, string, error) {
+	rawPath := filepath.Join(artifactDir, "local-agent-response.txt")
+	const publicArtifact = "Provider response omitted; the extracted patch is stored in local-agent.patch.\n"
+	if err := os.WriteFile(rawPath, []byte(publicArtifact), 0644); err != nil {
+		return "", "", fmt.Errorf("write public response artifact: %w", err)
+	}
+	diffPath := filepath.Join(artifactDir, "local-agent.patch")
+	if err := os.WriteFile(diffPath, []byte(diff), 0644); err != nil {
+		return "", "", fmt.Errorf("write patch artifact: %w", err)
+	}
+	return rawPath, diffPath, nil
 }
 
 func buildWorkerPrompt(req WorkerRequest, instruction string) string {
@@ -134,25 +146,98 @@ func extractDiff(text string) (string, error) {
 	if text == "" {
 		return "", fmt.Errorf("empty patch response")
 	}
-	if strings.Contains(text, "```") {
-		parts := strings.Split(text, "```")
-		for i := 1; i < len(parts); i += 2 {
-			block := strings.TrimSpace(parts[i])
-			block = strings.TrimPrefix(block, "diff")
-			block = strings.TrimPrefix(block, "patch")
-			block = strings.TrimSpace(block)
-			if strings.Contains(block, "diff --git ") || strings.HasPrefix(block, "--- ") {
-				return block + "\n", nil
+	// Find the first diff while skipping private reasoning blocks. Stop scanning
+	// as soon as the patch begins so literal <think> tags in source hunks remain
+	// part of the patch. Unterminated reasoning fails closed.
+	lower := strings.ToLower(text)
+	inFence := false
+	for i := 0; i < len(text); {
+		if hasThinkTagPrefix(lower, i, "<think") {
+			if !strings.HasPrefix(lower[i:], "<think>") {
+				return "", fmt.Errorf("response contained a malformed <think> tag")
 			}
+			closeStart, closeEnd, malformed := findThinkClose(lower, i+len("<think>"))
+			if malformed {
+				return "", fmt.Errorf("response contained a malformed </think> tag")
+			}
+			if closeStart < 0 {
+				return "", fmt.Errorf("response contained an unterminated <think> block")
+			}
+			i = closeEnd
+			continue
 		}
-	}
-	if idx := strings.Index(text, "diff --git "); idx >= 0 {
-		return text[idx:] + "\n", nil
-	}
-	if strings.HasPrefix(text, "--- ") {
-		return text + "\n", nil
+		if hasThinkTagPrefix(lower, i, "</think") {
+			return "", fmt.Errorf("response contained an unmatched or malformed </think> tag")
+		}
+		if strings.HasPrefix(text[i:], "```") {
+			inFence = !inFence
+			i += len("```")
+			continue
+		}
+		if strings.HasPrefix(text[i:], "diff --git ") {
+			if inFence {
+				if end := strings.Index(text[i:], "```"); end >= 0 {
+					return strings.TrimSpace(text[i:i+end]) + "\n", nil
+				}
+			}
+			return text[i:] + "\n", nil
+		}
+		if strings.HasPrefix(text[i:], "--- ") && (i == 0 || text[i-1] == '\n') {
+			if inFence {
+				if end := strings.Index(text[i:], "```"); end >= 0 {
+					return strings.TrimSpace(text[i:i+end]) + "\n", nil
+				}
+			}
+			return text[i:] + "\n", nil
+		}
+		i++
 	}
 	return "", fmt.Errorf("response did not contain a unified diff")
+}
+
+func hasThinkTagPrefix(lower string, i int, prefix string) bool {
+	if !strings.HasPrefix(lower[i:], prefix) {
+		return false
+	}
+	next := i + len(prefix)
+	if next == len(lower) {
+		return true
+	}
+	char := lower[next]
+	return !(char >= 'a' && char <= 'z' || char >= '0' && char <= '9' || char == '_')
+}
+
+func findThinkClose(lower string, start int) (int, int, bool) {
+	for i := start; i < len(lower); {
+		openRel := strings.Index(lower[i:], "<think")
+		closeRel := strings.Index(lower[i:], "</think")
+		if closeRel < 0 {
+			if openRel >= 0 {
+				open := i + openRel
+				if hasThinkTagPrefix(lower, open, "<think") {
+					return open, -1, true
+				}
+			}
+			return -1, -1, false
+		}
+		close := i + closeRel
+		if openRel >= 0 {
+			open := i + openRel
+			if open < close && hasThinkTagPrefix(lower, open, "<think") {
+				return open, -1, true
+			}
+		}
+		i = close
+		if !hasThinkTagPrefix(lower, close, "</think") {
+			i += len("</think")
+			continue
+		}
+		if !strings.HasPrefix(lower[close:], "</think>") {
+			return close, -1, true
+		}
+		return close, close + len("</think>"), false
+	}
+	return -1, -1, false
 }
 
 func firstParagraph(text string) string {

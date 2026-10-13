@@ -251,7 +251,7 @@ func synthesize(ctx context.Context, cfg Config, ev Evidence) (string, error) {
 		Prompt:      prompt,
 		Model:       cfg.Model,
 		Temperature: 0.2,
-		MaxTokens:   1600,
+		MaxTokens:   0,
 	})
 	if err != nil {
 		return "", err

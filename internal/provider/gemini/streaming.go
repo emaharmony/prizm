@@ -53,11 +53,11 @@ func (p *Provider) GenerateStream(ctx context.Context, req provider.GenerateRequ
 	// Handle retryable errors consistently with sync path
 	if resp.StatusCode == http.StatusTooManyRequests {
 		resp.Body.Close()
-		return nil, retry.NewRetryableError(fmt.Errorf("gemini: rate limited (429)"))
+		return nil, retry.NewRetryableErrorAfter(fmt.Errorf("gemini: rate limited (429)"), retry.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now()))
 	}
 	if resp.StatusCode == http.StatusServiceUnavailable {
 		resp.Body.Close()
-		return nil, retry.NewRetryableError(fmt.Errorf("gemini: service unavailable (503)"))
+		return nil, retry.NewRetryableErrorAfter(fmt.Errorf("gemini: service unavailable (503)"), retry.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now()))
 	}
 	if resp.StatusCode == http.StatusBadGateway {
 		resp.Body.Close()

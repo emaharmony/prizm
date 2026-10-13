@@ -224,9 +224,10 @@ func (s *Supervisor) newRunState(request RunRequest) RunState {
 		}
 	}
 	return RunState{
-		SchemaVersion: RunStateSchemaVersion,
-		RunID:         request.RunID,
-		WorkflowID:    s.graph.WorkflowID(),
+		SchemaVersion:   RunStateSchemaVersion,
+		RunID:           request.RunID,
+		RequestIdentity: cloneRequestIdentity(request.Identity),
+		WorkflowID:      s.graph.WorkflowID(),
 		// WorkflowVersion is the registry-assigned internal version
 		// (CompiledGraph.RegistryVersion) rather than the old user-facing
 		// int; WorkflowUserVersion/WorkflowFingerprint are the new additive
@@ -246,6 +247,10 @@ func (s *Supervisor) newRunState(request RunRequest) RunState {
 		// failing at the very first RoleConfig lookup.
 		CurrentRole: s.entryRole,
 		CurrentTask: request.Task,
+		// The composition root resolves this immutable identity before the
+		// first role is dispatched. Delegated commands must bind it before a
+		// role result exists to populate metadata.
+		WorkspaceID: request.WorkspaceID,
 		Status:      RunStatusRunning,
 		RoleStates:  roleStates,
 		CreatedAt:   now,
@@ -702,6 +707,13 @@ func (s *Supervisor) emitRole(
 		}
 		if result.OutgoingHandoff != nil {
 			payload["artifact_uris"] = artifactURIs(result.OutgoingHandoff.Artifacts)
+			if roleState.Role == RoleTester {
+				evidence := make([]ValidationEvidence, 0, len(result.OutgoingHandoff.ValidationResults))
+				for _, validationResult := range result.OutgoingHandoff.ValidationResults {
+					evidence = append(evidence, SafeValidationEvidence(validationResult))
+				}
+				payload["validation_results"] = evidence
+			}
 		}
 	}
 	s.emit(eventType, state, payload)
@@ -901,6 +913,14 @@ func cloneRoleConfig(config RoleConfig) RoleConfig {
 	config.Approval.Approvers = append([]Role(nil), config.Approval.Approvers...)
 	config.ValidationProfiles = append([]string(nil), config.ValidationProfiles...)
 	return config
+}
+
+func cloneFanOutPlan(plan *FanOutPlan) *FanOutPlan {
+	if plan == nil {
+		return nil
+	}
+	cloned := &FanOutPlan{Tasks: append([]FanOutTask(nil), plan.Tasks...)}
+	return cloned
 }
 
 func cloneHandoff(handoff *Handoff) *Handoff {

@@ -29,14 +29,17 @@ func TestSubagentExecutorMapsRuntimeAndResult(t *testing.T) {
 		runtime subagent.AgentRuntime,
 	) (subagent.RunResult, error) {
 		if packet.TargetAgent != "developer-agent" ||
-			packet.TaskID != "run-1:developer:2" {
+			packet.TaskID != "run-1:developer:2" ||
+			packet.FinalizationPrerequisiteTool != "write_file_proposal" ||
+			packet.FinalResponseContract != "developer schema" {
 			t.Errorf("packet = %#v", packet)
 		}
 		if runtime.WorkDir != "/workspace/run-1" ||
 			!runtime.EnforceAllowedTools ||
-			len(runtime.AllowedTools) != 1 ||
+			len(runtime.AllowedTools) != 2 ||
 			runtime.MaxIterations != 4 ||
-			runtime.ExecutionKey != "run-1:developer:2" {
+			runtime.ExecutionKey != "run-1:developer:2" ||
+			runtime.ReasoningEffort != "max" {
 			t.Errorf("runtime = %#v", runtime)
 		}
 		return subagent.RunResult{
@@ -61,15 +64,18 @@ func TestSubagentExecutorMapsRuntimeAndResult(t *testing.T) {
 		Role:         RoleDeveloper,
 		Visit:        2,
 		Profile: AgentProfile{
-			ID:           "developer-agent",
-			Provider:     "mock",
-			Model:        "mock-model",
-			Capabilities: []string{"code"},
+			ID:              "developer-agent",
+			Provider:        "mock",
+			Model:           "mock-model",
+			ReasoningEffort: "max",
+			Capabilities:    []string{"code"},
 		},
-		Workspace:     Workspace{ID: "workspace-run-1", Path: "/workspace/run-1"},
-		AllowedTools:  []string{"read_file"},
-		MaxIterations: 4,
-		MaxTokens:     100,
+		Workspace:                    Workspace{ID: "workspace-run-1", Path: "/workspace/run-1"},
+		AllowedTools:                 []string{"read_file", "write_file_proposal"},
+		FinalizationPrerequisiteTool: "write_file_proposal",
+		FinalResponseContract:        "  developer schema  ",
+		MaxIterations:                4,
+		MaxTokens:                    100,
 	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)

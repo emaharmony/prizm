@@ -91,6 +91,53 @@ func TestOllamaProviderSuccess(t *testing.T) {
 	}
 }
 
+func TestOllamaProviderRemovesPrivateReasoningFromGenerate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "test-model", "response": "<ThInK>PRIVATE_CANARY</tHiNk>Public answer.", "done": true,
+		})
+	}))
+	defer server.Close()
+
+	resp, err := ollama.New(server.URL).Generate(context.Background(), provider.GenerateRequest{Prompt: "test", Model: "test-model"})
+	if err != nil {
+		t.Fatalf("Generate error: %v", err)
+	}
+	if resp.Text != "Public answer." || strings.Contains(resp.Text, "PRIVATE_CANARY") {
+		t.Fatalf("public text leaked private reasoning: %q", resp.Text)
+	}
+}
+
+func TestOllamaProviderRejectsUnterminatedThinkAnywhere(t *testing.T) {
+	for _, output := range []string{"<think>PRIVATE_CANARY", "Public. <think>PRIVATE_CANARY"} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{"model": "test-model", "response": output, "done": true})
+		}))
+		_, err := ollama.New(server.URL).Generate(context.Background(), provider.GenerateRequest{Prompt: "test", Model: "test-model"})
+		server.Close()
+		if err == nil || !strings.Contains(err.Error(), "no public answer") || strings.Contains(err.Error(), "PRIVATE_CANARY") {
+			t.Fatalf("expected privacy-safe no-public-answer error for %q, got %v", output, err)
+		}
+	}
+}
+
+func TestOllamaProviderPreservesThinkTagsInCode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "test-model", "response": "Use `<think>literal</think>` in this example.\n```html\n<think>literal</think>\n```", "done": true,
+		})
+	}))
+	defer server.Close()
+
+	resp, err := ollama.New(server.URL).Generate(context.Background(), provider.GenerateRequest{Prompt: "test", Model: "test-model"})
+	if err != nil {
+		t.Fatalf("Generate error: %v", err)
+	}
+	if strings.Count(resp.Text, "<think>literal</think>") != 2 {
+		t.Fatalf("code example was rewritten: %q", resp.Text)
+	}
+}
+
 func TestOllamaProviderModelError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := map[string]any{
@@ -113,15 +160,15 @@ func TestOllamaProviderModelError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for model not found")
 	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("expected 'not found' in error, got: %v", err)
+	if strings.Contains(err.Error(), "nonexistent") || strings.Contains(err.Error(), "PRIVATE_CANARY") {
+		t.Errorf("provider error exposed response detail: %v", err)
 	}
 }
 
 func TestOllamaProviderHTTPError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("internal server error"))
+		w.Write([]byte("<think>PRIVATE_CANARY</think>internal server error"))
 	}))
 	defer server.Close()
 
@@ -135,6 +182,9 @@ func TestOllamaProviderHTTPError(t *testing.T) {
 	_, err := p.Generate(context.Background(), req)
 	if err == nil {
 		t.Fatal("expected error for 500")
+	}
+	if strings.Contains(err.Error(), "PRIVATE_CANARY") {
+		t.Fatalf("provider response body leaked through error: %v", err)
 	}
 }
 

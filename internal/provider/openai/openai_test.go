@@ -2,9 +2,11 @@ package openai_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/emaharmony/prizm/internal/provider"
 	"github.com/emaharmony/prizm/internal/provider/openai"
@@ -64,6 +66,7 @@ func TestProvider_Generate_Success(t *testing.T) {
 
 func TestProvider_Generate_RateLimit(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "13")
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer server.Close()
@@ -76,10 +79,15 @@ func TestProvider_Generate_RateLimit(t *testing.T) {
 	if !openai.IsRetryableError(err) {
 		t.Error("429 error should be retryable")
 	}
+	var after interface{ RetryAfter() time.Duration }
+	if !errors.As(err, &after) || after.RetryAfter() != 13*time.Second {
+		t.Errorf("429 Retry-After = %v, want 13s", after)
+	}
 }
 
 func TestProvider_Generate_ServiceUnavailable(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "17")
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
@@ -91,6 +99,10 @@ func TestProvider_Generate_ServiceUnavailable(t *testing.T) {
 	}
 	if !openai.IsRetryableError(err) {
 		t.Error("503 error should be retryable")
+	}
+	var after interface{ RetryAfter() time.Duration }
+	if !errors.As(err, &after) || after.RetryAfter() != 17*time.Second {
+		t.Errorf("503 Retry-After=%v want 17s", after)
 	}
 }
 

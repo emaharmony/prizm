@@ -52,12 +52,13 @@ type ollamaFunction struct {
 }
 
 type chatRequest struct {
-	Model    string           `json:"model"`
-	Messages []ollamaMessage  `json:"messages"`
-	Tools    []ollamaFunction `json:"tools,omitempty"`
-	Stream   bool             `json:"stream"`
-	Think    *bool            `json:"think,omitempty"`
-	Options  generateOptions  `json:"options,omitempty"`
+	Model         string           `json:"model"`
+	Messages      []ollamaMessage  `json:"messages"`
+	Tools         []ollamaFunction `json:"tools,omitempty"`
+	Stream        bool             `json:"stream"`
+	Think         any              `json:"think,omitempty"`
+	ClearThinking *bool            `json:"clear_thinking,omitempty"`
+	Options       generateOptions  `json:"options,omitempty"`
 }
 
 type ollamaMessage struct {
@@ -141,16 +142,32 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 		Messages: ollamaMsgs,
 		Tools:    ollamaTools,
 		Stream:   false,
-		// Disable thinking, matching the /api/generate path (ollama.go).
-		// Reasoning-hybrid models (e.g. GLM, DeepSeek-R1, Qwen3) can absorb
-		// tool-call intent into a hidden reasoning channel instead of the
-		// structured tool_calls field when thinking is left at its default,
-		// producing a plain-text response with no tool call at all.
-		Think: boolPtr(false),
 		Options: generateOptions{
 			Temperature: req.Temperature,
 			NumPredict:  req.MaxTokens,
 		},
+	}
+	// GLM-5.3's Ollama model contract requires clear_thinking for chat. Keep
+	// thinking out of the returned provider response: only final content and
+	// native tool calls cross this boundary.
+	if isGLM53Cloud(req.Model) {
+		effort := strings.TrimSpace(req.ReasoningEffort)
+		if effort == "" {
+			effort = "low"
+		}
+		if effort != "low" && effort != "high" && effort != "max" {
+			return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: glm-5.3 reasoning effort %q is unsupported (want low, high, or max)", effort)
+		}
+		body.ClearThinking = boolPtr(true)
+		body.Think = effort
+	} else {
+		// Disable thinking for other reasoning-hybrid models so tool-call intent
+		// remains in the structured tool_calls field.
+		if effort := strings.TrimSpace(req.ReasoningEffort); effort != "" {
+			body.Think = effort
+		} else {
+			body.Think = boolPtr(false)
+		}
 	}
 
 	bodyBytes, err := json.Marshal(body)
@@ -195,14 +212,14 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 			// and let FailoverProvider skip this target for the rest of the
 			// session instead of retrying it.
 			if resp.StatusCode == http.StatusTooManyRequests && isQuotaExhausted(bodyStr) {
-				return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: HTTP %d: %s: %w", resp.StatusCode, bodyStr, provider.ErrQuotaExhausted)
+				return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: HTTP %d: %w", resp.StatusCode, provider.ErrQuotaExhausted)
 			}
 			// Retry on transient errors
 			if isRetryableStatus(resp.StatusCode) && attempt < 3 {
 				time.Sleep(time.Duration(attempt+1) * time.Second)
 				continue
 			}
-			return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: HTTP %d: %s", resp.StatusCode, bodyStr)
+			return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: HTTP %d", resp.StatusCode)
 		}
 		break // success
 	}
@@ -213,7 +230,11 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 	}
 
 	if oResp.Error != "" {
-		return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: %s", oResp.Error)
+		return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: model request failed")
+	}
+	publicContent, err := sanitizeGenerateText(oResp.Message.Content)
+	if err != nil {
+		return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: no public answer: %w", err)
 	}
 
 	// Diagnostic: if the model returned thinking content despite think:false,
@@ -248,7 +269,7 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 	}
 
 	return provider.ChatGenerateResponse{
-		Content:      oResp.Message.Content,
+		Content:      publicContent,
 		ToolCalls:    toolCalls,
 		Model:        oResp.Model,
 		Provider:     Name + "-chat",
@@ -261,6 +282,10 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 			"total_duration_ns": oResp.TotalDuration,
 		},
 	}, nil
+}
+
+func isGLM53Cloud(model string) bool {
+	return strings.EqualFold(strings.TrimSpace(model), "glm-5.3:cloud")
 }
 
 // isQuotaExhausted reports whether a 429 response body indicates an

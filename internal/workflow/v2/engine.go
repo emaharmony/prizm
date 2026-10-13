@@ -27,6 +27,7 @@ type Engine struct {
 	verify        VerificationFunc       // optional objective build/test runner (see driver.go)
 	publishTask   func(TaskPacket) error // optional publisher for delegated task packets
 	rollback      RollbackFunc           // optional V57 rollback runner (see SetRollbackRunner)
+	configErr     error                  // invalid safety-critical config rejected before execution
 }
 
 // RollbackFunc discards a failing run's work (e.g. git reset --hard to the
@@ -103,10 +104,11 @@ type EventEmitter interface {
 
 // ExternalEvent is an event from Discord or NATS during feedback gates.
 type ExternalEvent struct {
-	Type          string // "approval", "review", "task_complete", "agent_status"
+	Type          string // approval, review, task_accepted, task_progress, task_complete, agent_status
 	CorrelationID string
 	Source        string // "discord", "nats"
 	Data          map[string]any
+	Acknowledge   func() error `json:"-"`
 }
 
 // NewEngineWithState creates an engine with an existing workflow state (for resumption).
@@ -128,12 +130,14 @@ func NewEngineWithState(config *WorkflowConfig, state *WorkflowState, emitter Ev
 
 // NewEngine creates a new Natural Gates workflow engine.
 func NewEngine(config *WorkflowConfig, emitter EventEmitter, delegation *DelegationManager) *Engine {
-	NormalizeTokenBudgets(config)
-	// Defensive: callers that build a config by hand (bypassing LoadConfig's
-	// validation) must not be able to disable the ceiling with an invalid negative.
-	// -1 (unlimited) is allowed through; anything below that falls back to the default.
-	if config != nil && config.Global.MaxTotalTokens < UnlimitedTokens {
-		config.Global.MaxTotalTokens = DefaultRunTokenCeiling
+	// Validate before normalization. Invalid negative values must not become the
+	// unlimited sentinel when callers construct configs without LoadConfig.
+	var configErr error
+	if config != nil {
+		configErr = validateTokenBudgets(config)
+		if configErr == nil {
+			NormalizeTokenBudgets(config)
+		}
 	}
 	e := &Engine{
 		phases:        make([]Phase, 0),
@@ -143,6 +147,7 @@ func NewEngine(config *WorkflowConfig, emitter EventEmitter, delegation *Delegat
 		eventEmitter:  emitter,
 		delegation:    delegation,
 		config:        config,
+		configErr:     configErr,
 		externalEvent: make(chan ExternalEvent, 100),
 	}
 
@@ -178,6 +183,9 @@ func (e *Engine) GetExternalEventChannel() chan<- ExternalEvent {
 // Run executes the workflow through all phases.
 // It handles phase transitions, gate checks, external event waiting, and delegation.
 func (e *Engine) Run(ctx context.Context) (*WorkflowState, error) {
+	if err := e.configValidationError(); err != nil {
+		return e.state, fmt.Errorf("invalid workflow budget configuration: %w", err)
+	}
 	e.state.Status = StatusInProgress
 	e.state.StartedAt = time.Now().UTC().Format(time.RFC3339)
 	e.emitEvent("workflow.started", map[string]any{"workflow": e.config.Name})
@@ -196,7 +204,10 @@ func (e *Engine) Run(ctx context.Context) (*WorkflowState, error) {
 
 		// Run phase iterations
 		completed := false
-		for iter := 0; iter < phase.MaxIterations(); iter++ {
+		for iter := 0; phase.MaxIterations() <= 0 || iter < phase.MaxIterations(); iter++ {
+			if err := ctx.Err(); err != nil {
+				return e.state, err
+			}
 			e.state.IncrementPhaseIteration(phaseName)
 
 			// Check for external events (for feedback gates)
@@ -299,17 +310,29 @@ func (e *Engine) Run(ctx context.Context) (*WorkflowState, error) {
 	return e.state, nil
 }
 
+func (e *Engine) configValidationError() error {
+	if e.configErr != nil {
+		return e.configErr
+	}
+	return validateTokenBudgets(e.config)
+}
+
 // WaitForResume blocks until an external event resumes the workflow.
 // This is used during feedback gates that pause for approval.
-func (e *Engine) WaitForResume(ctx context.Context) {
+func (e *Engine) WaitForResume(ctx context.Context, stateDir ...string) {
 	for {
 		select {
 		case evt := <-e.externalEvent:
-			if evt.Type == "approval" || evt.Type == "review" {
-				e.handleExternalEvent(evt, e.state.CurrentPhase())
-				if e.state.Status == StatusInProgress {
-					return // resumed
-				}
+			e.handleExternalEvent(evt, e.state.CurrentPhase())
+			dir := ""
+			if len(stateDir) > 0 {
+				dir = stateDir[0]
+			}
+			if err := e.persistAndAcknowledge(evt, dir); err != nil {
+				log.Printf("[V2] external event persistence/ack failed: %v", err)
+			}
+			if (evt.Type == "approval" || evt.Type == "review") && e.state.Status == StatusInProgress {
+				return // resumed
 			}
 		case <-ctx.Done():
 			return // context cancelled
@@ -320,6 +343,22 @@ func (e *Engine) WaitForResume(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (e *Engine) persistAndAcknowledge(evt ExternalEvent, stateDir string) error {
+	if evt.Acknowledge == nil {
+		return nil
+	}
+	if stateDir == "" {
+		return fmt.Errorf("workflow state directory is required before acknowledging durable external event")
+	}
+	if err := SaveWorkflowState(e.state, stateDir); err != nil {
+		return err
+	}
+	if err := SaveCurrentWorkflowState(e.state, stateDir); err != nil {
+		return err
+	}
+	return evt.Acknowledge()
 }
 
 // handleExternalEvent processes an external event (approval, review, task completion).
@@ -360,17 +399,33 @@ func (e *Engine) handleExternalEvent(evt ExternalEvent, phaseName string) {
 			e.state.PauseReason = ""
 		}
 	case "task_complete":
-		taskID, _ := evt.Data["task_id"].(string)
-		status, _ := evt.Data["status"].(string)
 		if e.delegation != nil {
-			// Route through the delegation manager so the matching delegation
-			// record is closed out alongside the task status.
-			summary, _ := evt.Data["output_summary"].(string)
-			e.delegation.HandleTaskCompletion(TaskCompletion{
-				TaskID: taskID, Status: status, OutputSummary: summary,
-			}, e.state)
+			if completion, ok := evt.Data["completion"].(TaskCompletion); ok {
+				e.delegation.HandleTaskCompletion(completion, e.state)
+			} else {
+				taskID, _ := evt.Data["task_id"].(string)
+				status, _ := evt.Data["status"].(string)
+				summary, _ := evt.Data["output_summary"].(string)
+				e.delegation.HandleTaskCompletion(TaskCompletion{TaskID: taskID, Status: status, OutputSummary: summary}, e.state)
+			}
 		} else {
+			taskID, _ := evt.Data["task_id"].(string)
+			status, _ := evt.Data["status"].(string)
 			e.state.UpdateTaskStatus(taskID, status, evt.Data)
+		}
+	case "task_accepted":
+		if e.delegation != nil {
+			taskID, _ := evt.Data["task_id"].(string)
+			delegationID, _ := evt.Data["delegation_id"].(string)
+			key, _ := evt.Data["delivery_key"].(string)
+			e.delegation.AcknowledgeTask(taskID, delegationID, key, e.state)
+		}
+	case "task_progress":
+		if e.delegation != nil {
+			taskID, _ := evt.Data["task_id"].(string)
+			delegationID, _ := evt.Data["delegation_id"].(string)
+			key, _ := evt.Data["delivery_key"].(string)
+			e.delegation.ProgressTask(taskID, delegationID, key, e.state)
 		}
 	case "agent_status":
 		agentName, _ := evt.Data["agent"].(string)
@@ -389,6 +444,9 @@ func (e *Engine) emitEvent(eventType string, payload map[string]any) {
 // ProcessLLMResponse processes an LLM response and returns the action to take.
 // This is called by the wake handler after getting a response from the LLM.
 func (e *Engine) ProcessLLMResponse(response string) (PhaseAction, error) {
+	if err := e.configValidationError(); err != nil {
+		return PhaseAction{}, fmt.Errorf("invalid workflow budget configuration: %w", err)
+	}
 	phase := e.phases[e.state.CurrentPhaseIdx]
 	return phase.RunIteration(context.Background(), e.state, response)
 }

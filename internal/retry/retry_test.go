@@ -2,7 +2,11 @@ package retry
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -18,7 +22,14 @@ func TestIsRetryable(t *testing.T) {
 		{"explicit non-retryable", NewNonRetryableError(fmt.Errorf("forbidden")), false},
 		{"503", fmt.Errorf("server returned 503"), true},
 		{"429", fmt.Errorf("rate limit 429"), true},
+		{"401 invalid api key", fmt.Errorf("provider returned 401: invalid api key"), false},
+		{"403 forbidden", fmt.Errorf("provider returned 403: forbidden"), false},
 		{"timeout", fmt.Errorf("connection timeout"), true},
+		{"wrapped connection reset", &net.OpError{Op: "read", Net: "tcp", Err: fmt.Errorf("transport: %w", syscall.ECONNRESET)}, true},
+		{"wrapped connection refused", &net.OpError{Op: "dial", Net: "tcp", Err: fmt.Errorf("transport: %w", syscall.ECONNREFUSED)}, true},
+		{"wrapped broken pipe", &net.OpError{Op: "write", Net: "tcp", Err: fmt.Errorf("transport: %w", syscall.EPIPE)}, true},
+		{"temporary DNS failure", &net.DNSError{Err: "temporary DNS failure", IsTemporary: true}, true},
+		{"permanent DNS miss", &net.DNSError{Err: "name not found", IsNotFound: true}, false},
 		{"context deadline", context.DeadlineExceeded, true},
 		{"context canceled", context.Canceled, true},
 		{"generic error", fmt.Errorf("something went wrong"), false},
@@ -31,6 +42,27 @@ func TestIsRetryable(t *testing.T) {
 				t.Errorf("IsRetryable(%v) = %v, want %v", tt.err, got, tt.retryable)
 			}
 		})
+	}
+}
+
+func TestParseRetryAfterAndTypedDelay(t *testing.T) {
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		value string
+		want  time.Duration
+	}{
+		{"7", 7 * time.Second},
+		{now.Add(9 * time.Second).Format(http.TimeFormat), 9 * time.Second},
+		{"invalid", 0},
+		{"-1", 0},
+	} {
+		if got := ParseRetryAfter(test.value, now); got != test.want {
+			t.Errorf("ParseRetryAfter(%q)=%v want %v", test.value, got, test.want)
+		}
+	}
+	err := NewRetryableErrorAfter(errors.New("rate limited"), 4*time.Second)
+	if !IsRetryable(err) || err.RetryAfter() != 4*time.Second {
+		t.Fatalf("typed Retry-After lost: %#v", err)
 	}
 }
 

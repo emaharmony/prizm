@@ -165,13 +165,13 @@ func TestPolicyV4_WriteFileProposalAbsolutePath(t *testing.T) {
 	}
 }
 
-func TestPolicyV4_ApplyPatchProposalDenied(t *testing.T) {
+func TestPolicyV4_ApplyPatchProposalRequiresApproval(t *testing.T) {
 	cfg := DefaultPolicyConfig()
 	result := EvaluatePolicy(cfg, "apply_patch_proposal", map[string]any{
-		"patch": "some diff",
+		"patch": "some diff", "base_sha": "abc",
 	})
-	if result.Decision != PolicyDenied {
-		t.Errorf("apply_patch_proposal should be denied (V5 candidate), got %s", result.Decision)
+	if result.Decision != PolicyRequiresApproval {
+		t.Errorf("apply_patch_proposal should require approval, got %s", result.Decision)
 	}
 }
 

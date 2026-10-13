@@ -461,6 +461,9 @@ type AgentConfig struct {
 	// Model is the model identifier: glm-5.1:cloud, gpt-4o, etc.
 	Model string `yaml:"model"`
 
+	// ReasoningEffort optionally selects a model-supported named thinking level.
+	ReasoningEffort string `yaml:"reasoning_effort,omitempty"`
+
 	// Fallbacks are attempted in order after the primary model fails. Each
 	// fallback names its provider explicitly so a model ID never silently routes
 	// through the wrong backend.
@@ -1561,11 +1564,12 @@ func boolPtr(v bool) *bool {
 func (c *Config) RegisterAgents(registry *agent.Registry) error {
 	for _, agentCfg := range c.Agents {
 		a := &agent.Agent{
-			Name:         agentCfg.ID,
-			Role:         agentCfg.Role,
-			Version:      "1.0.0",
-			ProviderName: agentCfg.Provider,
-			Model:        agentCfg.Model,
+			Name:            agentCfg.ID,
+			Role:            agentCfg.Role,
+			Version:         "1.0.0",
+			ProviderName:    agentCfg.Provider,
+			Model:           agentCfg.Model,
+			ReasoningEffort: agentCfg.ReasoningEffort,
 		}
 		// If no capabilities are specified, add a default based on role
 		if len(agentCfg.Capabilities) == 0 {

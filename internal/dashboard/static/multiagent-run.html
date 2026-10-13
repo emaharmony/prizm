@@ -371,6 +371,15 @@
         </div>
         <p class="card-hint" id="opBlockedNote" hidden></p>
         <p class="card-hint" id="opApprovalNote" hidden></p>
+        <div class="actions-row" id="proposalApprovalActions" hidden>
+          <button class="btn primary" id="proposalApproveBtn" type="button">Approve proposed change</button>
+          <button class="btn danger" id="proposalDenyBtn" type="button">Deny proposed change</button>
+        </div>
+        <details id="proposalReview" hidden>
+          <summary>Inspect exact proposal</summary>
+          <p class="card-hint" id="proposalMeta"></p>
+          <pre id="proposalPatch" class="code-block">Loading proposal…</pre>
+        </details>
         <p class="hint" id="opStatusMsg" role="status" aria-live="polite"></p>
       </div>
     </section>
@@ -440,7 +449,8 @@
   function renderHeader(snapshot) {
     $('#runTitle').textContent = snapshot.run_id;
     $('#runMeta').textContent = `Workflow ${snapshot.workflow_id || '—'} · v${snapshot.workflow_version || snapshot.schema_version || 1}`;
-    $('#statusBadge').innerHTML = ui.badge(snapshot.status);
+    $('#statusBadge').innerHTML = ui.badge(live.displayRunStatus(
+      snapshot.status, null, snapshot.waiting && snapshot.waiting.kind));
     // Milestone 8: reuses multiagent-replay.js's TERMINAL_RUN_STATUSES (which
     // mirrors internal/workflow/multiagent/types.go's RunStatus.Terminal())
     // instead of a second, separately-maintained literal list.
@@ -1338,6 +1348,12 @@
     try { envelope = JSON.parse(evt.data) || {}; } catch (_) { /* malformed frame: bookkeeping only, no patch */ }
     const patches = live.derivePatches(type, envelope.payload || {}, { timestamp: envelope.timestamp || '' });
     applyPatches(patches);
+    if (type === live.EVENT_TYPES.DASHBOARD_TASK_COMPLETED) {
+      banner('Task completed. Its final report is available in this run.', 'ok');
+    } else if (type === live.EVENT_TYPES.DASHBOARD_TASK_FAILED) {
+      const cancelled = envelope.payload && envelope.payload.status === 'cancelled';
+      banner(cancelled ? 'Task cancelled. Its final report is available in this run.' : 'Task ended without completion. Its final report is available in this run.', cancelled ? 'warn' : 'err');
+    }
     // Milestone 6: optimistically grow the timeline immediately (ahead of
     // the ~250ms debounced reconciliation below) so a fast-arriving event
     // shows up in the timeline without waiting on a full snapshot refetch.
@@ -1746,25 +1762,55 @@
     else button.removeAttribute('title');
   }
 
-  // renderApprovalNote: WaitingState (durable_types.go) carries only
-  // kind/reason/safe_to_retry/since -- no approval id anywhere in the
-  // current data model (verified: ApprovalRequiredError/ApprovalCheck in
-  // agent_adapter_types.go carry no id either, and this multiagent
-  // ApprovalChecker abstraction is entirely separate from the unrelated
-  // legacy /api/v1/approvals/{task_id}/grant|deny endpoint v2.html uses).
-  // Building an Approve/Reject button here would have to either fabricate
-  // an id or guess a URL -- both explicitly disallowed -- so this renders a
-  // clear, honest note instead of a non-functional control.
+  let requestedProposalKey = '';
+  let loadedProposalKey = '';
   function renderApprovalNote(snapshot) {
     const el = $('#opApprovalNote');
     if (!el) return;
     const waiting = snapshot && snapshot.waiting;
-    if (waiting && waiting.kind === 'approval') {
+    const exactProposalWait = waiting && waiting.kind === 'proposal_approval' &&
+      typeof waiting.proposal_id === 'string' && waiting.proposal_id.startsWith('prop_') &&
+      typeof waiting.approval_id === 'string' && waiting.approval_id.startsWith('appr_');
+    const actions = $('#proposalApprovalActions');
+    if (actions) actions.hidden = !exactProposalWait || replayActive || runUnavailable;
+    const review = $('#proposalReview');
+    if (review) review.hidden = !exactProposalWait;
+    if (exactProposalWait) {
       el.hidden = false;
-      el.textContent = 'This run is waiting on an approval decision. The dashboard’s data model does not carry an approval ID for this wait, so Approve/Reject cannot be offered here — resolve it through whatever approval mechanism this deployment has configured, then use Resume above once it has been decided.';
+      el.textContent = 'This run is waiting for a decision on its exact proposed change. Approving lets Prizm apply it and continue validation; denying records the decision and ends the proposal path.';
+      const key = `${snapshot.run_id}:${waiting.proposal_id}`;
+      $('#proposalApproveBtn').disabled = loadedProposalKey !== key;
+      if (key !== requestedProposalKey) {
+        requestedProposalKey = key;
+        $('#proposalMeta').textContent = 'Loading the persisted patch and base revision…';
+        $('#proposalPatch').textContent = 'Loading proposal…';
+        ui.request(`/multiagent/runs/${encodeURIComponent(snapshot.run_id)}/proposals/${encodeURIComponent(waiting.proposal_id)}`)
+          .then(proposal => {
+            if (requestedProposalKey !== key) return;
+            if (proposal.run_id !== snapshot.run_id || proposal.proposal_id !== waiting.proposal_id || proposal.approval_id !== waiting.approval_id) {
+              throw new Error('Proposal identity did not match the active run wait.');
+            }
+            const paths = Array.isArray(proposal.paths) ? proposal.paths.join(', ') : '';
+            $('#proposalMeta').textContent = `${proposal.status} · ${proposal.mutation_type}${paths ? ' · ' + paths : ''}${proposal.base_sha ? ' · base ' + proposal.base_sha : ''}`;
+            $('#proposalPatch').textContent = proposal.patch || `Target: ${proposal.target_path || 'not specified'}\nMutation: ${proposal.mutation_type}`;
+            loadedProposalKey = key;
+            $('#proposalApproveBtn').disabled = false;
+          })
+          .catch(error => {
+            if (requestedProposalKey !== key) return;
+            $('#proposalMeta').textContent = 'Could not load the exact proposal; do not approve until it can be inspected.';
+            $('#proposalPatch').textContent = (error && error.message) || 'Proposal inspection failed.';
+            $('#proposalApproveBtn').disabled = true;
+          });
+      }
+    } else if (waiting && waiting.kind === 'approval') {
+      el.hidden = false;
+      el.textContent = 'This run is waiting on an approval handled by a separate integration. Resolve it there, then use Resume above.';
     } else {
       el.hidden = true;
       el.textContent = '';
+      requestedProposalKey = '';
+      loadedProposalKey = '';
     }
   }
 
@@ -1803,6 +1849,35 @@
   $('#opPauseBtn').addEventListener('click', handlePauseClick);
   $('#opResumeBtn').addEventListener('click', handleResumeClick);
   $('#opCancelBtn').addEventListener('click', handleCancelClick);
+  async function decideProposal(decision) {
+    const waiting = lastSnapshot && lastSnapshot.waiting;
+    if (!waiting || waiting.kind !== 'proposal_approval' || !waiting.proposal_id || !waiting.approval_id) return;
+    let reason = '';
+    if (decision === 'grant' && !window.confirm('Approve this exact proposed change? Prizm will apply it and continue through validation.')) return;
+    if (decision === 'deny') {
+      if (!window.confirm('Deny this exact proposed change?')) return;
+      reason = window.prompt('Optional reason for denying this proposal:', '');
+      if (reason === null) return;
+    }
+    const buttons = [$('#proposalApproveBtn'), $('#proposalDenyBtn')];
+    buttons.forEach(button => { button.disabled = true; });
+    showOperatorMessage('Recording proposal decision…');
+    try {
+      await ui.request(`/multiagent/runs/${encodeURIComponent(runId)}/proposals/${encodeURIComponent(waiting.proposal_id)}/approval`, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approval_id: waiting.approval_id, decision, reason })
+      });
+      showOperatorMessage(decision === 'grant' ? 'Approval recorded; validation is resuming.' : 'Denial recorded; the run is resuming to record its outcome.', 'ok');
+    } catch (err) {
+      showOperatorMessage(classifyOperatorError(err), 'err');
+    } finally {
+      $('#proposalDenyBtn').disabled = false;
+      refreshOperatorControls();
+    }
+  }
+  $('#proposalApproveBtn').addEventListener('click', () => decideProposal('grant'));
+  $('#proposalDenyBtn').addEventListener('click', () => decideProposal('deny'));
 
   // ---- Load ---------------------------------------------------------------
 

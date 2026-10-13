@@ -1,7 +1,6 @@
-# security-review-loop-exhaustion.yaml proves templates/security-review.yaml's
-# security-reviewer -> implementer correction loop is actually bounded
-# (loop.maxTraversals: 3 on the reviewer-to-impl edge): a 4th consecutive
-# issues_found outcome must stop the run with a budget-exhausted status.
+# security-review-loop-exhaustion.yaml proves the shipped template leaves its
+# security-reviewer -> implementer correction loop unlimited by default: this
+# finite script ends in a role-script failure rather than loop-budget exhaustion.
 #
 # Because this workflow's role/outcome vocabulary ("security-reviewer" ->
 # "implementer" on "issues_found") does not collide with either of Phase 1's
@@ -13,10 +12,10 @@
 # hand-picked name.
 workflow: ../../templates/security-review.yaml
 scenarios:
-  - name: reviewer-loop-exhausted
+  - name: reviewer-loop-remains-unlimited
     input:
       id: task-loop-exhaustion
-      description: the reviewer keeps finding issues past the loop's traversal budget
+      description: the reviewer keeps finding issues while no traversal budget is configured
     script:
       - role: implementer
         outcome: ready_for_scan
@@ -43,11 +42,10 @@ scenarios:
       - role: security-reviewer
         outcome: issues_found
     expect:
-      finalStatus: budget_exhausted
-      loopExhausted: "max_edge:security-reviewer:issues_found_loops"
+      finalStatus: failed
       nodeVisits:
-        implementer: 4
+        implementer: 5
         security-scanner: 4
         security-reviewer: 4
       edgeTraversals:
-        "edge:security-reviewer:issues_found": 3
+        "edge:security-reviewer:issues_found": 4

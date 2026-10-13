@@ -214,9 +214,9 @@ func (s *RemembranceStage) Execute(ctx context.Context, rc *RunContext) (*RunCon
 // Uses (agent + session + turn) as an idempotency key to avoid duplicates
 // when both the NATS subscriber and this stage process the same output.
 func (s *RemembranceStage) captureOutput(rc *RunContext) map[string]any {
-	content := rc.LLMResponse
+	content := publicStageResponse(rc.LLMResponse)
 	if content == "" {
-		return map[string]any{"decision": "skip", "reason": "empty output"}
+		return map[string]any{"decision": "skip", "reason": "no public output"}
 	}
 
 	// Source tag identifies where the capture came from

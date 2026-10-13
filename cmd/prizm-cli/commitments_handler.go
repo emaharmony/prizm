@@ -53,7 +53,7 @@ func (cc *conversationContext) extractCommitments(userText, assistantText, agent
 			{Role: "user", Content: prompt},
 		},
 		Temperature: 0.3,
-		MaxTokens:   1024,
+		MaxTokens:   0,
 	})
 	if err != nil {
 		log.Printf("[COMMITMENTS] extraction model call failed: %v", err)

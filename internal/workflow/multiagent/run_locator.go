@@ -20,15 +20,23 @@ const (
 	runManifestFileName      = "multiagent_manifest.json"
 	runDatabaseFileName      = "multiagent.db"
 	runManifestSchemaVersion = 1
+	// cliReferenceManifestSchemaVersion is the current schema emitted by
+	// cmd/prizm-cli. Keep the locator compatible with v1 historical runs.
+	cliReferenceManifestSchemaVersion = 2
 )
 
 // RunSummary is the minimal listing view of one durable multi-agent run.
 type RunSummary struct {
-	RunID      string    `json:"run_id"`
-	WorkflowID string    `json:"workflow_id"`
-	Status     RunStatus `json:"status"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	RunID            string     `json:"run_id"`
+	WorkflowID       string     `json:"workflow_id"`
+	Status           RunStatus  `json:"status"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+	WaitingKind      string     `json:"waiting_kind,omitempty"`
+	RetryAt          *time.Time `json:"retry_at,omitempty"`
+	RetriesRemaining int        `json:"retries_remaining,omitempty"`
+	LastFailure      string     `json:"last_failure,omitempty"`
+	ReportRef        string     `json:"report_ref,omitempty"`
 }
 
 // RunLocator discovers and opens durable multi-agent runs persisted under a
@@ -127,15 +135,40 @@ func (l RunLocator) ListRuns(ctx context.Context) ([]RunSummary, error) {
 		if err != nil {
 			continue
 		}
-		summaries = append(summaries, RunSummary{
+		summary := RunSummary{
 			RunID:      record.State.RunID,
 			WorkflowID: firstNonEmptyString(record.State.WorkflowID, manifest.WorkflowID),
 			Status:     record.State.Status,
 			CreatedAt:  record.State.CreatedAt,
 			UpdatedAt:  record.State.UpdatedAt,
-		})
+		}
+		if record.Waiting != nil {
+			summary.WaitingKind = record.Waiting.Kind
+		}
+		if due := scheduledRetryAt(record); due != nil {
+			summary.RetryAt = due
+		}
+		if record.Retry != nil {
+			summary.RetriesRemaining = record.Retry.MaxRecoveries - record.Retry.RecoveryNumber
+			summary.LastFailure = safeRetryCode(record.Retry.FailureCode)
+		} else if record.State.Status == RunStatusFailed && len(record.RetryHistory) > 0 {
+			summary.LastFailure = safeRetryCode(record.RetryHistory[len(record.RetryHistory)-1].FailureCode)
+		}
+		if record.State.Status.Terminal() && record.State.RequestIdentity != nil && record.State.RequestIdentity.ResultDestination == "dashboard" {
+			summary.ReportRef = "multiagent_report.json"
+		}
+		summaries = append(summaries, summary)
 	}
 	return summaries, nil
+}
+
+func scheduledRetryAt(record DurableRun) *time.Time {
+	if record.Retry == nil || record.Phase != CheckpointWaiting || record.Waiting == nil ||
+		record.Waiting.Kind != "role_retry" || record.State.Status != RunStatusPaused || record.Retry.NextAt.IsZero() {
+		return nil
+	}
+	due := record.Retry.NextAt
+	return &due
 }
 
 // OpenInspection opens a run for read-only inspection: it returns a durable
@@ -281,7 +314,7 @@ func (l RunLocator) readManifest(runID string) (runManifest, error) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return runManifest{}, fmt.Errorf("multiagent: decode manifest for run %q: %w", runID, err)
 	}
-	if manifest.SchemaVersion != runManifestSchemaVersion || manifest.RunID != runID {
+	if (manifest.SchemaVersion != runManifestSchemaVersion && manifest.SchemaVersion != cliReferenceManifestSchemaVersion) || manifest.RunID != runID {
 		return runManifest{}, fmt.Errorf("multiagent: unsupported or inconsistent manifest for run %q", runID)
 	}
 	// A PR6 registry-backed run's manifest carries a zero-value Definition by

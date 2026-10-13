@@ -303,61 +303,33 @@
     return entries;
   }
 
-  // ---- Milestone 7: workflow-definition version/identity compatibility --
+  // ---- Dashboard snapshot compatibility ---------------------------------
   //
-  // Phase 1 has exactly one reference workflow definition; this frontend
-  // build's fixed NODE_POSITIONS/EDGE_ANCHORS tables (above) and
-  // multiagent-live.js's derivePatches switch were both written against it.
-  // Neither needs a compatibility framework to stay safe against an
-  // unexpected workflow_id/schema_version/workflow_version: unrecognized
-  // node ids already fall back to a plain overflow row (nodePosition above)
-  // and unrecognized edge ids already fall back to a straight center-to-
-  // center line (buildGraphViewModel above) or are skipped if an endpoint
-  // can't be resolved at all, so the page never crashes. What's missing is
-  // only a *visible* signal: without it, a mismatch renders "successfully"
-  // but silently, which risks an operator trusting a graph that may not
-  // actually reflect the real workflow shape. checkSnapshotCompatibility
-  // fills that gap with a proportionate, non-blocking warning -- it never
-  // withholds rendering and never attempts to reconcile/translate between
-  // versions.
-  var EXPECTED_WORKFLOW_ID = 'multi-agent-software-task';
+  // The snapshot is built from the run's pinned definition, so workflow IDs
+  // and definition versions are data, not frontend compatibility constants.
+  // Graph rendering already places unknown nodes in an overflow row and
+  // unknown edges use a safe generic line. Only a dashboard read-model schema
+  // mismatch warrants a compatibility warning here.
   var EXPECTED_SCHEMA_VERSION = 1;
-  var EXPECTED_WORKFLOW_VERSION = 1;
 
   /**
-   * checkSnapshotCompatibility compares one DashboardRunSnapshot's
-   * workflow_id/schema_version/workflow_version against the values this
-   * frontend build was written against. Returns a human-readable warning
-   * string when any of the three does not match (and was actually present
-   * on the snapshot -- a missing/zero field is not treated as a mismatch,
-   * since older or partially-populated payloads must not falsely warn),
-   * or null when everything matches (the common case today, since Phase 1
-   * has only one workflow).
+   * checkSnapshotCompatibility compares the dashboard read-model schema
+   * against the version this frontend understands. Workflow identity and
+   * definition version come from the stored run definition and are rendered
+   * dynamically; they are not evidence of incompatibility by themselves.
    */
   function checkSnapshotCompatibility(snapshot) {
     snapshot = snapshot || {};
-    var mismatches = [];
-    if (snapshot.workflow_id && snapshot.workflow_id !== EXPECTED_WORKFLOW_ID) {
-      mismatches.push('workflow "' + snapshot.workflow_id + '" (this page was built for "' + EXPECTED_WORKFLOW_ID + '")');
-    }
-    if (snapshot.schema_version != null && snapshot.schema_version !== EXPECTED_SCHEMA_VERSION) {
-      mismatches.push('dashboard schema version ' + snapshot.schema_version + ' (expected ' + EXPECTED_SCHEMA_VERSION + ')');
-    }
-    if (snapshot.workflow_version != null && snapshot.workflow_version !== EXPECTED_WORKFLOW_VERSION) {
-      mismatches.push('workflow definition version ' + snapshot.workflow_version + ' (expected ' + EXPECTED_WORKFLOW_VERSION + ')');
-    }
-    if (!mismatches.length) return null;
-    return 'This run uses an unexpected ' + mismatches.join(', and ') +
-      '. The graph below may be incomplete or laid out incorrectly.';
+    if (snapshot.schema_version == null || snapshot.schema_version === EXPECTED_SCHEMA_VERSION) return null;
+    return 'This run uses dashboard schema version ' + snapshot.schema_version +
+      ' (expected ' + EXPECTED_SCHEMA_VERSION + '). The graph below may be incomplete or laid out incorrectly.';
   }
 
   var api = {
     COUNTER_LABELS: COUNTER_LABELS,
     NODE_POSITIONS: NODE_POSITIONS,
     EDGE_ANCHORS: EDGE_ANCHORS,
-    EXPECTED_WORKFLOW_ID: EXPECTED_WORKFLOW_ID,
     EXPECTED_SCHEMA_VERSION: EXPECTED_SCHEMA_VERSION,
-    EXPECTED_WORKFLOW_VERSION: EXPECTED_WORKFLOW_VERSION,
     humanize: humanize,
     buildGraphViewModel: buildGraphViewModel,
     buildBudgetViewModel: buildBudgetViewModel,

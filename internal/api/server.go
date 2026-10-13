@@ -59,6 +59,7 @@ import (
 	"sync"
 	"time"
 
+	agentpkg "github.com/emaharmony/prizm/internal/agent"
 	"github.com/emaharmony/prizm/internal/agentns"
 	"github.com/emaharmony/prizm/internal/autopatch"
 	"github.com/emaharmony/prizm/internal/context"
@@ -102,6 +103,8 @@ type CoreIdentityInterface interface {
 
 // Server provides the Prizm HTTP API.
 type Server struct {
+	resumeCtx   contextctx.Context
+	resumeStop  contextctx.CancelFunc
 	addr        string
 	orch        *orchestrator.Orchestrator
 	store       *task.Store
@@ -275,7 +278,10 @@ type AutoPatchStarter interface {
 
 // NewServer creates a new API server.
 func NewServer(cfg Config) *Server {
+	resumeCtx, resumeStop := contextctx.WithCancel(contextctx.Background())
 	s := &Server{
+		resumeCtx:          resumeCtx,
+		resumeStop:         resumeStop,
 		addr:               cfg.Addr,
 		orch:               cfg.Orch,
 		store:              cfg.Store,
@@ -390,6 +396,7 @@ func (s *Server) routes() {
 
 // Start starts the API server with timeouts and panic recovery.
 func (s *Server) Start() error {
+	defer s.resumeStop()
 	log.Printf("[API] starting on %s", s.addr)
 
 	if s.authToken == "" {
@@ -478,7 +485,13 @@ func requiresAuth(r *http.Request) bool {
 	}
 	return r.URL.Path == "/api/v1/events/stream" ||
 		(strings.HasPrefix(r.URL.Path, "/api/v1/multiagent/runs/") &&
-			strings.HasSuffix(r.URL.Path, "/events/stream"))
+			(strings.HasSuffix(r.URL.Path, "/events/stream") ||
+				(r.Method == http.MethodGet && (strings.HasSuffix(r.URL.Path, "/report") || isMultiAgentProposalReadPath(r.URL.Path)))))
+}
+
+func isMultiAgentProposalReadPath(path string) bool {
+	parts := strings.Split(strings.TrimPrefix(path, "/api/v1/multiagent/runs/"), "/")
+	return len(parts) == 3 && parts[1] == "proposals"
 }
 
 // authorized validates the bearer token in constant time. Browsers using
@@ -652,8 +665,9 @@ func (s *Server) handleAgentInvoke(w http.ResponseWriter, r *http.Request, agent
 		return
 	}
 	maxTokens := req.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = invocation.DefaultMaxTokens
+	if maxTokens < 0 {
+		writeJSONError(w, "max_tokens must be positive when specified", http.StatusBadRequest)
+		return
 	}
 
 	conversationID := resolveConversationID(req)
@@ -822,7 +836,7 @@ func (s *Server) buildInvokeSystemPrompt(agentCfg orchestrator.AgentConfig, sear
 			for i, mem := range memories {
 				if i >= 5 {
 					break
-			}
+				}
 				sb.WriteString(fmt.Sprintf("- %s\n", mem.Content))
 			}
 			sb.WriteString("\n")
@@ -1008,11 +1022,7 @@ func (s *Server) runInvocationWithToolLoop(ctx contextctx.Context, agentCfg orch
 	}
 
 	sink := &invokeSink{}
-	cfg := toolloop.Config{
-		MaxIterations: 3,
-		Timeout:       3 * time.Minute,
-		NudgeAfter:    3,
-	}
+	cfg := toolloop.Config{Timeout: 3 * time.Minute}
 
 	result, err := toolloop.RunChatLoop(ctx, messages, chatTools, chatProv, &agentCfg, s.toolExecForInvoke, sink, cfg, nil)
 	if err != nil {
@@ -1027,6 +1037,7 @@ func (s *Server) runInvocationWithToolLoop(ctx contextctx.Context, agentCfg orch
 		finalContent = sink.content
 		sink.mu.Unlock()
 	}
+	finalContent = publicInvocationResponse(finalContent)
 
 	// V23: Post-hoc citation verification with tiered auto-correction
 	if s.memInjectorForInvoke != nil && finalContent != "" {
@@ -1085,6 +1096,10 @@ func (s *Server) runInvocationWithToolLoop(ctx contextctx.Context, agentCfg orch
 		}
 	}
 
+	// Citation rewriting is a post-provider transformation; sanitize once more
+	// immediately before any reply is persisted or published.
+	finalContent = publicInvocationResponse(finalContent)
+
 	if sessionID != "" && s.sessions != nil {
 		if _, aerr := s.sessions.AddMessage(sessionID, "agent", finalContent, agentCfg.ID); aerr != nil {
 			log.Printf("[API] persist invoke agent reply: %v", aerr)
@@ -1094,6 +1109,14 @@ func (s *Server) runInvocationWithToolLoop(ctx contextctx.Context, agentCfg orch
 	invResult := invocation.ParseResult(finalContent)
 	s.invocations.Complete(invocationID, invResult)
 	s.publishInvocationEvent(agentCfg.ID, invocationID, invocation.StatusCompleted, invResult, "")
+}
+
+func publicInvocationResponse(content string) string {
+	public, err := agentpkg.PublicResponseText(content)
+	if err != nil || strings.TrimSpace(public) == "" {
+		return "The model did not return a public answer."
+	}
+	return public
 }
 
 // publishInvocationEvent re-broadcasts completion on <agent-id>.invocation.completed

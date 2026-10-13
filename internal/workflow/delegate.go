@@ -118,7 +118,7 @@ func ExecuteDelegate(ctx context.Context, cfg DelegationConfig, step Step, input
 		Model:       a.Model,
 		Prompt:      subtask,
 		Temperature: 0.2,
-		MaxTokens:   2048,
+		MaxTokens:   0,
 	})
 	durationMs := time.Since(start).Milliseconds()
 
@@ -131,18 +131,22 @@ func ExecuteDelegate(ctx context.Context, cfg DelegationConfig, step Step, input
 		})
 		return nil, fmt.Errorf("delegate step %q: LLM call failed: %w", step.ID, err)
 	}
+	publicOutput, sanitizeErr := agent.PublicResponseText(resp.Text)
+	if sanitizeErr != nil || publicOutput == "" {
+		publicOutput = "The delegated model did not return a public answer."
+	}
 
 	// 5. Emit completion event
 	emitEvent(agent.EventAgentCompleted, "agent-"+agentName, map[string]any{
 		"agent_name":  agentName,
 		"subtask":     subtask,
-		"output":      resp.Text,
+		"output":      publicOutput,
 		"duration_ms": durationMs,
 	})
 
 	return &DelegationResult{
 		AgentName:  agentName,
-		Output:     resp.Text,
+		Output:     publicOutput,
 		DurationMs: durationMs,
 	}, nil
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/emaharmony/prizm/internal/agent"
 	"github.com/emaharmony/prizm/internal/api"
 	contextpkg "github.com/emaharmony/prizm/internal/context"
+	prizmevent "github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/factorymonitor"
 	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/emaharmony/prizm/internal/improve"
@@ -94,7 +95,7 @@ var knownActions = map[string]wakeAction{
 
 If everything looks good, say so briefly. If something needs attention, flag it clearly.`,
 		ChannelID: "1491622863118008431", // scheduled-reports destination
-		MaxTokens: 2048,
+		MaxTokens: 0,
 	},
 	"memory_consolidation": {
 		Prompt: `You are performing weekly memory consolidation. Review recent conversations and:
@@ -105,7 +106,7 @@ If everything looks good, say so briefly. If something needs attention, flag it 
 
 Focus on what matters. Skip trivia.`,
 		ChannelID: "1491622863118008431", // scheduled-reports destination
-		MaxTokens: 1024,
+		MaxTokens: 0,
 	},
 	"check_prs": {
 		Prompt: `You are summarizing PR status for a Discord channel. Take the raw PR data below and format it concisely:
@@ -115,13 +116,13 @@ Focus on what matters. Skip trivia.`,
 
 Be concise — this is a status report, not a novel.`,
 		ChannelID: "1491622863118008431", // scheduled-reports destination
-		MaxTokens: 1024,
+		MaxTokens: 0,
 		SkipLLM:   true, // Run gh pr list directly, then optionally summarize
 	},
 	"factory_status_digest": {
 		Prompt:    `Report the current Roblox Factory queue status.`,
 		ChannelID: "1491622863118008431", // scheduled-reports destination
-		MaxTokens: 512,
+		MaxTokens: 0,
 		SkipLLM:   true,
 	},
 	"auto_patch": {
@@ -157,18 +158,18 @@ Look for:
 
 Be thorough, proactive, and fast. START WITH A TOOL CALL, not prose.`,
 		ChannelID: "1491622863118008431", // scheduled-reports destination
-		MaxTokens: 2048,
+		MaxTokens: 0,
 	},
 	"status_report": {
 		Prompt:    `Generate a 2-hour status report (project state, recent runs, git activity).`,
 		ChannelID: "1491622863118008431", // scheduled-reports destination
-		MaxTokens: 1024,
+		MaxTokens: 0,
 		SkipLLM:   true, // Reads run summaries + PROJECT_STATE.md directly
 	},
 	"mol_status": {
 		Prompt:    `Report the MOL (Machine Orchestration Loop) self-status.`,
 		ChannelID: "1491622863118008431", // scheduled-reports destination
-		MaxTokens: 1024,
+		MaxTokens: 0,
 		SkipLLM:   true, // Pure introspection — no LLM needed
 	},
 	"review_improvements": {
@@ -184,7 +185,7 @@ Be thorough, proactive, and fast. START WITH A TOOL CALL, not prose.`,
 3. Dismiss duplicates or stale proposals
 4. Be concise — list proposals with status and recommended action`,
 		ChannelID: "1491622863118008431", // scheduled-reports destination
-		MaxTokens: 1024,
+		MaxTokens: 0,
 	},
 	"project_work": {
 		// project_work runs the full gated loop via runNaturalGatesWorkflow →
@@ -199,7 +200,7 @@ Be thorough, proactive, and fast. START WITH A TOOL CALL, not prose.`,
 
 Work fast and decisively. Don't overthink — implement, review, push. If you get stuck, report the blocker and move on.`,
 		ChannelID: "1491622863118008431", // scheduled-reports destination (fallback; project.channel preferred)
-		MaxTokens: 4096,
+		MaxTokens: 0,
 	},
 }
 
@@ -372,10 +373,7 @@ func (wh *WakeHandler) handleWorkflowStart(req workstart.Request) {
 		log.Printf("[WAKE] workflow.start: no agent configured")
 		return
 	}
-	model := agentCfg.Model
-	if model == "" {
-		model = "glm-5.1:cloud"
-	}
+	model := resolveRuntimeModel(agentCfg.Model)
 
 	// Resolve the result channel from the request or project config.
 	channel := resolved.Channel
@@ -556,7 +554,7 @@ func (wh *WakeHandler) handleScheduledEvent(msg *nats.Msg) {
 		actionDef = wakeAction{
 			Prompt:    fmt.Sprintf("You received a scheduled event with action %q. Check your state and report anything that needs attention.", action),
 			ChannelID: "1491622863118008431", // scheduled-reports destination
-			MaxTokens: 1024,
+			MaxTokens: 0,
 		}
 	}
 
@@ -737,10 +735,7 @@ You can create branches, commit changes, push to remote, and open PRs. You are n
 		return
 	}
 
-	model := agentCfg.Model
-	if model == "" {
-		model = "glm-5.1:cloud"
-	}
+	model := resolveRuntimeModel(agentCfg.Model)
 
 	// Create or reuse a session for this action
 	sessionKey := fmt.Sprintf("wake:%s:%s", action, time.Now().Format("2006-01-02"))
@@ -1425,8 +1420,6 @@ func (wh *WakeHandler) writeRunSummary(action, agent, content string, promptToke
 // commit-push enforcement, task assignment, and self-review.
 
 func (wh *WakeHandler) runToolLoopWake(ctx stdcontext.Context, systemPrompt, userPrompt, model string, agentCfg *orchestrator.AgentConfig, exec *tool.Executor) (string, int, int) {
-	const maxTotalIterations = 200
-
 	// Build tool prompt suffix
 	toolInfos := wh.toolReg.ListWithDescriptions()
 	workspaceRoot := wh.cfg.Prizm.Workspace
@@ -1494,26 +1487,31 @@ func (wh *WakeHandler) runToolLoopWake(ctx stdcontext.Context, systemPrompt, use
 
 	// V36: Phase definitions
 	type Phase struct {
-		Name          string
-		MaxIterations int
-		AllowedTools  map[string]bool // empty = all allowed
-		Description   string
+		Name             string
+		CompletionSignal string
+		AllowedTools     map[string]bool // empty = all allowed
+		Description      string
 	}
 	phases := []Phase{
-		{Name: "ORIENT", MaxIterations: 10, AllowedTools: map[string]bool{"read_file": true, "git_status": true, "git_log": true, "git_branch_list": true, "project_overview": true, "list_dir": true}, Description: "Read PROJECT_STATE.md and check git state. The system has already assigned your task — confirm it."},
-		{Name: "BRANCH", MaxIterations: 10, AllowedTools: map[string]bool{"git_branch_list": true, "git_status": true, "read_file": true, "git_checkout": true}, Description: "If on main/master, you MUST create a feature branch (feature/bb-{task-slug}). The system blocks all writes on main. If already on a feature branch, proceed."},
-		{Name: "IMPLEMENT", MaxIterations: 80, AllowedTools: map[string]bool{"read_file": true, "write_file": true, "create_directory": true, "list_dir": true, "search_files": true, "git_status": true, "git_diff": true}, Description: "Write code for your assigned task. After 3 read_file calls, the system forces you to mutate files or directories. You MUST produce at least one write_file or create_directory."},
-		{Name: "SELF_REVIEW", MaxIterations: 20, AllowedTools: map[string]bool{"read_file": true, "write_file": true, "create_directory": true, "git_diff": true, "git_status": true}, Description: "Review your changes via git_diff. Fix obvious errors. Respond REVIEW_PASSED when clean."},
-		{Name: "COMMIT_PUSH", MaxIterations: 10, AllowedTools: map[string]bool{"git_add": true, "git_commit": true, "git_push": true, "create_pr": true, "git_status": true}, Description: "Stage, commit, and push your changes. All three must complete."},
-		{Name: "UPDATE_STATE", MaxIterations: 10, AllowedTools: map[string]bool{"write_file": true, "read_file": true}, Description: "Update PROJECT_STATE.md to mark your task complete with [x]."},
-		{Name: "REPORT", MaxIterations: 5, AllowedTools: map[string]bool{}, Description: "Emit final summary. No tools allowed."},
+		{Name: "ORIENT", CompletionSignal: "ORIENT_COMPLETE", AllowedTools: map[string]bool{"read_file": true, "git_status": true, "git_log": true, "git_branch_list": true, "project_overview": true, "list_dir": true}, Description: "Read PROJECT_STATE.md and check git state. The system has already assigned your task — confirm it."},
+		{Name: "BRANCH", CompletionSignal: "BRANCH_COMPLETE", AllowedTools: map[string]bool{"git_branch_list": true, "git_status": true, "read_file": true, "git_checkout": true}, Description: "If on main/master, you MUST create a feature branch (feature/bb-{task-slug}). The system blocks all writes on main. If already on a feature branch, proceed."},
+		{Name: "IMPLEMENT", CompletionSignal: "IMPLEMENT_COMPLETE", AllowedTools: map[string]bool{"read_file": true, "write_file": true, "create_directory": true, "list_dir": true, "search_files": true, "git_status": true, "git_diff": true}, Description: "Write code for your assigned task. After 3 read_file calls, the system forces you to mutate files or directories. You MUST produce at least one write_file or create_directory."},
+		{Name: "SELF_REVIEW", CompletionSignal: "SELF_REVIEW_COMPLETE", AllowedTools: map[string]bool{"read_file": true, "write_file": true, "create_directory": true, "git_diff": true, "git_status": true}, Description: "Review your changes via git_diff. Fix obvious errors. Respond REVIEW_PASSED when clean."},
+		{Name: "COMMIT_PUSH", CompletionSignal: "COMMIT_PUSH_COMPLETE", AllowedTools: map[string]bool{"git_add": true, "git_commit": true, "git_push": true, "create_pr": true, "git_status": true}, Description: "Stage, commit, and push your changes. All three must complete."},
+		{Name: "UPDATE_STATE", CompletionSignal: "UPDATE_STATE_COMPLETE", AllowedTools: map[string]bool{"write_file": true, "read_file": true}, Description: "Update PROJECT_STATE.md to mark your task complete with [x]."},
+		{Name: "REPORT", CompletionSignal: "REPORT_COMPLETE", AllowedTools: map[string]bool{}, Description: "Emit final summary. No tools allowed."},
 	}
+	messages = append(messages, provider.ChatMessage{Role: "system", Content: wakePhaseGuidance(phases[0].Name, phases[0].Description, phases[0].CompletionSignal)})
 
 	phaseIdx := 0
 	iterInPhase := 0
 	tokenCeiling := wh.wakeToolTokenCeiling()
 
-	for totalIter := 0; totalIter < maxTotalIterations; totalIter++ {
+	for totalIter := 0; ; totalIter++ {
+		if err := ctx.Err(); err != nil {
+			wh.writeWorkState(state.branchName, state.assignedTask, state.committed, state.pushed)
+			return fmt.Sprintf("Project work stopped: %v", err), totalPromptTokens, totalCompletionTokens
+		}
 		// Bound token spend like the gated loop. This V36 tool loop was previously
 		// capped only by iteration count; use the default run ceiling so a stuck or
 		// expensive loop can't burn tokens without limit.
@@ -1522,25 +1520,7 @@ func (wh *WakeHandler) runToolLoopWake(ctx stdcontext.Context, systemPrompt, use
 			return fmt.Sprintf("Project work stopped: token budget exhausted (%d/%d tokens)", used, tokenCeiling), totalPromptTokens, totalCompletionTokens
 		}
 		phase := phases[phaseIdx]
-		log.Printf("[WAKE-TOOL] phase=%s iteration %d/%d (total %d/%d)", phase.Name, iterInPhase+1, phase.MaxIterations, totalIter+1, maxTotalIterations)
-
-		// V36: Phase transition enforcement
-		if iterInPhase >= phase.MaxIterations {
-			phaseIdx++
-			if phaseIdx >= len(phases) {
-				log.Printf("[WAKE-TOOL] all phases complete, forcing final")
-				break
-			}
-			iterInPhase = 0
-			state.readsInPhase = 0
-			nextPhase := phases[phaseIdx]
-			messages = append(messages, provider.ChatMessage{
-				Role:    "system",
-				Content: fmt.Sprintf("PHASE %s COMPLETE. Moving to %s phase. You MUST now: %s", phase.Name, nextPhase.Name, nextPhase.Description),
-			})
-			log.Printf("[WAKE-TOOL] phase transition: %s → %s", phase.Name, nextPhase.Name)
-			continue
-		}
+		log.Printf("[WAKE-TOOL] phase=%s iteration %d (total %d)", phase.Name, iterInPhase+1, totalIter+1)
 
 		// V37: Branch gate — when transitioning from ORIENT to BRANCH, check if ORIENT found work.
 		// If no task was assigned AND ORIENT didn't find issues, skip BRANCH and go straight to REPORT.
@@ -1553,7 +1533,7 @@ func (wh *WakeHandler) runToolLoopWake(ctx stdcontext.Context, systemPrompt, use
 				state.readsInPhase = 0
 				messages = append(messages, provider.ChatMessage{
 					Role:    "system",
-					Content: "No issues found and no task assigned. Skip to REPORT and emit final summary. No branch creation needed.",
+					Content: "No issues found and no task assigned. Skip to REPORT. No branch creation needed.\n" + wakePhaseGuidance(phases[phaseIdx].Name, phases[phaseIdx].Description, phases[phaseIdx].CompletionSignal),
 				})
 				continue
 			}
@@ -1579,6 +1559,10 @@ func (wh *WakeHandler) runToolLoopWake(ctx stdcontext.Context, systemPrompt, use
 				// No changes — skip self-review
 				phaseIdx++
 				iterInPhase = 0
+				if phaseIdx < len(phases) {
+					nextPhase := phases[phaseIdx]
+					messages = append(messages, provider.ChatMessage{Role: "system", Content: fmt.Sprintf("SELF_REVIEW skipped because there are no changes. Moving to %s phase.\n%s", nextPhase.Name, wakePhaseGuidance(nextPhase.Name, nextPhase.Description, nextPhase.CompletionSignal))})
+				}
 				continue
 			}
 		}
@@ -1587,10 +1571,9 @@ func (wh *WakeHandler) runToolLoopWake(ctx stdcontext.Context, systemPrompt, use
 		if phase.Name == "REPORT" {
 			messages = append(messages, provider.ChatMessage{
 				Role:    "system",
-				Content: "You are in REPORT phase. Emit your final summary now as {\"type\":\"final\",\"content\":\"...\"}. No tool calls.",
+				Content: fmt.Sprintf("You are in REPORT phase. Emit your final summary now as {\"type\":\"final\",\"content\":\"...\"}. No tool calls. Include %s on its own line before the JSON.", phase.CompletionSignal),
 			})
 		}
-
 		var responseText string
 
 		if chatErr == nil {
@@ -1600,7 +1583,7 @@ func (wh *WakeHandler) runToolLoopWake(ctx stdcontext.Context, systemPrompt, use
 				Model:       model,
 				Messages:    messages,
 				Temperature: 0.7,
-				MaxTokens:   4096,
+				MaxTokens:   0,
 			})
 			if err != nil {
 				log.Printf("[WAKE-TOOL] ERROR LLM call failed: %v", err)
@@ -1638,7 +1621,7 @@ func (wh *WakeHandler) runToolLoopWake(ctx stdcontext.Context, systemPrompt, use
 				Model:       model,
 				Prompt:      flatPrompt,
 				Temperature: 0.7,
-				MaxTokens:   4096,
+				MaxTokens:   0,
 			})
 			if err != nil {
 				return fmt.Sprintf("Project work failed at iteration %d: %v", totalIter+1, err), totalPromptTokens, totalCompletionTokens
@@ -1656,6 +1639,16 @@ func (wh *WakeHandler) runToolLoopWake(ctx stdcontext.Context, systemPrompt, use
 				return fmt.Sprintf("Project work stopped: token budget exhausted (%d/%d tokens)", used, tokenCeiling), totalPromptTokens, totalCompletionTokens
 			}
 		}
+
+		parsed, publicResponse, phaseComplete, publicErr := wakeParseResponse(responseText, phase.CompletionSignal)
+		if publicErr != nil || strings.TrimSpace(publicResponse) == "" {
+			log.Printf("[WAKE-TOOL] model response contained no well-formed public answer")
+			wh.writeWorkState(state.branchName, state.assignedTask, state.committed, state.pushed)
+			return "The model did not return a public answer.", totalPromptTokens, totalCompletionTokens
+		}
+		// Only sanitized public prose may enter subsequent prompts. Strict JSON is
+		// decoded before sanitation so code in its content remains literal.
+		responseText = publicResponse
 
 		// V36: Prose detection
 		trimmed := strings.TrimSpace(responseText)
@@ -1686,36 +1679,46 @@ func (wh *WakeHandler) runToolLoopWake(ctx stdcontext.Context, systemPrompt, use
 		}
 
 		// Parse the response
-		parsed := agent.ParseAgentOutputWithFallback(responseText)
-
 		if parsed.Type == agent.ResponseFinal {
-			// V36: Commit-Push Enforcement
-			if state.filesWritten && !state.committed {
-				log.Printf("[WAKE-TOOL] FINAL REJECTED: files written but not committed")
-				messages = append(messages, provider.ChatMessage{
-					Role:    "system",
-					Content: "COMMIT REQUIRED: You wrote files but have not committed. You MUST use git_add then git_commit before finishing. Your final response is rejected.",
-				})
+			if !phaseComplete {
+				messages = append(messages, provider.ChatMessage{Role: "assistant", Content: responseText})
+				messages = append(messages, provider.ChatMessage{Role: "user", Content: fmt.Sprintf("The %s phase is not complete until you emit %s on its own line, followed by a final JSON response. Continue this phase.", phase.Name, phase.CompletionSignal)})
+				iterInPhase++
 				continue
 			}
-			if state.committed && !state.pushed {
-				log.Printf("[WAKE-TOOL] FINAL REJECTED: committed but not pushed")
-				messages = append(messages, provider.ChatMessage{
-					Role:    "system",
-					Content: "PUSH REQUIRED: You committed but have not pushed. You MUST use git_push before finishing. Your final response is rejected.",
-				})
+			if phase.Name == "COMMIT_PUSH" && ((state.filesWritten && !state.committed) || (state.committed && !state.pushed)) {
+				messages = append(messages, provider.ChatMessage{Role: "assistant", Content: responseText})
+				messages = append(messages, provider.ChatMessage{Role: "user", Content: "COMMIT AND PUSH REQUIRED: written files must be committed and pushed before this phase can complete."})
+				iterInPhase++
 				continue
 			}
-
-			log.Printf("[WAKE-TOOL] final response accepted at phase %s", phase.Name)
-
-			// V36: Write work state for next cycle
-			wh.writeWorkState(state.branchName, state.assignedTask, state.committed, state.pushed)
-
-			return parsed.Content, totalPromptTokens, totalCompletionTokens
+			if phase.Name == "REPORT" {
+				wh.writeWorkState(state.branchName, state.assignedTask, state.committed, state.pushed)
+				return parsed.Content, totalPromptTokens, totalCompletionTokens
+			}
+			if phase.Name == "ORIENT" && state.assignedTask == "" && !state.orientFoundWork {
+				phaseIdx = len(phases) - 2 // REPORT follows UPDATE_STATE; skip the work phases.
+			}
+			if phaseIdx+1 >= len(phases) {
+				return "Project work completed without a report phase.", totalPromptTokens, totalCompletionTokens
+			}
+			phaseIdx++
+			iterInPhase = 0
+			state.readsInPhase = 0
+			nextPhase := phases[phaseIdx]
+			messages = append(messages, provider.ChatMessage{Role: "assistant", Content: responseText})
+			messages = append(messages, provider.ChatMessage{Role: "system", Content: fmt.Sprintf("PHASE %s COMPLETE. Moving to %s phase. You MUST now: %s\nWhen complete, emit %s on its own line immediately before a final JSON response. Do not emit it with a tool request; phase changes are controlled by the runtime.", phase.Name, nextPhase.Name, nextPhase.Description, nextPhase.CompletionSignal)})
+			log.Printf("[WAKE-TOOL] phase transition: %s → %s", phase.Name, nextPhase.Name)
+			continue
 		}
 
 		if parsed.Type == agent.ResponseToolRequest {
+			if phaseComplete {
+				messages = append(messages, provider.ChatMessage{Role: "assistant", Content: responseText})
+				messages = append(messages, provider.ChatMessage{Role: "user", Content: "A phase completion signal must accompany a final JSON response, not a tool request. Complete the tool work first."})
+				iterInPhase++
+				continue
+			}
 			log.Printf("[WAKE-TOOL] tool request: %s (phase: %s)", parsed.ToolName, phase.Name)
 
 			// V36: Phase tool enforcement — check if tool is allowed in current phase
@@ -1852,11 +1855,165 @@ func (wh *WakeHandler) runToolLoopWake(ctx stdcontext.Context, systemPrompt, use
 		return responseText, totalPromptTokens, totalCompletionTokens
 	}
 
-	// V36: Write work state even on incomplete runs
-	wh.writeWorkState(state.branchName, state.assignedTask, state.committed, state.pushed)
+}
 
-	log.Printf("[WAKE-TOOL] max iterations reached. State: written=%v staged=%v committed=%v pushed=%v", state.filesWritten, state.filesStaged, state.committed, state.pushed)
-	return "Project work cycle reached max iterations. See logs for details.", totalPromptTokens, totalCompletionTokens
+func wakeHasPhaseCompletionSignal(response, signal string) bool {
+	_, _, complete, err := wakeParseResponse(response, signal)
+	return err == nil && complete
+}
+
+// wakeParseResponse treats phase markers and valid JSON as structure before
+// removing private-reasoning blocks. In particular, final content can contain
+// source code whose literal text happens to look like a reasoning tag.
+func wakeParseResponse(response, signal string) (agent.AgentResponse, string, bool, error) {
+	if signal != "" {
+		lines := strings.Split(response, "\n")
+		for i, line := range lines {
+			if strings.TrimSpace(line) != signal || i+1 == len(lines) {
+				continue
+			}
+			finalJSON := strings.TrimSpace(strings.Join(lines[i+1:], "\n"))
+			var final agent.AgentResponse
+			if err := json.Unmarshal([]byte(finalJSON), &final); err != nil || final.Type != agent.ResponseFinal || strings.TrimSpace(final.Content) == "" {
+				continue
+			}
+
+			// Confirm the marker is public. A matching line inside an outer
+			// <think> block must never advance the phase.
+			preamble := strings.Join(lines[:i], "\n")
+			checkedPreamble, err := agent.PublicResponseText(preamble + "\n" + signal)
+			if err != nil {
+				return agent.AgentResponse{}, "", false, err
+			}
+			if !strings.HasSuffix(checkedPreamble, signal) {
+				continue
+			}
+			publicContent, err := wakePublicFinalContent(final.Content)
+			if err != nil || strings.TrimSpace(publicContent) == "" {
+				if err == nil {
+					err = fmt.Errorf("final response contained no public content")
+				}
+				return agent.AgentResponse{}, "", false, err
+			}
+			final.Content = publicContent
+			publicJSON, err := json.Marshal(final)
+			if err != nil {
+				return agent.AgentResponse{}, "", false, err
+			}
+			publicPreamble := strings.TrimSuffix(checkedPreamble, signal)
+			publicText := strings.TrimSpace(publicPreamble)
+			if publicText != "" {
+				publicText += "\n"
+			}
+			publicText += signal + "\n" + string(publicJSON)
+			return final, publicText, true, nil
+		}
+	}
+
+	trimmed := strings.TrimSpace(response)
+	var decoded agent.AgentResponse
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err == nil {
+		switch decoded.Type {
+		case agent.ResponseFinal:
+			content, err := wakePublicFinalContent(decoded.Content)
+			if err != nil || strings.TrimSpace(content) == "" {
+				if err == nil {
+					err = fmt.Errorf("final response contained no public content")
+				}
+				return agent.AgentResponse{}, "", false, err
+			}
+			decoded.Content = content
+			publicJSON, err := json.Marshal(decoded)
+			if err != nil {
+				return agent.AgentResponse{}, "", false, err
+			}
+			return decoded, string(publicJSON), false, nil
+		case agent.ResponseToolRequest:
+			if decoded.ToolName != "" {
+				return decoded, trimmed, false, nil
+			}
+		}
+	}
+
+	publicResponse, err := agent.PublicResponseText(response)
+	if err != nil || strings.TrimSpace(publicResponse) == "" {
+		if err == nil {
+			err = fmt.Errorf("response contained no public text")
+		}
+		return agent.AgentResponse{}, "", false, err
+	}
+	return agent.ParseAgentOutputWithFallback(publicResponse), publicResponse, false, nil
+}
+
+// wakePublicFinalContent sanitizes prose while leaving unified-diff hunk lines
+// intact. Those lines are code, even when source text contains <think> tags.
+func wakePublicFinalContent(content string) (string, error) {
+	var out, prose strings.Builder
+	flushProse := func() error {
+		if prose.Len() == 0 {
+			return nil
+		}
+		raw := prose.String()
+		public, err := agent.PublicResponseText(raw)
+		if err != nil {
+			return err
+		}
+		out.WriteString(public)
+		// PublicResponseText trims surrounding whitespace; retain source line
+		// boundaries needed to keep adjacent diff metadata/hunks well formed.
+		trimmed := strings.TrimRight(raw, " \t\r\n")
+		out.WriteString(raw[len(trimmed):])
+		prose.Reset()
+		return nil
+	}
+	inHunk := false
+	for _, line := range strings.SplitAfter(content, "\n") {
+		body := strings.TrimSuffix(line, "\n")
+		if strings.HasPrefix(body, "diff --git ") {
+			inHunk = false
+		}
+		if strings.HasPrefix(body, "@@ ") {
+			if err := flushProse(); err != nil {
+				return "", err
+			}
+			inHunk = true
+			out.WriteString(line)
+			continue
+		}
+		if inHunk && body != "" && (body[0] == ' ' || body[0] == '+' || body[0] == '-' || body[0] == '\\') {
+			if err := flushProse(); err != nil {
+				return "", err
+			}
+			out.WriteString(line)
+			continue
+		}
+		if inHunk {
+			inHunk = false
+		}
+		prose.WriteString(line)
+	}
+	if err := flushProse(); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
+func wakeStripPhaseCompletionSignal(response, signal string) string {
+	if signal == "" {
+		return response
+	}
+	lines := strings.Split(response, "\n")
+	filtered := lines[:0]
+	for _, line := range lines {
+		if strings.TrimSpace(line) != signal {
+			filtered = append(filtered, line)
+		}
+	}
+	return strings.Join(filtered, "\n")
+}
+
+func wakePhaseGuidance(name, description, signal string) string {
+	return fmt.Sprintf("You are in %s phase. %s\nWhen complete, emit %s on its own line immediately before a final JSON response. Do not emit it with a tool request; phase changes are controlled by the runtime.", name, description, signal)
 }
 
 // getCurrentBranch returns the current git branch in the BassBook repo.
@@ -2213,7 +2370,7 @@ func (wh *WakeHandler) gatherScoutContext(ctx stdcontext.Context) string {
 		Model:       "qwen3:8b",
 		Prompt:      scoutPrompt,
 		Temperature: 0.3,
-		MaxTokens:   512,
+		MaxTokens:   0,
 	})
 	if err != nil {
 		log.Printf("[SCOUT] local context gather failed: %v", err)
@@ -2367,8 +2524,24 @@ func (wh *WakeHandler) RunGatedLoop(ctx stdcontext.Context, project *orchestrato
 	// Engine: NATS emitter for dashboard observability + delegation for optional
 	// sub-agent reviewers. Falls back to a no-op log emitter without NATS.
 	var emitter v2.EventEmitter = &v2.LogEmitter{}
+	var workflowPublisher *v2.NATSPublisher
+	var delegationPublisher *v2.NATSPublisher
+	var workflowOutbox *prizmevent.SQLiteOutbox
 	if wh.natsConn != nil {
-		emitter = v2.NewNATSEmitter(v2.NewNATSPublisherFromConn(wh.natsConn), "prizm.workflow")
+		workflowPublisher = v2.NewNATSPublisherFromConn(wh.natsConn)
+		outbox, outboxErr := prizmevent.NewSQLiteOutbox(filepath.Join(stateDir, "event-outbox.db"))
+		if outboxErr != nil {
+			log.Printf("[GATED-LOOP] durable event outbox unavailable; refusing delegated dispatch: %v", outboxErr)
+		} else {
+			defer outbox.Close()
+			workflowPublisher.UseOutbox(outbox)
+			delegationPublisher = workflowPublisher
+			workflowOutbox = outbox
+			if replayErr := workflowPublisher.ReplayOutbox(ctx); replayErr != nil {
+				log.Printf("[GATED-LOOP] pending event replay paused after publish failure: %v", replayErr)
+			}
+		}
+		emitter = v2.NewNATSEmitter(workflowPublisher, "prizm.workflow")
 	}
 	delegation := v2.NewDelegationManager("prizm.agent.openclaw", "prizm.workflow.task.complete")
 	delegation.ApplyTimeoutConfig(config.Global.DelegationTimeouts)
@@ -2441,13 +2614,9 @@ func (wh *WakeHandler) RunGatedLoop(ctx stdcontext.Context, project *orchestrato
 	// Delegation transport: publish delegated task packets onto the agent subject so
 	// other agents/Prizms can pick them up. Without NATS, delegations are still
 	// recorded in state but not dispatched.
-	if wh.natsConn != nil {
+	if delegationPublisher != nil {
 		engine.SetTaskPublisher(func(packet v2.TaskPacket) error {
-			data, err := json.Marshal(packet)
-			if err != nil {
-				return err
-			}
-			return wh.natsConn.Publish(delegation.Subject(), data)
+			return delegationPublisher.PublishTaskPacket(delegation.Subject(), packet)
 		})
 	}
 
@@ -2492,27 +2661,28 @@ func (wh *WakeHandler) RunGatedLoop(ctx stdcontext.Context, project *orchestrato
 
 		// Delegated task completions: forward into the engine so the delegation
 		// manager closes out the record and the task_completion gate sees it.
+		if workflowOutbox != nil {
+			if err := forwardDurableDelegationOutcomes(ctx, workflowOutbox, runID, eventCh); err != nil {
+				log.Printf("[GATED-LOOP] delegation outcome replay paused: %v", err)
+			}
+		}
 		csub, csubErr := wh.natsConn.Subscribe(delegation.Subject()+".complete", func(msg *nats.Msg) {
-			var payload map[string]any
-			if err := json.Unmarshal(msg.Data, &payload); err != nil {
+			if workflowOutbox == nil {
 				return
 			}
-			if wfID, _ := payload["workflow_id"].(string); wfID != "" && wfID != runID {
+			var outcome prizmevent.Outcome
+			if err := json.Unmarshal(msg.Data, &outcome); err != nil {
 				return
 			}
-			evt := v2.ExternalEvent{
-				Type:          "task_complete",
-				CorrelationID: runID,
-				Source:        "nats",
-				Data: map[string]any{
-					"task_id":        payload["task_id"],
-					"status":         payload["status"],
-					"output_summary": payload["output_summary"],
-				},
+			if outcome.RunID != runID {
+				return
 			}
-			select {
-			case eventCh <- evt:
-			default:
+			if _, err := workflowOutbox.RecordOutcome(ctx, outcome); err != nil {
+				log.Printf("[GATED-LOOP] rejected delegation outcome %s: %v", outcome.EventID, err)
+				return
+			}
+			if err := forwardDurableDelegationOutcomes(ctx, workflowOutbox, runID, eventCh); err != nil {
+				log.Printf("[GATED-LOOP] delegation outcome delivery paused: %v", err)
 			}
 		})
 		if csubErr == nil {
@@ -2546,7 +2716,7 @@ func (wh *WakeHandler) RunGatedLoop(ctx stdcontext.Context, project *orchestrato
 			}
 			resp, err := chatProv.ChatGenerate(c, provider.ChatGenerateRequest{
 				RunID: runID, Agent: agentCfg.ID, Model: model, Messages: cm,
-				Temperature: 0.7, MaxTokens: 4096,
+				Temperature: 0.7, MaxTokens: 0,
 			})
 			if err != nil {
 				return "", 0, 0, err
@@ -2568,7 +2738,7 @@ func (wh *WakeHandler) RunGatedLoop(ctx stdcontext.Context, project *orchestrato
 		}
 		resp, err := prov.Generate(c, provider.GenerateRequest{
 			RunID: runID, Agent: agentCfg.ID, Model: model, Prompt: flat.String(),
-			Temperature: 0.7, MaxTokens: 4096,
+			Temperature: 0.7, MaxTokens: 0,
 		})
 		if err != nil {
 			return "", 0, 0, err
@@ -2643,6 +2813,53 @@ func (wh *WakeHandler) RunGatedLoop(ctx stdcontext.Context, project *orchestrato
 
 // buildGatedLoopSystemPrompt builds the project-aware system prompt for the loop.
 // No hardcoded repo paths or agent IDs — everything comes from the project config.
+func forwardDurableDelegationOutcomes(ctx stdcontext.Context, outbox *prizmevent.SQLiteOutbox, runID string, eventCh chan<- v2.ExternalEvent) error {
+	outcomes, err := outbox.PendingOutcomes(ctx, runID)
+	if err != nil {
+		return err
+	}
+	for _, out := range outcomes {
+		evt := v2.ExternalEvent{CorrelationID: out.CorrelationID, Source: "durable_outcome", Data: map[string]any{"task_id": out.TaskID, "delegation_id": out.DelegationID, "delivery_key": out.DeliveryKey}}
+		eventID := out.EventID
+		evt.Acknowledge = func() error { return outbox.MarkOutcomeConsumed(ctx, eventID) }
+		switch out.Status {
+		case prizmevent.OutcomeAccepted:
+			evt.Type = "task_accepted"
+		case prizmevent.OutcomeProgress:
+			evt.Type = "task_progress"
+		case prizmevent.OutcomeSucceeded, prizmevent.OutcomeFailed, prizmevent.OutcomeTimedOut, prizmevent.OutcomeRejected:
+			evt.Type = "task_complete"
+			var completion v2.TaskCompletion
+			if len(out.Payload) > 0 {
+				if err := json.Unmarshal(out.Payload, &completion); err != nil {
+					return fmt.Errorf("decode terminal outcome %s: %w", out.EventID, err)
+				}
+			}
+			if completion.TaskID == "" {
+				completion.TaskID = out.TaskID
+			}
+			completion.DelegationID = out.DelegationID
+			completion.DeliveryKey = out.DeliveryKey
+			if completion.Status == "" {
+				if out.Status == prizmevent.OutcomeSucceeded {
+					completion.Status = "completed"
+				} else {
+					completion.Status = "failed"
+				}
+			}
+			evt.Data["completion"] = completion
+		default:
+			return fmt.Errorf("unsupported delegation outcome %q", out.Status)
+		}
+		select {
+		case eventCh <- evt:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
 func (wh *WakeHandler) buildGatedLoopSystemPrompt(project *orchestrator.ProjectConfig, taskPrompt, repoPath string, requirePush bool) string {
 	var b strings.Builder
 	b.WriteString("You are an autonomous engineering agent running a gated dev loop. You build production-quality code.\n\n")

@@ -7,38 +7,6 @@ the next contributor.
 > Prizm is source-available under an all-rights-reserved [license](../../LICENSE)
 > and is preview-stage.
 
-## 2026-10-08 — R6 Durable Reconciliation Contract
-
-**Roadmap IDs:** R2, R6
-**Branch/baseline:** `codex/r6-memory-reconciliation`, based on merged staging `dca2156`
-
-- Added an `internal/memory` reconciliation consumer that startup-scans durable
-  `sync_pending` facts and receives notifications when new pending captures are
-  persisted. It reconstructs and revalidates the trusted scope against the
-  local record, uses bounded retry/backoff, and records retry or terminal facts
-  in the existing SQLite event store.
-- Terminal sync and failure facts use stable IDs derived from the sync key, so
-  duplicate consumers cannot duplicate the local terminal evidence. A remote
-  success followed by a process failure before local confirmation is safely
-  replayed only through the explicit idempotent-primary contract.
-- Serve now starts the consumer, exposes pending/error state through health,
-  and cancels it before closing its event store. Deterministic coverage proves
-  restart recovery, outage/recovery, concurrent workers, crash recovery,
-  scope mismatch rejection, two-project isolation, unsupported primary failure,
-  and retry exhaustion.
-- Inspected the current Remembrance capture API: `source_ref` is persisted but
-  has no idempotency key, lookup, uniqueness constraint, or atomic dedupe.
-  The Remembrance adapter therefore does not opt into replay; Prizm fails
-  closed instead of risking duplicate remote writes. `localhost:18790` was not
-  available for a bounded live trace.
-
-**Open risks:** R6 cannot complete a live local-to-Recall reconciliation until
-Recall exposes an atomic idempotency-key contract returning the original remote
-identifier. R1's durable event outbox and delegation gates remain open.
-
-**Next action:** add and verify Recall's idempotent ingest contract, implement
-the adapter capability, then run a live outage/recovery trace.
-
 ## 2026-10-02 — R2 Scope Isolation and Serve Wiring
 
 **Roadmap IDs:** R2, R6
@@ -518,28 +486,6 @@ then complete the R1 approval-to-verified-resume slice.
 - [Prizm Roadmap](../architecture/PRIZM_ROADMAP.md)
 - [Current Plan of Action](PLAN_OF_ACTION.md)
 
-## 2026-10-09 — R6 Recall Atomic Capture Contract
-
-**Roadmap IDs:** R2, R6
-
-- Paired the local reconciliation contract with Recall migration 14. The Recall
-  durable capture outbox now stores an idempotency key and payload fingerprint,
-  with a `COALESCE`-normalized unique index over owner, workspace, project,
-  repository, task, session, agent, and key. Replays with an identical payload
-  reuse the original capture and remote memory ID; a changed payload returns a
-  conflict.
-- `ScopedMemoryBackend` now implements `IdempotentPrimaryBackend` and carries
-  the stable local memory ID to Recall's `/v1/memory/ingest` API. Focused Go
-  adapter and reconciler tests pass. Direct Recall service acceptance covered
-  duplicate, restart, and concurrent duplicate delivery with one raw capture.
-
-**Open risks:** the paired Recall worktree requires its own review and its
-broken virtual environment prevented running its full pytest suite. A
-process-level Prizm-to-Recall outage/recovery trace remains required.
-
-**Next action:** review the paired API migration, then run the configured
-Prizm process against Recall through outage and restart recovery.
-
 ## 2026-10-02 — R2 Autonomous Prompt Scope and Sync-Pending Evidence
 
 **Roadmap IDs:** R2, R6
@@ -620,6 +566,184 @@ R6 follow-up work; the R2/R6 acceptance claims remain limited accordingly.
 local-to-Recall reconciliation and perform the live outage/recovery trace when
 the required local services are available.
 
+## 2026-10-08 — R1 Event-Outbox Planning Handoff
+
+**Roadmap IDs:** R1; R2/R6 parked
+**Branch/baseline:** `codex/r1-event-outbox` from refreshed `origin/staging`
+`dca2156`
+
+- Parked draft PR #86 and `codex/r6-memory-reconciliation` without further
+  Recall implementation, review, merge, or a claim of live Recall recovery.
+- Reprioritized the next implementation slice to the roadmap's R1 event
+  contract: one typed command intake and durable SQLite outbox shared by graph
+  and NATS action delivery.
+- Defined the required delegation lifecycle evidence: correlated idempotency
+  keys, explicit accepted/progress/terminal acknowledgements, deadlines, and
+  terminal failure for lost workers, while preserving `workflow/v2`.
+- The slice is planned only. No event-outbox, delegation, or Recall code has
+  been implemented or tested in this session.
+
+**Open risks:** graph and NATS actions still have split delivery paths;
+delegation remains short of durable acknowledgement and recovery. Parallel
+fan-out/fan-in and R3/R4 remain dependent on this foundation.
+
+**Next action:** implement the typed event contract and SQLite outbox, with
+embedded NATS and fake-worker tests for duplicate delivery, restart, deadline,
+lost-worker, and terminal-report behavior.
+
+## 2026-10-08 — R1 Durable Event-Outbox Vertical Slice
+
+**Roadmap IDs:** R1; R2/R6 parked
+**Branch/baseline:** `codex/r1-event-outbox` from `origin/staging` `dca2156`
+
+- Added the canonical typed command and outcome envelope in the event domain,
+  including run/task/delegation, correlation/causation, idempotency, deadline,
+  schema, and payload identity.
+- Added a SQLite outbox with accept-once conflict detection, atomic claim and
+  lease, bounded retry, terminal failure, expired-claim replay, deadline
+  enforcement, one terminal outcome per delivery, and correlated reports.
+- Routed `workflow/v2` delegation commands through the outbox in the serve wake
+  path, including startup replay. The legacy TaskPacket remains the NATS wire
+  payload. The canonical graph continues to use its existing atomic run/event
+  outbox, so compatibility paths remain green.
+- Added delegation and per-attempt delivery IDs, explicit accepted/progress
+  transitions, retry identity, and rejection of late completion from an older
+  attempt. Embedded-NATS tests prove the durable path preserves the legacy wire
+  contract; deterministic tests cover publish failure, restart replay,
+  duplicate intake, leases, retry bounds, deadline failure, terminal outcome,
+  stale retry rejection, and correlated reporting.
+- Verified `go build ./...`, `go vet ./...`, `staticcheck ./...`, `go test ./...
+  -count=1`, and `git diff --check`.
+
+**Open risks:** worker outcome intake is not yet composed end to end with the
+outbox report, and graph parent pause/resume has not yet been driven by these
+accepted/terminal outcome facts. Parallel fan-out/fan-in and the real-provider
+R1 score gate remain open.
+
+**Next action:** compose durable worker outcome intake and parent resume, then
+prove duplicate delivery, worker loss, retry, restart, and parallel fan-in with
+one terminal event-derived report.
+
+## 2026-10-08 — R1 Durable Delegation Outcome Intake
+
+**Roadmap IDs:** R1; R2/R6 parked
+**Branch/baseline:** `codex/r1-event-outbox` at `6381756`
+
+- Replaced the wake path's lossy generic completion forwarding with canonical
+  accepted/progress/terminal outcomes. Each fact is validated against the
+  stored command, persisted before forwarding, replayed after restart while
+  unconsumed, and handed to `workflow/v2` with blocking/context backpressure.
+- The sub-agent worker now publishes an accepted fact before execution and one
+  terminal fact with the full run, correlation, task, delegation, delivery,
+  artifact, and result identity. Delegation IDs use sortable unique IDs rather
+  than second-resolution timestamps.
+- Terminal publish exhaustion and command deadlines now atomically add failed
+  or timed-out facts to the correlated report. Forged identity, progress before
+  acceptance, duplicate terminal facts, and late results from older retries
+  fail closed.
+- Tests cover restart before intake, pending-outcome replay, backpressure without
+  loss, complete artifact forwarding, mismatch rejection, progress ordering,
+  stale retry rejection, deadline reporting, and `workflow/v2` parent task
+  advancement. `go build ./...`, `go vet ./...`, `staticcheck ./...`, and the
+  repeated full `go test ./... -count=1` pass. One first full-suite attempt hit
+  a pre-existing Windows temporary-directory cleanup race; the isolated test,
+  CLI package, and complete rerun passed.
+
+**Open risks:** the canonical multiagent graph still uses its own atomic event
+outbox and does not yet consume delegation outcomes to drive a parent waiting
+checkpoint. Parallel fan-out/fan-in and the real-provider R1 score gate remain
+open.
+
+**Next action:** implement deterministic parallel research/code/review
+fan-out/fan-in and bind the graph parent wait/resume seam to canonical terminal
+delegation outcomes.
+
+## 2026-10-08 — R1 Outcome Acknowledgement Ordering
+
+**Roadmap IDs:** R1; R2/R6 parked
+**Branch/baseline:** `codex/r1-event-outbox` at `f521d03`
+
+- Moved durable outcome acknowledgement from the wake intake to the workflow
+  engine. `workflow/v2` now saves the run-specific and current state files after
+  applying an external event and only then marks its outcome consumed.
+- `WaitForResume` routes accepted, progress, and terminal delegation facts
+  through the same handler while a parent is paused, persists and acknowledges
+  them, and keeps waiting until an approval or review decision actually resumes
+  the parent.
+- Duplicate outcome event IDs are now content-addressed in practice: exact
+  redelivery is idempotent, while changed status, sequence, payload, or identity
+  under the same event ID fails closed.
+- Tests cover crash after wake enqueue but before acknowledgement, replay after
+  reopen, paused-parent delegation handling, persistence-before-acknowledgement,
+  and changed duplicate rejection.
+
+**Open risks:** this proves durable parent advancement for `workflow/v2`. The
+canonical multiagent graph has no child/delegation identity in its durable run
+schema and no delegation waiting checkpoint, so adding an outcome source alone
+would create an unowned partial authority path. Its graph-owned child state,
+waiting transition, checkpoint-before-dispatch, and checkpoint-before-ack
+contract remain a separate coherent R1 slice. Parallel fan-out/fan-in and the
+real-provider gate remain open.
+
+**Next action:** add the bounded canonical-graph delegation state and waiting
+checkpoint contract, adapt `event.Outcome` at the composition edge, and prove
+restart, mismatch, deadline, terminal transition, and acknowledgement ordering.
+
+## 2026-10-08 — R1 Compatibility Listener Backpressure
+
+**Roadmap IDs:** R1
+**Branch/baseline:** `codex/r1-event-outbox` at `7102370`
+
+- Confirmed the standalone `workflow/v2` NATS listener has no production
+  composition caller; production delegation outcomes use the durable wake
+  intake and SQLite acknowledgement lifecycle.
+- Marked the standalone listener's canonical outcome source as compatibility
+  only and replaced its full-channel drop with blocking backpressure that is
+  released by listener shutdown. It does not claim durable delivery.
+- A focused embedded-NATS test fills the workflow event queue and proves the
+  canonical outcome is delivered after capacity becomes available.
+
+**Open risks:** legacy feedback, agent-status, and TaskCompletion messages in
+the compatibility listener retain their historical best-effort behavior. They
+are outside the canonical outcome path and are not used by production serve
+composition.
+
+**Next action:** continue the canonical graph delegation checkpoint work; keep
+the standalone listener compatibility-only unless a production caller adopts
+it with a durable intake.
+
+## 2026-10-08 — R6 Durable Reconciliation Contract
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r6-memory-reconciliation`, based on merged staging `dca2156`
+
+- Added an `internal/memory` reconciliation consumer that startup-scans durable
+  `sync_pending` facts and receives notifications when new pending captures are
+  persisted. It reconstructs and revalidates the trusted scope against the
+  local record, uses bounded retry/backoff, and records retry or terminal facts
+  in the existing SQLite event store.
+- Terminal sync and failure facts use stable IDs derived from the sync key, so
+  duplicate consumers cannot duplicate the local terminal evidence. A remote
+  success followed by a process failure before local confirmation is safely
+  replayed only through the explicit idempotent-primary contract.
+- Serve now starts the consumer, exposes pending/error state through health,
+  and cancels it before closing its event store. Deterministic coverage proves
+  restart recovery, outage/recovery, concurrent workers, crash recovery,
+  scope mismatch rejection, two-project isolation, unsupported primary failure,
+  and retry exhaustion.
+- Inspected the current Remembrance capture API: `source_ref` is persisted but
+  has no idempotency key, lookup, uniqueness constraint, or atomic dedupe.
+  The Remembrance adapter therefore does not opt into replay; Prizm fails
+  closed instead of risking duplicate remote writes. `localhost:18790` was not
+  available for a bounded live trace.
+
+**Open risks:** R6 cannot complete a live local-to-Recall reconciliation until
+Recall exposes an atomic idempotency-key contract returning the original remote
+identifier. R1's durable event outbox and delegation gates remain open.
+
+**Next action:** add and verify Recall's idempotent ingest contract, implement
+the adapter capability, then run a live outage/recovery trace.
+
 ## 2026-10-08 — R6 Durable Pending-Intent Hardening
 
 **Roadmap IDs:** R2, R6
@@ -673,6 +797,366 @@ outage/recovery trace remains required.
 **Next action:** implement or adopt Recall's atomic idempotency contract, then
 run and retain a live outage/recovery trace with scoped replay evidence.
 
+## 2026-10-09 — R1 Canonical Graph Delegation Safety Gate
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Completed the canonical graph's durable child/delegation checkpoint and
+  outcome-consumption seam with deterministic injected-outcome coverage. The
+  typed command/outcome envelope and SQLite outbox remain the durable path for
+  `workflow/v2` delegation delivery and outcome acknowledgement.
+- Kept production canonical-graph delegation disabled. A production request via
+  `PRIZM_GRAPH_ROLE_DELEGATION=1` now fails fast because no durable graph-role
+  publisher and worker are composed. Deterministic composition tests inject
+  correlated outcomes only through an unexported package-test helper; no
+  environment switch can activate no-worker graph delegation in production.
+- The existing sub-agent worker cannot safely consume graph commands: it accepts
+  legacy task packets, while graph roles require the parent-owned profile,
+  workspace/worktree, authorization, proposal lifecycle, validation, and
+  graph-role result contract.
+- Evidence: `go test ./cmd/prizm-cli -count=1` passed, including default inline
+  graph execution, production enablement fail-fast, and test-only durable
+  checkpoint/restart outcome consumption. No Recall changes were made.
+
+**Open risks:** no live graph-role worker, real-provider proof, embedded-NATS
+delivery matrix, or parallel research/code/review fan-out/fan-in exists yet.
+Graph delegation deadline checks run only when an API/operator/outcome resume
+path executes; there is no graph wake/recovery scheduler at wall-clock expiry.
+R4 adapters remain blocked on that verified command-consumer contract.
+
+**Next action:** compose a graph-owned worker and durable publisher/outcome
+intake, then prove the R1 failure matrix and parallel fan-in with an
+event-derived report.
+
+## 2026-10-09 — R1 Production Graph-Role Worker and Recovery
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Added the typed graph-role command/result contract. Commands bind the exact
+  prepared role request to trusted run, role, task, execution, workspace,
+  delegation, delivery, correlation, command-event, and deadline identity.
+- Composed an opt-in `prizm serve` NATS publisher/worker. The worker validates
+  the command against its persisted manifest and the immutable SQLite outbox
+  row, including exact payload bytes. NATS carries notifications only. Outcome
+  intake likewise requires exact bytes already persisted by the trusted worker
+  ledger before it can resume the parent.
+- Added a SQLite execution ledger. Concurrent duplicates do not re-execute,
+  terminal results replay after restart, and a new worker that finds an
+  interrupted in-flight owner records an ambiguous terminal failure instead of
+  blindly repeating role execution.
+- Routed delegated mutation proposals into the parent runtime's existing exact
+  approval, application, and post-apply validation lifecycle. The worker never
+  applies a proposal or supplies approval authority; the parent checkpoints the
+  proposal identities before acknowledging the terminal worker fact.
+- Added autonomous deadline scanning and embedded-NATS coverage for duplicate
+  delivery, forged outcome rejection, malformed-command terminal rejection,
+  bounded publisher retry, terminal replay after restart, interrupted worker
+  failure, and wall-clock deadline wake. Local wake serialization and the
+  durable run claimer arbitrate scanner races.
+- Evidence: focused failure-matrix tests passed; `go test ./... -count=1`
+  passed with workspace-local `TMP`, `TEMP`, and `GOCACHE`; `git diff --check`
+  passed.
+
+**Open risks:** no configured real-provider graph task was run in this session.
+The separate bounded parallel research/code/review fan-out/fan-in acceptance
+and its complete event-derived report remain open, so the full R1 score gate is
+not claimed. The worker requires a shared run database; authenticated remote
+workers remain R3 scope.
+
+**Next action:** run one opt-in serve task with a configured provider, review
+its command/outcome/proposal trace, then implement and prove bounded parallel
+fan-out/fan-in.
+
+## 2026-10-09 — R1 Live-Provider Outcome and Resume Recovery
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Diagnosed the disposable configured-provider failure as two independent
+  compatibility/recovery defects. The accepted outcome event ID is stable by
+  delivery key and status, but acceptance reconstruction could replace its
+  timestamped bytes before transport replay; the dashboard `RunLocator` also
+  rejected the CLI's current schema-v2 registry-backed manifest.
+- Made acceptance replay publish the first ledger-persisted bytes. The event
+  outbox keeps its strict conflicting-content rejection: a changed body for a
+  stable event ID still fails closed.
+- When an outcome reaches the worker before the originating `Run` releases
+  its durable claim, resume is retried through the existing per-run guard.
+  The durable claim remains the sole cross-process execution arbiter.
+- Added regression coverage for immutable acceptance replay, temporary claim
+  contention retry, and current CLI v2 manifest inspection.
+- Evidence: focused `go test ./cmd/prizm-cli ./internal/workflow/multiagent -count=1`
+  and `go test ./... -count=1` passed with workspace-local `TMP`, `TEMP`, and
+  `GOCACHE`; `git diff --check` passed.
+
+**Open risks:** the disposable real-provider run was executed against the
+baseline before this repair. The complete configured-provider acceptance rerun
+and the bounded parallel fan-out/fan-in report remain required before claiming
+the R1 score gate. Authenticated remote workers remain R3 scope.
+
+**Next action:** rebuild the CLI and rerun the isolated opt-in provider task;
+verify one immutable accepted fact, one terminal fact, successful dashboard
+snapshot, and eventual resume after an initial claim conflict.
+
+## 2026-10-09 — R1 Graph Workspace Binding and Terminal-Fact Convergence
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Seeded `RunState.WorkspaceID` from the trusted reference-runtime manifest at
+  run creation. Graph commands now carry that immutable workspace identity in
+  both their envelope and prepared role request before the first delegated
+  role runs; worker-side identity validation remains unchanged.
+- Identified the remaining event-ID conflict as an uncertain publisher result
+  racing a terminal fact already persisted by the worker. The dispatcher had
+  attempted to create a second terminal failure for the same delivery key,
+  with a different diagnostic body. It now preserves the worker terminal fact
+  and marks transport delivery complete when that fact proves receipt.
+- Added deterministic coverage for workspace-bound command construction and
+  an embedded-NATS worker terminal followed by a simulated publisher failure.
+  The strict outbox conflicting-content rejection remains covered separately.
+
+**Evidence:** focused CLI, event, and multiagent package tests passed with
+workspace-local `TMP`, `TEMP`, and `GOCACHE`.
+
+**Open risks:** the live provider must still be rerun from this commit. The
+parallel fan-out/fan-in acceptance report remains required before the R1 score
+gate can be claimed.
+
+**Next action:** rebuild the isolated acceptance binary, run one opt-in graph
+task, then inspect the outbox trace for a workspace-bound command, exactly one
+accepted fact, one terminal fact, and a successful snapshot.
+
+## 2026-10-09 — R1 Persistence-Before-Notification Outcome Closure
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Moved trusted worker outcome insertion ahead of NATS publication. Accepted,
+  terminal, ambiguous, and replayed outcomes now enter `command_outcomes` from
+  their exact graph-role ledger bytes before transport notification; NATS is
+  notification-only and duplicate intake remains byte-identical.
+- Production graph delegation now explicitly requires the composition-seeded
+  workspace identity. Test-only injected delegation remains available without
+  that production invariant.
+- A fresh acceptance run exposed a second dispatcher race: it attempted a
+  synthetic terminal at sequence one after the worker had already persisted
+  acceptance at sequence one. Publisher uncertainty now treats accepted or
+  terminal worker facts as delivery proof; the rare no-worker fallback derives
+  its sequence from the durable maximum.
+- Added coverage for persistence before notification, production workspace
+  requirement, worker-terminal publisher failure, and accepted worker receipt
+  during publisher failure.
+
+**Open risks:** the real-provider process also reported external Codex CLI
+plugin-cache and PowerShell snapshot errors; those are provider-environment
+failures outside the durable event contract. The graph worker should be rerun
+from this repair before R1 acceptance is claimed.
+
+**Next action:** rebuild the isolated binary and rerun one opt-in provider
+task. Confirm the snapshot, command workspace fields, and one accepted plus
+one terminal outbox fact before investigating any provider-environment error.
+
+## 2026-10-09 — R1 Accepted-Worker Recovery Arbitration
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Tightened publisher-failure arbitration: a terminal worker fact completes
+  delivery, while an accepted-only worker fact returns the command to pending
+  delivery for redelivery or deadline recovery. Acceptance is no longer
+  mistaken for a terminal acknowledgement.
+- Fallback terminal outcomes allocate the next persisted sequence, preserving
+  `UNIQUE(delivery_key, sequence)` without relaxing it.
+- Moved manifest workspace verification into the durable rejection path, so a
+  mismatch is rejected before acceptance while still producing a trusted
+  terminal rejection. Added bounded SQLite-busy retry around exact-byte worker
+  outcome insertion for concurrent fan-out writers.
+
+**Evidence:** focused CLI and event tests passed with workspace-local cache
+paths. Full-suite validation remains the next execution step.
+
+**Next action:** run the full Go suite, then rerun the isolated provider task
+only after this recovery path is committed.
+
+## 2026-10-09 — R1 Expired Accepted-Worker Closure
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- The graph-worker deadline scanner now reads only the canonical outbox command
+  and its trusted accepted ledger fact before producing one durable timed-out
+  terminal outcome for a worker that died after acceptance. The parent is then
+  woken to consume the terminal fact.
+- Resume consumes durable delegation outcomes before evaluating an interrupted
+  pending-dispatch checkpoint or deadline. A terminal worker outcome therefore
+  cannot be discarded by recovery ordering.
+- Dispatcher publication failures now return success when the outbox already
+  proves a terminal worker result; idempotency and strict terminal bytes remain
+  unchanged.
+
+**Evidence:** deterministic focused tests cover accepted-worker expiry,
+terminal-before-expired-pending-dispatch, and terminal proof after publisher
+failure using workspace-local Go cache paths.
+
+**Open risks:** the full CLI package currently has an unrelated ambient
+`TestCoreIdentityBlock_Build` model assertion failure. The configured provider
+acceptance run remains required before claiming the R1 gate.
+
+**Next action:** run the full suite in the provider acceptance environment,
+then inspect a live graph task for one accepted fact, one terminal fact, and a
+valid snapshot.
+
+## 2026-10-09 — R1 User-Approved Ollama Cloud Default
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- The user approved `ollama/glm-5.3:cloud` as the default across all agent
+  profiles and examples while preserving capabilities and a 1,048,576-token
+  model-window declaration.
+- An isolated Ollama 0.34.4 service at `http://127.0.0.1:11435` completed a
+  real cloud-provider graph task with `PRIZM_OK`. Configuration validation and
+  doctor passed apart from the pre-existing Remembrance offline warning.
+
+**Evidence:** provider/CLI-focused tests passed on the default-provider commit;
+the runtime lifecycle regressions are committed separately as `016a3b6`.
+
+**Next action:** preserve the provider default for the next live graph run and
+inspect the durable outbox and snapshot as part of the R1 acceptance record.
+
+## 2026-10-09 — R1 Fan-Out Expiry Fact-First Closure
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Expired fan-out recovery persists every trusted child terminal fact before
+  waking the parent; NATS notification cannot interleave a partial recovery.
+- Join expiry consumes all durable child outcomes first, then marks only
+  missing siblings timed out in the same recovery pass.
+
+**Evidence:** focused join deadline and terminal-before-expiry tests pass;
+full build, vet, and test passed on combined head before this narrow repair.
+
+**Next action:** add the live three-child accepted-worker-crash acceptance
+trace before starting another paid provider run.
+
+**Scanner contract:** timeout synthesis is owned by the running graph-worker
+scanner in `prizm serve`; direct manual `Resume` consumes durable outcomes but
+does not synthesize missing command outcomes.
+
+## 2026-10-09 — R1 Integrated Fan-Out Scanner Recovery
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Added an integrated regression using embedded NATS, the shared canonical
+  SQLite outbox/event/run database, and a persisted `DurableRuntime`. The real
+  parent command produces a three-child `delegation_join`; one child records a
+  successful terminal while two simulate worker loss after durable acceptance.
+- The graph-worker deadline scanner persists both missing trusted terminal
+  facts before invoking the actual durable resume callback. The parent reaches
+  a terminal failed state, and its event-derived report contains all three
+  fan-out children.
+- Re-running the scanner preserves each accepted and terminal event identity
+  and does not append duplicate outcomes.
+
+**Evidence:**
+`go test ./cmd/prizm-cli -run TestGraphRoleWorkerEmbeddedNATSRecoversPersistedFanoutJoin -count=1`
+passed. The full CLI package requires workspace-local `TMP`/`TEMP`; a first
+sandbox run without those settings failed existing worktree-safety tests before
+the corrected validation run.
+
+**Open risks:** a successful configured-provider graph task remains required
+before claiming the complete R1 score gate. Authenticated remote workers remain
+R3 scope.
+
+**Next action:** complete the configured-provider acceptance trace, then assess
+the remaining R1 gate evidence before starting R3/R4 work.
+
+## 2026-10-09 — R1 Live GLM Approval and Terminal Notification Recovery
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Fixed the persistence-before-notification wake seam. A graph worker commits
+  trusted outcome bytes before NATS publication, so the subscriber normally
+  observes an idempotent insert; a verified terminal notification now resumes
+  the parent even when that insert reports the row already exists.
+- Added a regression that creates the canonical command, persists accepted and
+  terminal worker facts, delivers the exact terminal bytes, and verifies the
+  parent resume callback. Untrusted or conflicting bytes still fail before the
+  callback.
+- Live `ollama/glm-5.3:cloud` run `run_01M4HTQVKXRTHH4VN8PNK29CV0` completed
+  planner and developer roles, recorded and exactly approved proposal
+  `appr_1791599842692901700`, reconciled the applied file in the isolated
+  worktree, and completed tester validation. The allowlisted `go_test_all`
+  profile passed with exit code 0. The reviewer then failed closed because its
+  response encoded `evidence` as a string rather than an `ArtifactRef` object.
+- Clarified the reviewer output prompt with concrete `{kind, uri}` evidence
+  objects while retaining strict decoding; no string coercion or authority
+  bypass was added.
+
+**Evidence:** focused graph-worker resume tests passed. Full `go build ./...`
+and `go vet ./...` passed. The first full `go test ./... -count=1` run passed all
+packages except an existing Windows temp-directory cleanup race in
+`TestScopedPromptInjectionDoesNotCrossScopeOrCache`; focused rerun evidence is
+recorded with the final handoff.
+
+**Open risks:** the live task did not reach a completed reviewer terminal, and
+daemon restart recovery plus approval/application were demonstrated in separate
+runs rather than one continuous run. Authenticated remote workers remain R3
+scope.
+
+**Next action:** rerun the bounded configured-provider task with the clarified
+reviewer contract, including a daemon restart while paused for exact approval,
+then require a completed terminal report before claiming the R1 gate.
+
+## 2026-10-09 — R1/R4 Remaining Acceptance Handoff
+
+**Roadmap IDs:** R1; R4 remains dependent; the broader 9/10 roadmap gates are
+not achieved
+
+- Audited the handoff at `fdc38dc` without changing runtime code. Draft PR #87
+  retains its latest verified green Linux, race, Windows, Python, vet, and
+  staticcheck evidence.
+- Three acceptance items remain: obtain a completed live reviewer result with
+  the corrected artifact-evidence prompt; prove one continuous daemon restart
+  while paused for exact approval through apply, validation, and terminal
+  completion; and repeat the acceptance task in a second independent real
+  repository.
+- The reviewer and restart checks can be combined in one controlled run. A
+  second focused session can cover the independent repository, followed by a
+  final evidence and PR-readiness pass. The working estimate is two to three
+  focused sessions, with one or two additional fix sessions only if a live
+  provider run exposes a concrete defect.
+
+**Evidence:** documentation-only audit of the roadmap, current plan, latest
+work-log entry, and repository head. No provider call, build, test, or fresh CI
+query was performed in this handoff session.
+
+**Open risks:** a transient resume error other than `ErrRunClaimed` relies on a
+later durable wake; this remains P2 hardening. The session estimate applies to
+the current R1/R4 acceptance handoff and must not be read as completion of the
+full multi-roadmap 9/10 program.
+
+**Next action:** run the corrected reviewer contract and restart-through-
+approval recovery as one bounded acceptance trace, then execute the same task
+in a second independent repository.
+
+## 2026-10-09 — R6 Recall Atomic Capture Contract
+
+**Roadmap IDs:** R2, R6
+
+- Paired the local reconciliation contract with Recall migration 14. The Recall
+  durable capture outbox now stores an idempotency key and payload fingerprint,
+  with a `COALESCE`-normalized unique index over owner, workspace, project,
+  repository, task, session, agent, and key. Replays with an identical payload
+  reuse the original capture and remote memory ID; a changed payload returns a
+  conflict.
+- `ScopedMemoryBackend` now implements `IdempotentPrimaryBackend` and carries
+  the stable local memory ID to Recall's `/v1/memory/ingest` API. Focused Go
+  adapter and reconciler tests pass. Direct Recall service acceptance covered
+  duplicate, restart, and concurrent duplicate delivery with one raw capture.
+
+**Open risks:** the paired Recall worktree requires its own review and its
+broken virtual environment prevented running its full pytest suite. A
+process-level Prizm-to-Recall outage/recovery trace remains required.
+
+**Next action:** review the paired API migration, then run the configured
+Prizm process against Recall through outage and restart recovery.
+
 ## 2026-10-09 — R6 Process-Level Recall Outage and Restart Acceptance
 
 **Roadmap IDs:** R2, R6
@@ -718,3 +1202,468 @@ run and retain a live outage/recovery trace with scoped replay evidence.
 **Open risks:** the seam proves the actual registered serve tool and scoped fallback/search behavior while Recall is down. The previously recorded process harness remains the evidence for Recall restart, replay, and crash-after-success behavior; a public serve capture route remains intentionally absent.
 
 **Next action:** rerun the process-level trace against a Recall build that reports accepted idempotent terminal decisions, then retain the scoped search and terminal-event evidence with the paired API review.
+
+## 2026-10-10 — R1 Bounded Role Finalization and Provider Blocker
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Fixed delegated final-envelope parsing so a marker with empty, missing,
+  object, or malformed content cannot publish an empty completion. Valid final
+  envelopes, tool requests, fenced finals, and strict direct role JSON remain
+  supported.
+- Added privacy-safe per-turn diagnostics, an 8,192-token GLM reply allowance,
+  and an opt-in finalization phase for the live graph runner. It accounts for
+  the actual pending tool feedback, reserves one final response, executes no
+  further tools during that phase, and fails closed if the model does not
+  return the existing strict role schema.
+- Live Prizm run `run_01M4JDQVRP089S8S9F6417WFA2` used isolated workspace
+  `workspace_9a533227548e7d4316bb1f82`. Planner finalization armed once with
+  21,031 aggregate tokens remaining and a 19,456-token conservative estimate;
+  its only finalization call returned a valid strict result and advanced the
+  graph to developer.
+- Developer turns 1 and 2 completed valid read actions. On turn 3,
+  `glm-5.3:cloud` returned no public content after consuming the complete
+  8,192-token reply allowance in private reasoning. The backend emitted an
+  explicit terminal error, and the trusted terminal notification resumed the
+  parent to failed. No proposal, approval, or mutation was recorded.
+
+**Evidence:** focused parser, CLI subagent, and runner tests passed. The prior
+embedded-NATS SQLite lock failure did not reproduce in five focused runs.
+`go build ./...`, `go vet ./...`, and `go test ./... -count=1` passed with
+workspace-local Go and temporary caches. The live trace contains only lengths,
+token counts, classifications, tool names, and terminal state; private
+reasoning and response content were not persisted in diagnostics.
+
+**Open risks:** the configured provider can consume its full bounded reply in
+private reasoning without returning actionable content. The required
+continuous restart-at-approval trace, completed reviewer report, and second
+independent Roblox Factory acceptance remain unproved. A transient resume
+error other than `ErrRunClaimed` still relies on a later durable wake.
+
+**Next action:** after the configured provider reliably returns bounded public
+content, rerun the real Prizm task through exact approval with a daemon restart,
+apply, validation, and reviewer completion. Then run the independent Roblox
+Factory preflight-doctor task from an isolated snapshot that preserves its
+existing dirty production work.
+
+## 2026-10-10 — R1 Atomic Multi-File Proposal Gate
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Added `apply_patch_proposal`, a non-mutating bounded unified-diff proposal
+  that validates an exact trusted base, clean repository, canonical paths,
+  ordinary file modes, configured write roots, and `git apply --check` before
+  persisting one approval for all touched files.
+- Persisted the patch hash, base and expected trees, and sorted paths. Approved
+  application revalidates that identity and performs one `git apply` without
+  partial-reject behavior. Restart recovery compares the complete worktree
+  tree and fails ambiguous states closed.
+- Governed developer roles expose only this approval-producing mutation tool;
+  the runtime injects the trusted HEAD. Legacy single-file proposals remain
+  available to compatible non-graph callers.
+- A deterministic composition test proves real tool/policy persistence, one
+  approval for two files, durable pause, runtime reconstruction, grant, atomic
+  apply, post-apply validation, and terminal completion.
+
+**Evidence:** focused atomic and cross-package suites pass. `go build ./...`
+and `go vet ./...` pass. Two concurrent `go test ./... -count=1` runs reached
+only the previously tracked embedded-NATS `SQLITE_BUSY` race; its exact test
+passed five consecutive focused runs and the latest combined focused gate.
+The independent final review found no remaining P1/P2 after write-root
+containment was enforced at proposal and apply.
+
+**Open risks:** a fully green full-suite run is still required before the live
+provider gate. No new provider call was made. The prior provider exhaustion,
+continuous live restart-at-approval trace, completed live reviewer, and second
+independent repository acceptance remain open.
+
+**Next action:** obtain a green full validation run, commit and push the atomic
+proposal checkpoint, then retry the unchanged bounded live Prizm acceptance
+task without raising provider limits.
+
+## 2026-10-10 — R1 Outbox Contention Gate
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Fixed a concurrent SQLite outbox race exposed by parallel graph lanes. The
+  outbox now begins its read-before-write transactions with an immediate write
+  reservation, so another connection waits under the existing bounded busy
+  timeout instead of failing a deferred transaction upgrade with
+  `SQLITE_BUSY`.
+- Added a causal two-connection regression. One connection holds a real write
+  reservation while the second records an accepted outcome; the second must
+  wait and then durably persist sequence 1 after release.
+- Kept WAL, the per-connection busy timeout, transaction boundaries, and the
+  accepted-outcome authority contract unchanged. No manual resume or test-only
+  retry was added.
+
+**Evidence:** the contention regression and neighboring outcome tests passed
+five consecutive runs. The previously failing embedded-NATS fanout/recovery
+test passed ten consecutive runs. `go build ./...`, `go vet ./...`, and
+`go test ./... -count=1` passed with workspace-local caches. Independent review
+found no blocker in the outbox fix or the atomic patch integration.
+
+**Open risks:** the configured provider can still consume its bounded reply in
+private reasoning without returning actionable content. The continuous live
+restart-at-approval trace, completed live reviewer, and second independent
+repository acceptance remain unproved.
+
+**Next action:** run the unchanged bounded live Prizm task once against the
+clean acceptance clone, restart only at the exact approval pause, and require
+apply, full validation, and reviewer completion before advancing to the
+independent Roblox Factory snapshot.
+
+## 2026-10-10 — R1 Canonical Proposal Envelope Repair
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Corrected live run `run_01M4M4ZKYNGND1677XW8YCQMM8` used the registered
+  `software-delivery-v5` graph and clean `6de4579` acceptance clone. It failed
+  safely before proposal when the developer returned a valid JSON object that
+  the formatting-sensitive text parser classified as unrecognized. No raw
+  response content was persisted, so the exact returned keys are unknown; no
+  proposal, approval, or mutation occurred.
+- Added a strict complete-object decoder for governed worker tool requests and
+  typed finals. It accepts member reordering and whitespace, preserves decoded
+  patch bytes including braces, requires exact top-level envelope fields, and
+  requires `apply_patch_proposal` input to contain exactly non-empty string
+  `patch` and `base_sha` fields. Prose, fenced wrappers, multiple objects,
+  unknown typed objects, malformed inputs, and embedded envelope text fail
+  closed. Existing embedded-envelope parsing remains available to legacy
+  `workflow/v2` callers only.
+- The prerequisite phase now supplies the exact canonical atomic-proposal
+  envelope and input schema. New diagnostics record only fixed discriminator
+  and tool classes, known-key presence, key counts, and value kinds; they do
+  not record response values, patch content, SHA content, or private reasoning.
+
+**Evidence:** focused parser, subagent runner, and production worker tests pass,
+including pretty and reordered JSON, exact patch round-trip with source braces,
+strict typed-final parsing, role JSON isolation, and embedded-envelope
+rejection. `go build ./...`, `go vet ./...`, and `go test ./... -count=1` pass
+with workspace-local caches and temporary storage. Independent review found no
+P1/P2 blocker for one corrected bounded live trial.
+
+**Open risks:** native provider tool calls remain outside this repair; the
+worker continues to use the canonical text contract. Live provider completion,
+the continuous restart-at-approval trace, completed reviewer result, and the
+independent real-repository acceptance trace remain unproved.
+
+**Next action:** commit and deploy this exact parser repair to the verified gate
+daemon, then execute the unchanged registered task once. Review the complete
+proposal before approval, restart the same daemon and database while paused,
+and require apply, validation, and reviewer completion before advancing.
+
+## 2026-10-10 — R1 Governed Patch Hunk Recount
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Live run `run_01M4M5S9KN928HX89GHVMXZQFF` proved the repaired canonical
+  worker parser reached `apply_patch_proposal`. Git rejected the submitted
+  unified diff as corrupt at stdin line 16, before proposal persistence. No
+  approval directory was created, and both the isolated run worktree and
+  source clone remained clean at `6de4579`.
+- The raw patch was intentionally not persisted, so its exact defect and hunk
+  counts are unknown. Inspection proved the local pipeline does not trim or
+  normalize patch bytes: JSON decoding yields the string, the tool only checks
+  trimmed emptiness, Git receives the original value, the plan hashes it, and
+  approval stores it unchanged.
+- Added Git's documented `--recount` behavior consistently to the governed
+  patch path: path inspection, indexed precheck, temporary-index expected-tree
+  calculation, actual apply, reverse rollback, and direction checks. This
+  tolerates incorrect hunk header counts without changing the approval-bound
+  patch bytes, base, expected tree, paths, or atomic apply behavior. No reject,
+  three-way, unsafe-path, inaccurate-EOF, or content-normalization mode was
+  added.
+
+**Evidence:** focused Git and real proposal-tool tests pass. They prove exact
+trailing-newline content and SHA-256 persistence before approval, wrong-count
+multi-file planning and apply to the exact expected tree, forward and reverse
+direction checks, and structurally malformed patch rejection without mutation.
+`go build ./...`, `go vet ./...`, `go test ./... -count=1`, and
+`git diff --check` pass with workspace-local caches and temporary storage.
+
+**Open risks:** `--recount` is a bounded compatibility policy, not a proven
+explanation for the unavailable failed-run patch. The fresh full build, vet,
+test gate, and independent diff review are complete. Live completion,
+continuous restart at approval, completed reviewer, and independent-repository
+acceptance remain unproved.
+
+**Next action:** checkpoint and deploy the exact recount repair. Run the
+unchanged registered task once, stop at proposal for content review, and grant
+only after the same daemon/database restart proves recovery.
+
+## 2026-10-10 — R1 Recount Live Gate
+
+**Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
+
+- Built the independently reviewed recount code from local checkpoint
+  `648aa70` and deployed binary SHA-256
+  `51C663EDC2B5A1928B11CFE26672F17EFCB14408836EB7CB04D2BA1172E533BC`
+  to the same gate configuration and durable data directories.
+- Verified the registered `software-delivery-v5` graph retained its 200,000
+  total-token cap, per-role caps and iteration limits, the task packet retained
+  its exact SHA-256, and the acceptance clone was clean at `6de4579`.
+- Dispatched exactly one run, `run_01M4M68BG82B8PFYHY1TGKNCNE`. The planner
+  completed and the developer returned a canonical `apply_patch_proposal`.
+  Recount accepted the unified-diff structure, then indexed Git precheck
+  rejected the proposed context at `internal/provider/ollama/chat.go:160` as
+  not applying to the exact target.
+- The run failed before proposal persistence. No approval directory exists,
+  and the isolated run worktree and source clone remain clean at `6de4579`.
+
+**Evidence:** daemon health reported four agents; the running executable path
+and hash matched the rebuilt binary; the task hash and target HEAD matched the
+reviewed gate. The terminal snapshot records the semantic patch-precheck
+failure. This demonstrates that the canonical envelope and recount repairs
+crossed their prior parsing failures while Git still rejected invalid context
+without approval or mutation. The raw proposal was intentionally not retained.
+
+**Open risks:** the provider generated patch context that did not apply to the
+exact source it had read. The unavailable raw patch prevents a more specific
+claim about which context line was stale or incorrect. Live approval recovery,
+apply, validation, completed reviewer, and the independent real-repository
+acceptance remain unproved. Documentation commit `648aa70` is local because
+automatic approval review rejected its push pending explicit ownership of the
+GitHub remote; the reviewed code commit `ef4808b` is already on the branch.
+
+**Next action:** do not retry the live provider task. Diagnose the incorrect
+patch-context mechanism from privacy-safe public evidence, design the smallest
+bounded repair, and require independent review and a fresh validation gate
+before authorizing another provider call.
+## 2026-10-11 — Remove Implicit Runtime Token and Iteration Ceilings
+
+**Roadmap IDs:** R1 (autonomous execution behavior)
+
+- Removed the local autopatch worker's implicit 4096-token output request cap;
+  it now passes the provider's uncapped value unless a caller supplies a cap.
+- Removed the CLI tool-loop iteration assertion that encoded the old default
+  count. Both CLI tool loops keep their existing two-minute wall-clock
+  deadlines and now observe context cancellation while iterating.
+- Confirmed graph projection maps `Unlimited` to an absent maximum and v2
+  workflow engine loops honor unlimited defaults with cancellation checks.
+- Retained legacy wake phase iteration limits for now: they are the only normal
+  state-machine transitions between phases. Removing those values without a
+  completion signal would trap the flow in its initial phase.
+- Anthropic maps an uncapped Prizm request to a 64,000-token provider allowance
+  because its Messages API requires a positive `max_tokens`; explicit positive
+  request values are preserved.
+
+**Evidence:** focused autopatch cap test and CLI tool-loop tests pass. The
+attempted wider package run is not green: workspace temp-root resolution is
+denied in validation/multiagent tests, CLI worktree/symlink tests fail under the
+current filesystem permissions, and existing template loop-exhaustion tests
+show expectation mismatches. These were not modified in this slice.
+
+**Open risks:** Anthropic's required `max_tokens` argument is a provider-side
+output allowance and currently defaults to 64,000, distinct from Prizm's run
+budget. The wake phase caps remain.
+
+**Next action:** finish the broader defaults audit, update the wake phase
+completion protocol before removing its transition-driving limits, and rerun
+affected focused checks.
+
+## 2026-10-11 — Wake Completion Signals and V2 Report Privacy
+
+**Roadmap IDs:** R1 autonomous execution behavior; R1 durable delegation/outbox behavior; R4 dependent.
+
+- Updated the wake workflow to use standalone phase-completion signals followed by final JSON, removing outer and per-phase iteration transition caps. Signal parsing occurs before JSON parsing; signal-plus-tool turns retry, cancellation is checked each iteration, and commit/push enforcement remains active until that phase completes.
+- Closed the V2 report privacy boundary. `ReportPhase` rejects incomplete private-reasoning blocks before markers or report state can change, strips complete `<think>` blocks before storing or returning report content, and the shared final formatter sanitizes again before Discord output or artifact persistence. Fenced code and patch data remain intact.
+- Kept all changes in existing packages; no new package was introduced.
+
+**Evidence:** wake focused completion-signal/parser tests and `git diff --check` pass. The privacy canary plus report-format and artifact tests pass with `go test ./internal/workflow/v2 -run 'TestReportOutputAndArtifactExcludePrivateReasoning|TestFinalReport|TestWriteReportArtifact' -count=1`, using workspace-local Go caches. The broad wake CLI package run still fails in unrelated approval/workspace-scope, temp-root ACL, and subagent worktree tests.
+
+**Open risks:** wake completion signals remain model-declared, and the wake loop lacks an end-to-end fake-provider test. The current filesystem restrictions prevent interpreting the unrelated wider CLI failures as regressions in this change.
+
+**Next action:** coordinator reviews the wake and privacy diffs and decides whether wider validation is practical under the current filesystem permissions.
+
+## 2026-10-11 — Public Output Boundaries and Wake Parsing
+
+**Roadmap IDs:** R1 autonomous execution behavior; R1 durable delegation/outbox behavior; R4 dependent.
+
+- Sanitized model text at the identified public boundaries: runner `output.md` and `agent.completed.summary`, delegated return values and completion events, API invocation replies/session/event results, serve replies/session/TTS/commitment and extraction events, and stage final response data. Structured tool inputs and raw stage context remain available to their parsers; tool payloads are not rewritten for display sanitization.
+- Kept the existing V2 Discord/report artifact boundary and canary. Added focused runner, delegate, API, serve, and stage canaries for tagged and unterminated reasoning, with fenced diff payload preservation.
+- Hardened wake completion parsing: validate the standalone marker and strict final JSON before sanitizing public preamble and final prose, preserving literal reasoning-like tags inside diff hunks. Added rejection for invalid workflow token-budget values below -1 before any LLM call.
+- Kept changes in existing domain packages; no new package was added.
+
+**Evidence:** focused tests pass for `TestV2PublicOutputSanitizesPrivateReasoning`, `TestExecuteDelegatePublishesOnlyPublicOutput`, `TestPublicInvocationResponseSanitizesPrivateReasoning`, `TestSanitizeServeResponse*`, and `TestLLMStageResult*`. Wake focused tests and full `go test ./internal/workflow/v2` pass. `git diff --check` passes for the combined changes. The full `cmd/prizm-cli` package still has unrelated workspace/ACL and path failures; those remain outside this slice.
+
+**Open risks:** full CLI validation is limited by the current host’s workspace and filesystem permissions. The report covers the concrete provider-output publication paths identified and reviewed during this session.
+
+**Next action:** coordinator review of the combined diffs and decision on whether to retry the wider CLI suite under suitable filesystem permissions.
+
+## 2026-10-11 — Stage Persistence and Memory Capture Privacy
+
+- Closed the remaining stage output paths: persistence stores sanitized public text and deletes any stale `output.md` for incomplete reasoning or structured tool output; a failed deletion fails the stage with a generic error. Remembrance capture now skips unsafe or non-final structured output. The raw run context remains available to internal parsing.
+- Added regression coverage for sanitized output, fenced diff preservation, stale artifact removal, skipped tool payloads, and raw context preservation.
+
+**Evidence:** full `go test ./internal/stage -count=1`, focused serve response tests, `go build ./...`, `go vet ./...`, and `git diff --check` pass with workspace-local Go caches.
+
+**Next action:** coordinator review of the combined privacy diff. The broader CLI suite remains constrained by unrelated workspace, ACL, and path failures.
+
+### Persistence replacement refinement (2026-10-11)
+
+- Extended `PersistenceStage` reconciliation to empty `LLMResponse` values so stale output is removed for empty or unsafe content. Public output replacement uses a same-directory temporary file and rename; failures clean up the prior artifact and return a generic error.
+
+**Evidence:** `go test ./internal/stage -count=1` passes, including empty-response cleanup and injected temp-creation failure regressions; `gofmt` and `git diff --check` pass for the persistence implementation and tests. The broader CLI suite remains limited by unrelated workspace, ACL, and path failures.
+
+## 2026-10-11 — Patch Grounding and Reviewer Output Security
+
+**Roadmap IDs:** R1 governed proposals/review evidence; R8 autopatch remains dependent on R1 approval and provenance.
+
+- Excluded private fenced diffs from autopatch patch extraction.
+- Hardened Claude verdict parsing so verdict text inside private reasoning is ignored and malformed, nested, or unmatched reasoning tags fail closed.
+- Fixed patch source-range accounting for in-hunk `--- ` lines while retaining old-side grounding for additions and deletions.
+
+**Evidence:** focused autopatch tests pass; the full autopatch suite is blocked by Windows temp-root ACL errors. The full `claudeworker` suite passes. Full `gitx` and `subagent`, and focused proposal/graph checks, pass with workspace-local `TMP`/`TEMP`. No secrets or user data were included in this entry.
+
+**Open risks:** full autopatch suite validation is still pending an allowed temp root.
+
+**Next action:** coordinator reviews the security changes and decides whether to retry the autopatch suite under suitable temp-root permissions.
+
+### Final autopatch parser review (2026-10-11)
+
+- Diff extraction now rejects malformed or nested think-like tags before selecting a patch. Focused canaries pass. Independent review found no remaining P1/P2 issues, and the local changes are ready for commit review.
+
+## 2026-10-11 — Unlimited Defaults Validation Handoff
+
+**Roadmap IDs:** R1 runtime execution behavior; R8 autopatch depends on the governed R1 path.
+
+- The initial full `go test ./...` run found stale CLI manifest expectations of 60k rather than `UnlimitedTokens`, and two shipped template scenarios that expected default loop caps that were removed.
+- The CLI assertion was updated. Shipped templates retain `-1` unlimited defaults; scenarios now assert those defaults and test traversal exhaustion separately with explicit opt-in caps.
+
+**Evidence:** full `internal/workflow/multiagent` tests pass. The complete suite has not yet been rerun after these corrections.
+
+**Next action:** rerun `go test ./...` and record any remaining failures.
+
+### Full Go validation green (2026-10-11)
+
+The full `go test ./...` rerun explicitly exited 0 with workspace-local `GOCACHE`, `GOMODCACHE`, `TMP`, and `TEMP`: 88 packages passed, 5 had no test files, and 0 failed. This resolves the earlier pending full-suite note. `go build ./...` and `go vet ./...` passed earlier with workspace-local caches.
+
+**Next action:** coordinator review and commit preparation for the validated local changes.
+
+## 2026-10-11 — PR #87 Staticcheck U1000 Cleanup
+
+**Roadmap IDs:** R1 runtime execution behavior and governed proposal handling; R8 autopatch/self-improvement remains dependent on R1 approval and provenance.
+
+- Removed the unused singular `canonicalProposalArtifact` wrapper; multi-artifact proposals continue through `canonicalProposalArtifacts`.
+- Removed the obsolete unphased `canAffordPrerequisiteAndFinal`; the runner continues using phased budget checks and preserves its unlimited/no-cap default.
+
+**Evidence:** `staticcheck ./...` (local 2026.1/v0.7.0), `go vet ./...`, `go build ./...`, `go test ./internal/subagent ./cmd/prizm-cli -count=1`, and `git diff --check` pass. Staticcheck used a workspace-local cache after the default user cache denied writes.
+
+**Open risks:** the Linux CI action installs its moving `latest` Staticcheck release; local validation used v0.7.0 on Windows. Generated workspace cache and worktree directories remain untracked and are not part of the change.
+
+**Next action:** coordinator review, then confirm PR #87's Linux lint result against the committed cleanup.
+
+## 2026-10-11 — PR #87 Local Rebuild and Test Serve
+
+**Roadmap IDs:** R1 durable event/outbox runtime and governed execution; R8 autopatch/self-improvement remains dependent on R1 approval and provenance evidence.
+
+- Built the `cmd/prizm-cli` binary from `codex/r1-event-outbox` at `c30ca7f` using `.tmp-gocache` and `.tmp-gomodcache`. Started the rebuilt service from `.tmp-prizm-c30ca7f.exe` as PID `6700` on the configured loopback ports. The prior listener was verified as `D:\_projects_\prism\prizm.exe` before replacement. Startup logs are `logs/prizm-local-c30ca7f.out.log` and `logs/prizm-local-c30ca7f.err.log`.
+- Verified `GET http://127.0.0.1:8321/health` and `GET http://127.0.0.1:8322/api/v1/status` both return HTTP 200; health reports six configured agents and API status reports `running`.
+
+**Open risks:** Discord gateway access was denied by the host, so `discord_ready` is false. Blender MCP initialization failed; model context compression received HTTP 410 and used template extraction. These do not prevent local health/API readiness. The API is loopback-bound with no auth token configured. No provider completion was validated.
+
+**Next action:** user tests the local R1 flows via the API/dashboard; retry external integrations when their services are reachable.
+
+## 2026-10-11 — Live Real-Provider Task Smoke Blocked at API Gate
+
+**Roadmap IDs:** R1 durable observable task lifecycle; R8 requires R1 execution evidence.
+
+- Attempted a bounded read-only README question through `POST /api/v1/agents/scout/invoke`. The service returned HTTP 403 because `scout` has `invocable_via_api=false`; all six configured agents are opted out. The request was rejected before invocation creation, so there is no task/run ID or event trace.
+- The multi-agent API reports no registered definitions. The remaining workflow-start route publishes general project work, so it was not used for this read-only smoke.
+- Captured stable service evidence: PID 6700 and executable `.tmp-prizm-c30ca7f.exe` remained unchanged; health stayed `ok`; API status stayed `running`; task counts stayed at one failed, zero in-progress/completed. The failed task predates this attempt. No retry, timeout, or task termination occurred. Effective task/provider budgets are not exposed by the live status/config response.
+
+**Evidence and limitation:** the API fails closed before provider execution, so this attempt cannot establish provider capability or task-disappearance recovery. It does establish that the rejected request did not create a task that vanished.
+
+**Next action:** create an explicitly opted-in, read-only test entry point or register a bounded read-only workflow, then repeat and inspect its durable status and event trace. No configuration or task was created in this attempt.
+
+### Isolated live provider lifecycle follow-up (2026-10-11)
+
+- Used the supported `prizm graph run` CLI with a temporary one-role reviewer workflow, `forge` profile, and only `read_file` allowed. The source workspace was a disposable Git repository containing the project README; run artifacts and the workflow definition were isolated in a unique temporary path. The task requested one factual README summary and prohibited other tools or mutations.
+- Effective run ceilings: 2 transitions, 2,000 tokens, 2 local iterations, global retry ceiling 1 with role retries set to 0, 5-minute run duration, and 4-minute role duration. The run was created durably before provider execution as `run_01M4PWAZFPZPDS82VJF95VAGE6`.
+- The configured Ollama model call returned HTTP 429 on model turn 1. Durable inspection shows `run.started` (`evt_01M4PWAZV5WS1F6R86817TXCW4`), `role.entered` (`evt_01M4PWAZVARRSG0XM7ENV52VZJ`), and terminal `run.failed` (`evt_01M4PWB6AQYX862HTDA6734B78`) with the exact 429 failure reason. Status and report both show `failed`; role retries and token usage are zero. The task did not complete its read_file call, and no retry, timeout, or process termination occurred.
+- The main service stayed at PID 6700 and `.tmp-prizm-c30ca7f.exe`; health stayed `ok` and API status stayed `running` with unchanged task counters. This provides live evidence of durable terminal failure, not successful model work or recovery after process loss.
+
+**Next action:** after HTTP 429 clears, run one bounded read-only smoke again and inspect its terminal event and workspace state. No provider retry was sent during this session.
+
+### Isolated local Ollama lifecycle follow-up (2026-10-11)
+
+- Confirmed local `qwen3.5:9b` is installed and reachable, then ran one isolated `prizm graph run` with a minimal config containing only the local Ollama reviewer profile. No main service or user config changes were made. The reviewer was allowed only `read_file`; task token and iteration ceilings were unlimited, graph transitions capped at 2, the role had 0 retries (global retry ceiling 1), the graph deadline was 3 minutes, and the role deadline was 2 minutes.
+- Run `run_01M4PWEE6MX1FCE76G3WYANSKF` was durably created. The model emitted a `read_file` tool request, but execution failed; runtime logging records only `execution_error=true`, and the durable event trace omits the underlying tool error. The next model response was not valid JSON for the strict reviewer schema. Terminal status is `failed` with exact reason `multiagent: invalid structured output for role "reviewer": invalid character 'T' looking for beginning of value`.
+- Durable events: `run.started` (`evt_01M4PWEEE60V25QWRV6YETY9T8`), `role.entered` (`evt_01M4PWEEEAEPPE2629AAPSTPY3`), `run.failed` (`evt_01M4PWF669HAN44YZYBKJFDHZN`). No task retry, timeout, process termination, or disappearance occurred. Runtime logs show three model turns but durable failed-role state reports zero iterations and empty token usage. The main service remained PID 6700 and healthy, with unchanged task counters.
+
+**Evidence limit:** Prizm produced real local-model output and a read-file request, but this attempt did not read the README or complete the task. It supports explicit terminal-failure observability and identifies missing failed-attempt details; it does not support a successful-work claim.
+
+**Next action:** inspect the read-file tool request contract and improve persistence of tool failures and partial usage/iteration counts before one further bounded read-only acceptance run.
+
+### Successful no-tool local-provider lifecycle follow-up (2026-10-11)
+
+- Ran one isolated `prizm graph run` against local Ollama `qwen3.5:9b` through a temporary minimal configuration, leaving the long-running service and its configuration untouched. The one-visit reviewer had no tools enabled, zero role retries, and produced a valid structured final in one turn. Run ID: `run_01M4PWJHYXC7SH5E0N1PB47ZNT`.
+- `graph inspect` reported omitted token, local-iteration, and global retry caps as unlimited; explicit safety limits were 2 transitions, 3-minute graph deadline, and 2-minute role deadline. Durable status and report both show `completed`, outcome `review_approved`, terminal reason `review approved`, 1,689 prompt tokens, 37 completion tokens, one local iteration, zero retries, and about 2.45 seconds elapsed.
+- Event trace has run.started (`evt_01M4PWJJAPNGWRJ9GHEHQ6D0PV`), role.entered (`evt_01M4PWJJAZ41E1RP6T6S05WH1A`), role.completed (`evt_01M4PWJMQSYWHKPDE7GD5G72YX`), selected terminal transition (`evt_01M4PWJMR2JWC17K3F5MHKPKFN`), and run.completed (`evt_01M4PWJMR2JWC17K3F5PH17ZWH`). The CLI returned exit code 0; no retry, timeout, cancellation, or orphan graph process was observed. The isolated source workspace was clean.
+- After task completion, main service PID 6700 remained `.tmp-prizm-c30ca7f.exe`, same start time; loopback ports 8321 and 8322 remained listening under PID 6700, health returned `ok`, and API status returned `running`. One process enumeration method was denied, but `Get-Process` and netstat independently confirmed PID/path/listeners.
+
+**Evidence and limitation:** one real local provider generated an accepted final response and its graph reached durable successful terminal state. Since tools were disabled, this proves model-backed task completion but not file/tool work. The earlier real-provider read-file runs failed (cloud HTTP 429; local tool execution error and subsequent invalid structured output), so tool execution remains unverified. No process-kill/recovery behavior was exercised.
+
+**Next action:** resolve the read-file tool contract and preserve tool errors plus partial turn metrics in failed durable runs, then perform a bounded read-only tool run. Test process-loss recovery as a separate scenario.
+
+### Evidence correction: distinguish the original tool failure from investigator reruns (2026-10-11)
+
+The original local run `run_01M4PWEE6MX1FCE76G3WYANSKF` remains unchanged and has no detailed durable record of the first tool error; it ends with the strict-reviewer JSON decode failure and reports zero failed-attempt iterations/usage. In the distinct post-fix investigator rerun `run_01M4PWTKBPE493XNW2TFWN0RQA`, turn 1 failed because qwen supplied `start_line=0` (the tool requires a positive integer), and turn 2 successfully read 1,263 bytes; the graph still failed on the final reviewer output. Do not describe that separate retry as recovery or success of the original run. Other investigator runs were excluded: `run_01M4PWX2PA75F882QPZQ351ZAE` hit a context deadline after repeated reads, while `run_01M4PWWN4XSFYQKDHVHYF9ZPNT` completed without a read_file call. The no-tool run `run_01M4PWJHYXC7SH5E0N1PB47ZNT` remains the only completed task in this smoke series.
+
+### R1 durable-retry coding acceptance follow-up (2026-10-12)
+
+- Corrected built-in `software-delivery` defaults to leave aggregate retries and overall duration unlimited unless a definition explicitly authors a positive cap; per-role retry ceilings remain in place. Tests cover omission defaults and preservation of explicit caps. The previously terminal 30-minute `budget_exhausted` run was preserved; acceptance used a new immutable template version.
+- Added strict API task decoding: only documented `id`/`description` keys are accepted, and a nonblank description is required before run creation. Regression coverage checks unknown/misspelled keys, missing/blank descriptions, no starter invocation, and valid documented input.
+- Real-provider run `run_ab78d1b310fc9568fefc209851` (`ollama` / `glm-5.3:cloud`) followed plan → proposal → exact coordinator grant → apply → configured validation → review. The only isolated-worktree edit was the two accepted `TestIsRetryable` cases for 401 invalid API key and 403 forbidden (`retryable=false`). The persisted validation was `go test ./...`, exit 0, 107,322 ms, in `.tmp/glm-prism-clone-6de/.prizm/worktrees/run_ab78d1b310fc9568fefc209851`; stdout/stderr artifacts exist (5,647 bytes / 0 bytes). Roles completed and reviewer outcome was `review_approved`.
+- The run-scoped duplicate grant returned `decision_already_recorded`; run event cursor stayed fixed, applied-event count remained one, and exactly one dashboard completion event remained. Restarting the isolated service exercised report reconstruction from durable state. The report now shows the original task description and exact tester validation result without changing terminal events or model reviewer history.
+- Regression coverage added for bounded/safe validation evidence and latest tester results taking precedence over earlier failed validation attempts; raw process error text is excluded from event/report projections. Current checkout verification: default-parallel `go test ./... -count=1` passed; `go vet ./...` and `go build ./...` passed; all seven dashboard JavaScript tests passed. The clean `6de` baseline passed `go test ./... -count=1 -p 1`; an earlier parallel baseline run had one unexplained transient CLI test failure, so no cause is asserted.
+- Visual browser acceptance could not be completed: the child IAB blocked local navigation and installed headless Chrome did not return a DOM/screenshot within the bounded attempt. API report/snapshot evidence is verified, but no visual claim is made. Main PID 6700 and legacy PID 74312 were left untouched. R1 overall and its multi-task roadmap gate remain open; feature commit/PR awaits coordinator review.
+
+**Next action:** coordinator reviews the proposed feature diff and this evidence before authorizing branch, commit, push, and PR steps. Continue the remaining R1 acceptance scenarios and visual verification when the supported browser surface is available.
+
+### R1 final verification and browser capture correction (2026-10-12)
+
+- On `codex/durable-task-retries` based at fetched `origin/staging` `d7f76ef`, final default-parallel `go test ./... -count=1`, `go build ./...`, `go vet ./...`, and all seven `internal/dashboard/static/tests/*.test.js` passed. The old feature HEAD tree hash exactly matched staging, so the new branch carries the dirty feature changes without the prior history divergence. No commit, push, or PR was created.
+- Final safety tests caught a baseline Windows symlink resolution defect: `EvalSymlinks` returned Access is denied on the existing symlink, and the old resolver treated that as a missing parent. It also rebuilt multiple absent path components in reverse order. The containment function now rejects missing/unresolvable roots and unresolved existing parents, while walking upward only for absent components and appending them forward. Existing in-root target, nested absent target, missing-root rejection, symlink escape, and `internal/tool` fuzzy-root tests pass; the full parallel suite passes after the fix.
+- Safe validation evidence omits raw process error output and redacts credential-like argument values. Focused tests cover `--token value`, `--password=value`, `api_key=value`, and Authorization/Bearer values. The multiagent report regression checks durable objective fallback and latest tester validation facts.
+- The live accepted run `run_ab78d1b310fc9568fefc209851` remains complete/review-approved with the exact approved test-only patch and persisted passing `go test ./...` validation. Duplicate grant stays `decision_already_recorded`; no second apply/event or completion outbox entry was created. API report reconstruction preserved event/outbox history and the original task description.
+- Correction to the earlier visual note: a headless Chrome run did finish and produced `.tmp/dashboard-proof.png` plus DOM at `.tmp/dashboard-proof-dom.txt` from `http://127.0.0.1:20822/multiagent-run.html?run=run_ab78d1b310fc9568fefc209851`. The page shows Completed, terminal `review approved`, one task-completion timeline row, and no retry countdown text. The reference graph is empty. The report itself was verified via API, while the screenshot does not show the linked final report opened; the runs page’s `Open final report` link or a human UI check remains the final visual detail.
+
+**Next action:** coordinator decides whether this rendered run page plus API-backed report is sufficient for visual acceptance. Keep R1 overall open; do not claim remaining roadmap scenarios are all closed. Commit/push/PR remain pending explicit coordinator authorization.
+
+### Dashboard report route visual verification update (2026-10-12)
+
+- Headless Chrome rendered the run list at `http://127.0.0.1:20822/multiagent-runs.html`. The target `run_ab78d1b310fc9568fefc209851` row visibly shows `Completed` and an `Open final report` link. DOM confirms the exact report target `/api/v1/multiagent/runs/run_ab78d1b310fc9568fefc209851/report`.
+- The exact report target was opened in headless Chrome and rendered at `.tmp/dashboard-report.png`. The visible JSON contains the original objective, `go_test_all: passed (go test ./...)`, validation `passed`, exit code 0, test outcome `passed`, review outcome `review_approved`, and final status `completed`. The run-detail screenshot `.tmp/dashboard-proof.png` shows its Completed badge/terminal outcome and event timeline; its DOM contains no retry countdown fields. One completed row is visible for the target run in the run list.
+- This corrects the prior pending visual-report detail: the run page itself does not inline the full report, but the supported run-list report link and its served report render were verified. Captures are untracked files under `.tmp/`; they are excluded from source changes.
+
+**Next action:** hand the exact branch diff and acceptance evidence to the coordinator for final commit/push/PR authorization. R1 overall remains open pending other roadmap scenarios.
+
+### Commit and PR handoff (2026-10-12)
+
+- Commit `b798578f5b7ac175b94fed6d5f8036811625e3d8` is pushed on `codex/durable-task-retries`, based on `origin/staging` `d7f76efbd913b165bd695ff295a051e74cf828c2`.
+- PR [#89](https://github.com/emaharmony/prizm/pull/89) targets `staging`, open and non-draft. Initial CI snapshot: `lint-linux` and `test-linux` running; `test-windows` and `test-python` queued. Staged diff check and credential pattern scan passed; exactly 76 reviewed files, 6,148 additions and 294 deletions.
+- No merge was performed. The tracked worktree was clean after commit; pre-existing caches/temp directories remain untracked and excluded.
+
+**Next action:** CI follow-up on PR #89 resolved the deprecated `Temporary` classifier and three concrete gates; verify the newly pushed head's CI. Keep R1 overall open for remaining roadmap scenarios.
+
+### PR #89 CI corrections (2026-10-12)
+
+- CI reported Staticcheck SA1019 for `net.Error.Temporary`, ST1012 for the process-crash test sentinel, a Windows short-name versus canonical-path assertion, and Linux TempDir cleanup racing asynchronous recall metadata writes. The transient classifier now uses typed timeout/DNS fields and wrapped transport errno checks (`ECONNRESET`, `ECONNREFUSED`, `EPIPE`); unknown text remains nonretryable in durable execution. The test sentinel follows Go error naming. The Windows nested-path test compares against `EvalSymlinks(root)` plus forward components. Recall tracking now admits workers under a mutex-protected `WaitGroup` and has a lifecycle drain used before the scoped MarkdownStore test removes its temp directory.
+- Verification on this tree: `go test ./... -count=1`, `go build ./...`, `go vet ./...`, `staticcheck ./...`, seven dashboard JS tests, focused retry/safety/workflow/CLI regressions, and Windows compilation of `internal/retry` passed. The scoped prompt-memory test passed 30 consecutive runs before the full suite. No PR merge was performed; latest CI state is pending the follow-up push.
+
+**Next action:** push the reviewed CI correction commit to PR #89 and check CI for that exact head; continue to leave R1's other multi-task scenarios open.
+
+## 2026-10-12 — PR #86 Documentation Conflict Resolution
+
+**Roadmap IDs:** R1, R2, R6
+**Branches/bases:** `codex/r6-memory-reconciliation` at `809e9adc52c1428386563162031a2ffbe4d76de8`; `origin/staging` at `b85f46aca4be910dfd3477e0efb6bee4eac2aa0e`.
+
+- The PR-head merge with current staging auto-merged source and test files; the only content conflicts were this plan and work log. The resolution preserves the staging R1 handoff and all distinct R1/R6 history in date order. Historical entries remain unchanged.
+- Recall PR #9 is merged. Deployed-service and public scoped-route acceptance remains open.
+- No Recall repository files or primary Prizm checkout edits are part of this resolution.
+
+**Verification:** `go build ./...`, `go vet ./...`, and `go test ./...` passed in the isolated worktree using `.tmp/pr86-merge-gates` for `TMP`, `TEMP`, `GOTMPDIR`, `GOCACHE`, and `GOMODCACHE` (completion marker records exit 0 for all three). `git diff --cached --check` passes and no unmerged paths or conflict markers remain. No merge commit or push has been made.
+
+**Next action:** complete validation of the auto-merged PR diff and request review before committing or pushing.

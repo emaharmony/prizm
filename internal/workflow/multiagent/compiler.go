@@ -114,6 +114,7 @@ type CompiledNode struct {
 	AllowedOutcomes   []TransitionOutcome    `json:"allowed_outcomes,omitempty"`
 	TerminalCondition TerminalCondition      `json:"terminal_condition,omitempty"`
 	Execution         *SchemaExecutionPolicy `json:"execution,omitempty"`
+	Retry             *SchemaRetryPolicy     `json:"retry,omitempty"`
 }
 
 // CompiledEdge is one stable-ID transition rule of a CompiledGraph.
@@ -266,6 +267,7 @@ func buildCompiledGraph(def WorkflowDefinition) *CompiledGraph {
 			AllowedOutcomes:   allowedOutcomes,
 			TerminalCondition: terminalCond,
 			Execution:         cloneExecutionPolicy(n.Execution),
+			Retry:             cloneRetryPolicy(n.Retry),
 		}
 	}
 
@@ -552,6 +554,14 @@ func cloneExecutionPolicy(p *SchemaExecutionPolicy) *SchemaExecutionPolicy {
 	return &clone
 }
 
+func cloneRetryPolicy(p *SchemaRetryPolicy) *SchemaRetryPolicy {
+	if p == nil {
+		return nil
+	}
+	clone := *p
+	return &clone
+}
+
 func cloneReflectionPolicy(p *SchemaReflectionPolicy) *SchemaReflectionPolicy {
 	if p == nil {
 		return nil
@@ -580,6 +590,7 @@ func cloneCompiledNode(n CompiledNode) CompiledNode {
 	n.AllowedOutcomes = cloneOutcomes(n.AllowedOutcomes)
 	n.RoleConfig = cloneRoleConfig(n.RoleConfig)
 	n.Execution = cloneExecutionPolicy(n.Execution)
+	n.Retry = cloneRetryPolicy(n.Retry)
 	return n
 }
 

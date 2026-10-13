@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/emaharmony/prizm/internal/approval"
+	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/emaharmony/prizm/internal/safety"
 	"github.com/emaharmony/prizm/internal/tool"
 )
@@ -165,7 +166,7 @@ func (e *Executor) ApplyWithRun(ctx context.Context, runID, approvalID, approved
 	// resolveTargetPath (containment against workspace roots) doesn't apply
 	// to it. The actual tool is re-invoked with the preserved a.Input below.
 	var absPath string
-	if a.MutationType != approval.MutationToolCall {
+	if a.MutationType != approval.MutationToolCall && a.MutationType != approval.MutationApplyPatch {
 		var resolveErr error
 		absPath, resolveErr = e.resolveTargetPath(a.TargetPath)
 		if resolveErr != nil {
@@ -181,6 +182,15 @@ func (e *Executor) ApplyWithRun(ctx context.Context, runID, approvalID, approved
 	}
 
 	switch a.MutationType {
+	case approval.MutationApplyPatch:
+		plan := gitx.PatchPlan{
+			BaseSHA: a.PatchPlan.BaseSHA, BaseTree: a.PatchPlan.BaseTree, ExpectedTree: a.PatchPlan.ExpectedTree,
+			PatchSHA256: a.PatchPlan.PatchSHA256, Paths: append([]string(nil), a.PatchPlan.Paths...),
+		}
+		if err := gitx.ApplyPlannedPatch(ctx, e.workspaceRoot, a.Content, plan); err != nil {
+			e.emitEvent("prizm.mutation.failed", map[string]any{"approval_id": approvalID, "mutation_type": a.MutationType, "correlation_id": a.CorrelationID, "error": err.Error()})
+			return &MutationResult{Success: false, ApprovalID: approvalID, TargetPath: a.TargetPath, Message: err.Error()}, nil
+		}
 	case approval.MutationToolCall:
 		var result tool.ToolResult
 		var err error
@@ -309,6 +319,29 @@ func (e *Executor) ApplyWithRun(ctx context.Context, runID, approvalID, approved
 
 // validateSafety performs all required safety checks before any mutation is applied.
 func (e *Executor) validateSafety(a *approval.Approval) error {
+	if a.MutationType == approval.MutationApplyPatch {
+		if a.PatchPlan == nil {
+			return fmt.Errorf("patch plan is missing")
+		}
+		if len(a.Content) == 0 || len(a.Content) > gitx.MaxPatchBytes {
+			return fmt.Errorf("patch content size is invalid")
+		}
+		if len(a.PatchPlan.Paths) == 0 || len(a.PatchPlan.Paths) > gitx.MaxPatchPaths {
+			return fmt.Errorf("patch path count is invalid")
+		}
+		roots := append([]string(nil), e.allowedPaths...)
+		if len(roots) == 0 {
+			roots = []string{e.workspaceRoot}
+		}
+		for _, path := range a.PatchPlan.Paths {
+			absolute := filepath.Join(e.workspaceRoot, filepath.FromSlash(path))
+			if _, err := safety.ResolveAndContainMulti(roots, absolute); err != nil {
+				return fmt.Errorf("patch path %q is outside configured write roots: %w", path, err)
+			}
+		}
+		return nil
+	}
+
 	// Check: target path must not be empty
 	if a.TargetPath == "" {
 		return fmt.Errorf("target path is empty")

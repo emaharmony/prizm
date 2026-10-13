@@ -92,6 +92,14 @@ func (cr *claudeReviewer) review(phase, runID, pkg, repoPath string) {
 }
 
 func (cr *claudeReviewer) publish(phase, runID string, v claudeworker.Verdict) {
+	payload := reviewerPayload(phase, runID, cr.worker.ReviewerName(), v)
+	data, _ := json.Marshal(payload)
+	if err := cr.nc.Publish("prizm.workflow.feedback.response", data); err != nil {
+		log.Printf("[CLAUDE-REVIEW] publish response failed: %v", err)
+	}
+}
+
+func reviewerPayload(phase, runID, reviewer string, v claudeworker.Verdict) map[string]any {
 	payload := map[string]any{
 		"decision":    v.Decision,
 		"notes":       v.Notes,
@@ -101,17 +109,14 @@ func (cr *claudeReviewer) publish(phase, runID string, v claudeworker.Verdict) {
 	// uses review semantics (reviewer + optional dimensions).
 	if phase == "FEEDBACK_POST" {
 		payload["type"] = "review_response"
-		payload["reviewer"] = cr.worker.ReviewerName()
+		payload["reviewer"] = reviewer
 		if len(v.Dimensions) > 0 {
 			payload["dimensions"] = v.Dimensions
 		}
 	} else {
 		payload["type"] = "feedback_response"
 	}
-	data, _ := json.Marshal(payload)
-	if err := cr.nc.Publish("prizm.workflow.feedback.response", data); err != nil {
-		log.Printf("[CLAUDE-REVIEW] publish response failed: %v", err)
-	}
+	return payload
 }
 
 // buildReviewPrompt assembles the print-mode prompt for the Claude Code CLI.

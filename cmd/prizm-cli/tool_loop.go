@@ -14,8 +14,6 @@ import (
 	"github.com/emaharmony/prizm/internal/tool"
 )
 
-const maxToolIterations = 10
-
 // toolUsageGuidance is shared between the chat and text-based tool loops.
 // This prevents duplication — both paths must present the same guidance to the model.
 const toolUsageGuidance = "You have tools available for reading files, searching code, inspecting projects, and managing plans. " +
@@ -58,7 +56,6 @@ const toolLoopTimeout = 2 * time.Minute // separate timeout for the tool loop
 // If so, it executes the tool, feeds the result back as a new prompt, and
 // calls the LLM again. This repeats until:
 //   - The LLM gives a final text response (no tool request)
-//   - The maximum iteration count is reached (returns a fallback message)
 //   - A tool requires approval (pauses for human review)
 //   - An error occurs (returns a user-facing error message)
 //
@@ -72,23 +69,17 @@ func (cc *conversationContext) runToolLoop(
 	placeholderMsgID string,
 	runID string,
 ) (string, []toolCallSummary, error) {
-	ctx := parentCtx
+	ctx, cancel := context.WithTimeout(parentCtx, toolLoopTimeout)
+	defer cancel()
 
 	var summaries []toolCallSummary
 	currentPrompt := prompt
-	nudgeInjected := false // only inject the wrap-up nudge once
 
-	for i := 0; i < maxToolIterations; i++ {
-		log.Printf("[TOOL] iteration %d/%d", i+1, maxToolIterations)
-
-		// V75: After 6 iterations, inject a nudge telling the model to wrap up.
-		// Previous threshold (3) was too aggressive for execution tasks that need 5-8 reads.
-		// The nudge now distinguishes between research and execution: produce the deliverable,
-		// don't just summarize.
-		if i >= 6 && !nudgeInjected {
-			currentPrompt += "\n\nYou have used several tools. If you have enough information to produce the deliverable, produce it now. If you genuinely need more information, continue — but do not produce a summary when a deliverable was requested."
-			nudgeInjected = true
+	for i := 0; ; i++ {
+		if err := ctx.Err(); err != nil {
+			return "", summaries, err
 		}
+		log.Printf("[TOOL] iteration %d", i+1)
 
 		// Call the LLM with the current prompt
 		responseText, err := cc.callLLMForToolLoop(ctx, currentPrompt, agentCfg, channelID)
@@ -155,20 +146,6 @@ func (cc *conversationContext) runToolLoop(
 		return responseText, summaries, nil
 	}
 
-	// Max iterations reached — return a user-facing fallback message
-	log.Printf("[TOOL] max iterations (%d) reached, returning fallback message", maxToolIterations)
-	fallback := fmt.Sprintf("I used %d tool calls but wasn't able to reach a final conclusion. Here's what I found:", maxToolIterations)
-	for _, ts := range summaries {
-		fallback += fmt.Sprintf("\n- %s: %s", ts.Tool, ts.Status)
-		if ts.Result != "" {
-			fallback += fmt.Sprintf(" (%s)", truncateStr(ts.Result, 200))
-		}
-		if ts.Error != "" {
-			fallback += fmt.Sprintf(" — error: %s", ts.Error)
-		}
-	}
-	fallback += "\n\nCould you rephrase your request so I can help more directly?"
-	return fallback, summaries, nil
 }
 
 // callLLMForToolLoop makes an LLM call within the tool loop context.
@@ -192,7 +169,7 @@ func (cc *conversationContext) callLLMForToolLoop(ctx context.Context, prompt st
 		Model:       agentCfg.Model,
 		Prompt:      prompt,
 		Temperature: 0.7,
-		MaxTokens:   4096,
+		MaxTokens:   0,
 	})
 	if err != nil {
 		return "", fmt.Errorf("LLM call failed: %w", err)

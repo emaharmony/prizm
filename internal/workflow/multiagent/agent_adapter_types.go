@@ -13,10 +13,11 @@ import (
 // AgentProfile is the execution identity resolved from an existing Prism agent
 // registry or configuration source.
 type AgentProfile struct {
-	ID           string
-	Provider     string
-	Model        string
-	Capabilities []string
+	ID              string
+	Provider        string
+	Model           string
+	ReasoningEffort string
+	Capabilities    []string
 }
 
 // AgentProfileResolver resolves RoleConfig.AgentRef without giving the adapter
@@ -49,10 +50,11 @@ func (r RegistryProfileResolver) ResolveAgent(ref string) (AgentProfile, error) 
 		capabilities = append(capabilities, capability.Action)
 	}
 	return AgentProfile{
-		ID:           resolved.Name,
-		Provider:     resolved.ProviderName,
-		Model:        resolved.Model,
-		Capabilities: capabilities,
+		ID:              resolved.Name,
+		Provider:        resolved.ProviderName,
+		Model:           resolved.Model,
+		ReasoningEffort: resolved.ReasoningEffort,
+		Capabilities:    capabilities,
 	}, nil
 }
 
@@ -171,19 +173,26 @@ func (f ValidationRunnerFunc) RunValidation(
 // AgentExecutionRequest is the narrow request sent to Prism's real bounded
 // agent execution seam.
 type AgentExecutionRequest struct {
-	RunID                string
-	TaskID               string
-	ExecutionKey         string
-	Role                 Role
-	Visit                int
-	Profile              AgentProfile
-	Prompt               string
-	Workspace            Workspace
-	AllowedTools         []string
-	RequiredCapabilities []string
-	MaxIterations        Limit
-	MaxTokens            Limit
-	Deadline             time.Time
+	RunID                        string
+	TaskID                       string
+	ExecutionKey                 string
+	Role                         Role
+	Visit                        int
+	Profile                      AgentProfile
+	Prompt                       string
+	Workspace                    Workspace
+	AllowedTools                 []string
+	RequiredCapabilities         []string
+	FinalizationPrerequisiteTool string
+	FinalResponseContract        string
+	ExploreReplyMaxTokens        int
+	PrerequisiteReplyMaxTokens   int
+	FinalReplyMaxTokens          int
+	MaxIterations                Limit
+	MaxTokens                    Limit
+	Deadline                     time.Time
+	RetryHandle                  RoleVisitRetryHandle `json:"-"`
+	ToolEventSink                ToolEventSink        `json:"-"`
 }
 
 // AgentExecutionResult is the transport-neutral result returned by the real
@@ -236,6 +245,21 @@ type StructuredOutputError struct {
 	Role  Role
 	Cause error
 }
+
+// SchemaCorrectionError marks a recoverable structured-output failure. Code
+// is deliberately a stable allowlisted identifier, never provider content.
+type SchemaCorrectionError struct {
+	Role     Role
+	Code     string
+	Fields   []string
+	Feedback string
+	Cause    error
+}
+
+func (e *SchemaCorrectionError) Error() string {
+	return "multiagent: structured output needs correction"
+}
+func (e *SchemaCorrectionError) Unwrap() error { return e.Cause }
 
 func (e *StructuredOutputError) Error() string {
 	return fmt.Sprintf("multiagent: invalid structured output for role %q: %v", e.Role, e.Cause)

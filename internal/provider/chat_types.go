@@ -30,6 +30,9 @@ type ChatGenerateRequest struct {
 	Tools         []ChatTool
 	Temperature   float64
 	MaxTokens     int
+	// ReasoningEffort selects a provider-supported named thinking level. Empty
+	// leaves the provider's model-specific default in effect.
+	ReasoningEffort string
 }
 
 // ChatMessage represents a single message in a conversation.

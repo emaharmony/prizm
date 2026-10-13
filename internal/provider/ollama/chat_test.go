@@ -113,6 +113,100 @@ func TestChatProviderContentOnly(t *testing.T) {
 	}
 }
 
+func TestChatProviderSanitizesPublicContentAndRejectsIncompleteBlock(t *testing.T) {
+	responses := []string{
+		"Public before. <ThInK>PRIVATE_CANARY</tHiNk> Public after.",
+		"Public before. <think>PRIVATE_CANARY",
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		content := responses[0]
+		responses = responses[1:]
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "test-model", "done": true,
+			"message": map[string]any{"role": "assistant", "content": content},
+		})
+	}))
+	defer server.Close()
+	cp := ollama.NewChatProvider(server.URL)
+	req := provider.ChatGenerateRequest{Model: "test-model", Messages: []provider.ChatMessage{{Role: "user", Content: "test"}}}
+
+	resp, err := cp.ChatGenerate(context.Background(), req)
+	if err != nil || strings.Contains(resp.Content, "PRIVATE_CANARY") || resp.Content != "Public before.  Public after." {
+		t.Fatalf("chat content was not sanitized: content=%q err=%v", resp.Content, err)
+	}
+	_, err = cp.ChatGenerate(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), "no public answer") || strings.Contains(err.Error(), "PRIVATE_CANARY") {
+		t.Fatalf("expected privacy-safe failure, got %v", err)
+	}
+}
+
+func TestChatProviderGLM53UsesLowEffortClearsThinkingAndExcludesItFromResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if request["model"] != "glm-5.3:cloud" || request["clear_thinking"] != true {
+			t.Fatalf("request=%#v", request)
+		}
+		if request["think"] != "low" {
+			t.Fatalf("GLM request must use the model's supported low thinking effort: %#v", request)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "glm-5.3:cloud", "done": true, "prompt_eval_count": 12, "eval_count": 4,
+			"message": map[string]any{"role": "assistant", "content": `{"schema_version":1}`, "thinking": "private reasoning"},
+		})
+	}))
+	defer server.Close()
+
+	response, err := ollama.NewChatProvider(server.URL).ChatGenerate(context.Background(), provider.ChatGenerateRequest{
+		Model: "glm-5.3:cloud", Messages: []provider.ChatMessage{{Role: "user", Content: "return JSON"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Content != `{"schema_version":1}` || response.PromptTokens != 12 || response.OutputTokens != 4 {
+		t.Fatalf("response=%#v", response)
+	}
+	if _, present := response.Raw["thinking"]; present {
+		t.Fatalf("thinking must not cross provider boundary: %#v", response.Raw)
+	}
+}
+
+func TestChatProviderGLM53PreservesConfiguredReasoningEffort(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if request["think"] != "max" || request["clear_thinking"] != true {
+			t.Fatalf("request=%#v", request)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "glm-5.3:cloud", "done": true,
+			"message": map[string]any{"role": "assistant", "content": "done"},
+		})
+	}))
+	defer server.Close()
+
+	_, err := ollama.NewChatProvider(server.URL).ChatGenerate(context.Background(), provider.ChatGenerateRequest{
+		Model: "glm-5.3:cloud", ReasoningEffort: "max",
+		Messages: []provider.ChatMessage{{Role: "user", Content: "return done"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestChatProviderGLM53RejectsUnsupportedReasoningEffort(t *testing.T) {
+	_, err := ollama.NewChatProvider("http://127.0.0.1:1").ChatGenerate(context.Background(), provider.ChatGenerateRequest{
+		Model: "glm-5.3:cloud", ReasoningEffort: "medium",
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestChatProviderToolCalls(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := map[string]any{
@@ -260,8 +354,8 @@ func TestChatProviderModelError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for model not found")
 	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("expected 'not found' in error, got: %v", err)
+	if strings.Contains(err.Error(), "nonexistent") || strings.Contains(err.Error(), "PRIVATE_CANARY") {
+		t.Errorf("provider error exposed response detail: %v", err)
 	}
 }
 
@@ -322,7 +416,7 @@ func TestChatProviderGenericRateLimitStillRetries(t *testing.T) {
 func TestChatProviderHTTPError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("internal server error"))
+		w.Write([]byte("<think>PRIVATE_CANARY</think>internal server error"))
 	}))
 	defer server.Close()
 
@@ -335,6 +429,9 @@ func TestChatProviderHTTPError(t *testing.T) {
 	_, err := cp.ChatGenerate(context.Background(), req)
 	if err == nil {
 		t.Fatal("expected error for 500")
+	}
+	if strings.Contains(err.Error(), "PRIVATE_CANARY") {
+		t.Fatalf("provider response body leaked through error: %v", err)
 	}
 }
 

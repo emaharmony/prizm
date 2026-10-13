@@ -2,6 +2,8 @@ package tool
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -79,7 +81,7 @@ func (e *Executor) ExecuteWithPolicy(ctx context.Context, toolName, agent, proje
 		"project":        project,
 		"correlation_id": correlationID,
 		"run_id":         runID,
-		"input":          execInput,
+		"args":           safeInputSummary(execInput),
 	})
 
 	// V8: Evaluate central policy first (if configured)
@@ -146,7 +148,7 @@ func (e *Executor) ExecuteWithPolicy(ctx context.Context, toolName, agent, proje
 		// input alone, and the real invocation is deferred to approval time.
 		var result ToolResult
 		switch toolName {
-		case "write_file_proposal", "create_directory_proposal":
+		case "write_file_proposal", "create_directory_proposal", "apply_patch_proposal":
 			var err error
 			result, err = e.Registry.Execute(ctx, toolName, execInput)
 			if err != nil {
@@ -162,6 +164,10 @@ func (e *Executor) ExecuteWithPolicy(ctx context.Context, toolName, agent, proje
 		if result.Output == nil {
 			result.Output = map[string]any{}
 		}
+		if !result.Success {
+			e.emitEvent("prizm.tool.failed", map[string]any{"tool_name": toolName, "agent": agent, "project": project, "correlation_id": correlationID, "error_code": safeToolErrorCode(result.Error)})
+			return result, nil
+		}
 
 		// Mark as pending_approval status
 		result.Output["policy_decision"] = string(PolicyRequiresApproval)
@@ -173,12 +179,13 @@ func (e *Executor) ExecuteWithPolicy(ctx context.Context, toolName, agent, proje
 				"project":        project,
 				"correlation_id": correlationID,
 				"run_id":         runID,
-				"error":          err.Error(),
+				"error_code":     safeToolErrorCode(err.Error()),
 			})
 			return ToolResult{
-				Success: false,
-				Output:  nil,
-				Error:   fmt.Sprintf("approval request could not be saved: %v", err),
+				Success:       false,
+				Output:        nil,
+				Error:         fmt.Sprintf("approval request could not be saved: %v", err),
+				FailureEffect: FailureEffectUnknown,
 			}, nil
 		}
 
@@ -230,7 +237,7 @@ func (e *Executor) ExecuteWithPolicy(ctx context.Context, toolName, agent, proje
 			"agent":          agent,
 			"project":        project,
 			"correlation_id": correlationID,
-			"error":          err.Error(),
+			"error_code":     safeToolErrorCode(err.Error()),
 		})
 		return ToolResult{
 			Success: false,
@@ -278,16 +285,47 @@ func (e *Executor) ExecuteWithPolicy(ctx context.Context, toolName, agent, proje
 		}
 	}
 
-	// Emit tool.completed
-	e.emitEvent("prizm.tool.completed", map[string]any{
+	// Emit tool.completed. Tool errors can contain paths or returned data, so
+	// record only a fixed diagnostic class in the durable event stream.
+	completed := map[string]any{
 		"tool_name":      toolName,
 		"agent":          agent,
 		"project":        project,
 		"correlation_id": correlationID,
 		"success":        result.Success,
-	})
+	}
+	if toolName == "read_file" && !result.Success && result.Error != "" {
+		completed["error_code"] = safeToolErrorCode(result.Error)
+	}
+	e.emitEvent("prizm.tool.completed", completed)
 
 	return result, nil
+}
+
+// safeToolErrorCode maps an arbitrary tool error to an allowlisted event code.
+func safeToolErrorCode(message string) string {
+	message = strings.ToLower(message)
+	switch {
+	case strings.Contains(message, "permission denied"), strings.Contains(message, "access denied"):
+		return "permission_denied"
+	case strings.Contains(message, "not found"), strings.Contains(message, "does not exist"), strings.Contains(message, "no such file"):
+		return "not_found"
+	case strings.Contains(message, "invalid"), strings.Contains(message, "required"), strings.Contains(message, "must be"):
+		return "invalid_input"
+	default:
+		return "execution_error"
+	}
+}
+
+// safeInputSummary keeps tool.requested useful for correlation while keeping
+// argument values, paths, and file contents out of durable event payloads.
+func safeInputSummary(input map[string]any) map[string]any {
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return map[string]any{"field_count": len(input), "hash": "unavailable"}
+	}
+	hash := sha256.Sum256(encoded)
+	return map[string]any{"field_count": len(input), "hash": fmt.Sprintf("%x", hash[:])}
 }
 
 // emitEvent calls the configured emitter if it exists.
@@ -372,6 +410,20 @@ func (e *Executor) persistApproval(toolName, agent, project, correlationID, runI
 			Reason:   policyResult.Reason,
 		},
 	}
+	if mutationType == approval.MutationApplyPatch {
+		paths, err := stringSliceOutput(result.Output["paths"])
+		if err != nil {
+			return fmt.Errorf("persist patch approval: %w", err)
+		}
+		a.Content, _ = input["patch"].(string)
+		a.PatchPlan = &approval.PatchPlan{
+			BaseSHA: outputString(result.Output, "base_sha"), BaseTree: outputString(result.Output, "base_tree"),
+			ExpectedTree: outputString(result.Output, "expected_tree"), PatchSHA256: outputString(result.Output, "patch_sha256"), Paths: paths,
+		}
+		if a.PatchPlan.BaseSHA == "" || a.PatchPlan.BaseTree == "" || a.PatchPlan.ExpectedTree == "" || a.PatchPlan.PatchSHA256 == "" || len(paths) == 0 {
+			return fmt.Errorf("persist patch approval: incomplete patch plan")
+		}
+	}
 	if err := e.ApprovalStore.Save(a); err != nil {
 		return err
 	}
@@ -392,11 +444,35 @@ func (e *Executor) persistApproval(toolName, agent, project, correlationID, runI
 		"mutation_type":  mutationType,
 		"tool_name":      toolName,
 		"preview":        preview,
-		"content_length": len(content),
+		"content_length": len(a.Content),
 		"_channel_id":    channelID,
 	})
 
 	return nil
+}
+
+func outputString(output map[string]any, key string) string {
+	v, _ := output[key].(string)
+	return v
+}
+
+func stringSliceOutput(value any) ([]string, error) {
+	switch paths := value.(type) {
+	case []string:
+		return append([]string(nil), paths...), nil
+	case []any:
+		out := make([]string, len(paths))
+		for i, value := range paths {
+			path, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("path %d is not a string", i)
+			}
+			out[i] = path
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("paths are missing")
+	}
 }
 
 // describeToolCall derives a human-readable target label and preview for an

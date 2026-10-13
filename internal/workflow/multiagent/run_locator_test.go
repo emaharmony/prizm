@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/emaharmony/prizm/internal/event"
 )
@@ -82,6 +83,29 @@ func TestRunLocatorListRunsReturnsSeededRuns(t *testing.T) {
 	}
 	if got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
 		t.Fatalf("summary timestamps = %+v, want both populated", got)
+	}
+}
+
+func TestScheduledRetryAtExcludesActiveAndAmbiguousAttempts(t *testing.T) {
+	due := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	record := DurableRun{
+		State: RunState{Status: RunStatusPaused}, Phase: CheckpointWaiting,
+		Waiting: &WaitingState{Kind: "role_retry"}, Retry: &RetryState{NextAt: due},
+	}
+	if got := scheduledRetryAt(record); got == nil || !got.Equal(due) {
+		t.Fatalf("scheduled retry due=%v, want %v", got, due)
+	}
+	record.Phase = CheckpointRoleRunning
+	record.State.Status = RunStatusRunning
+	record.Waiting = nil
+	if got := scheduledRetryAt(record); got != nil {
+		t.Fatalf("active attempt advertised retry_at=%v", got)
+	}
+	record.Phase = CheckpointWaiting
+	record.State.Status = RunStatusPaused
+	record.Waiting = &WaitingState{Kind: "execution_reconciliation"}
+	if got := scheduledRetryAt(record); got != nil {
+		t.Fatalf("ambiguous attempt advertised retry_at=%v", got)
 	}
 }
 
@@ -169,6 +193,29 @@ func TestRunLocatorOpenInspectionSucceedsForSeededRun(t *testing.T) {
 	})
 	if runErr == nil {
 		t.Fatal("expected inspection-only runtime to refuse execution, got nil error")
+	}
+}
+
+func TestRunLocatorReadManifestAcceptsCurrentCLIRegistrySchema(t *testing.T) {
+	root := t.TempDir()
+	runID := "run-locator-cli-v2"
+	if err := os.MkdirAll(filepath.Join(root, runID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := runManifest{SchemaVersion: cliReferenceManifestSchemaVersion, RunID: runID, WorkflowID: "graph-workflow", WorkflowVersion: 1, DefinitionDBPath: "definitions.db"}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, runID, runManifestFileName), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := (RunLocator{Root: root}).readManifest(runID)
+	if err != nil {
+		t.Fatalf("read current CLI manifest: %v", err)
+	}
+	if !got.registryBacked() || got.WorkflowVersion != manifest.WorkflowVersion {
+		t.Fatalf("manifest = %+v, want registry-backed v2 manifest", got)
 	}
 }
 

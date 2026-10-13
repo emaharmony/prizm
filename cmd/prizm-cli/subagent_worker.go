@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/emaharmony/prizm/internal/agent"
+	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/provider"
 	"github.com/emaharmony/prizm/internal/safety"
@@ -42,10 +44,11 @@ func newSubAgentResolver(cfg *orchestrator.Config) *subAgentResolver {
 	m := make(map[string]subagent.AgentRuntime, len(cfg.Agents))
 	for _, a := range cfg.Agents {
 		m[a.ID] = subagent.AgentRuntime{
-			AgentID:      a.ID,
-			Provider:     a.Provider,
-			Model:        a.Model,
-			Capabilities: append([]string(nil), a.Capabilities...),
+			AgentID:         a.ID,
+			Provider:        a.Provider,
+			Model:           a.Model,
+			ReasoningEffort: a.ReasoningEffort,
+			Capabilities:    append([]string(nil), a.Capabilities...),
 		}
 	}
 	return &subAgentResolver{agents: m}
@@ -69,12 +72,20 @@ func subAgentRepoRoot(cfg *orchestrator.Config) string {
 // callbacks, reusing the same text-generation + JSON-contract parsing the gated
 // loop uses.
 type subAgentBackend struct {
-	providers       *provider.ProviderRegistry
-	exec            *tool.Executor // shared executor (no worktree isolation)
-	toolReg         *tool.Registry // shared registry, source for non-root tools
-	protectedBranch string         // branch git_commit/git_push in worktree executors must refuse to write to
-	approvalStore   tool.ApprovalStorer
-	worktreeRoot    string // canonical <repo>/.prizm/worktrees root for native-tool providers
+	providers            *provider.ProviderRegistry
+	exec                 *tool.Executor // shared executor (no worktree isolation)
+	toolReg              *tool.Registry // shared registry, source for non-root tools
+	protectedBranch      string         // branch git_commit/git_push in worktree executors must refuse to write to
+	approvalStore        tool.ApprovalStorer
+	worktreeRoot         string // canonical <repo>/.prizm/worktrees root for native-tool providers
+	toolEventSinkFactory subagent.ToolEventSinkFactory
+}
+
+// SetToolEventSinkFactory wires a durable per-task event sink into this worker
+// adapter. The factory receives only trusted task identity and must not be
+// used to forward prompts, arguments, or tool output.
+func (b *subAgentBackend) SetToolEventSinkFactory(factory subagent.ToolEventSinkFactory) {
+	b.toolEventSinkFactory = factory
 }
 
 // subAgentWorktreeMaxFileSize matches serve's builtin file-size cap.
@@ -95,6 +106,7 @@ func (b *subAgentBackend) executorFor(workDir string) *tool.Executor {
 	roots := []string{workDir}
 	tool.RegisterBuiltinsWithRoots(reg, workDir, subAgentWorktreeMaxFileSize, roots, roots)
 	_ = reg.Register(&tool.WriteFileProposal{WorkspaceRoot: workDir, AllowedPaths: roots})
+	_ = reg.Register(&tool.ApplyPatchProposal{WorkspaceRoot: workDir, AllowedPaths: roots})
 	_ = reg.Register(&tool.CreateDirectoryProposal{WorkspaceRoot: workDir, AllowedPaths: roots})
 	_ = reg.Register(&tool.WriteFileDirect{WorkspaceRoot: workDir, AllowedPaths: roots})
 	_ = reg.Register(&tool.CreateDirectoryDirect{WorkspaceRoot: workDir, AllowedPaths: roots})
@@ -120,6 +132,9 @@ func (b *subAgentBackend) executorFor(workDir string) *tool.Executor {
 }
 
 func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, subagent.Parser, subagent.ToolExec, error) {
+	if rt.ToolEventSink == nil && b.toolEventSinkFactory != nil {
+		rt.ToolEventSink = b.toolEventSinkFactory(rt)
+	}
 	prov, err := b.providers.Get(rt.Model)
 	if err != nil {
 		return nil, nil, nil, err
@@ -129,7 +144,8 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 	// file + git tools (not just git) operate inside it.
 	ex := b.executorFor(rt.WorkDir)
 
-	llm := func(ctx stdcontext.Context, msgs []v2.Message) (subagent.Turn, error) {
+	llm := func(ctx stdcontext.Context, msgs []v2.Message, allowance subagent.ReplyAllowance) (subagent.Turn, error) {
+		replyMaxTokens := allowance.MaxTokens
 		var sb strings.Builder
 		for _, m := range msgs {
 			sb.WriteString(m.Content)
@@ -137,7 +153,7 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 		}
 		request := provider.GenerateRequest{
 			Agent: rt.AgentID, Model: rt.Model, Prompt: sb.String(),
-			Temperature: 0.7, MaxTokens: 4096,
+			Temperature: 0.7, MaxTokens: replyMaxTokens,
 		}
 		var resp provider.GenerateResponse
 		var gerr error
@@ -149,6 +165,23 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 			resp, gerr = scoped.GenerateInRunScope(ctx, request, provider.RunScope{Workspace: workspace, ReadOnly: true})
 		} else if native, ok := prov.(provider.NativeToolProvider); ok && native.UsesNativeTools() {
 			return subagent.Turn{}, fmt.Errorf("native-tool provider cannot guarantee an isolated read-only run scope")
+		} else if chat, ok := prov.(provider.ChatProvider); ok {
+			messages := make([]provider.ChatMessage, 0, len(msgs))
+			for _, msg := range msgs {
+				messages = append(messages, provider.ChatMessage{Role: msg.Role, Content: msg.Content})
+			}
+			chatResp, chatErr := chat.ChatGenerate(ctx, provider.ChatGenerateRequest{
+				Agent: rt.AgentID, Model: rt.Model, Messages: messages,
+				Temperature: 0.7, MaxTokens: replyMaxTokens,
+				ReasoningEffort: subAgentReasoningEffort(rt.Model, rt.ReasoningEffort),
+			})
+			if chatErr != nil {
+				return subagent.Turn{}, chatErr
+			}
+			if replyMaxTokens > 0 && strings.TrimSpace(chatResp.Content) == "" && chatResp.OutputTokens >= replyMaxTokens {
+				return subagent.Turn{}, fmt.Errorf("model exhausted the %d-token reply allowance without final content", replyMaxTokens)
+			}
+			return subagent.Turn{Text: chatResp.Content, PromptTokens: chatResp.PromptTokens, CompletionTokens: chatResp.OutputTokens}, nil
 		} else {
 			resp, gerr = prov.Generate(ctx, request)
 		}
@@ -169,6 +202,17 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 		for key, value := range input {
 			execInput[key] = value
 		}
+		if toolName == "read_file" {
+			if _, ok := execInput["start_line"]; !ok {
+				execInput["start_line"] = 1
+			}
+			if _, ok := execInput["max_lines"]; !ok {
+				execInput["max_lines"] = 80
+			}
+			if requested, ok := numericToolInput(execInput["max_bytes"]); !ok || requested <= 0 || requested > subAgentReadPageBytes {
+				execInput["max_bytes"] = subAgentReadPageBytes
+			}
+		}
 		project := "subagent"
 		correlationID := rt.AgentID
 		if rt.RunID != "" {
@@ -185,16 +229,62 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 		if xerr != nil {
 			return "", xerr
 		}
-		if !res.Success {
-			if res.Error != "" {
-				return "", fmt.Errorf("%s", res.Error)
+		if failure := subAgentToolFailure(toolName, res); failure != nil {
+			return "", failure
+		}
+		if toolName == "read_file" {
+			encoded, marshalErr := json.Marshal(res.Output)
+			if marshalErr != nil {
+				return "", fmt.Errorf("encode read_file result: %w", marshalErr)
 			}
-			return "", fmt.Errorf("tool %s failed", toolName)
+			if len(encoded) > subagentToolFeedbackBytes {
+				return "", fmt.Errorf("read_file page metadata exceeded bounded feedback envelope")
+			}
+			return string(encoded), nil
 		}
 		return fmt.Sprintf("%v", res.Output), nil
 	}
 
 	return llm, parse, execFn, nil
+}
+
+func subAgentToolFailure(toolName string, result tool.ToolResult) error {
+	if result.Success {
+		return nil
+	}
+	if toolName == "apply_patch_proposal" && result.FailureEffect == tool.FailureEffectNoEffects {
+		return &subagent.CorrectableToolError{Code: "patch_validation_failed"}
+	}
+	if result.Error != "" {
+		return fmt.Errorf("%s", result.Error)
+	}
+	return fmt.Errorf("tool %s failed", toolName)
+}
+
+const (
+	subAgentReadPageBytes     = 1024
+	subagentToolFeedbackBytes = 3000
+)
+
+func numericToolInput(value any) (int, bool) {
+	switch n := value.(type) {
+	case int:
+		return n, true
+	case float64:
+		return int(n), n == float64(int(n))
+	default:
+		return 0, false
+	}
+}
+
+func subAgentReasoningEffort(model, configured string) string {
+	if effort := strings.TrimSpace(configured); effort != "" {
+		return effort
+	}
+	if strings.EqualFold(strings.TrimSpace(model), "glm-5.3:cloud") {
+		return "low"
+	}
+	return ""
 }
 
 func (b *subAgentBackend) validateScopedWorkspace(workDir string) (string, error) {
@@ -220,40 +310,144 @@ func (b *subAgentBackend) validateScopedWorkspace(workDir string) (string, error
 }
 
 func parseSubAgentAction(text string) subagent.Action {
-	if toolName, input, ok := v2.ParseToolRequestText(text); ok {
+	if toolName, input, ok := v2.ParseCanonicalToolRequestText(text); ok {
 		return subagent.Action{Tool: toolName, Input: input}
-	}
-	if content, ok := v2.ParseFinalText(text); ok {
-		return subagent.Action{Final: true, Content: content}
 	}
 	// Multi-agent role prompts require the role schema itself as the final
 	// JSON object. Accept that strict object directly after ruling out the
-	// tool/final envelopes used by the generic delegated loop.
+	// tool envelope used by the generic delegated loop.
 	trimmed := strings.TrimSpace(text)
 	if strings.HasPrefix(trimmed, "{") && json.Valid([]byte(trimmed)) {
+		var envelope map[string]json.RawMessage
+		if json.Unmarshal([]byte(trimmed), &envelope) != nil {
+			return subagent.Action{}
+		}
+		var kind string
+		if raw, exists := envelope["type"]; exists {
+			_ = json.Unmarshal(raw, &kind)
+		}
+		logSubAgentResponseShape(envelope, kind)
+		if kind == "final" {
+			if content, ok := v2.ParseCanonicalFinalText(trimmed); ok {
+				return subagent.Action{Final: true, Content: content}
+			}
+			return subagent.Action{CorrectionCode: "invalid_final_schema"}
+		}
+		if kind == "tool_request" {
+			return subagent.Action{CorrectionCode: "malformed_tool_input"}
+		}
+		if kind != "" {
+			return subagent.Action{CorrectionCode: "invalid_response_schema"}
+		}
 		return subagent.Action{Final: true, Content: trimmed}
 	}
-	return subagent.Action{}
+	return subagent.Action{CorrectionCode: "invalid_response_schema"}
+}
+
+func logSubAgentResponseShape(envelope map[string]json.RawMessage, kind string) {
+	discriminator := "missing"
+	switch kind {
+	case "tool_request", "final":
+		discriminator = kind
+	case "":
+	default:
+		discriminator = "other"
+	}
+	toolClass := "missing"
+	if raw, exists := envelope["tool"]; exists {
+		var toolName string
+		if json.Unmarshal(raw, &toolName) != nil {
+			toolClass = "non_string"
+		} else if toolName == "apply_patch_proposal" {
+			toolClass = "apply_patch_proposal"
+		} else {
+			toolClass = "other"
+		}
+	}
+	inputKind, inputKeys, patchKind, baseKind := "missing", 0, "missing", "missing"
+	if raw, exists := envelope["input"]; exists {
+		var input map[string]json.RawMessage
+		if json.Unmarshal(raw, &input) == nil && input != nil {
+			inputKind, inputKeys = "object", len(input)
+			patchKind = jsonValueKind(input["patch"])
+			baseKind = jsonValueKind(input["base_sha"])
+		} else {
+			inputKind = jsonValueKind(raw)
+		}
+	}
+	log.Printf("[SUBAGENT] response_shape root_kind=object discriminator=%s top_level_keys=%d has_type=%t has_tool=%t has_input=%t has_schema_version=%t tool_class=%s input_kind=%s input_keys=%d patch_kind=%s base_sha_kind=%s",
+		discriminator, len(envelope), envelope["type"] != nil, envelope["tool"] != nil, envelope["input"] != nil, envelope["schema_version"] != nil, toolClass, inputKind, inputKeys, patchKind, baseKind)
+}
+
+func jsonValueKind(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "missing"
+	}
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return "invalid"
+	}
+	switch value.(type) {
+	case string:
+		return "string"
+	case map[string]any:
+		return "object"
+	case []any:
+		return "array"
+	case bool:
+		return "boolean"
+	case float64:
+		return "number"
+	case nil:
+		return "null"
+	default:
+		return "other"
+	}
 }
 
 // subAgentPublisher publishes completions back onto the completion subject.
 type subAgentPublisher struct {
 	nc      *nats.Conn
 	subject string
+	packet  v2.TaskPacket
 }
 
 func (p *subAgentPublisher) PublishCompletion(c v2.TaskCompletion) error {
-	data, err := json.Marshal(c)
+	c.DelegationID = p.packet.DelegationID
+	c.DeliveryKey = p.packet.DeliveryKey
+	payload, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	status := event.OutcomeSucceeded
+	if c.Status != "completed" {
+		status = event.OutcomeFailed
+	}
+	out := p.outcome(status, 2, payload)
+	data, err := json.Marshal(out)
 	if err != nil {
 		return err
 	}
 	return p.nc.Publish(p.subject, data)
 }
 
+func (p *subAgentPublisher) PublishAccepted() error {
+	out := p.outcome(event.OutcomeAccepted, 1, nil)
+	data, err := json.Marshal(out)
+	if err != nil {
+		return err
+	}
+	return p.nc.Publish(p.subject, data)
+}
+
+func (p *subAgentPublisher) outcome(status event.OutcomeStatus, sequence int64, payload []byte) event.Outcome {
+	return event.Outcome{EventID: event.CommandEventID(p.packet.DeliveryKey + ":" + string(status)), CommandEventID: event.CommandEventID(p.packet.DeliveryKey), RunID: p.packet.RunID, TaskID: p.packet.TaskID, DelegationID: p.packet.DelegationID, CorrelationID: p.packet.CorrelationID, CausationID: event.CommandEventID(p.packet.DeliveryKey), DeliveryKey: p.packet.DeliveryKey, Status: status, Sequence: sequence, OccurredAt: time.Now().UTC(), Payload: payload}
+}
+
 // startSubAgentWorker subscribes the generic sub-agent worker to the delegation
 // subject. Feature-flagged via PRIZM_SUBAGENT_WORKER (empty = off) so it is a
 // no-op until explicitly enabled — no behavior change to existing deployments.
-func startSubAgentWorker(nc *nats.Conn, providers *provider.ProviderRegistry, exec *tool.Executor, toolReg *tool.Registry, cfg *orchestrator.Config) {
+func startSubAgentWorker(nc *nats.Conn, providers *provider.ProviderRegistry, exec *tool.Executor, toolReg *tool.Registry, cfg *orchestrator.Config, eventSinkFactory ...subagent.ToolEventSinkFactory) {
 	if os.Getenv("PRIZM_SUBAGENT_WORKER") == "" {
 		return
 	}
@@ -274,6 +468,9 @@ func startSubAgentWorker(nc *nats.Conn, providers *provider.ProviderRegistry, ex
 		worktreeRoot = filepath.Join(root, ".prizm", "worktrees")
 	}
 	backend := &subAgentBackend{providers: providers, exec: exec, toolReg: toolReg, protectedBranch: cfg.ProtectedBranch(), worktreeRoot: worktreeRoot}
+	if len(eventSinkFactory) > 0 {
+		backend.SetToolEventSinkFactory(eventSinkFactory[0])
+	}
 	runner := subagent.NewLoopRunner(subagent.LoopRunnerConfig{
 		Backend: backend,
 		// Per-agent tool scoping: keep each sub-agent in its role lane (only
@@ -296,8 +493,6 @@ func startSubAgentWorker(nc *nats.Conn, providers *provider.ProviderRegistry, ex
 	if root != "" {
 		worker.SetWorktrees(subagent.GitWorktreeProvider{Root: root})
 	}
-	pub := &subAgentPublisher{nc: nc, subject: subAgentCompletionSubject}
-
 	// Bound concurrent sub-agent runs so a burst of delegations can't exhaust
 	// resources. Parallel runs stay isolated at the git layer via V56 worktrees
 	// when a task mutates files.
@@ -315,6 +510,11 @@ func startSubAgentWorker(nc *nats.Conn, providers *provider.ProviderRegistry, ex
 		go func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			pub := &subAgentPublisher{nc: nc, subject: subAgentCompletionSubject, packet: packet}
+			if err := pub.PublishAccepted(); err != nil {
+				log.Printf("[SUBAGENT] task %s acceptance publish error: %v", packet.TaskID, err)
+				return
+			}
 			completion, herr := worker.HandleAndPublish(stdcontext.Background(), packet, pub)
 			if herr != nil {
 				log.Printf("[SUBAGENT] task %s publish error: %v", packet.TaskID, herr)

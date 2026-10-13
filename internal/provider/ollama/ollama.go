@@ -123,9 +123,9 @@ func (o *Provider) Generate(ctx context.Context, req provider.GenerateRequest) (
 	if resp.StatusCode != http.StatusOK {
 		bodyStr := strings.TrimSpace(string(respBody))
 		if resp.StatusCode == http.StatusTooManyRequests && isQuotaExhausted(bodyStr) {
-			return provider.GenerateResponse{}, fmt.Errorf("ollama: HTTP %d: %s: %w", resp.StatusCode, bodyStr, provider.ErrQuotaExhausted)
+			return provider.GenerateResponse{}, fmt.Errorf("ollama: HTTP %d: %w", resp.StatusCode, provider.ErrQuotaExhausted)
 		}
-		return provider.GenerateResponse{}, fmt.Errorf("ollama: HTTP %d: %s", resp.StatusCode, bodyStr)
+		return provider.GenerateResponse{}, fmt.Errorf("ollama: HTTP %d", resp.StatusCode)
 	}
 
 	var oResp generateResponse
@@ -134,7 +134,12 @@ func (o *Provider) Generate(ctx context.Context, req provider.GenerateRequest) (
 	}
 
 	if oResp.Error != "" {
-		return provider.GenerateResponse{}, fmt.Errorf("ollama: %s", oResp.Error)
+		return provider.GenerateResponse{}, fmt.Errorf("ollama: model request failed")
+	}
+
+	publicText, err := sanitizeGenerateText(oResp.Response)
+	if err != nil {
+		return provider.GenerateResponse{}, fmt.Errorf("ollama: no public answer: %w", err)
 	}
 
 	latency := time.Since(start).Milliseconds()
@@ -149,7 +154,7 @@ func (o *Provider) Generate(ctx context.Context, req provider.GenerateRequest) (
 	}
 
 	return provider.GenerateResponse{
-		Text:         oResp.Response,
+		Text:         publicText,
 		Model:        oResp.Model,
 		Provider:     Name,
 		LatencyMS:    latency,
@@ -161,6 +166,47 @@ func (o *Provider) Generate(ctx context.Context, req provider.GenerateRequest) (
 			"total_duration_ns": oResp.TotalDuration,
 		},
 	}, nil
+}
+
+// sanitizeGenerateText removes explicit private-reasoning containers from the
+// public completion channel. Markdown code spans are preserved so examples and
+// generated source containing literal tags are not rewritten.
+func sanitizeGenerateText(text string) (string, error) {
+	trimmed := strings.TrimLeft(text, " \t\r\n")
+	lowerTrimmed := strings.ToLower(trimmed)
+	if strings.HasPrefix(lowerTrimmed, "<think>") && !strings.Contains(lowerTrimmed, "</think>") {
+		return "", fmt.Errorf("unterminated <think> block")
+	}
+
+	lower := strings.ToLower(text)
+	var out strings.Builder
+	start := 0
+	inFence, inCode := false, false
+	for i := 0; i < len(text); {
+		if strings.HasPrefix(text[i:], "```") {
+			inFence = !inFence
+			i += 3
+			continue
+		}
+		if !inFence && text[i] == '`' {
+			inCode = !inCode
+			i++
+			continue
+		}
+		if !inFence && !inCode && strings.HasPrefix(lower[i:], "<think>") {
+			endRel := strings.Index(lower[i+len("<think>"):], "</think>")
+			if endRel < 0 {
+				return "", fmt.Errorf("unterminated <think> block")
+			}
+			out.WriteString(text[start:i])
+			i += len("<think>") + endRel + len("</think>")
+			start = i
+			continue
+		}
+		i++
+	}
+	out.WriteString(text[start:])
+	return strings.TrimSpace(out.String()), nil
 }
 
 // ChatGenerate delegates to the embedded ChatProvider.

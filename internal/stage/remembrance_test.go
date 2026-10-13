@@ -2,8 +2,10 @@ package stage
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -158,6 +160,81 @@ func TestRemembranceStage_Capture(t *testing.T) {
 	}
 	if !captureCalled {
 		t.Error("expected capture to be called")
+	}
+}
+
+func TestRemembranceStageCaptureExcludesPrivateReasoningAndPreservesCode(t *testing.T) {
+	const raw = "<think>PRIVATE_CANARY</think>Apply this patch:\n```diff\n+literal <think>patch text</think>\n```"
+	const want = "Apply this patch:\n```diff\n+literal <think>patch text</think>\n```"
+	var captured string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/health":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/v1/memory/ingest":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Errorf("decode capture payload: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			captured, _ = payload["content"].(string)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"memory_id":"mem_privacy","status":"ingested"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	stage := NewRemembranceStage(true, false, server.URL, WithCapture(true), WithContext(false))
+	rc := &RunContext{Task: "test", Agent: "lumi", Project: "prizm", LLMResponse: raw}
+	_, result, err := stage.Execute(context.Background(), rc)
+	if err != nil || !result.Success {
+		t.Fatalf("Execute() = success %v, err %v", result.Success, err)
+	}
+	if captured != want || strings.Contains(captured, "PRIVATE_CANARY") {
+		t.Fatalf("captured content = %q, want sanitized fenced text %q", captured, want)
+	}
+	if rc.LLMResponse != raw {
+		t.Fatalf("capture changed internal raw response: %q", rc.LLMResponse)
+	}
+}
+
+func TestRemembranceStageCaptureSkipsIncompleteReasoningAndToolPayload(t *testing.T) {
+	for name, raw := range map[string]string{
+		"incomplete_reasoning": "Public preface. <think>PRIVATE_CANARY",
+		"tool_request":         `{"type":"tool_request","tool":"write_file","input":{"content":"<think>literal code</think>"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			captureCalled := false
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/v1/health":
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"status":"ok"}`))
+				case "/v1/memory/ingest":
+					captureCalled = true
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+
+			stage := NewRemembranceStage(true, false, server.URL, WithCapture(true), WithContext(false))
+			rc := &RunContext{Task: "test", Agent: "lumi", Project: "prizm", LLMResponse: raw}
+			_, result, err := stage.Execute(context.Background(), rc)
+			if err != nil || !result.Success {
+				t.Fatalf("Execute() = success %v, err %v", result.Success, err)
+			}
+			if captureCalled {
+				t.Fatal("capture called without a public final response")
+			}
+			if rc.LLMResponse != raw {
+				t.Fatalf("capture changed internal raw response: %q", rc.LLMResponse)
+			}
+		})
 	}
 }
 

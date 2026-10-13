@@ -14,7 +14,7 @@ func TestRenderWorkflowPreviewDefault(t *testing.T) {
 		"gated-loop preview",
 		"built-in default",
 		"Budgets",
-		"max iterations:  60",
+		"max iterations:  unlimited",
 		"max tokens:",
 		"stuck cap:",
 		"Phases",
@@ -59,12 +59,12 @@ func TestResolvePreviewConfigExplicitFileError(t *testing.T) {
 	}
 }
 
-func TestRenderWorkflowPreviewZeroTokenBudgetShowsDefault(t *testing.T) {
+func TestRenderWorkflowPreviewZeroTokenBudgetShowsUnlimited(t *testing.T) {
 	cfg := v2.DefaultConfig()
 	cfg.Global.MaxTotalTokens = 0
 
 	out := renderWorkflowPreview(cfg, "raw")
-	if !strings.Contains(out, "max tokens:      2000.0k") {
-		t.Fatalf("preview should show default token ceiling for zero budget:\n%s", out)
+	if !strings.Contains(out, "max tokens:      unlimited") {
+		t.Fatalf("preview should show an omitted token ceiling as unlimited:\n%s", out)
 	}
 }
