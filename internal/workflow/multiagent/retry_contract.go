@@ -1,6 +1,7 @@
 package multiagent
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/emaharmony/prizm/internal/cost"
+	"github.com/emaharmony/prizm/internal/subagent"
 )
 
 const maxRoleRecoveryRetries = 10
@@ -42,6 +44,79 @@ type RetryAttempt struct {
 	RecoveryNumber int
 	Remaining      int
 	NextAt         time.Time
+}
+
+// RoleExecutionFailure is a safe typed summary returned by the trusted graph
+// worker. It contains no raw model/provider error text.
+type RoleExecutionFailure struct {
+	DeliveryAttemptID string          `json:"delivery_attempt_id"`
+	AttemptID         string          `json:"attempt_id"`
+	Class             string          `json:"class"`
+	Code              string          `json:"code"`
+	CorrectionField   string          `json:"correction_field,omitempty"`
+	ExpectedType      string          `json:"expected_type,omitempty"`
+	AllowedValues     []string        `json:"allowed_values,omitempty"`
+	RetryAfter        time.Duration   `json:"retry_after,omitempty"`
+	Retryable         bool            `json:"retryable"`
+	Usage             cost.TokenUsage `json:"usage,omitempty"`
+}
+
+// ClassifyRoleExecutionFailure returns only allowlisted retry categories.
+// Unknown failures remain nonretryable and do not expose their error string.
+func ClassifyRoleExecutionFailure(err error) RoleExecutionFailure {
+	class, code, retryAfter, retryable := classifyRetryableRoleFailure(err)
+	if !retryable {
+		class, code = classifySafeNonRetryableRoleFailure(err)
+		return RoleExecutionFailure{Class: class, Code: code}
+	}
+	failure := RoleExecutionFailure{Class: safeRetryCode(class), Code: safeRetryCode(code), RetryAfter: retryAfter, Retryable: true}
+	var schema *SchemaCorrectionError
+	if errors.As(err, &schema) && schema != nil {
+		failure.CorrectionField, failure.ExpectedType, failure.AllowedValues = safeSchemaCorrectionDetails(schema.Role, schema.Code, schema.Fields, schema.AllowedValues)
+	}
+	return failure
+}
+
+// classifySafeNonRetryableRoleFailure retains only server-defined diagnostic
+// codes. It never serializes arbitrary error strings or unknown SafeFailure
+// codes across the durable worker boundary.
+func classifySafeNonRetryableRoleFailure(err error) (string, string) {
+	if err == nil {
+		return "unknown", "unknown"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "cancellation", "cancelled"
+	}
+	var governance *GovernanceError
+	if errors.As(err, &governance) {
+		switch governance.Kind {
+		case "policy", "tool_scope", "workspace_scope", "approval":
+			return "governance", governance.Kind
+		default:
+			return "unknown", "unknown"
+		}
+	}
+	var approval *ApprovalRequiredError
+	if errors.As(err, &approval) {
+		return "governance", "approval_required"
+	}
+	var safeFailure *subagent.SafeFailureError
+	if errors.As(err, &safeFailure) && safeFailure != nil {
+		switch safeFailure.Code {
+		case "backend_bind_failed", "progress_checkpoint_failed", "schema_recovery_failed",
+			"tool_diagnostic_checkpoint_failed", "no_effects_checkpoint_failed",
+			"tool_recovery_failed", "invalid_read_coverage", "no_progress_checkpoint_failed",
+			"no_progress_recovery_failed", "invalid_proposal_context":
+			class := "execution"
+			if safeFailure.Code == "invalid_read_coverage" || safeFailure.Code == "invalid_proposal_context" {
+				class = "governance"
+			}
+			return class, safeFailure.Code
+		default:
+			return "unknown", "unknown"
+		}
+	}
+	return "unknown", "unknown"
 }
 
 // RoleVisitRetryHandle is the only way an executing role may debit the shared

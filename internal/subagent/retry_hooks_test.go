@@ -23,6 +23,48 @@ type recordingRetryHooks struct {
 	onConsume           func()
 	lastObservationHash string
 	noProgressCount     int
+	countedAttempts     []string
+}
+
+func TestLoopRunnerFailedToolRefreshesAttemptBeforeProgressCount(t *testing.T) {
+	backend := &scriptBackend{
+		parse:   lineParser,
+		turns:   []Turn{{Text: "TOOL read_file"}, {Text: "FINAL: corrected"}},
+		toolErr: errors.New("read failed"),
+	}
+	hooks := &recordingRetryHooks{attempt: RetryAttempt{VisitID: "visit-failed-read", AttemptID: "attempt-1", Number: 1, Remaining: 10}}
+	var diagnostics []ToolDiagnostic
+	runner := NewLoopRunner(LoopRunnerConfig{Backend: backend})
+	result, err := runner.Run(context.Background(), v2.TaskPacket{TaskID: "failed-read"}, AgentRuntime{
+		AgentID: "planner", Role: "planner", RunID: "run-failed-read", TaskID: "failed-read", ExecutionKey: "exec-failed-read",
+		RetryHooks: hooks,
+		ToolEventSink: func(event ToolDiagnostic) error {
+			diagnostics = append(diagnostics, event)
+			if event.Status == "failed" && event.ObservationHash != "" {
+				hooks.lastObservationHash = event.ObservationHash
+				hooks.noProgressCount = 1
+			}
+			return nil
+		},
+	})
+	if err != nil || result.Summary != "corrected" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if got := backend.toolCalls; len(got) != 1 || got[0] != "read_file" {
+		t.Fatalf("tool executions=%v, want one failed read", got)
+	}
+	if len(hooks.consumed) != 1 || hooks.consumed[0] != "tool_execution_error" || hooks.attempt.AttemptID != "attempt-2" {
+		t.Fatalf("recovery state=%#v", hooks)
+	}
+	if len(hooks.countedAttempts) != 1 || hooks.countedAttempts[0] != "attempt-2" {
+		t.Fatalf("progress count attempt identities=%v", hooks.countedAttempts)
+	}
+	if len(diagnostics) != 2 || diagnostics[0].AttemptID != "attempt-1" || diagnostics[1].AttemptID != "attempt-1" {
+		t.Fatalf("action diagnostics lost original attempt identity: %#v", diagnostics)
+	}
+	if len(backend.messages) < 2 || !strings.Contains(backend.messages[1][len(backend.messages[1])-1].Content, "Tool \"read_file\" failed") {
+		t.Fatalf("corrective feedback missing from next provider request: %#v", backend.messages)
+	}
 }
 
 func (h *recordingRetryHooks) CurrentAttempt() RetryAttempt { return h.attempt }
@@ -31,6 +73,7 @@ func (h *recordingRetryHooks) NoProgressCount(expectedAttemptID, observationHash
 	if expectedAttemptID != h.attempt.AttemptID {
 		return 0, errors.New("stale attempt")
 	}
+	h.countedAttempts = append(h.countedAttempts, expectedAttemptID)
 	if observationHash != h.lastObservationHash {
 		return 0, nil
 	}

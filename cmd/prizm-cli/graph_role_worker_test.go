@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,6 +19,26 @@ import (
 	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 	"github.com/nats-io/nats.go"
 )
+
+func TestGraphRoleWorkerRestoresSafeCorrectionIntoRoleRequest(t *testing.T) {
+	runDir := t.TempDir()
+	command := graphWorkerTestCommand("run-safe-schema-feedback", time.Now().Add(time.Minute))
+	command.RecoveryFeedback = "Field findings must be a JSON array of objects."
+	prepareGraphWorkerRun(t, runDir, command)
+	var got string
+	worker := &graphRoleWorker{
+		runDir: runDir, workerID: "worker-feedback-test",
+		executeRole: func(_ context.Context, request multiagent.GraphRoleCommand) (multiagent.RoleRunResult, error) {
+			got = request.Request.RecoveryFeedback
+			return multiagent.RoleRunResult{Outcome: multiagent.OutcomePlanReady, LocalIterations: 1}, nil
+		},
+		publish: func(context.Context, string, []byte) error { return nil },
+	}
+	worker.execute(command)
+	if got != command.RecoveryFeedback {
+		t.Fatalf("role request recovery feedback=%q, want %q", got, command.RecoveryFeedback)
+	}
+}
 
 func TestGraphRoleWorkerEmbeddedNATSExecutesThreeFanoutLanesConcurrently(t *testing.T) {
 	runDir := t.TempDir()
@@ -86,6 +108,144 @@ func TestGraphRoleWorkerEmbeddedNATSExecutesThreeFanoutLanesConcurrently(t *test
 		if outcome.JoinID != string(command.JoinID) || outcome.Lane != string(command.Lane) {
 			t.Fatalf("trusted outcome identity mismatch: %#v", outcome)
 		}
+	}
+}
+
+func TestGraphRoleWorkerCloseDrainsTerminalPublishAndRejectsLateCommand(t *testing.T) {
+	runDir := t.TempDir()
+	command := graphWorkerTestCommand("run-worker-close-drain", time.Now().Add(time.Minute))
+	prepareGraphWorkerRun(t, runDir, command)
+	url, cleanup, err := bus.StartEmbeddedBus(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	nc, err := bus.ConnectToBus(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+
+	terminalPublishEntered := make(chan struct{}, 1)
+	releaseTerminalPublish := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseTerminalPublish) }) }
+	defer release()
+	worker, err := startGraphRoleWorkerWithRunner(nc, runDir, "", nil, func(context.Context, multiagent.GraphRoleCommand) (multiagent.RoleRunResult, error) {
+		return multiagent.RoleRunResult{Outcome: multiagent.OutcomeImplementationReady, LocalIterations: 1}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		release()
+		_ = worker.Close()
+	}()
+	worker.mu.Lock()
+	worker.publish = func(_ context.Context, subject string, payload []byte) error {
+		if subject == graphRoleOutcomeSubject {
+			var outcome event.Outcome
+			if json.Unmarshal(payload, &outcome) == nil && outcome.Status.Terminal() {
+				select {
+				case terminalPublishEntered <- struct{}{}:
+				default:
+				}
+				<-releaseTerminalPublish
+			}
+		}
+		return nil
+	}
+	worker.mu.Unlock()
+	payload, err := json.Marshal(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := nc.Publish(graphRoleDelegationSubject, payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := nc.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-terminalPublishEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker did not reach the terminal publish boundary")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- worker.Close() }()
+	deadline := time.After(3 * time.Second)
+	for {
+		worker.mu.Lock()
+		closing := worker.closing
+		worker.mu.Unlock()
+		if closing {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("Close did not close worker admission")
+		default:
+			runtime.Gosched()
+		}
+	}
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned while terminal publish was blocked: %v", err)
+	default:
+	}
+	release()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not drain the terminal publish")
+	}
+	if err := worker.Close(); err != nil {
+		t.Fatalf("repeated Close: %v", err)
+	}
+
+	late := graphWorkerTestCommand("run-worker-close-late", time.Now().Add(time.Minute))
+	prepareGraphWorkerRun(t, runDir, late)
+	latePayload, err := json.Marshal(late)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.handleCommand(&nats.Msg{Data: latePayload})
+	db, err := openGraphRoleLedger(t.Context(), filepath.Join(runDir, late.RunID, "multiagent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var tableCount int
+	if err := db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='graph_role_executions'`).Scan(&tableCount); err != nil {
+		t.Fatal(err)
+	}
+	var executions int
+	if tableCount > 0 {
+		if err := db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM graph_role_executions WHERE delivery_key=?`, late.DeliveryKey).Scan(&executions); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if executions != 0 {
+		t.Fatalf("late command created %d execution records after Close", executions)
+	}
+}
+
+func TestGraphRoleWorkerCloseCancelsDeferredResume(t *testing.T) {
+	resumed := atomic.Bool{}
+	worker := &graphRoleWorker{resume: func(context.Context, string) error {
+		resumed.Store(true)
+		return nil
+	}, resumeRetryDelay: time.Hour}
+	worker.retryResume("run-close-retry", "test")
+	if err := worker.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if resumed.Load() {
+		t.Fatal("deferred resume ran after Close")
 	}
 }
 

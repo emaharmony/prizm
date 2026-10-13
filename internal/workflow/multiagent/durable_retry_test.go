@@ -2,7 +2,9 @@ package multiagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -111,6 +113,12 @@ func TestRetryClassificationAndPolicyDefaults(t *testing.T) {
 	if class, _, _, ok := classifyRetryableRoleFailure(&StructuredOutputError{Role: RolePlanner, Cause: errors.New("bad shape")}); !ok || class != "schema_correction" {
 		t.Fatal("structured correction was not classified")
 	}
+	if class, code, _, ok := classifyRetryableRoleFailure(&subagent.SafeFailureError{Code: "invalid_proposal_diff"}); !ok || class != "schema_correction" || code != "invalid_proposal_diff" {
+		t.Fatalf("typed malformed diff was not recoverable: class=%q code=%q ok=%t", class, code, ok)
+	}
+	if _, _, _, ok := classifyRetryableRoleFailure(&subagent.SafeFailureError{Code: "invalid_proposal_context"}); ok {
+		t.Fatal("workspace or source-context violation must remain nonretryable")
+	}
 	if got := roleRetryLimit(CompiledNode{}); got != 10 {
 		t.Fatalf("default shared retry budget=%d", got)
 	}
@@ -135,6 +143,37 @@ func TestRetryClassificationAndPolicyDefaults(t *testing.T) {
 		"run_id": "r", "workflow_id": "w", "role": "planner", "execution_key": "e", "visit_id": "v", "attempt_id": "a", "attempt": 2, "recovery_number": 1, "failure_class": "provider_transient", "failure_code": "503", "next_at": time.Now().UTC().Format(time.RFC3339Nano),
 	})); err != nil {
 		t.Fatalf("retry event contract: %v", err)
+	}
+}
+
+func TestNonRetryableRoleFailureRetainsOnlyAllowlistedTypedCodes(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		wantClass string
+		wantCode  string
+	}{
+		{name: "safe execution code", err: &subagent.SafeFailureError{Code: "progress_checkpoint_failed"}, wantClass: "execution", wantCode: "progress_checkpoint_failed"},
+		{name: "safe governance code", err: &subagent.SafeFailureError{Code: "invalid_proposal_context"}, wantClass: "governance", wantCode: "invalid_proposal_context"},
+		{name: "governance kind", err: &GovernanceError{Kind: "workspace_scope", Reason: "PRIVATE_REASON_CANARY"}, wantClass: "governance", wantCode: "workspace_scope"},
+		{name: "cancellation", err: context.Canceled, wantClass: "cancellation", wantCode: "cancelled"},
+		{name: "unknown typed code", err: &subagent.SafeFailureError{Code: "PRIVATE_UNKNOWN_CANARY"}, wantClass: "unknown", wantCode: "unknown"},
+		{name: "raw error", err: errors.New("PRIVATE_RAW_ERROR_CANARY"), wantClass: "unknown", wantCode: "unknown"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			failure := ClassifyRoleExecutionFailure(test.err)
+			if failure.Retryable || failure.Class != test.wantClass || failure.Code != test.wantCode {
+				t.Fatalf("failure=%#v, want nonretryable %s/%s", failure, test.wantClass, test.wantCode)
+			}
+			encoded, err := json.Marshal(failure)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(encoded), "PRIVATE_") {
+				t.Fatalf("failure payload leaked private detail: %s", encoded)
+			}
+		})
 	}
 }
 
@@ -210,6 +249,68 @@ func TestDurableRetryExhaustionIsInitialPlusTenAndTerminalIsStable(t *testing.T)
 	events := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRunFailed)
 	if len(events) != 1 {
 		t.Fatalf("terminal failure event count=%d", len(events))
+	}
+	failed := events[0].Payload
+	if failed["failure_reason"] != "retry_exhausted" || failed["retry_exhausted"] != true || failed["retryable"] != true || fmt.Sprint(failed["max_recoveries"]) != "10" {
+		t.Fatalf("terminal exhaustion classification=%#v", failed)
+	}
+	if failed["attempt_id"] == "" || fmt.Sprint(failed["attempt"]) != "11" || fmt.Sprint(failed["recovery_number"]) != "10" {
+		t.Fatalf("terminal attempt identity=%#v", failed)
+	}
+}
+
+func TestDurableRetryTerminalNonretryableFailureRetainsAttemptClassification(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	runner := &scriptedRunner{scripts: map[Role][]scriptedStep{
+		RolePlanner: {
+			{result: RoleRunResult{LocalIterations: 1}, err: retry.NewRetryableError(errors.New("transient transport failure"))},
+			{result: RoleRunResult{LocalIterations: 1}, err: &subagent.SafeFailureError{Code: "invalid_input", Tool: "read_file"}},
+		},
+	}}
+	runtime := newMutableClockRuntime(t, validDefinition(), runner, env, &now)
+	request := testRunRequest()
+	request.RunID = "run-retry-nonretryable-terminal"
+	_, err := runtime.Run(context.Background(), request)
+	var waiting *RunWaitingError
+	if !errors.As(err, &waiting) {
+		t.Fatalf("first attempt err=%v, want retry wait", err)
+	}
+	record, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Retry == nil || record.Retry.MaxRecoveries != 10 || record.Retry.RecoveryNumber != 1 {
+		t.Fatalf("first recovery policy=%#v, want one of ten", record.Retry)
+	}
+	now = record.Retry.NextAt.Add(time.Millisecond)
+	state, err := runtime.Resume(context.Background(), request.RunID)
+	if err == nil || state.Status != RunStatusFailed {
+		t.Fatalf("terminal state=%s err=%v", state.Status, err)
+	}
+	record, err = env.store.Load(context.Background(), request.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Failure == nil || record.Failure.FailureReason != "nonretryable" || record.Failure.FailureClass != "nonretryable" || record.Failure.FailureCode != "invalid_input" || record.Failure.Retryable || record.Failure.RetryExhausted {
+		t.Fatalf("persisted failure classification=%#v", record.Failure)
+	}
+	if record.Failure.Attempt != 2 || record.Failure.RecoveryNumber != 1 || record.Failure.MaxRecoveries != 10 || record.Failure.AttemptID == "" {
+		t.Fatalf("persisted failure attempt=%#v", record.Failure)
+	}
+	started := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryAttemptStarted)
+	failed := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRunFailed)
+	if len(started) != 1 || len(failed) != 1 {
+		t.Fatalf("retry started=%d terminal failures=%d", len(started), len(failed))
+	}
+	if started[0].Payload["attempt_id"] != record.Failure.AttemptID || fmt.Sprint(started[0].Payload["attempt"]) != "2" {
+		t.Fatalf("retry start identity=%#v terminal=%#v", started[0].Payload, record.Failure)
+	}
+	if failed[0].Payload["failure_reason"] != "nonretryable" || failed[0].Payload["failure_code"] != "invalid_input" || failed[0].Payload["retryable"] != false || failed[0].Payload["retry_exhausted"] != false {
+		t.Fatalf("terminal event classification=%#v", failed[0].Payload)
+	}
+	if strings.Contains(failed[0].Payload["reason"].(string), "transient transport") {
+		t.Fatal("terminal event exposed original provider error text")
 	}
 }
 
@@ -415,6 +516,55 @@ func TestSuccessfulRoleResultCannotClearAmbiguousFailedMutation(t *testing.T) {
 	}
 	if len(runner.calls) != 1 || runner.calls[0] != RolePlanner {
 		t.Fatalf("runtime advanced after ambiguous mutation: calls=%v", runner.calls)
+	}
+}
+
+type proposalThenMalformedFinalRunner struct{ calls int }
+
+func (r *proposalThenMalformedFinalRunner) RunRole(_ context.Context, request RoleRunRequest) (RoleRunResult, error) {
+	r.calls++
+	if request.Run.CurrentRole != RolePlanner {
+		return scriptedResult(OutcomePlanReady), nil
+	}
+	attempt := request.RetryHandle.CurrentAttempt()
+	mutationID := strings.Repeat("d", 64)
+	for _, status := range []string{"started", "completed"} {
+		if err := request.ToolEventSink(ToolDiagnostic{AttemptID: attempt.AttemptID, Tool: "apply_patch_proposal",
+			Status: status, MutationID: mutationID, MutationPossible: true}); err != nil {
+			return RoleRunResult{}, err
+		}
+	}
+	// The proposal-like mutation completed and is durable, but the worker's
+	// final structured output is malformed. Retrying the worker could create a
+	// second proposal because no authoritative receipt identity is available.
+	return RoleRunResult{}, &StructuredOutputError{Role: RolePlanner, Cause: errors.New("malformed final output")}
+}
+
+func TestSuccessfulProposalLikeMutationThenMalformedFinalFailsClosed(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	runner := &proposalThenMalformedFinalRunner{}
+	runtime := newDurableRuntimeForTest(t, validDefinition(), runner, env.store, env.claimer, env.events)
+	request := testRunRequest()
+	request.RunID = "run-proposal-mutation-malformed-final"
+	state, err := runtime.Run(context.Background(), request)
+	var waiting *RunWaitingError
+	if !errors.As(err, &waiting) || waiting.Kind != "execution_reconciliation" || state.Status != RunStatusPaused {
+		t.Fatalf("malformed final output replayed after proposal-like mutation: status=%s err=%v", state.Status, err)
+	}
+	record, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil || record.Retry == nil || !record.Retry.MutationPossible || record.Retry.RecoveryNumber != 0 || record.Waiting == nil || record.Waiting.SafeToRetry {
+		t.Fatalf("known mutation was not retained for reconciliation: retry=%#v waiting=%#v err=%v", record.Retry, record.Waiting, err)
+	}
+	if runner.calls != 1 {
+		t.Fatalf("worker was retried after an unbound proposal receipt: calls=%d", runner.calls)
+	}
+	if scheduled := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryScheduled); len(scheduled) != 0 {
+		t.Fatalf("unsafe proposal created recovery retries: %d", len(scheduled))
+	}
+	paused := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRunPaused)
+	recovery := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRecoveryFailed)
+	if len(paused) != 1 || len(recovery) != 1 {
+		t.Fatalf("reconciliation notices paused=%d recovery=%d; want one each", len(paused), len(recovery))
 	}
 }
 

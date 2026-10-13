@@ -124,7 +124,7 @@ func (h *durableRoleRetryHandle) RecordCorrectionFeedback(expectedAttemptID, err
 	}
 	next := h.record
 	state := *next.Retry
-	feedback := correctionFeedback(safeRetryCode(code))
+	feedback := roleFailureFeedback(state.Role, safeRetryCode(code), "", "")
 	state.Corrections = append(state.Corrections, RetryCorrection{
 		ErrorClass: safeRetryCode(errorClass), Code: safeRetryCode(code), Feedback: feedback,
 	})
@@ -147,6 +147,8 @@ func correctionFeedback(code string) string {
 	switch code {
 	case "patch_validation_failed":
 		return "The patch proposal failed validation before an approval was saved. Correct the request and try again: input must contain exactly the non-empty string fields \"patch\" and \"base_sha\"; patch must be one complete unified diff that applies cleanly, changes at least one file, and stays within this workspace's allowed write paths; base_sha must equal the trusted patch base supplied in the task. After the proposal succeeds, return the required final role JSON."
+	case "invalid_proposal_diff":
+		return "The proposal is not a valid complete unified diff. Correct its diff syntax and return the required final role JSON. The proposal was not executed."
 	case "invalid_json_syntax":
 		return "The previous response was not valid JSON syntax. Return exactly one JSON object matching the required role schema."
 	case "missing_required_fields":
@@ -213,56 +215,8 @@ func (h *durableRoleRetryHandle) RecordToolDiagnostic(diagnostic ToolDiagnostic)
 	}
 	next := h.record
 	state := *next.Retry
-	ensureMutationLedger(&state)
-	state.UnsafeMutationIDs = append([]string(nil), state.UnsafeMutationIDs...)
-	if diagnostic.MutationPossible {
-		mutationID := safeMutationID(diagnostic.MutationID)
-		if mutationID == "" {
-			state.UnattributedMutation = true
-		} else {
-			if !containsMutationID(state.UnsafeMutationIDs, mutationID) && len(state.UnsafeMutationIDs) >= 128 {
-				state.UnattributedMutation = true
-			} else {
-				state.UnsafeMutationIDs = appendUniqueMutationID(state.UnsafeMutationIDs, mutationID)
-			}
-		}
-	}
-	if diagnostic.Status == "failed" && diagnostic.MutationPossible && !diagnostic.NoEffectsProven {
-		state.UnresolvedMutationFailure = true
-	}
-	if diagnostic.NoEffectsProven {
-		mutationID := safeMutationID(diagnostic.MutationID)
-		if diagnostic.Status != "failed" || mutationID == "" || !containsMutationID(state.UnsafeMutationIDs, mutationID) {
-			return fmt.Errorf("multiagent: invalid no-effects proof diagnostic")
-		}
-		state.ProvenNoEffectIDs = appendUniqueMutationID(state.ProvenNoEffectIDs, mutationID)
-		if len(state.ProvenNoEffectIDs) > 128 {
-			return fmt.Errorf("multiagent: no-effects proof ledger is full")
-		}
-	}
-	refreshMutationSafety(&state)
-	if diagnostic.NoProgressEligible && diagnostic.ObservationHash != "" {
-		hash := safeRetryFact(diagnostic.ObservationHash)
-		if hash == state.LastObservationHash {
-			state.ConsecutiveNoProgress++
-		} else {
-			state.LastObservationHash = hash
-			state.ConsecutiveNoProgress = 1
-		}
-		updated := false
-		for i := range state.Observations {
-			if state.Observations[i].Hash == hash {
-				state.Observations[i].Count++
-				updated = true
-				break
-			}
-		}
-		if !updated {
-			state.Observations = append(state.Observations, RetryObservation{Hash: hash, Count: 1})
-		}
-		if len(state.Observations) > 64 {
-			state.Observations = append([]RetryObservation(nil), state.Observations[len(state.Observations)-64:]...)
-		}
+	if err := applyRetryToolDiagnostic(&state, diagnostic); err != nil {
+		return err
 	}
 	next.Retry = &state
 	payload := map[string]any{
@@ -458,6 +412,8 @@ func classifyRetryableRoleFailure(err error) (class, code string, retryAfter tim
 	var safeFailure *subagent.SafeFailureError
 	if errors.As(err, &safeFailure) {
 		switch safeFailure.Code {
+		case "invalid_proposal_diff":
+			return "schema_correction", safeFailure.Code, 0, true
 		case "provider_turn_failed":
 			return "provider_transient", safeRetryCode(safeFailure.Code), safeFailure.RetryAfter(), true
 		case "deadline_exceeded", "execution_error":
@@ -612,8 +568,37 @@ func describeRecoveryCandidate(record DurableRun, now time.Time) RecoveryCandida
 		if candidate.WaitingKind == "role_retry" && record.Retry != nil {
 			candidate.DueAt = record.Retry.NextAt
 			candidate.Ready = !record.Retry.MutationPossible && !record.Retry.NextAt.After(now)
+		} else if candidate.WaitingKind == "delegation_outcome" && record.Waiting.DispatchPending {
+			if record.Retry == nil {
+				candidate.Ready = true
+			} else {
+				candidate.DueAt = record.Retry.NextAt
+				candidate.Ambiguous = record.Retry.MutationPossible || record.Retry.UnresolvedMutationFailure || record.Retry.UnattributedMutation
+				candidate.Ready = !candidate.Ambiguous && (record.Retry.NextAt.IsZero() || !record.Retry.NextAt.After(now))
+			}
 		} else if candidate.WaitingKind == "execution_reconciliation" {
 			candidate.Ambiguous = true
+		} else if candidate.WaitingKind == "delegation_join" && record.DelegationJoin != nil {
+			candidate.Kind = "delegation_join"
+			for _, child := range record.DelegationJoin.Children {
+				if !child.DispatchPending {
+					continue
+				}
+				due := time.Time{}
+				if child.Retry != nil {
+					due = child.Retry.NextAt
+					if child.Retry.MutationPossible || child.Retry.UnresolvedMutationFailure || child.Retry.UnattributedMutation {
+						candidate.Ambiguous = true
+						continue
+					}
+				}
+				if candidate.DueAt.IsZero() || (!due.IsZero() && due.Before(candidate.DueAt)) {
+					candidate.DueAt = due
+				}
+				if due.IsZero() || !due.After(now) {
+					candidate.Ready = true
+				}
+			}
 		}
 	default:
 		candidate.Kind = string(record.Phase)
@@ -663,6 +648,19 @@ func accumulateFailedAttempt(record DurableRun, result RoleRunResult) DurableRun
 }
 
 func roleFailureCode(err error) string {
+	var safeFailure *subagent.SafeFailureError
+	if errors.As(err, &safeFailure) && safeRetryCode(safeFailure.Code) != "" {
+		return safeRetryCode(safeFailure.Code)
+	}
+	var governance *GovernanceError
+	if errors.As(err, &governance) {
+		switch governance.Kind {
+		case "fan_out":
+			return "unsupported_fan_out"
+		case "validation_profile_configuration":
+			return "validation_profile_configuration_changed"
+		}
+	}
 	if errors.Is(err, ErrRetryBudgetExhausted) {
 		return "retry_exhausted"
 	}
@@ -675,6 +673,58 @@ func roleFailureCode(err error) string {
 		return "no_progress"
 	}
 	return "role_execution_failed"
+}
+
+func durableFailureDiagnostic(err error, retry *RetryState) *PersistedFailure {
+	diagnostic := &PersistedFailure{FailureReason: "nonretryable"}
+	if retry != nil {
+		diagnostic.AttemptID = safeRetryCode(retry.AttemptID)
+		diagnostic.Attempt = retry.Number
+		diagnostic.RecoveryNumber = retry.RecoveryNumber
+		diagnostic.MaxRecoveries = retry.MaxRecoveries
+	}
+	if errors.Is(err, ErrRetryBudgetExhausted) {
+		diagnostic.FailureReason = "retry_exhausted"
+		diagnostic.RetryExhausted = true
+		if retry != nil {
+			diagnostic.FailureClass = safeRetryCode(retry.FailureClass)
+			diagnostic.FailureCode = safeRetryCode(retry.FailureCode)
+			diagnostic.Retryable = diagnostic.FailureClass != ""
+		}
+		return diagnostic
+	}
+	if errors.Is(err, context.Canceled) {
+		diagnostic.FailureReason = "cancelled"
+		diagnostic.FailureClass = "cancellation"
+		diagnostic.FailureCode = "cancelled"
+		return diagnostic
+	}
+	var governance *GovernanceError
+	var approval *ApprovalRequiredError
+	if errors.As(err, &governance) || errors.As(err, &approval) {
+		diagnostic.FailureReason = "governance"
+		diagnostic.FailureClass = "governance"
+		diagnostic.FailureCode = roleFailureCode(err)
+		return diagnostic
+	}
+	if class, code, _, retryable := classifyRetryableRoleFailure(err); retryable {
+		diagnostic.FailureClass = safeRetryCode(class)
+		diagnostic.FailureCode = safeRetryCode(code)
+		diagnostic.Retryable = true
+		diagnostic.FailureReason = "recovery_unavailable"
+		return diagnostic
+	}
+	diagnostic.FailureClass = "nonretryable"
+	diagnostic.FailureCode = safeRetryCode(roleFailureCode(err))
+	var deadline RetryDeadlineError
+	if errors.As(err, &deadline) {
+		diagnostic.FailureReason = "deadline"
+	}
+	var noProgress *subagent.NoProgressError
+	if errors.As(err, &noProgress) {
+		diagnostic.FailureReason = "no_progress"
+	}
+	return diagnostic
 }
 
 func appendRetryHistory(record *DurableRun, state *RetryState) {

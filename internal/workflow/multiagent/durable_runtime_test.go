@@ -486,6 +486,36 @@ func TestDurableRuntimeTerminalFailuresNeverExecuteAgain(t *testing.T) {
 	}
 }
 
+func TestAcceptedConfigurationFailureIsDurableAndIdempotent(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	runner := happyDurableRunner()
+	runtime := newDurableRuntimeForTest(t, validDefinition(), runner, env.store, env.claimer, env.events)
+	request := testRunRequest()
+	request.RunID = "run-profile-config-changed"
+	if _, err := runtime.Accept(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	state, err := runtime.FailAcceptedRun(context.Background(), request.RunID, "validation_profile_configuration_changed")
+	if err == nil || state.Status != RunStatusFailed || state.TerminalOutcome == nil || state.TerminalOutcome.Reason != "validation_profile_configuration_changed" {
+		t.Fatalf("configuration failure state=%#v err=%v", state, err)
+	}
+	if got := runnerCalls(runner); len(got) != 0 {
+		t.Fatalf("runner invoked before config failure: %v", got)
+	}
+	failures := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRunFailed)
+	if len(failures) != 1 {
+		t.Fatalf("run.failed events=%d want 1", len(failures))
+	}
+	state, err = runtime.FailAcceptedRun(context.Background(), request.RunID, "validation_profile_configuration_changed")
+	if err != nil || state.Status != RunStatusFailed {
+		t.Fatalf("duplicate failure state=%q err=%v", state.Status, err)
+	}
+	failures = queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRunFailed)
+	if len(failures) != 1 {
+		t.Fatalf("duplicate created run.failed events=%d want 1", len(failures))
+	}
+}
+
 type durableTestEnvironment struct {
 	store   *SQLiteDurableRunStore
 	events  *event.SQLiteEventStore
@@ -534,8 +564,10 @@ func newDurableRuntimeForTest(
 	if len(options) > 0 {
 		runtimeOptions = options[0]
 	}
-	runtimeOptions.Clock = func() time.Time {
-		return time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
+	if runtimeOptions.Clock == nil {
+		runtimeOptions.Clock = func() time.Time {
+			return time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
+		}
 	}
 	runtimeOptions.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	runtime, err := NewDurableRuntime(

@@ -196,6 +196,7 @@ type RunView struct {
 type RoleRunRequest struct {
 	Run              RunView
 	RoleConfig       RoleConfig
+	FanOutAvailable  bool                 `json:"fan_out_available,omitempty"`
 	RecoveryFeedback string               `json:"-"`
 	RetryHandle      RoleVisitRetryHandle `json:"-"`
 	ToolEventSink    ToolEventSink        `json:"-"`
@@ -217,17 +218,22 @@ type HandoffDraft struct {
 
 // ExecutionMetadata is observational data returned by a runner.
 type ExecutionMetadata struct {
-	AgentRef         string
-	Provider         string
-	Model            string
-	WorkspaceID      string
-	ToolCalls        int
-	DeniedToolCalls  int
-	ValidationStatus string
-	ApprovalStatus   string
-	Attempt          int
-	StartedAt        time.Time
-	FinishedAt       time.Time
+	AgentRef          string
+	Provider          string
+	Model             string
+	WorkspaceID       string
+	ExecutionMode     string
+	SourceJoinID      string
+	SourceChildID     string
+	SourceDeliveryKey string
+	SourceProposalIDs []string
+	ToolCalls         int
+	DeniedToolCalls   int
+	ValidationStatus  string
+	ApprovalStatus    string
+	Attempt           int
+	StartedAt         time.Time
+	FinishedAt        time.Time
 }
 
 // RoleRunResult is the bounded result of one role visit.

@@ -1,5 +1,39 @@
 # Prizm Plan of Action
 
+## Current Handoff: R1 fan-out recovery and worker lifecycle (2026-10-13)
+
+The review candidate is `codex/r1-parallel-acceptance-staging`, based on the
+current `origin/staging` snapshot `e2a4421018acca7940f4d6806d5a3c2cf59a92b9`.
+It contains the R1 implementation and regression tests; the dirty primary
+`codex/r1-parallel-acceptance` checkout and separate Recall worktree remain
+untouched. The source change covers trusted Planner fan-out capability,
+durable child recovery and retry-attempt scoping, fail-closed approval-bound
+fan-out adoption, immutable validation-profile binding, safe structured-output
+feedback, and worker close/drain synchronization.
+
+Candidate verification on this tree passed `go build ./...`, `go vet ./...`,
+default-parallel `go test ./...`, `staticcheck ./...`, `git diff --check`,
+the graph-worker concurrency regression at 20 repetitions, and a focused race
+detector run for close/drain. The Linux CI cleanup race was traced to worker
+callbacks and command/deferred-resume work outliving `Close`; the worker now
+closes admission and drains owned callbacks/work before returning. This is a
+candidate for draft review, not evidence that the live Factory acceptance is
+complete.
+
+The latest real-provider Factory run, `run_9544229c6a3b2158bf82ddf6e6`, proved
+three overlapping worker intervals but failed at fan-in: research succeeded,
+implementation ended with a safe unknown/nonretryable failure, and review
+exhausted structured-output recovery after typed field feedback. It recorded
+no proposal, apply, or test result and emitted one terminal failure notice.
+Earlier failed/cancelled records remain unchanged. The selected Factory source
+snapshot is not full-game or live Studio evidence. Keep R1 open; do not claim a
+9/10 gate or successful coding acceptance. PR #86 is now part of staging; the
+separate Recall API-only test proof does not verify Prizm-to-Recall recovery.
+
+**Next action:** review this exact candidate diff and validation packet, then
+open a draft PR against staging if approved. Keep the full Factory acceptance
+gate open and diagnose only from safe typed evidence. Do not merge the PR.
+
 This is the current execution plan. It is updated at the end of every project
 work session and must cite the active [roadmap](../architecture/PRIZM_ROADMAP.md)
 items.

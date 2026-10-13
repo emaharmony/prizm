@@ -211,12 +211,15 @@ func TestApprovalProposalLifecycleAppliesAndReconcilesExactContent(t *testing.T)
 func TestWorkspaceValidationRunnerUsesResolvedWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	registry := validation.NewEmptyRegistry()
-	if err := registry.Register(validation.Profile{Name: "go_version", Command: "go", Args: []string{"version"}, TimeoutSeconds: 10, AllowedExitCodes: []int{0}}); err != nil {
+	if err := registry.Register(validation.Profile{Name: "factory_pytest_selected_v1", Command: "go", Args: []string{"version"}, WorkingDir: ".", TimeoutSeconds: 10, AllowedExitCodes: []int{0}}); err != nil {
 		t.Fatal(err)
 	}
 	runner := workspaceValidationRunner{registry: registry, fallbackRoot: t.TempDir(), artifactRoot: t.TempDir()}
-	result, err := runner.RunValidationInWorkspace(context.Background(), "go_version", "run-1", multiagent.Workspace{ID: "workspace-1", Path: workspace})
-	if err != nil || result.Status != "passed" {
+	result, err := runner.RunValidationInWorkspace(context.Background(), "factory_pytest_selected_v1", "run-1", multiagent.Workspace{ID: "workspace-1", Path: workspace})
+	if err != nil || result.Status != "passed" || result.Profile != "factory_pytest_selected_v1" || result.WorkingDir != workspace {
 		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if _, err := runner.RunValidationInWorkspace(context.Background(), "unapproved_factory_profile", "run-2", multiagent.Workspace{ID: "workspace-1", Path: workspace}); err == nil {
+		t.Fatal("unregistered profile ID was executed")
 	}
 }

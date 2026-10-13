@@ -1667,3 +1667,49 @@ The original local run `run_01M4PWEE6MX1FCE76G3WYANSKF` remains unchanged and ha
 **Verification:** `go build ./...`, `go vet ./...`, and `go test ./...` passed in the isolated worktree using `.tmp/pr86-merge-gates` for `TMP`, `TEMP`, `GOTMPDIR`, `GOCACHE`, and `GOMODCACHE` (completion marker records exit 0 for all three). `git diff --cached --check` passes and no unmerged paths or conflict markers remain. No merge commit or push has been made.
 
 **Next action:** complete validation of the auto-merged PR diff and request review before committing or pushing.
+
+### R1 fan-out recovery candidate and worker lifecycle correction (2026-10-13)
+
+**Roadmap:** R1 remains active; R6 Recall is separate and not completed by this
+candidate. Candidate branch `codex/r1-parallel-acceptance-staging` is based on
+`origin/staging` `e2a4421018acca7940f4d6806d5a3c2cf59a92b9`. The dirty primary
+Prizm branch and Recall repository/worktree were preserved; generated caches,
+temporary evidence, and worktrees are excluded from the candidate source scope.
+
+The candidate carries trusted fan-out capability propagation; parent-owned
+durable child retry state with attempt-scoped compare-and-swap and safe failure
+classification; exact-scope fan-out adoption only after grant/apply/tree
+reconciliation; selected validation-profile fingerprints checked on resume;
+safe typed schema feedback; and worker close/drain ownership for callbacks,
+commands, and deferred retries. The Linux TempDir CI failure was a shutdown race:
+terminal database state could be visible before final worker publication and
+SQLite work completed. `Close` now stops admission, cancels/unsubscribes, and
+waits for admitted work. Regression tests block post-terminal publication and
+verify Close waits, repeated Close is safe, post-close commands do not create
+work, and deferred retry timers do not fire after shutdown.
+
+Validation on this candidate: `go build ./...` passed; `go vet ./...` passed;
+default-parallel `go test ./...` passed (all packages); `staticcheck ./...`
+passed; `git diff --check` passed. The worker concurrency regression passed 20
+runs, and the close/drain regression passed with the race detector. Windows
+workspace temp/cache variables were directed to the approved D: project temp
+area. No source Factory checkout was edited.
+
+The latest real-provider Factory run `run_9544229c6a3b2158bf82ddf6e6` showed
+three overlapping worker intervals, but failed at fan-in: the research lane
+succeeded, implementation ended with safe `unknown/unknown` nonretryable
+classification, and review exhausted structured-output recovery after typed
+field feedback. The durable report records no proposal/apply/test result and
+one delivered terminal failure notice. Earlier terminal runs remain unchanged.
+The isolated Factory source is a selected production-package snapshot, not a
+full game or live Studio result. The 19-test out-of-band result remains
+out-of-band. Therefore R1 acceptance is incomplete and no 9/10 score is claimed.
+
+PR #86 is merged into staging; prior historical entries describing its draft
+state are preserved. The separate Recall API proof did not modify Recall
+production code and does not prove Prizm reconciler outage/replay behavior.
+No commit, push, PR creation, or merge has occurred for this candidate yet.
+
+**Next action:** coordinator reviews the candidate code, tests, and this
+handoff. If approved, create a draft PR against current staging and continue the
+R1 failure diagnosis without changing immutable runs or weakening governance.

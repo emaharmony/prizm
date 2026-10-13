@@ -15,9 +15,47 @@ const roleOutputSchemaVersion = 1
 type OutputHandoff struct {
 	Objective        string        `json:"objective"`
 	Reason           string        `json:"reason"`
+	Summary          string        `json:"summary,omitempty"`
 	Evidence         []ArtifactRef `json:"evidence,omitempty"`
 	UnresolvedIssues []Issue       `json:"unresolved_issues,omitempty"`
 	Notes            string        `json:"notes,omitempty"`
+}
+
+// UnmarshalJSON accepts a concise summary string as well as the strict object
+// form. A summary supplies descriptive handoff text only; routing remains
+// derived from the compiled graph. Object fields stay closed to unknown keys.
+func (h *OutputHandoff) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) > 0 && trimmed[0] == '"' {
+		var summary string
+		if err := json.Unmarshal(trimmed, &summary); err != nil {
+			return err
+		}
+		*h = OutputHandoff{Summary: summary, Objective: summary, Reason: "role handoff summary"}
+		return nil
+	}
+	type handoffAlias OutputHandoff
+	var decoded handoffAlias
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("multiple JSON values are not allowed")
+		}
+		return err
+	}
+	if strings.TrimSpace(decoded.Objective) == "" && strings.TrimSpace(decoded.Summary) != "" {
+		decoded.Objective = decoded.Summary
+	}
+	if strings.TrimSpace(decoded.Reason) == "" && strings.TrimSpace(decoded.Summary) != "" {
+		decoded.Reason = "role handoff summary"
+	}
+	*h = OutputHandoff(decoded)
+	return nil
 }
 
 // PlannerOutput is the strict planner result contract.
@@ -350,7 +388,7 @@ func validateTesterOutput(output TesterOutput) error {
 		return err
 	}
 	if output.Result != "passed" && output.Result != "failed" {
-		return errors.New(`result must be "passed" or "failed"`)
+		return schemaEnumValueError{field: "result"}
 	}
 	if len(output.TestsExecuted) == 0 {
 		return errors.New("tests_executed is required")
@@ -362,7 +400,7 @@ func validateTesterOutput(output TesterOutput) error {
 		}
 		if test.Status != "passed" && test.Status != "failed" &&
 			test.Status != "timeout" && test.Status != "error" {
-			return fmt.Errorf("tests_executed[%d].status is invalid", i)
+			return schemaEnumValueError{field: "tests_executed.status"}
 		}
 		if test.Status != "passed" {
 			nonPassing++
@@ -392,7 +430,7 @@ func validateReviewerOutput(output ReviewerOutput) error {
 		return err
 	}
 	if output.Decision != "approved" && output.Decision != "changes_requested" {
-		return errors.New(`decision must be "approved" or "changes_requested"`)
+		return schemaEnumValueError{field: "decision"}
 	}
 	for i, finding := range output.Findings {
 		if strings.TrimSpace(finding.Summary) == "" {
@@ -401,7 +439,7 @@ func validateReviewerOutput(output ReviewerOutput) error {
 		switch finding.Severity {
 		case "info", "low", "medium", "high", "critical":
 		default:
-			return fmt.Errorf("findings[%d].severity is invalid", i)
+			return schemaEnumValueError{field: "findings.severity"}
 		}
 		if err := validateOutputArtifacts(finding.Evidence); err != nil {
 			return fmt.Errorf("findings[%d].evidence: %w", i, err)
@@ -475,22 +513,54 @@ func validateRequiredStrings(field string, values []string) error {
 }
 
 func handoffFromOutput(output OutputHandoff, artifacts []ArtifactRef) *HandoffDraft {
+	notes := output.Notes
+	if strings.TrimSpace(notes) == "" {
+		notes = output.Summary
+	}
 	return &HandoffDraft{
 		Objective:        output.Objective,
 		Reason:           output.Reason,
 		Artifacts:        cloneArtifactRefs(artifacts),
 		Evidence:         cloneArtifactRefs(output.Evidence),
 		UnresolvedIssues: cloneIssues(output.UnresolvedIssues),
-		Notes:            output.Notes,
+		Notes:            notes,
 	}
 }
 
 func structuredError(role Role, err error) error {
 	code, feedback, fields := safeSchemaCorrection(role, err)
+	var allowedValues []string
+	if values, ok := safeSchemaEnumCorrection(role, err); ok {
+		code = "invalid_field_value"
+		fields = []string{values.field}
+		allowedValues = values.allowed
+		feedback = canonicalEnumFeedback(role, values.field, values.allowed)
+	}
 	return &SchemaCorrectionError{
-		Role: role, Code: code, Fields: fields, Feedback: feedback,
+		Role: role, Code: code, Fields: fields, AllowedValues: allowedValues, Feedback: feedback,
 		Cause: &StructuredOutputError{Role: role, Cause: err},
 	}
+}
+
+type schemaEnumValueError struct{ field string }
+
+func (schemaEnumValueError) Error() string { return "invalid enum value" }
+
+type safeSchemaEnum struct {
+	field   string
+	allowed []string
+}
+
+func safeSchemaEnumCorrection(role Role, err error) (safeSchemaEnum, bool) {
+	var enumErr schemaEnumValueError
+	if !errors.As(err, &enumErr) {
+		return safeSchemaEnum{}, false
+	}
+	allowed := schemaFieldAllowedValues(role, enumErr.field)
+	if len(allowed) == 0 {
+		return safeSchemaEnum{}, false
+	}
+	return safeSchemaEnum{field: enumErr.field, allowed: allowed}, true
 }
 
 func safeSchemaCorrection(role Role, err error) (string, string, []string) {
@@ -552,10 +622,8 @@ func canonicalSchemaFeedback(role Role, code string, fields []string) string {
 		return "Missing required field(s): " + strings.Join(fields, ", ") + ". Add them to the next response. Follow the required role schema shown in the task instructions and return exactly one JSON object."
 	case "invalid_field_type":
 		if len(fields) == 1 {
-			for _, allowed := range schemaFields(role) {
-				if fields[0] == allowed {
-					return "Field " + allowed + " has the wrong JSON type. Match its type and structure to the required role schema, then return exactly one JSON object."
-				}
+			if expected := schemaFieldExpectedType(role, fields[0]); expected != "" {
+				return "Field " + fields[0] + " must be " + expected + ". Match its type and structure to the required role schema, then return exactly one JSON object."
 			}
 		}
 		return "A field has the wrong JSON type. Check field types in the required role schema and return exactly one JSON object."
@@ -564,6 +632,160 @@ func canonicalSchemaFeedback(role Role, code string, fields []string) string {
 	default:
 		return ""
 	}
+}
+
+func canonicalEnumFeedback(role Role, field string, allowed []string) string {
+	if len(schemaFieldAllowedValues(role, field)) == 0 || len(allowed) == 0 {
+		return canonicalSchemaFeedback(role, "invalid_field_value", nil)
+	}
+	return "Field " + field + " must be one of: " + strings.Join(allowed, ", ") + ". Match the allowed values in the required role schema, then return exactly one valid response."
+}
+
+// safeSchemaCorrectionDetails returns only schema-owned identifiers. It never
+// carries a provider value or error string across the worker boundary.
+func safeSchemaCorrectionDetails(role Role, code string, fields, allowedValues []string) (string, string, []string) {
+	if len(fields) != 1 {
+		return "", "", nil
+	}
+	field := fields[0]
+	if code == "invalid_field_type" {
+		expected := schemaFieldExpectedType(role, field)
+		if expected != "" {
+			return field, expected, nil
+		}
+	}
+	if code == "invalid_field_value" {
+		allowed := schemaFieldAllowedValues(role, field)
+		if len(allowed) > 0 && equalStrings(allowed, allowedValues) {
+			return field, "", allowed
+		}
+	}
+	return "", "", nil
+}
+
+// roleFailureFeedback rebuilds specific feedback from a role's local schema.
+// The worker-provided field/type pair is accepted only when it exactly matches
+// that schema; all unknown values fall back to the existing generic feedback.
+func roleFailureFeedback(role Role, code, field, expectedType string, allowedValues ...[]string) string {
+	if code == "invalid_field_type" {
+		if expected := schemaFieldExpectedType(role, field); expected != "" && expected == expectedType {
+			return canonicalSchemaFeedback(role, code, []string{field})
+		}
+	}
+	if code == "invalid_field_value" {
+		allowed := schemaFieldAllowedValues(role, field)
+		provided := []string(nil)
+		if len(allowedValues) == 1 {
+			provided = allowedValues[0]
+		}
+		if len(allowed) > 0 && equalStrings(allowed, provided) {
+			return canonicalEnumFeedback(role, field, allowed)
+		}
+	}
+	return correctionFeedback(code)
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func schemaFieldAllowedValues(role Role, field string) []string {
+	switch role {
+	case RoleTester:
+		switch field {
+		case "result":
+			return []string{"passed", "failed"}
+		case "tests_executed.status":
+			return []string{"passed", "failed", "timeout", "error"}
+		}
+	case RoleReviewer:
+		switch field {
+		case "decision":
+			return []string{"approved", "changes_requested"}
+		case "findings.severity":
+			return []string{"info", "low", "medium", "high", "critical"}
+		}
+	}
+	return nil
+}
+
+func schemaFieldExpectedType(role Role, field string) string {
+	switch role {
+	case RolePlanner:
+		switch field {
+		case "schema_version":
+			return "a JSON number"
+		case "understanding":
+			return "a JSON string"
+		case "implementation_plan", "task_breakdown", "acceptance_criteria", "risks", "assumptions":
+			return "a JSON array of strings"
+		case "handoff":
+			return "a JSON object or a concise JSON string summary"
+		}
+	case RoleDeveloper:
+		switch field {
+		case "schema_version":
+			return "a JSON number"
+		case "summary":
+			return "a JSON string"
+		case "commands_executed", "known_limitations":
+			return "a JSON array of strings"
+		case "changed_artifacts":
+			return "a JSON array of objects"
+		case "handoff":
+			return "a JSON object or a concise JSON string summary"
+		}
+	case RoleTester:
+		switch field {
+		case "schema_version":
+			return "a JSON number"
+		case "result":
+			return "a JSON string"
+		case "tests_executed", "failure_evidence":
+			return "a JSON array of objects"
+		case "reproduction":
+			return "a JSON array of strings"
+		case "handoff":
+			return "a JSON object or a concise JSON string summary"
+		}
+	case RoleReviewer:
+		switch field {
+		case "schema_version":
+			return "a JSON number"
+		case "decision":
+			return "a JSON string"
+		case "findings", "evidence":
+			return "a JSON array of objects"
+		case "required_corrections":
+			return "a JSON array of strings"
+		case "handoff":
+			return "a JSON object, a concise JSON string summary, or null"
+		}
+	case RoleReflector:
+		switch field {
+		case "schema_version":
+			return "a JSON number"
+		case "confidence":
+			return "a JSON number"
+		case "replan_requested":
+			return "a JSON boolean"
+		case "verdict", "failure_class", "replan_reason":
+			return "a JSON string"
+		case "evidence":
+			return "a JSON array of objects"
+		case "lesson_candidate":
+			return "a JSON object or null"
+		}
+	}
+	return ""
 }
 
 func schemaFields(role Role) []string {

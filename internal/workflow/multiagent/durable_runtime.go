@@ -220,7 +220,38 @@ func (r *DurableRuntime) Resume(
 		return RunState{}, err
 	}
 	defer claim.Release()
+	for attempt := 0; attempt < 8; attempt++ {
+		state, resumeErr := r.resumeClaimed(ctx, runID)
+		if !errors.Is(resumeErr, ErrRevisionConflict) {
+			return state, resumeErr
+		}
+		latest, loadErr := r.store.Load(ctx, runID)
+		if loadErr != nil || !safeDelegationResumeCheckpoint(latest) {
+			return state, resumeErr
+		}
+		// Failed CAS events were never committed. Rebuild them from the latest
+		// durable state rather than appending a duplicate on the next pass.
+		r.buffer.reset()
+	}
+	return RunState{}, fmt.Errorf("multiagent: resume exceeded revision conflict retries for run %s", runID)
+}
 
+func safeDelegationResumeCheckpoint(record DurableRun) bool {
+	if record.Phase != CheckpointWaiting || record.Waiting == nil {
+		return false
+	}
+	switch record.Waiting.Kind {
+	case "delegation_join", "delegation_outcome":
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *DurableRuntime) resumeClaimed(
+	ctx context.Context,
+	runID string,
+) (RunState, error) {
 	record, err := r.store.Load(ctx, runID)
 	if err != nil {
 		r.publishRecoveryFailure(ctx, runID, err)
@@ -281,7 +312,7 @@ func (r *DurableRuntime) Resume(
 			if err != nil {
 				return record.State, err
 			}
-			if record.Phase == CheckpointWaiting {
+			if record.Phase == CheckpointWaiting && !hasDuePendingDelegatedRole(record, r.now().UTC()) {
 				return record.State, waitingError(record)
 			}
 		}
@@ -299,7 +330,7 @@ func (r *DurableRuntime) Resume(
 			if err != nil {
 				return record.State, err
 			}
-			if record.Phase == CheckpointWaiting {
+			if record.Phase == CheckpointWaiting && !hasDuePendingDelegationChild(record, r.now().UTC()) {
 				return record.State, waitingError(record)
 			}
 		}
@@ -425,6 +456,52 @@ func (r *DurableRuntime) Resume(
 		return record.State, err
 	}
 	return r.drive(ctx, record, true)
+}
+
+func hasDuePendingDelegatedRole(record DurableRun, now time.Time) bool {
+	return record.Waiting != nil && record.Waiting.Kind == "delegation_outcome" && record.Waiting.DispatchPending &&
+		record.Retry != nil && (record.Retry.NextAt.IsZero() || !record.Retry.NextAt.After(now))
+}
+
+func hasDuePendingDelegationChild(record DurableRun, now time.Time) bool {
+	if record.Waiting == nil || record.Waiting.Kind != "delegation_join" || record.DelegationJoin == nil {
+		return false
+	}
+	for _, child := range record.DelegationJoin.Children {
+		if child.DispatchPending && (child.Retry == nil || child.Retry.NextAt.IsZero() || !child.Retry.NextAt.After(now)) {
+			return true
+		}
+	}
+	return false
+}
+
+// FailAcceptedRun records a deterministic, safe configuration failure for an
+// accepted run before execution is resumed. Repeated calls are idempotent.
+func (r *DurableRuntime) FailAcceptedRun(ctx context.Context, runID, code string) (RunState, error) {
+	claim, err := r.claimer.Acquire(ctx, runID)
+	if err != nil {
+		return RunState{}, err
+	}
+	defer claim.Release()
+	record, err := r.store.Load(ctx, runID)
+	if err != nil {
+		return RunState{}, err
+	}
+	if err := record.Validate(r.supervisor.graph); err != nil {
+		return record.State, err
+	}
+	if record.Phase == CheckpointTerminal {
+		return record.State, nil
+	}
+	if code != "validation_profile_configuration_changed" {
+		return record.State, errors.New("unsupported accepted-run failure code")
+	}
+	role := record.State.CurrentRole
+	if role == "" {
+		return record.State, errors.New("accepted run has no current role")
+	}
+	saved, failureErr := r.persistRoleFailure(ctx, record, role, &GovernanceError{Kind: "validation_profile_configuration", Reason: code})
+	return saved.State, failureErr
 }
 
 // Inspect loads and validates the durable source of truth without advancing it.
@@ -773,6 +850,9 @@ func (r *DurableRuntime) executePreparedRole(
 	ctx context.Context,
 	record DurableRun,
 ) (DurableRun, error) {
+	if record.PendingFanOutAdoption != nil {
+		return r.executeFanOutAdoption(ctx, record)
+	}
 	if r.delegation != nil {
 		return r.dispatchDelegatedRole(ctx, record)
 	}
@@ -933,6 +1013,10 @@ func (r *DurableRuntime) executePreparedRole(
 			&RoleExecutionError{Role: role, Cause: err},
 		)
 	}
+	if result.FanOut != nil {
+		record = accumulateFailedAttempt(record, result)
+		return r.persistRoleFailure(ctx, record, role, &GovernanceError{Kind: "fan_out", Reason: "result cannot be executed without durable planner delegation"})
+	}
 	if record.Retry != nil {
 		result.Retries = record.Retry.RecoveryNumber
 		result.LocalIterations += record.Retry.AccumulatedIterations
@@ -941,9 +1025,133 @@ func (r *DurableRuntime) executePreparedRole(
 	if len(result.Proposals) > 0 {
 		appendRetryHistory(&record, record.Retry)
 		record.Retry = nil
-		return r.pauseForProposals(ctx, record, role, result, startedAt, finishedAt)
+		return r.pauseForProposals(ctx, record, role, result, startedAt, finishedAt, nil)
 	}
 	return r.finishPreparedRole(ctx, record, role, roleConfig, result, startedAt, finishedAt)
+}
+
+func (r *DurableRuntime) verifyFanOutAdoptionApproval(ctx context.Context, record DurableRun, task *ApprovedTaskState) (*FanOutAdoptionState, error) {
+	candidate := task.FanOutAdoption
+	expectedNodeID, hasDeveloperNode := r.supervisor.graph.NodeIDForRole(RoleDeveloper)
+	if candidate == nil || !validFanOutAdoptionSource(*candidate, record.State, r.supervisor.graph) || task.Role != candidate.ParentRole || candidate.RunID != record.State.RunID ||
+		candidate.Task != record.State.CurrentTask || candidate.WorkflowID != record.State.WorkflowID ||
+		candidate.WorkflowFingerprint != record.State.WorkflowFingerprint || candidate.WorkspaceID != record.State.WorkspaceID ||
+		candidate.ParentExecutionKey != record.ActiveExecutionKey || candidate.ParentVisit != record.State.RoleStates[candidate.ParentRole].Visits ||
+		candidate.ExpectedRole != RoleDeveloper || !hasDeveloperNode || candidate.ExpectedNodeID != expectedNodeID ||
+		candidate.ExpectedVisit != record.State.RoleStates[RoleDeveloper].Visits+1 ||
+		!sameProposalSet(candidate.Proposals, task.Result.Proposals) || !sameProposalSet(candidate.Proposals, proposalProgressRefs(task.Proposals)) {
+		return nil, errors.New("fan-out adoption source scope does not match the approved task")
+	}
+	transition, err := r.supervisor.graph.Resolve(task.Role, task.Result.Outcome)
+	if err != nil || transition.Terminal != "" || transition.To != candidate.ExpectedRole {
+		return nil, errors.New("fan-out adoption no longer targets the immediate Developer successor")
+	}
+	if record.State.WorkspaceID == "" || candidate.ChildID == "" || candidate.ChildExecutionKey == "" || candidate.JoinID == "" ||
+		candidate.DeliveryKey == "" || candidate.CommandEventID == "" || candidate.CorrelationID == "" ||
+		candidate.Result.Metadata.WorkspaceID != candidate.WorkspaceID || candidate.Result.Metadata.StartedAt.IsZero() || candidate.Result.Metadata.FinishedAt.IsZero() {
+		return nil, errors.New("fan-out adoption source execution evidence is incomplete")
+	}
+	for _, progress := range task.Proposals {
+		if progress.Phase != "applied" || progress.Result == nil || !progress.Result.Success {
+			return nil, errors.New("fan-out adoption proposal was not durably applied")
+		}
+		decision, _, decisionErr := r.proposals.Decision(ctx, progress.ProposalOperation)
+		if decisionErr != nil || decision != ProposalGranted {
+			return nil, errors.New("fan-out adoption proposal is not currently granted")
+		}
+		status, result, reconcileErr := r.proposals.Reconcile(ctx, progress.ProposalOperation)
+		if reconcileErr != nil || status != ProposalApplied || !result.Success {
+			return nil, errors.New("fan-out adoption worktree does not match the approved proposal tree")
+		}
+	}
+	return cloneFanOutAdoption(candidate), nil
+}
+
+func (r *DurableRuntime) executeFanOutAdoption(ctx context.Context, record DurableRun) (DurableRun, error) {
+	adoption := record.PendingFanOutAdoption
+	role := record.State.CurrentRole
+	roleState := record.State.RoleStates[role]
+	currentNodeID, hasCurrentNode := r.supervisor.graph.NodeIDForRole(role)
+	failClosed := func(reason string) (DurableRun, error) {
+		record.PendingFanOutAdoption = nil
+		return r.persistRoleFailure(ctx, record, role, &GovernanceError{Kind: "fan_out_adoption", Reason: reason})
+	}
+	if adoption == nil || role != RoleDeveloper || !hasCurrentNode || adoption.ExpectedRole != role || adoption.ExpectedNodeID != currentNodeID ||
+		adoption.RunID != record.State.RunID || adoption.Task != record.State.CurrentTask ||
+		adoption.WorkflowID != record.State.WorkflowID || adoption.WorkflowFingerprint != record.State.WorkflowFingerprint ||
+		adoption.WorkspaceID == "" || adoption.WorkspaceID != record.State.WorkspaceID ||
+		adoption.ParentRole != RolePlanner || adoption.ParentExecutionKey == "" ||
+		record.LastCompletedExecutionKey != adoption.ParentExecutionKey ||
+		adoption.ParentVisit != record.State.RoleStates[adoption.ParentRole].Visits || adoption.ExpectedVisit != roleState.Visits ||
+		adoption.ChildID == "" || adoption.ChildExecutionKey == "" || adoption.JoinID == "" || adoption.DeliveryKey == "" ||
+		adoption.DeliveryAttemptID != fmt.Sprintf("%s:delivery:%d", adoption.ChildExecutionKey, adoption.DeliveryNumber) ||
+		adoption.AttemptID != retryAttemptID(adoption.ChildExecutionKey, adoption.AttemptNumber) || adoption.AttemptNumber <= 0 ||
+		adoption.CommandEventID == "" || adoption.CorrelationID == "" || adoption.Result.Metadata.WorkspaceID != adoption.WorkspaceID ||
+		!sameProposalSet(adoption.Proposals, adoption.Result.Proposals) {
+		return failClosed("approved implementation result is outside its bound successor scope")
+	}
+	transition, err := r.supervisor.graph.Resolve(role, adoption.Result.Outcome)
+	if err != nil || transition.Terminal != "" || transition.To != RoleTester {
+		return failClosed("approved implementation result does not route to the configured Tester")
+	}
+	if r.proposals == nil {
+		return failClosed("proposal lifecycle is unavailable for adoption reconciliation")
+	}
+	for _, proposal := range adoption.Proposals {
+		op := ProposalOperation{RunID: adoption.RunID, ProposalID: proposal.ProposalID, ApprovalID: proposal.ApprovalID,
+			ApplyKey: proposalApplyKey(adoption.RunID, proposal.ProposalID), WorkspaceID: adoption.WorkspaceID,
+			ExecutionKey: adoption.ParentExecutionKey}
+		decision, _, decisionErr := r.proposals.Decision(ctx, op)
+		if decisionErr != nil || decision != ProposalGranted {
+			return failClosed("approved implementation proposal is no longer granted")
+		}
+		status, result, reconcileErr := r.proposals.Reconcile(ctx, op)
+		if reconcileErr != nil || status != ProposalApplied || !result.Success {
+			return failClosed("approved implementation tree changed before adoption")
+		}
+	}
+	result := cloneRoleRunResult(adoption.Result)
+	result.Proposals = nil
+	result.FanOut = nil
+	result.Metadata.ExecutionMode = "approved_fanout_adoption"
+	result.Metadata.SourceJoinID = adoption.JoinID
+	result.Metadata.SourceChildID = adoption.ChildID
+	result.Metadata.SourceDeliveryKey = adoption.DeliveryKey
+	result.Metadata.SourceProposalIDs = make([]string, 0, len(adoption.Proposals))
+	for _, proposal := range adoption.Proposals {
+		result.Metadata.SourceProposalIDs = append(result.Metadata.SourceProposalIDs, proposal.ProposalID)
+	}
+	startedAt, finishedAt := result.Metadata.StartedAt, result.Metadata.FinishedAt
+	record.PendingFanOutAdoption = nil
+	roleConfig, _ := r.supervisor.graph.RoleConfig(role)
+	return r.finishPreparedRole(ctx, record, role, roleConfig, result, startedAt, finishedAt)
+}
+
+func proposalProgressRefs(progress []ProposalProgress) []ProposalReference {
+	refs := make([]ProposalReference, 0, len(progress))
+	for _, item := range progress {
+		refs = append(refs, ProposalReference{ProposalID: item.ProposalID, ApprovalID: item.ApprovalID})
+	}
+	return refs
+}
+
+func cloneProposalReferences(refs []ProposalReference) []ProposalReference {
+	cloned := make([]ProposalReference, len(refs))
+	for i, ref := range refs {
+		cloned[i] = ref
+		cloned[i].Artifacts = cloneArtifactRefs(ref.Artifacts)
+	}
+	return cloned
+}
+
+func cloneFanOutAdoption(adoption *FanOutAdoptionState) *FanOutAdoptionState {
+	if adoption == nil {
+		return nil
+	}
+	cloned := *adoption
+	cloned.Proposals = cloneProposalReferences(adoption.Proposals)
+	cloned.Result = cloneRoleRunResult(adoption.Result)
+	return &cloned
 }
 
 func (r *DurableRuntime) finishPreparedRole(
@@ -1117,6 +1325,7 @@ func (r *DurableRuntime) pauseForProposals(
 	result RoleRunResult,
 	startedAt time.Time,
 	finishedAt time.Time,
+	fanOutAdoption *FanOutAdoptionState,
 ) (DurableRun, error) {
 	now := r.now().UTC()
 	seen := make(map[string]struct{}, len(result.Proposals))
@@ -1142,6 +1351,7 @@ func (r *DurableRuntime) pauseForProposals(
 	}
 	record.ApprovedTask = &ApprovedTaskState{
 		Role: role, Result: result, StartedAt: startedAt, FinishedAt: finishedAt, Proposals: progress,
+		FanOutAdoption: cloneFanOutAdoption(fanOutAdoption),
 	}
 	record.State.Status = RunStatusPaused
 	roleState := record.State.RoleStates[role]
@@ -1259,6 +1469,14 @@ func (r *DurableRuntime) advanceApprovedTask(ctx context.Context, record Durable
 	}
 
 	task := record.ApprovedTask
+	var adoption *FanOutAdoptionState
+	if task.FanOutAdoption != nil {
+		var adoptionErr error
+		adoption, adoptionErr = r.verifyFanOutAdoptionApproval(ctx, record, task)
+		if adoptionErr != nil {
+			return r.persistRoleFailure(ctx, record, task.Role, &GovernanceError{Kind: "fan_out_adoption", Reason: adoptionErr.Error()})
+		}
+	}
 	roleConfig, _ := r.supervisor.graph.RoleConfig(task.Role)
 	validator, ok := r.supervisor.runner.(ApprovedRoleValidator)
 	if !ok {
@@ -1301,6 +1519,7 @@ func (r *DurableRuntime) advanceApprovedTask(ctx context.Context, record Durable
 	}
 	record.ProposalResults = append(record.ProposalResults, task.Proposals...)
 	record.ApprovedTask = nil
+	record.PendingFanOutAdoption = adoption
 	record.Waiting = nil
 	record.Failure = nil
 	record.State.Status = RunStatusRunning
@@ -1484,6 +1703,7 @@ func (r *DurableRuntime) persistRoleFailure(
 	cause error,
 ) (DurableRun, error) {
 	failureCode := roleFailureCode(cause)
+	diagnostic := durableFailureDiagnostic(cause, record.Retry)
 	if record.Retry != nil {
 		roleState := record.State.RoleStates[role]
 		roleState.LocalIterations += record.Retry.AccumulatedIterations
@@ -1500,10 +1720,17 @@ func (r *DurableRuntime) persistRoleFailure(
 		appendRetryHistory(&record, record.Retry)
 		record.Retry = nil
 	}
-	state, terminalErr := r.supervisor.failRole(record.State, role, cause)
+	var governance *GovernanceError
+	if errors.As(cause, &governance) && governance.Kind == "validation_profile_configuration" {
+		cause = errors.New(failureCode)
+	}
+	state, terminalErr := r.supervisor.failRoleWithRetryDiagnostic(record.State, role, cause, diagnostic)
 	record.State = state
 	record.Phase = CheckpointTerminal
-	record.Failure = persistedFailure("role_execution", errors.New(failureCode), r.now())
+	record.Failure = diagnostic
+	record.Failure.Kind = "role_execution"
+	record.Failure.Message = failureCode
+	record.Failure.At = r.now().UTC()
 	record.PendingTransition = nil
 	record, checkpointErr := r.checkpoint(ctx, record)
 	if checkpointErr != nil {

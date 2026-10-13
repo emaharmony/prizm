@@ -1,7 +1,9 @@
 package multiagent
 
 import (
+	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -125,6 +127,56 @@ func TestDecodeRoleOutput(t *testing.T) {
 	}
 }
 
+func TestHandoffSummaryCompatibilityKeepsStrictRoutingAndReviewSemantics(t *testing.T) {
+	t.Run("string summary becomes descriptive handoff", func(t *testing.T) {
+		got, err := decodeRoleOutput(RolePlanner, `{"schema_version":1,"understanding":"plan","implementation_plan":["inspect"],"task_breakdown":["work"],"acceptance_criteria":["pass"],"handoff":"Ready for implementation"}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Outcome != OutcomePlanReady || got.Handoff == nil || got.Handoff.Objective != "Ready for implementation" || got.Handoff.Reason != "role handoff summary" || got.Handoff.Notes != "Ready for implementation" {
+			t.Fatalf("summary handoff normalization = %#v", got)
+		}
+	})
+	t.Run("summary object remains strict", func(t *testing.T) {
+		got, err := decodeRoleOutput(RoleDeveloper, `{"schema_version":1,"summary":"changed","changed_artifacts":[{"kind":"file","uri":"a.go"}],"handoff":{"summary":"Verify the change"}}`)
+		if err != nil || got.Handoff == nil || got.Handoff.Objective != "Verify the change" || got.Handoff.Reason != "role handoff summary" {
+			t.Fatalf("summary object handoff = %#v, err=%v", got, err)
+		}
+		_, err = decodeRoleOutput(RoleDeveloper, `{"schema_version":1,"summary":"changed","changed_artifacts":[{"kind":"file","uri":"a.go"}],"handoff":{"summary":"Verify","destination":"reviewer"}}`)
+		var malformed *StructuredOutputError
+		if !errors.As(err, &malformed) || malformed.Cause == nil || !strings.Contains(malformed.Cause.Error(), "unknown field") {
+			t.Fatalf("unknown handoff routing field accepted: %v", err)
+		}
+		_, err = decodeRoleOutput(RoleDeveloper, `{"schema_version":1,"summary":"changed","changed_artifacts":[{"kind":"file","uri":"a.go"}],"handoff":{"summary":"x"} {}}`)
+		if err == nil {
+			t.Fatal("handoff accepted trailing JSON value")
+		}
+	})
+	t.Run("empty shorthand is not a valid handoff", func(t *testing.T) {
+		for _, value := range []string{`""`, `"   "`, `null`} {
+			raw := `{"schema_version":1,"understanding":"plan","implementation_plan":["inspect"],"task_breakdown":["work"],"acceptance_criteria":["pass"],"handoff":` + value + `}`
+			if _, err := decodeRoleOutput(RolePlanner, raw); err == nil {
+				t.Errorf("accepted empty handoff value %s", value)
+			}
+		}
+	})
+	t.Run("review decision and routing remain strict", func(t *testing.T) {
+		got, err := decodeRoleOutput(RoleReviewer, `{"schema_version":1,"decision":"changes_requested","findings":[{"severity":"high","summary":"fix it"}],"required_corrections":["fix it"],"handoff":"Return to implementation","destination":"developer"}`)
+		if err == nil || got.Outcome != "" {
+			t.Fatalf("reviewer routing field accepted: %#v err=%v", got, err)
+		}
+		_, err = decodeRoleOutput(RoleReviewer, `{"schema_version":1,"decision":"approved","handoff":"Do more work"}`)
+		var malformed *StructuredOutputError
+		if !errors.As(err, &malformed) || malformed.Cause == nil || !strings.Contains(malformed.Cause.Error(), "must not include a handoff") {
+			t.Fatalf("approved review accepted handoff summary: %v", err)
+		}
+		_, err = decodeRoleOutput(RoleReviewer, `{"schema_version":1,"decision":"changes_requested","required_corrections":["fix"],"handoff":null}`)
+		if err == nil {
+			t.Fatal("changes-requested review accepted null handoff")
+		}
+	})
+}
+
 func TestStructuredOutputCorrectionFeedbackIsSpecificAndSafe(t *testing.T) {
 	t.Run("syntax", func(t *testing.T) {
 		_, err := decodeRoleOutput(RolePlanner, `{"provider_private_canary":`)
@@ -146,6 +198,61 @@ func TestStructuredOutputCorrectionFeedbackIsSpecificAndSafe(t *testing.T) {
 			t.Fatalf("feedback leaked response content: %q", correction.Feedback)
 		}
 	})
+}
+
+func TestRoleExecutionFailureCarriesOnlyAllowlistedFieldTypeFeedback(t *testing.T) {
+	const privateCanary = "PRIVATE_MODEL_VALUE_CANARY"
+	_, err := decodeRoleOutput(RoleReviewer, `{"schema_version":1,"decision":"approved","findings":{"summary":"`+privateCanary+`"},"evidence":[]}`)
+	var correction *SchemaCorrectionError
+	if !errors.As(err, &correction) || correction.Code != "invalid_field_type" {
+		t.Fatalf("expected typed schema correction, got %T: %v", err, err)
+	}
+	failure := ClassifyRoleExecutionFailure(err)
+	if failure.CorrectionField != "findings" || failure.ExpectedType != "a JSON array of objects" {
+		t.Fatalf("safe type detail = %q/%q", failure.CorrectionField, failure.ExpectedType)
+	}
+	feedback := roleFailureFeedback(RoleReviewer, failure.Code, failure.CorrectionField, failure.ExpectedType, failure.AllowedValues)
+	if !strings.Contains(feedback, "findings") || !strings.Contains(feedback, "a JSON array of objects") {
+		t.Fatalf("feedback lacks actionable field/type: %q", feedback)
+	}
+	wire, marshalErr := json.Marshal(failure)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if strings.Contains(string(wire), privateCanary) || strings.Contains(feedback, privateCanary) {
+		t.Fatalf("schema feedback leaked model value: wire=%s feedback=%q", wire, feedback)
+	}
+	if got := roleFailureFeedback(RoleReviewer, "invalid_field_type", "private_model_field", privateCanary); strings.Contains(got, privateCanary) || strings.Contains(got, "private_model_field") {
+		t.Fatalf("untrusted field/type pair escaped schema allowlist: %q", got)
+	}
+}
+
+func TestEnumCorrectionFeedbackIsAllowlistedAndSpecific(t *testing.T) {
+	const privateValue = "PRIVATE_BAD_DECISION_CANARY"
+	raw := `{"schema_version":1,"decision":"` + privateValue + `","findings":[],"evidence":[]}`
+	_, err := decodeRoleOutput(RoleReviewer, raw)
+	var correction *SchemaCorrectionError
+	if !errors.As(err, &correction) || correction.Code != "invalid_field_value" {
+		t.Fatalf("expected typed enum correction, got %T: %v", err, err)
+	}
+	failure := ClassifyRoleExecutionFailure(err)
+	if failure.CorrectionField != "decision" || !reflect.DeepEqual(failure.AllowedValues, []string{"approved", "changes_requested"}) {
+		t.Fatalf("enum detail = %q %v", failure.CorrectionField, failure.AllowedValues)
+	}
+	feedback := roleFailureFeedback(RoleReviewer, failure.Code, failure.CorrectionField, failure.ExpectedType, failure.AllowedValues)
+	if !strings.Contains(feedback, "decision") || !strings.Contains(feedback, "approved, changes_requested") {
+		t.Fatalf("feedback lacks allowed enum values: %q", feedback)
+	}
+	wire, marshalErr := json.Marshal(failure)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if strings.Contains(string(wire), privateValue) || strings.Contains(feedback, privateValue) {
+		t.Fatalf("private model value leaked: wire=%s feedback=%q", wire, feedback)
+	}
+	if got := roleFailureFeedback(RoleReviewer, "invalid_field_value", "private_field", "", []string{privateValue}); strings.Contains(got, privateValue) || strings.Contains(got, "private_field") {
+		t.Fatalf("untrusted enum detail escaped allowlist: %q", got)
+	}
 }
 
 func TestDecodeRoleOutputRejectsMalformedOrAmbiguousResults(t *testing.T) {

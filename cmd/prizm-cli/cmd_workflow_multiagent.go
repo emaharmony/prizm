@@ -22,7 +22,6 @@ import (
 	"github.com/emaharmony/prizm/internal/safety"
 	"github.com/emaharmony/prizm/internal/subagent"
 	"github.com/emaharmony/prizm/internal/tool"
-	"github.com/emaharmony/prizm/internal/validation"
 	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 	"runtime"
@@ -48,17 +47,18 @@ const referenceManifestSchemaVersion = 2
 // the same discriminator applied to the RunLocator-based read paths
 // (ListRuns/OpenInspection).
 type referenceWorkflowManifest struct {
-	SchemaVersion       int                               `json:"schema_version"`
-	RunID               string                            `json:"run_id"`
-	WorkflowID          string                            `json:"workflow_id"`
-	Input               multiagent.ReferenceWorkflowInput `json:"input"`
-	Definition          multiagent.Definition             `json:"definition"`
-	WorkspaceID         string                            `json:"workspace_id"`
-	WorkspacePath       string                            `json:"workspace_path"`
-	SourceWorkspacePath string                            `json:"source_workspace_path,omitempty"`
-	WorkspaceCleaned    bool                              `json:"workspace_cleaned,omitempty"`
-	WorkflowVersion     int64                             `json:"workflow_version,omitempty"`
-	DefinitionDBPath    string                            `json:"definition_db_path,omitempty"`
+	SchemaVersion                 int                               `json:"schema_version"`
+	RunID                         string                            `json:"run_id"`
+	WorkflowID                    string                            `json:"workflow_id"`
+	Input                         multiagent.ReferenceWorkflowInput `json:"input"`
+	Definition                    multiagent.Definition             `json:"definition"`
+	WorkspaceID                   string                            `json:"workspace_id"`
+	WorkspacePath                 string                            `json:"workspace_path"`
+	SourceWorkspacePath           string                            `json:"source_workspace_path,omitempty"`
+	WorkspaceCleaned              bool                              `json:"workspace_cleaned,omitempty"`
+	WorkflowVersion               int64                             `json:"workflow_version,omitempty"`
+	DefinitionDBPath              string                            `json:"definition_db_path,omitempty"`
+	ValidationProfileFingerprints map[string]string                 `json:"validation_profile_fingerprints,omitempty"`
 }
 
 // registryBacked reports whether m describes a PR6 `graph run`-started run
@@ -105,6 +105,9 @@ func executeReferenceWorkflowRun(inputFile, runDir, configPath string) error {
 		RunID:         runID, WorkflowID: multiagent.ReferenceWorkflowID,
 		Input: input, Definition: definition,
 		WorkspaceID: workspaceID, WorkspacePath: workspacePath, SourceWorkspacePath: sourceWorkspacePath,
+	}
+	if err := bindManifestValidationProfiles(configPath, &manifest); err != nil {
+		return err
 	}
 	if err := writeReferenceManifest(runDir, manifest); err != nil {
 		return err
@@ -315,6 +318,15 @@ type liveReferenceComponents struct {
 }
 
 func openLiveReferenceRuntime(runDir, configPath string, manifest referenceWorkflowManifest) (*referenceRuntime, error) {
+	if err := checkAcceptedValidationProfiles(configPath, manifest); err != nil {
+		inspection, openErr := openInspectionReferenceRuntime(runDir, manifest)
+		if openErr != nil {
+			return nil, errors.Join(err, openErr)
+		}
+		_, failErr := inspection.runtime.FailAcceptedRun(context.Background(), manifest.RunID, "validation_profile_configuration_changed")
+		closeErr := inspection.close()
+		return nil, errors.Join(err, failErr, closeErr)
+	}
 	components, err := buildLiveReferenceComponents(runDir, configPath, manifest)
 	if err != nil {
 		return nil, err
@@ -382,8 +394,12 @@ func buildLiveReferenceComponents(runDir, configPath string, manifest referenceW
 			return charter + agent.BuildToolPromptSuffix(toolInfos, manifest.WorkspacePath, manifest.WorkspacePath)
 		},
 	})
+	validationProfiles, err := configuredValidationRegistry(cfg)
+	if err != nil {
+		return nil, err
+	}
 	validationRunner := workspaceValidationRunner{
-		registry: validation.NewRegistry(), fallbackRoot: manifest.WorkspacePath, artifactRoot: runDir,
+		registry: validationProfiles, fallbackRoot: manifest.WorkspacePath, artifactRoot: runDir,
 	}
 	roleRunner, err := multiagent.NewAgentRoleRunner(multiagent.AgentRoleRunnerOptions{
 		Profiles: multiagent.RegistryProfileResolver{Registry: agentRegistry},

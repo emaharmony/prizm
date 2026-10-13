@@ -39,19 +39,25 @@ func (p natsCommandPublisher) Publish(ctx context.Context, subject string, paylo
 }
 
 type graphRoleWorker struct {
-	nc          *nats.Conn
-	runDir      string
-	configPath  string
-	resume      func(context.Context, string) error
-	executeRole func(context.Context, multiagent.GraphRoleCommand) (multiagent.RoleRunResult, error)
-	sem         chan struct{}
-	mu          sync.Mutex
-	running     map[string]struct{}
-	workerID    string
-	subs        []*nats.Subscription
-	cancel      context.CancelFunc
-	done        chan struct{}
-	publish     func(context.Context, string, []byte) error
+	nc               *nats.Conn
+	runDir           string
+	configPath       string
+	resume           func(context.Context, string) error
+	executeRole      func(context.Context, multiagent.GraphRoleCommand) (multiagent.RoleRunResult, error)
+	sem              chan struct{}
+	mu               sync.Mutex
+	running          map[string]struct{}
+	closing          bool
+	inFlight         sync.WaitGroup
+	closeOnce        sync.Once
+	closeErr         error
+	closeCh          chan struct{}
+	resumeRetryDelay time.Duration
+	workerID         string
+	subs             []*nats.Subscription
+	cancel           context.CancelFunc
+	done             chan struct{}
+	publish          func(context.Context, string, []byte) error
 }
 
 func startGraphRoleWorker(nc *nats.Conn, runDir, configPath string, resume func(context.Context, string) error) (*graphRoleWorker, error) {
@@ -63,7 +69,7 @@ func startGraphRoleWorkerWithRunner(nc *nats.Conn, runDir, configPath string, re
 		return nil, errors.New("graph role worker requires a connected NATS bus")
 	}
 	w := &graphRoleWorker{nc: nc, runDir: runDir, configPath: configPath, resume: resume, executeRole: executeRole,
-		sem: make(chan struct{}, subAgentMaxConcurrency), running: make(map[string]struct{}), workerID: event.NewID()}
+		sem: make(chan struct{}, subAgentMaxConcurrency), running: make(map[string]struct{}), workerID: event.NewID(), closeCh: make(chan struct{})}
 	commands, err := nc.QueueSubscribe(graphRoleDelegationSubject, "prizm-graph-role-workers", w.handleCommand)
 	if err != nil {
 		return nil, err
@@ -85,15 +91,59 @@ func startGraphRoleWorkerWithRunner(nc *nats.Conn, runDir, configPath string, re
 }
 
 func (w *graphRoleWorker) Close() error {
-	if w.cancel != nil {
-		w.cancel()
-		<-w.done
+	w.closeOnce.Do(func() {
+		w.mu.Lock()
+		w.closing = true
+		if w.closeCh == nil {
+			w.closeCh = make(chan struct{})
+		}
+		close(w.closeCh)
+		cancel, done := w.cancel, w.done
+		subs := append([]*nats.Subscription(nil), w.subs...)
+		w.mu.Unlock()
+
+		if cancel != nil {
+			cancel()
+			if done != nil {
+				<-done
+			}
+		}
+		var errs []error
+		for _, sub := range subs {
+			if sub != nil {
+				errs = append(errs, sub.Unsubscribe())
+			}
+		}
+		w.inFlight.Wait()
+		w.closeErr = errors.Join(errs...)
+	})
+	return w.closeErr
+}
+
+func (w *graphRoleWorker) admitCallback() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closing {
+		return false
 	}
-	var errs []error
-	for _, sub := range w.subs {
-		errs = append(errs, sub.Unsubscribe())
+	if w.closeCh == nil {
+		w.closeCh = make(chan struct{})
 	}
-	return errors.Join(errs...)
+	w.inFlight.Add(1)
+	return true
+}
+
+func (w *graphRoleWorker) admitWork() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closing {
+		return false
+	}
+	if w.closeCh == nil {
+		w.closeCh = make(chan struct{})
+	}
+	w.inFlight.Add(1)
+	return true
 }
 
 func (w *graphRoleWorker) deadlineLoop(ctx context.Context) {
@@ -268,19 +318,31 @@ func (w *graphRoleWorker) resumeRun(runID, reason string) {
 }
 
 func (w *graphRoleWorker) retryResume(runID, reason string) {
-	time.AfterFunc(graphRoleResumeRetryAfter, func() {
-		if w.done != nil {
-			select {
-			case <-w.done:
-				return
-			default:
-			}
+	if !w.admitWork() {
+		return
+	}
+	delay := w.resumeRetryDelay
+	if delay <= 0 {
+		delay = graphRoleResumeRetryAfter
+	}
+	go func() {
+		defer w.inFlight.Done()
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			w.resumeRun(runID, reason)
+		case <-w.closeCh:
+			return
 		}
-		w.resumeRun(runID, reason)
-	})
+	}()
 }
 
 func (w *graphRoleWorker) handleCommand(msg *nats.Msg) {
+	if !w.admitCallback() {
+		return
+	}
+	defer w.inFlight.Done()
 	var command multiagent.GraphRoleCommand
 	if err := json.Unmarshal(msg.Data, &command); err != nil {
 		log.Printf("[GRAPH-WORKER] rejected undecodable command: %v", err)
@@ -306,7 +368,14 @@ func (w *graphRoleWorker) handleCommand(msg *nats.Msg) {
 	}
 	w.running[command.DeliveryKey] = struct{}{}
 	w.mu.Unlock()
+	if !w.admitWork() {
+		w.mu.Lock()
+		delete(w.running, command.DeliveryKey)
+		w.mu.Unlock()
+		return
+	}
 	go func() {
+		defer w.inFlight.Done()
 		w.sem <- struct{}{}
 		defer func() {
 			<-w.sem
@@ -360,6 +429,9 @@ func (w *graphRoleWorker) validateCommand(command multiagent.GraphRoleCommand) e
 	}
 	if (command.JoinID == "") != (command.Lane == "") {
 		return errors.New("graph role join and lane identity must be paired")
+	}
+	if (command.DeliveryAttemptID == "") != (command.AttemptID == "") {
+		return errors.New("graph role retry attempt identity must be complete")
 	}
 	if command.JoinID != "" {
 		want := map[multiagent.FanOutLane]multiagent.Role{multiagent.FanOutResearch: multiagent.RolePlanner, multiagent.FanOutImplementation: multiagent.RoleDeveloper, multiagent.FanOutReview: multiagent.RoleReviewer}[command.Lane]
@@ -429,16 +501,44 @@ func (w *graphRoleWorker) execute(command multiagent.GraphRoleCommand) {
 		err = fmt.Errorf("persisted workspace %q does not match command workspace %q", manifest.WorkspaceID, command.WorkspaceID)
 	}
 	var result multiagent.RoleRunResult
+	var retryHandle multiagent.RoleVisitRetryHandle
 	if err == nil {
 		execCtx, cancel := context.WithDeadline(ctx, command.Deadline)
+		command.Request.RecoveryFeedback = command.RecoveryFeedback
+		var retryStore *multiagent.SQLiteDurableRunStore
+		if command.DeliveryAttemptID != "" && command.AttemptID != "" {
+			retryStore, err = multiagent.NewSQLiteDurableRunStore(ledgerPath)
+			if err == nil {
+				err = multiagent.ValidateDelegatedRoleCommand(execCtx, retryStore, command)
+			}
+			if err == nil {
+				var toolSink multiagent.ToolEventSink
+				if command.JoinID != "" {
+					retryHandle, toolSink, err = multiagent.NewDelegationChildRetryHandle(execCtx, retryStore,
+						command.RunID, command.JoinID, command.ChildID, command.DeliveryAttemptID, command.AttemptID)
+				} else {
+					retryHandle, toolSink, err = multiagent.NewDelegatedRoleRetryHandle(execCtx, retryStore,
+						command.RunID, command.DeliveryAttemptID, command.AttemptID)
+				}
+				if err == nil {
+					command.Request.RetryHandle = retryHandle
+					command.Request.ToolEventSink = toolSink
+				}
+			}
+		}
 		if w.executeRole != nil {
-			result, err = w.executeRole(execCtx, command)
-		} else {
+			if err == nil {
+				result, err = w.executeRole(execCtx, command)
+			}
+		} else if err == nil {
 			var components *liveReferenceComponents
 			components, err = buildLiveReferenceComponents(w.runDir, w.configPath, manifest)
 			if err == nil {
 				result, err = components.runner.RunRole(execCtx, command.Request)
 			}
+		}
+		if retryStore != nil {
+			_ = retryStore.Close()
 		}
 		cancel()
 	}
@@ -447,7 +547,18 @@ func (w *graphRoleWorker) execute(command multiagent.GraphRoleCommand) {
 		if errors.Is(err, context.DeadlineExceeded) || !time.Now().UTC().Before(command.Deadline) {
 			status = event.OutcomeTimedOut
 		}
-		if publishErr := w.persistAndPublishTerminal(ctx, ledgerPath, command, status, map[string]string{"message": err.Error()}); publishErr != nil {
+		var payload any = map[string]string{"message": err.Error()}
+		if command.DeliveryAttemptID != "" {
+			failure := multiagent.ClassifyRoleExecutionFailure(err)
+			failure.DeliveryAttemptID = command.DeliveryAttemptID
+			failure.AttemptID = command.AttemptID
+			failure.Usage = result.TokenUsage
+			if retryHandle != nil {
+				failure.AttemptID = retryHandle.CurrentAttempt().AttemptID
+			}
+			payload = multiagent.GraphRoleOutcome{Failure: &failure}
+		}
+		if publishErr := w.persistAndPublishTerminal(ctx, ledgerPath, command, status, payload); publishErr != nil {
 			log.Printf("[GRAPH-WORKER] terminal %s: %v", command.DeliveryKey, publishErr)
 		}
 		return
@@ -545,8 +656,11 @@ func (w *graphRoleWorker) recordTrustedOutcome(ctx context.Context, ledgerPath s
 }
 
 func (w *graphRoleWorker) publishMessage(ctx context.Context, subject string, payload []byte) error {
-	if w.publish != nil {
-		return w.publish(ctx, subject, payload)
+	w.mu.Lock()
+	publish := w.publish
+	w.mu.Unlock()
+	if publish != nil {
+		return publish(ctx, subject, payload)
 	}
 	if w.nc == nil || !w.nc.IsConnected() {
 		return errors.New("graph role NATS publisher is disconnected")
@@ -663,6 +777,10 @@ func openGraphRoleLedger(ctx context.Context, path string) (*sql.DB, error) {
 }
 
 func (w *graphRoleWorker) handleOutcome(msg *nats.Msg) {
+	if !w.admitCallback() {
+		return
+	}
+	defer w.inFlight.Done()
 	var outcome event.Outcome
 	if json.Unmarshal(msg.Data, &outcome) != nil || outcome.Validate() != nil {
 		return

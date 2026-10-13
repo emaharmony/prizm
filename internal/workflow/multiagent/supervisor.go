@@ -555,6 +555,10 @@ func (s *Supervisor) completeRunWithCondition(state RunState, condition Terminal
 }
 
 func (s *Supervisor) failRole(state RunState, role Role, err error) (RunState, error) {
+	return s.failRoleWithRetryDiagnostic(state, role, err, nil)
+}
+
+func (s *Supervisor) failRoleWithRetryDiagnostic(state RunState, role Role, err error, diagnostic *PersistedFailure) (RunState, error) {
 	now := s.now().UTC()
 	roleState := state.RoleStates[role]
 	roleState.Status = RoleStatusFailed
@@ -562,10 +566,14 @@ func (s *Supervisor) failRole(state RunState, role Role, err error) (RunState, e
 	roleState.UpdatedAt = now
 	roleState.CompletedAt = timePointer(now)
 	state.RoleStates[role] = roleState
-	return s.failRun(state, err), err
+	return s.failRunWithRetryDiagnostic(state, err, diagnostic), err
 }
 
 func (s *Supervisor) failRun(state RunState, err error) RunState {
+	return s.failRunWithRetryDiagnostic(state, err, nil)
+}
+
+func (s *Supervisor) failRunWithRetryDiagnostic(state RunState, err error, diagnostic *PersistedFailure) RunState {
 	now := s.now().UTC()
 	state.Status = RunStatusFailed
 	state.TerminalOutcome = &TerminalOutcome{
@@ -575,7 +583,33 @@ func (s *Supervisor) failRun(state RunState, err error) RunState {
 	}
 	state.CompletedAt = timePointer(now)
 	state.UpdatedAt = now
-	s.emitRun(event.EventMultiAgentRunFailed, state, err.Error())
+	fields := map[string]any{}
+	if diagnostic != nil {
+		if diagnostic.AttemptID != "" {
+			fields["attempt_id"] = diagnostic.AttemptID
+		}
+		if diagnostic.Attempt > 0 {
+			fields["attempt"] = diagnostic.Attempt
+		}
+		if diagnostic.RecoveryNumber > 0 {
+			fields["recovery_number"] = diagnostic.RecoveryNumber
+		}
+		if diagnostic.MaxRecoveries > 0 {
+			fields["max_recoveries"] = diagnostic.MaxRecoveries
+		}
+		if diagnostic.FailureClass != "" {
+			fields["failure_class"] = diagnostic.FailureClass
+		}
+		if diagnostic.FailureCode != "" {
+			fields["failure_code"] = diagnostic.FailureCode
+		}
+		if diagnostic.FailureReason != "" {
+			fields["failure_reason"] = diagnostic.FailureReason
+		}
+		fields["retryable"] = diagnostic.Retryable
+		fields["retry_exhausted"] = diagnostic.RetryExhausted
+	}
+	s.emitRunWithFields(event.EventMultiAgentRunFailed, state, err.Error(), fields)
 	s.log(state, "run failed", slog.String("outcome", "failed"), slog.String("error", err.Error()))
 	return state
 }
@@ -641,6 +675,10 @@ func (s *Supervisor) runView(state RunState) RunView {
 }
 
 func (s *Supervisor) emitRun(eventType string, state RunState, reason string) {
+	s.emitRunWithFields(eventType, state, reason, nil)
+}
+
+func (s *Supervisor) emitRunWithFields(eventType string, state RunState, reason string, fields map[string]any) {
 	payload := map[string]any{
 		"run_id":      state.RunID,
 		"workflow_id": state.WorkflowID,
@@ -651,6 +689,9 @@ func (s *Supervisor) emitRun(eventType string, state RunState, reason string) {
 	}
 	if state.TerminalOutcome != nil {
 		payload["terminal_condition"] = string(state.TerminalOutcome.Condition)
+	}
+	for key, value := range fields {
+		payload[key] = value
 	}
 	s.emit(eventType, state, payload)
 }
@@ -687,6 +728,13 @@ func (s *Supervisor) emitRole(
 		}
 		if result.Metadata.Model != "" {
 			payload["model"] = result.Metadata.Model
+		}
+		if result.Metadata.ExecutionMode != "" {
+			payload["execution_mode"] = result.Metadata.ExecutionMode
+			payload["source_join_id"] = result.Metadata.SourceJoinID
+			payload["source_child_id"] = result.Metadata.SourceChildID
+			payload["source_delivery_key"] = result.Metadata.SourceDeliveryKey
+			payload["source_proposal_ids"] = append([]string(nil), result.Metadata.SourceProposalIDs...)
 		}
 		if !result.Metadata.StartedAt.IsZero() &&
 			!result.Metadata.FinishedAt.IsZero() {
