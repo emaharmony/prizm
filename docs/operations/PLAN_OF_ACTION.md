@@ -279,3 +279,10 @@ The run list was rendered from `http://127.0.0.1:20822/multiagent-runs.html`. It
 Feature commit `b798578f5b7ac175b94fed6d5f8036811625e3d8` is pushed on `codex/durable-task-retries` from `origin/staging` `d7f76efbd913b165bd695ff295a051e74cf828c2`. Pull request [#89](https://github.com/emaharmony/prizm/pull/89) targets `staging`; it is open and not a draft. At handoff, CI jobs `lint-linux` and `test-linux` were running, with `test-windows` and `test-python` queued. The tracked worktree is clean; pre-existing caches and temporary directories remain untracked and are excluded. No merge was performed.
 
 **Next action:** CI follow-up on PR #89 resolved the deprecated `Temporary` classifier and three concrete gates; verify the newly pushed head's CI. R1 overall and its additional roadmap scenarios remain open.
+
+
+### R1 terminal fan-out diagnostics handoff (2026-10-13)
+
+PR #91 remains a draft checkpoint; the real Factory acceptance run `run_9544229c6a3b2158bf82ddf6e6` failed before proposal, apply, configured validation, or final review. Its immutable report remains unchanged. The R1 review worktree was merged with current staging `31a6ee783691c7a59005d6afc2b064ad73859258`; only seven reviewed diagnostic/classifier paths were ported. Terminal child failures now preserve trusted retry counters and allowlisted failure/schema details through durable join failure, child event, and revalidated report projection. Four known safe nonretryable tool codes remain distinct; unknown errors stay unknown. Focused multiagent/event tests pass; full build, vet, and default-parallel suite are pending on the merged candidate.
+
+Next: finish current-tree gates and review the exact seven-file diagnostic diff before committing/pushing an update to PR #91. Then address the live acceptance failure from the new bounded evidence; do not claim R1 complete or change immutable run history. FW-P1 (FW-002/003/004) remains separate follow-on work after this R1 checkpoint.

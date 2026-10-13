@@ -173,25 +173,51 @@ type FanOutAdoptionState struct {
 // DelegationJoinChild is the durable identity and bounded result state for one
 // parallel fan-out lane.
 type DelegationJoinChild struct {
-	ChildID           string              `json:"child_id"`
-	Lane              FanOutLane          `json:"lane"`
-	Role              Role                `json:"role"`
-	Task              TaskReference       `json:"task"`
-	ExecutionKey      string              `json:"execution_key"`
-	DelegationID      string              `json:"delegation_id"`
-	JoinID            string              `json:"join_id"`
-	DeliveryKey       string              `json:"delivery_key"`
-	CommandEventID    string              `json:"command_event_id"`
-	CorrelationID     string              `json:"correlation_id"`
-	Deadline          time.Time           `json:"deadline"`
-	DeliveryAttemptID string              `json:"delivery_attempt_id,omitempty"`
-	DeliveryNumber    int                 `json:"delivery_number,omitempty"`
-	Retry             *RetryState         `json:"retry,omitempty"`
-	DispatchPending   bool                `json:"dispatch_pending"`
-	Status            event.OutcomeStatus `json:"status"`
-	LastSequence      int64               `json:"last_sequence,omitempty"`
-	Result            *RoleRunResult      `json:"result,omitempty"`
-	Error             string              `json:"error,omitempty"`
+	ChildID           string               `json:"child_id"`
+	Lane              FanOutLane           `json:"lane"`
+	Role              Role                 `json:"role"`
+	Task              TaskReference        `json:"task"`
+	ExecutionKey      string               `json:"execution_key"`
+	DelegationID      string               `json:"delegation_id"`
+	JoinID            string               `json:"join_id"`
+	DeliveryKey       string               `json:"delivery_key"`
+	CommandEventID    string               `json:"command_event_id"`
+	CorrelationID     string               `json:"correlation_id"`
+	Deadline          time.Time            `json:"deadline"`
+	DeliveryAttemptID string               `json:"delivery_attempt_id,omitempty"`
+	DeliveryNumber    int                  `json:"delivery_number,omitempty"`
+	Retry             *RetryState          `json:"retry,omitempty"`
+	DispatchPending   bool                 `json:"dispatch_pending"`
+	Status            event.OutcomeStatus  `json:"status"`
+	LastSequence      int64                `json:"last_sequence,omitempty"`
+	Result            *RoleRunResult       `json:"result,omitempty"`
+	Error             string               `json:"error,omitempty"`
+	TerminalFailure   *TerminalRoleFailure `json:"terminal_failure,omitempty"`
+}
+
+// TerminalRoleFailure is an allowlisted diagnosis for a completed delegated
+// attempt. It contains schema-owned identifiers only, never provider output.
+type TerminalRoleFailure struct {
+	AttemptID       string   `json:"attempt_id,omitempty"`
+	Class           string   `json:"class"`
+	Code            string   `json:"code"`
+	CorrectionField string   `json:"correction_field,omitempty"`
+	ExpectedType    string   `json:"expected_type,omitempty"`
+	AllowedValues   []string `json:"allowed_values,omitempty"`
+	RecoveryNumber  int      `json:"recovery_number"`
+	MaxRecoveries   int      `json:"max_recoveries"`
+	Retryable       bool     `json:"retryable"`
+	Reason          string   `json:"reason"`
+}
+
+// TerminalFanOutFailure preserves failed child identity after the active join
+// is cleared from a terminal run.
+type TerminalFanOutFailure struct {
+	JoinID  string              `json:"join_id"`
+	ChildID string              `json:"child_id"`
+	Lane    FanOutLane          `json:"lane"`
+	Role    Role                `json:"role"`
+	Failure TerminalRoleFailure `json:"failure"`
 }
 
 // DelegationJoinState retains the parent result while three bounded child
@@ -212,18 +238,19 @@ type DelegationJoinState struct {
 // PersistedFailure is bounded diagnostic information. It never contains
 // prompts, credentials, or provider output.
 type PersistedFailure struct {
-	Kind           string    `json:"kind"`
-	Message        string    `json:"message"`
-	At             time.Time `json:"at"`
-	AttemptID      string    `json:"attempt_id,omitempty"`
-	Attempt        int       `json:"attempt,omitempty"`
-	RecoveryNumber int       `json:"recovery_number,omitempty"`
-	MaxRecoveries  int       `json:"max_recoveries,omitempty"`
-	FailureClass   string    `json:"failure_class,omitempty"`
-	FailureCode    string    `json:"failure_code,omitempty"`
-	FailureReason  string    `json:"failure_reason,omitempty"`
-	Retryable      bool      `json:"retryable,omitempty"`
-	RetryExhausted bool      `json:"retry_exhausted,omitempty"`
+	Kind           string                  `json:"kind"`
+	Message        string                  `json:"message"`
+	At             time.Time               `json:"at"`
+	AttemptID      string                  `json:"attempt_id,omitempty"`
+	Attempt        int                     `json:"attempt,omitempty"`
+	RecoveryNumber int                     `json:"recovery_number,omitempty"`
+	MaxRecoveries  int                     `json:"max_recoveries,omitempty"`
+	FailureClass   string                  `json:"failure_class,omitempty"`
+	FailureCode    string                  `json:"failure_code,omitempty"`
+	FailureReason  string                  `json:"failure_reason,omitempty"`
+	Retryable      bool                    `json:"retryable,omitempty"`
+	RetryExhausted bool                    `json:"retry_exhausted,omitempty"`
+	FanOutFailures []TerminalFanOutFailure `json:"fanout_failures,omitempty"`
 }
 
 // DurableRun is the atomic persistence envelope around canonical RunState.
@@ -260,6 +287,22 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 	}
 	if !r.Phase.Valid() {
 		problems = append(problems, fmt.Sprintf("unknown checkpoint phase %q", r.Phase))
+	}
+	if r.Failure != nil {
+		seenFailureChildren := make(map[string]struct{}, len(r.Failure.FanOutFailures))
+		laneRoles := map[FanOutLane]Role{FanOutResearch: RolePlanner, FanOutImplementation: RoleDeveloper, FanOutReview: RoleReviewer}
+		for _, failure := range r.Failure.FanOutFailures {
+			if failure.JoinID == "" || failure.ChildID == "" || laneRoles[failure.Lane] == "" || failure.Role != laneRoles[failure.Lane] ||
+				!validTerminalRoleFailure(failure.Role, failure.Failure) {
+				problems = append(problems, "persisted fan-out failure summary is invalid")
+				break
+			}
+			if _, exists := seenFailureChildren[failure.ChildID]; exists {
+				problems = append(problems, "persisted fan-out failure child is duplicated")
+				break
+			}
+			seenFailureChildren[failure.ChildID] = struct{}{}
+		}
 	}
 	if err := r.State.Validate(graph); err != nil {
 		problems = append(problems, err.Error())
@@ -466,6 +509,13 @@ func (j DelegationJoinState) Validate(runID string, currentRole Role) error {
 		}
 		if child.Result != nil && child.Result.FanOut != nil {
 			return fmt.Errorf("delegation join child %q cannot nest a fan-out plan", child.ChildID)
+		}
+		if child.TerminalFailure != nil {
+			failure := child.TerminalFailure
+			if !child.Status.Terminal() || !validTerminalRoleFailure(child.Role, *failure) ||
+				(child.Retry != nil && (failure.AttemptID != child.Retry.AttemptID || failure.RecoveryNumber != child.Retry.RecoveryNumber || failure.MaxRecoveries != child.Retry.MaxRecoveries)) {
+				return fmt.Errorf("delegation join child %q has invalid terminal failure summary", child.ChildID)
+			}
 		}
 		if child.Retry != nil {
 			state := child.Retry

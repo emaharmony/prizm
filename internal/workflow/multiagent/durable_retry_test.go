@@ -154,6 +154,10 @@ func TestNonRetryableRoleFailureRetainsOnlyAllowlistedTypedCodes(t *testing.T) {
 		wantCode  string
 	}{
 		{name: "safe execution code", err: &subagent.SafeFailureError{Code: "progress_checkpoint_failed"}, wantClass: "execution", wantCode: "progress_checkpoint_failed"},
+		{name: "safe tool input code", err: &subagent.SafeFailureError{Code: "invalid_input"}, wantClass: "tool", wantCode: "invalid_input"},
+		{name: "safe tool lookup code", err: &subagent.SafeFailureError{Code: "not_found"}, wantClass: "tool", wantCode: "not_found"},
+		{name: "safe tool permission code", err: &subagent.SafeFailureError{Code: "permission_denied"}, wantClass: "tool", wantCode: "permission_denied"},
+		{name: "safe patch validation code", err: &subagent.SafeFailureError{Code: "patch_validation_failed"}, wantClass: "tool", wantCode: "patch_validation_failed"},
 		{name: "safe governance code", err: &subagent.SafeFailureError{Code: "invalid_proposal_context"}, wantClass: "governance", wantCode: "invalid_proposal_context"},
 		{name: "governance kind", err: &GovernanceError{Kind: "workspace_scope", Reason: "PRIVATE_REASON_CANARY"}, wantClass: "governance", wantCode: "workspace_scope"},
 		{name: "cancellation", err: context.Canceled, wantClass: "cancellation", wantCode: "cancelled"},

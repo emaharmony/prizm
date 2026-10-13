@@ -1755,3 +1755,14 @@ queued. These are an opening snapshot, not a final CI result.
 **Next action:** monitor PR #92 checks and address any failures. After that
 review checkpoint, FW-002 (deduplicated bounded wake producer) is the next
 eligible Freewill task; FW-P2 stays blocked on R1 and FW-G2.
+
+
+## 2026-10-13 — R1 terminal fan-out diagnostics port
+
+**Roadmap:** R1 remains incomplete; FW-001 is separately published and FW-002/003/004 remain follow-on scope. **Branch:** `codex/r1-parallel-acceptance-staging`, PR #91 review worktree. The worktree was synchronized by merging `origin/staging` at `31a6ee783691c7a59005d6afc2b064ad73859258`; both staging FW-001 and prior R1/R6 log histories were retained.
+
+Ported seven reviewed paths for safe terminal fan-out failure diagnostics: durable child and run failure summaries; trusted retry attempt/recovery/reason derivation; allowlisted child completion event fields; report revalidation; fixed nonretryable tool-code classification; event payload schema; and regressions for persistence, report projection, and unknown/raw-value exclusion. No provider output, raw error text, prompts, or user content is added.
+
+**Validation:** `go test ./internal/workflow/multiagent ./internal/event` passed on the merged candidate. Full build, vet, and default-parallel test suite remain pending. Prior real-provider run `run_9544229c6a3b2158bf82ddf6e6` remains a failed immutable record: three overlapping child intervals were observed, but no implementation proposal, apply, configured validation, or final review occurred; one terminal failure notice was delivered. The diagnostics do not alter that record or establish acceptance success.
+
+**Next action:** complete current-tree checks and review the exact diff before updating PR #91. Do not merge the PR or claim R1 completion.
