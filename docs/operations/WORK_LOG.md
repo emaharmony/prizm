@@ -1701,6 +1701,12 @@ created in an isolated clean staging worktree at
   FW-001 slice as R1 acceptance or a 9/10 result. The dirty primary checkout
   and separate Recall worktree were not changed.
 
-**Next action:** publish the coordinator-approved FW-001 review PR from this
-branch. Then FW-002 (deduplicated bounded wake producer) is the next eligible
-Freewill task; FW-P2 stays blocked on R1 and FW-G2.
+**Publication:** commit `8ca67fbc9e9b3f2a896b53a81c96244951830a21` contains the
+12-file FW-001 contract slice. PR [#92](https://github.com/emaharmony/prizm/pull/92)
+targets `staging`, is open/non-draft/mergeable, and was opened with
+`lint-linux`, `test-linux`, and `test-python` in progress and `test-windows`
+queued. These are an opening snapshot, not a final CI result.
+
+**Next action:** monitor PR #92 checks and address any failures. After that
+review checkpoint, FW-002 (deduplicated bounded wake producer) is the next
+eligible Freewill task; FW-P2 stays blocked on R1 and FW-G2.

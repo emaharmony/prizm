@@ -92,8 +92,12 @@ feature/scheduling config flags that both default off, and ADR 0003 with the
 package justification and threat model. The package does not connect to policy,
 approval, persistence, transport, a scheduler, providers, tools, or execution.
 Focused and full repository checks passed, and coordinator review approved the
-implementation. A focused FW-001 pull request is being prepared; no runtime
-behavior or execution path was added.
+implementation. The FW-001 review PR has no runtime behavior or execution
+path added.
+
+The review-ready checkpoint is [PR #92](https://github.com/emaharmony/prizm/pull/92),
+head `8ca67fbc9e9b3f2a896b53a81c96244951830a21` against `staging`. At opening it
+was non-draft and mergeable; CI was still running or queued.
 
 R1 remains open: PR #91 is an open draft, and its latest real-provider parallel
 Factory attempt failed before proposal, apply, configured validation, or final

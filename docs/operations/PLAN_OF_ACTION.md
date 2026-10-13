@@ -23,11 +23,12 @@ FW-001 adds only pure intention/candidate contracts, structural lifecycle
 validation, disabled-by-default `freewill` flags, and ADR 0003 documentation.
 Its config flags have no runtime consumer and do not enable scheduling or
 execution. Focused tests and full repository `go test ./...`, `go build ./...`,
-`go vet ./...`, and `staticcheck ./...` passed on this branch; coordinator
-review approved the implementation. The FW-001 review PR is being prepared.
-After that checkpoint, the next eligible Freewill task is FW-002, subject to
-its provider/scheduler prerequisites. FW-P2 remains blocked on R1 acceptance
-and FW-G2.
+`go vet ./...`, and `staticcheck ./...` passed; coordinator review approved the
+implementation. PR [#92](https://github.com/emaharmony/prizm/pull/92) is open,
+ready for review, and initially mergeable; CI is running/queued on head
+`8ca67fbc9e9b3f2a896b53a81c96244951830a21`. FW-002 is the next eligible
+Freewill task after this review checkpoint, subject to provider/scheduler
+prerequisites. FW-P2 remains blocked on R1 acceptance and FW-G2.
 
 ## Previous R1 delivery plan (retained for context)
 
