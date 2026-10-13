@@ -286,6 +286,16 @@ Checkpoint + structured outcomes + enjoyment + reflection + memory
 
 **Approval contract [REQUIRED INVARIANT]:** An approval binds to a **particular immutable request version, user identity, scope, budgets, and expiry**. Any relevant change requires new validation, and expanded scope requires fresh authorization. User amendments preserve original and changed forms and a machine-readable diff. Decisions: `allow`, `allow_with_limits`, `deny`, `needs_user_review`. A human edit is a new proposal, **not** a universal authorization override.
 
+**Repository contract refinement (FW-001):** The initial Go request contract
+requires `request_id`, `agent_id`, `origin: agent`, `candidate_source`,
+`title`, `goal`, a brief `reason_summary`, a non-empty unique
+`requested_capabilities` list, explicit `scope.project_id` and
+`scope.workspace`, `idempotency_key`, and `correlation_id`. Resource budget
+fields are optional and remain unspecified when omitted. Unknown JSON fields,
+including approval or permission fields, are rejected. These shape checks do
+not establish identity or authorize the requested scope/capabilities; only the
+existing authenticated runtime gates can do that. See [ADR 0003](../architecture/decisions/0003-freewill-intention-contracts.md).
+
 ### 4.4 Intention state model [PROPOSED]
 
 ```text
