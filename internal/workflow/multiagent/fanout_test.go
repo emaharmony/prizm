@@ -909,10 +909,9 @@ func TestTerminalFanOutFailuresPersistSafeClassificationThroughReport(t *testing
 	if err != nil || len(childEvents) != 3 {
 		t.Fatalf("child events=%d err=%v", len(childEvents), err)
 	}
-	var report ReferenceRunReport
 	// The public report is assembled from the same canonical event projection
 	// used by the run-report endpoint.
-	report = BuildReferenceRunReport(ReferenceWorkflowInput{Objective: "diagnostic test"}, record.State, childEvents)
+	report := BuildReferenceRunReport(ReferenceWorkflowInput{Objective: "diagnostic test"}, record.State, childEvents)
 	if len(report.FanOut) != 3 {
 		t.Fatalf("report fanout=%#v", report.FanOut)
 	}
