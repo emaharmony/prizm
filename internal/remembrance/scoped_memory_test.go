@@ -2,13 +2,148 @@ package remembrance
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/emaharmony/prizm/internal/memory"
 )
+
+func TestScopedMemoryBackendCaptureIdempotentHonorsCancellation(t *testing.T) {
+	entered := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		select {
+		case <-r.Context().Done():
+		case <-time.After(200 * time.Millisecond):
+		}
+	}))
+	defer server.Close()
+	backend := ScopedMemoryBackend{Client: NewClient(server.URL)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := backend.CaptureIdempotent(ctx, memory.Memory{ID: "local", Content: "x", Summary: "x", ProjectID: "p", TaskID: "t"}, "key")
+		errCh <- err
+	}()
+	<-entered
+	cancel()
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected cancellation error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("capture did not honor cancellation")
+	}
+}
+
+func TestScopedMemoryBackendCaptureHonorsCancellation(t *testing.T) {
+	entered := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		select {
+		case <-r.Context().Done():
+		case <-time.After(200 * time.Millisecond):
+		}
+	}))
+	defer server.Close()
+	backend := ScopedMemoryBackend{Client: NewClient(server.URL)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := backend.Capture(ctx, memory.Memory{ID: "local", Content: "x", Summary: "x", ProjectID: "p", TaskID: "t"})
+		errCh <- err
+	}()
+	<-entered
+	cancel()
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected cancellation error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("capture did not honor cancellation")
+	}
+}
+
+func TestScopedMemoryBackendCaptureIdempotentSendsScopeAndKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/memory/ingest" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["idempotency_key"] != "sync-key" || body["owner_id"] != "user-a" || body["project_id"] != "project-a" || body["task_id"] != "task-a" || body["agent_id"] != "agent-a" {
+			t.Fatalf("bad scope/key: %#v", body)
+		}
+		_, _ = w.Write([]byte(`{"id":"remote-original","decision":"PERSIST"}`))
+	}))
+	defer server.Close()
+	backend := ScopedMemoryBackend{Client: NewClient(server.URL)}
+	mem := memory.Memory{ID: "local-id", Content: "durable", Summary: "durable", UserID: "user-a", ProjectID: "project-a", TaskID: "task-a", AgentID: "agent-a"}
+	id, err := backend.CaptureIdempotent(context.Background(), mem, "sync-key")
+	if err != nil || id != "remote-original" {
+		t.Fatalf("capture = %q, %v", id, err)
+	}
+}
+
+func TestScopedMemoryBackendCaptureIdempotentRejectsFailedDecision(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"remote-failed","decision":"FAILED"}`))
+	}))
+	defer server.Close()
+
+	backend := ScopedMemoryBackend{Client: NewClient(server.URL)}
+	_, err := backend.CaptureIdempotent(context.Background(), memory.Memory{
+		ID: "local-id", Content: "durable", Summary: "durable", ProjectID: "project-a", TaskID: "task-a",
+	}, "sync-key")
+	if err == nil || !strings.Contains(err.Error(), `decision="FAILED"`) {
+		t.Fatalf("failed decision error = %v, want rejected FAILED decision", err)
+	}
+}
+
+func TestScopedMemoryBackendCaptureIdempotentRejectsSkipDecision(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"remote-skipped","decision":"SKIP"}`))
+	}))
+	defer server.Close()
+
+	backend := ScopedMemoryBackend{Client: NewClient(server.URL)}
+	_, err := backend.CaptureIdempotent(context.Background(), memory.Memory{
+		ID: "local-id", Content: "durable", Summary: "durable", ProjectID: "project-a", TaskID: "task-a",
+	}, "sync-key")
+	if err == nil || !strings.Contains(err.Error(), `decision="SKIP"`) {
+		t.Fatalf("skip decision error = %v, want rejected SKIP decision", err)
+	}
+}
+
+func TestScopedMemoryBackendCaptureIdempotentRejectsBlankRemoteID(t *testing.T) {
+	for _, remoteID := range []string{"", "   \t\n"} {
+		t.Run(fmt.Sprintf("id_%q", remoteID), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(fmt.Sprintf(`{"id":%q,"decision":"PERSIST"}`, remoteID)))
+			}))
+			defer server.Close()
+
+			backend := ScopedMemoryBackend{Client: NewClient(server.URL)}
+			_, err := backend.CaptureIdempotent(context.Background(), memory.Memory{
+				ID: "local-id", Content: "durable", Summary: "durable", ProjectID: "project-a", TaskID: "task-a",
+			}, "sync-key")
+			if err == nil || !strings.Contains(err.Error(), "no remote ID") {
+				t.Fatalf("blank remote ID error = %v, want missing-ID rejection", err)
+			}
+		})
+	}
+}
 
 func TestScopedMemorySearchSendsScopeAndRejectsIncompleteMetadata(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -273,6 +273,36 @@ func TestSQLiteEventStore_QueryOrdersByIDNotTimestamp(t *testing.T) {
 	}
 }
 
+func TestSQLiteEventStore_QueryInInsertionOrderPageUsesRowIDCursor(t *testing.T) {
+	store, err := NewSQLiteEventStore(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteEventStore() error = %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	for _, id := range []string{"evt_c", "evt_a", "evt_b"} {
+		if err := store.Store(ctx, Event{ID: id, Type: "prizm.memory.capture.pending", Timestamp: "2026-10-08T00:00:00Z", Payload: map[string]any{}, Metadata: EventMetadata{RunID: "run_causal_page"}}); err != nil {
+			t.Fatalf("store %s: %v", id, err)
+		}
+	}
+
+	first, cursor, err := store.QueryInInsertionOrderPage(ctx, EventFilter{RunID: "run_causal_page", Limit: 2}, 0)
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	if len(first) != 2 || first[0].ID != "evt_c" || first[1].ID != "evt_a" || cursor == 0 {
+		t.Fatalf("first page=%#v cursor=%d, want insertion order and cursor", first, cursor)
+	}
+	second, next, err := store.QueryInInsertionOrderPage(ctx, EventFilter{RunID: "run_causal_page", Limit: 2}, cursor)
+	if err != nil {
+		t.Fatalf("second page: %v", err)
+	}
+	if len(second) != 1 || second[0].ID != "evt_b" || next <= cursor {
+		t.Fatalf("second page=%#v next=%d cursor=%d", second, next, cursor)
+	}
+}
+
 func TestSQLiteEventStore_DuplicateEventIDIsIdempotent(t *testing.T) {
 	store, err := NewSQLiteEventStore(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

@@ -10,6 +10,7 @@ package remembrance
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -167,6 +168,7 @@ type CaptureRequest struct {
 	Content         string   `json:"content"`
 	SourceType      string   `json:"source_type"`
 	SourceAgent     string   `json:"source_agent,omitempty"`
+	IdempotencyKey  string   `json:"idempotency_key,omitempty"`
 }
 
 // ScopedSearchRequest carries the exact authorization boundary to Recall.
@@ -295,6 +297,12 @@ func (c *Client) Capture(text, source, category, tier string) (map[string]any, e
 }
 
 func (c *Client) CaptureWithMetadata(req CaptureRequest) (map[string]any, error) {
+	return c.CaptureWithMetadataContext(context.Background(), req)
+}
+
+// CaptureWithMetadataContext preserves the legacy API while allowing callers
+// that own a shutdown deadline to cancel the outbound capture request.
+func (c *Client) CaptureWithMetadataContext(ctx context.Context, req CaptureRequest) (map[string]any, error) {
 	if req.ProjectID == "" {
 		req.ProjectID = "prizm"
 	}
@@ -324,7 +332,7 @@ func (c *Client) CaptureWithMetadata(req CaptureRequest) (map[string]any, error)
 	if err := json.Unmarshal(bodyBytes, &body); err != nil {
 		return nil, fmt.Errorf("failed to encode capture request: %w", err)
 	}
-	return c.doPost(c.BaseURL+"/v1/memory/ingest", body)
+	return c.doPostContext(ctx, c.BaseURL+"/v1/memory/ingest", body)
 }
 
 func truncate(s string, maxLen int) string {
@@ -438,12 +446,21 @@ func (c *Client) doGetMap(reqURL string) (map[string]any, error) {
 }
 
 func (c *Client) doPost(reqURL string, body map[string]any) (map[string]any, error) {
+	return c.doPostContext(context.Background(), reqURL, body)
+}
+
+func (c *Client) doPostContext(ctx context.Context, reqURL string, body map[string]any) (map[string]any, error) {
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	resp, err := c.HTTPClient.Post(reqURL, "application/json", bytes.NewReader(bodyBytes))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create remembrance request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("remembrance request failed: %w", err)
 	}
