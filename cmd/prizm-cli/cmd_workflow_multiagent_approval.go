@@ -85,14 +85,19 @@ func canonicalProposalArtifacts(item *approval.Approval, workspace string) ([]mu
 // approvalProposalLifecycle composes the existing approval store and mutation
 // executor behind the workflow-owned durable sequencing contract.
 type approvalProposalLifecycle struct {
-	store        *approval.Store
-	executor     *mutation.Executor
-	workspace    string
-	artifactRoot string
+	store           *approval.Store
+	executor        *mutation.Executor
+	workspace       string
+	sourceWorkspace string
+	artifactRoot    string
 }
 
-func newApprovalProposalLifecycle(store *approval.Store, workspace, artifactRoot string) approvalProposalLifecycle {
-	return approvalProposalLifecycle{store: store, executor: mutation.NewExecutor(workspace, store, workspace), workspace: workspace, artifactRoot: artifactRoot}
+func newApprovalProposalLifecycle(store *approval.Store, workspace, artifactRoot string, sourceWorkspace ...string) approvalProposalLifecycle {
+	source := ""
+	if len(sourceWorkspace) == 1 {
+		source = sourceWorkspace[0]
+	}
+	return approvalProposalLifecycle{store: store, executor: mutation.NewExecutor(workspace, store, workspace), workspace: workspace, sourceWorkspace: source, artifactRoot: artifactRoot}
 }
 
 func (l approvalProposalLifecycle) load(op multiagent.ProposalOperation) (*approval.Approval, error) {
@@ -137,11 +142,20 @@ func (l approvalProposalLifecycle) Apply(ctx context.Context, op multiagent.Prop
 	if item.Status != approval.StatusApproved {
 		return multiagent.ProposalApplyResult{}, fmt.Errorf("approval %s is not granted", op.ApprovalID)
 	}
+	if item.MutationType == approval.MutationApplyPatch {
+		if item.PatchPlan == nil || l.sourceWorkspace == "" {
+			return multiagent.ProposalApplyResult{}, fmt.Errorf("approved patch lacks a trusted run workspace binding")
+		}
+		ctx, err = gitx.WithVerifiedRunWorktree(ctx, l.workspace, l.sourceWorkspace, op.RunID, item.PatchPlan.BaseSHA)
+		if err != nil {
+			return multiagent.ProposalApplyResult{}, err
+		}
+	}
 	result, err := l.executor.ApplyWithRun(ctx, op.RunID, op.ApprovalID, item.ApprovedBy)
 	if err != nil {
 		return multiagent.ProposalApplyResult{}, err
 	}
-	return l.withDiffEvidence(op, multiagent.ProposalApplyResult{Success: result.Success, TargetPath: result.TargetPath, Message: result.Message}), nil
+	return l.withDiffEvidence(ctx, op, multiagent.ProposalApplyResult{Success: result.Success, TargetPath: result.TargetPath, Message: result.Message}), nil
 }
 
 func (l approvalProposalLifecycle) Reconcile(ctx context.Context, op multiagent.ProposalOperation) (multiagent.ProposalReconciliation, multiagent.ProposalApplyResult, error) {
@@ -156,7 +170,16 @@ func (l approvalProposalLifecycle) Reconcile(ctx context.Context, op multiagent.
 			result.ReconcileCode = multiagent.ProposalReconcilePlanMissing
 			return multiagent.ProposalAmbiguous, result, nil
 		}
-		tree, treeErr := gitx.WorktreeTree(ctx, l.workspace)
+		if l.sourceWorkspace == "" {
+			result.ReconcileCode = multiagent.ProposalReconcileInspectFailed
+			return multiagent.ProposalAmbiguous, result, nil
+		}
+		trustedCtx, trustErr := gitx.WithVerifiedRunWorktree(ctx, l.workspace, l.sourceWorkspace, op.RunID, item.PatchPlan.BaseSHA)
+		if trustErr != nil {
+			result.ReconcileCode = multiagent.ProposalReconcileInspectFailed
+			return multiagent.ProposalAmbiguous, result, nil
+		}
+		tree, treeErr := gitx.WorktreeTree(trustedCtx, l.workspace)
 		if treeErr != nil {
 			if ctx.Err() != nil {
 				result.ReconcileCode = multiagent.ProposalReconcileContextCancelled
@@ -178,7 +201,7 @@ func (l approvalProposalLifecycle) Reconcile(ctx context.Context, op multiagent.
 			result.Success, result.Message = true, "approved patch tree present"
 			result.ReconcileCode = multiagent.ProposalReconcileExpectedTree
 			result.ObservedTree = tree
-			return multiagent.ProposalApplied, l.withDiffEvidence(op, result), nil
+			return multiagent.ProposalApplied, l.withDiffEvidence(trustedCtx, op, result), nil
 		case item.PatchPlan.BaseTree:
 			result.ReconcileCode = multiagent.ProposalReconcileBaseTree
 			result.ObservedTree = tree
@@ -202,7 +225,7 @@ func (l approvalProposalLifecycle) Reconcile(ctx context.Context, op multiagent.
 		}
 		if bytes.Equal(content, []byte(item.Content)) {
 			result.Success, result.Message = true, "approved content present"
-			return multiagent.ProposalApplied, l.withDiffEvidence(op, result), nil
+			return multiagent.ProposalApplied, l.withDiffEvidence(ctx, op, result), nil
 		}
 		return multiagent.ProposalNotApplied, result, nil
 	case approval.MutationCreateDirectory:
@@ -218,16 +241,16 @@ func (l approvalProposalLifecycle) Reconcile(ctx context.Context, op multiagent.
 			return multiagent.ProposalAmbiguous, result, nil
 		}
 		result.Success, result.Message = true, "approved directory present"
-		return multiagent.ProposalApplied, l.withDiffEvidence(op, result), nil
+		return multiagent.ProposalApplied, l.withDiffEvidence(ctx, op, result), nil
 	default:
 		// External tool effects cannot be inferred from approval status alone.
 		return multiagent.ProposalAmbiguous, result, nil
 	}
 }
 
-func (l approvalProposalLifecycle) withDiffEvidence(op multiagent.ProposalOperation, result multiagent.ProposalApplyResult) multiagent.ProposalApplyResult {
-	diff, diffErr := gitx.RunCommand(context.Background(), l.workspace, "", "git", "diff", "--binary")
-	stat, statErr := gitx.RunCommand(context.Background(), l.workspace, "", "git", "diff", "--stat")
+func (l approvalProposalLifecycle) withDiffEvidence(ctx context.Context, op multiagent.ProposalOperation, result multiagent.ProposalApplyResult) multiagent.ProposalApplyResult {
+	diff, diffErr := gitx.RunCommand(ctx, l.workspace, "", "git", "diff", "--binary")
+	stat, statErr := gitx.RunCommand(ctx, l.workspace, "", "git", "diff", "--stat")
 	if item, err := l.store.Load(op.RunID, op.ApprovalID); err == nil && item.MutationType == approval.MutationApplyPatch && item.PatchPlan != nil {
 		diff = item.Content
 		diffErr = nil

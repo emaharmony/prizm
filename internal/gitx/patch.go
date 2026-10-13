@@ -439,10 +439,25 @@ func runGitWithIndex(ctx context.Context, root, index string, args ...string) (s
 }
 
 func runGitWithIndexInput(ctx context.Context, root, index, stdin string, args ...string) (string, error) {
-	args = append([]string{"-c", "core.excludesFile="}, args...)
+	owned, err := ownedScopeForCommand(ctx, root)
+	if err != nil {
+		return "", err
+	}
+	if owned != nil && hasRepositoryOverride(args) {
+		return "", fmt.Errorf("git repository override is not allowed for an owned worktree")
+	}
+	prefix := []string{"-c", "core.excludesFile="}
+	if owned != nil {
+		prefix = append([]string{"-c", "safe.directory=" + owned.workspace}, prefix...)
+	}
+	args = append(prefix, args...)
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+index)
+	env := os.Environ()
+	if owned != nil {
+		env = filteredGitEnvironment(env)
+	}
+	cmd.Env = append(env, "GIT_INDEX_FILE="+index)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
