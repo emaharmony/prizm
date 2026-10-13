@@ -7,7 +7,29 @@ items.
 > Prizm is source-available under an all-rights-reserved [license](../../LICENSE)
 > and is preview-stage. This plan does not change approval or policy requirements.
 
-## Current Focus: R1 Durable Event Outbox and Delegation Acknowledgements
+## Current Handoff (2026-10-13)
+
+**Active roadmap IDs:** R1 remains the platform priority; FW-001 contract
+groundwork is proceeding in parallel on branch `codex/fw001-intention-contracts`
+from staging base `e2a4421018acca7940f4d6806d5a3c2cf59a92b9`.
+
+PR [#91](https://github.com/emaharmony/prizm/pull/91) is an open draft R1
+checkpoint. Its latest real-provider Factory run had three parallel child
+lanes but failed during fan-in; it produced no implementation proposal, apply,
+configured validation, or final review. R1 acceptance and the roadmap 9/10 gate
+remain open. Do not start FW-P2 or describe the R1 gate as complete.
+
+FW-001 adds only pure intention/candidate contracts, structural lifecycle
+validation, disabled-by-default `freewill` flags, and ADR 0003 documentation.
+Its config flags have no runtime consumer and do not enable scheduling or
+execution. Focused tests and full repository `go test ./...`, `go build ./...`,
+`go vet ./...`, and `staticcheck ./...` passed on this branch; coordinator
+review approved the implementation. The FW-001 review PR is being prepared.
+After that checkpoint, the next eligible Freewill task is FW-002, subject to
+its provider/scheduler prerequisites. FW-P2 remains blocked on R1 acceptance
+and FW-G2.
+
+## Previous R1 delivery plan (retained for context)
 
 Recall and R6 reconciliation are intentionally parked for a later stage. The
 next slice consolidates graph and NATS action delivery behind one typed command

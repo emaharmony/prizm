@@ -119,6 +119,14 @@ gates are **verified** on the implementation branch.
 selecting it, verify whether a current developer/PR already owns it. Do not
 replace active R1 work or start a second competing implementation.
 
+**FW-001 checkpoint (2026-10-13):** Pure intention/candidate contracts,
+structural transition validation, and separate off-by-default feature and
+scheduling config flags are implemented on `codex/fw001-intention-contracts`
+from staging `e2a4421`. This is an unmerged checkpoint; full project checks and
+review remain pending. R1 PR #91 remains draft and its real-provider parallel
+acceptance failed before proposal/apply/validation/review, so no R1 9/10 or
+FW-P2 prerequisite is marked complete.
+
 ### Freewill gate rules for automated task selection
 
 1. Read `AGENTS.md`, this roadmap, `PLAN_OF_ACTION.md`, latest `WORK_LOG.md`,
