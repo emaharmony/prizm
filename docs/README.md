@@ -66,6 +66,10 @@ Pick the path that matches what you're doing:
 *   [Multi-Agent Workflow](./MULTI_AGENT_WORKFLOW.md) - Run, inspect, cancel, resume, and report the Phase 1 reference flow.
 *   [Multi-Agent Execution Graph Dashboard](./architecture/MULTI_AGENT_EXECUTION_GRAPH.md) - The live, replayable execution-graph dashboard for one multi-agent run.
 *   [Developer-Authored Workflow Graphs](./workflows/README.md) - Author, validate, test, register, and run your own role/outcome workflow graphs (Phase 3).
+*   [Freewill Mode Design](./concepts/PRIZM-FREEWILL-MODE-DESIGN.md) - Agent-initiated intention lifecycle, disabled by default.
+*   [Freewill Implementation Roadmap](./architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md) - FW-slice sequencing alongside the R-series roadmap.
+*   [ADR 0003: Freewill Intention Contracts](./architecture/decisions/0003-freewill-intention-contracts.md) - Authority boundary and threat model for the policy-only contract slice.
+*   [Memory Store Design](./design/memory-store.md) - Scoped memory lifecycle (R2) contract.
 
 ## 🛠️ Reference
 *   [Stability Matrix](./reference/stability-matrix.md) - Feature status and production readiness.
@@ -90,6 +94,7 @@ Pick the path that matches what you're doing:
 *   [CI](./operations/ci.md) - GitHub Actions workflows and local reproduction.
 *   [Releasing Prizm](./operations/releasing.md) - Version reconciliation and tagging process.
 *   [Public Preview Checklist](./operations/PUBLIC_PREVIEW_CHECKLIST.md) - Requirements for the preview phase.
+*   [Freewill Agent Handoff](./operations/FREEWILL_AGENT_HANDOFF.md) - Operating notes for the Freewill contract slices.
 
 ## 📦 Releases
 *   [v0.2.0-preview.1 Release Notes](./releases/v0.2.0-preview.1.md) - Current release candidate.

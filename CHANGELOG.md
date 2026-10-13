@@ -7,8 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet — see [0.2.0-preview.1](#020-preview1---unreleased) below for the
-current release candidate.
+Roadmap-track work merged to `staging` since the preview-branch cut. See the
+[Prizm Roadmap](./docs/architecture/PRIZM_ROADMAP.md) for the R1–R8 delivery
+gates this work belongs to.
+
+### Added
+
+- **R1 approved-task recovery and isolated validation (#84)** — approved
+  proposals now connect to durable execution: exact approval identity is
+  carried through apply and resume, isolated-worktree runs validate with the
+  project's configured validation, and run reports reconstruct from durable
+  state after restart.
+- **R2 scoped memory lifecycle and isolation (#85)** — memory capture,
+  retrieval, supersession, and fallback are scoped to user/project/task;
+  prompt-time memory injection respects scope boundaries.
+- **R1 durable delegation, uncapped runs, and private outputs (#87)** — a
+  durable event outbox with idempotency keys and lease-based claim/retry for
+  delegation commands; aggregate retries and run duration are uncapped unless
+  a workflow definition authors an explicit cap; delegated outputs are private
+  to their intended consumer.
+- **Freewill intention contracts, disabled (#92)** — policy-only typed
+  intention/candidate contracts and lifecycle validators behind independent
+  `freewill.enabled` / `freewill.scheduling.enabled` flags (both default
+  `false`, no runtime consumer). See
+  [ADR 0003](./docs/architecture/decisions/0003-freewill-intention-contracts.md).
+
+### Changed
+
+- **Recall idempotency and reconciliation (#86)** — durable memory-sync
+  intents: recall capture is idempotent, retries are reconciliation-safe,
+  and outages fall back to local memory without scope leakage
+  (R2/R6 groundwork).
+
+### Fixed
+
+- **Durable multi-agent task recovery (#89)** — restart, duplicate grant,
+  and approval interruption in multi-agent runs recover through the durable
+  outbox instead of dropping silently; Windows symlink resolution and
+  credential redaction in validation evidence were hardened alongside.
 
 ## [0.2.0-preview.1] - Unreleased
 
