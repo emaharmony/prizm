@@ -1,38 +1,12 @@
 # Prizm Plan of Action
 
-## Current Handoff: R1 fan-out recovery and worker lifecycle (2026-10-13)
+## Current Handoff: R1 parent-task propagation and proof-v4 recovery (2026-10-14)
 
-The review candidate is `codex/r1-parallel-acceptance-staging`, based on the
-current `origin/staging` snapshot `e2a4421018acca7940f4d6806d5a3c2cf59a92b9`.
-It contains the R1 implementation and regression tests; the dirty primary
-`codex/r1-parallel-acceptance` checkout and separate Recall worktree remain
-untouched. The source change covers trusted Planner fan-out capability,
-durable child recovery and retry-attempt scoping, fail-closed approval-bound
-fan-out adoption, immutable validation-profile binding, safe structured-output
-feedback, and worker close/drain synchronization.
+PR #91 remains a draft. The local R1 checkpoint is `8d43c8827762a1152ce829cee89785f3046541c9` on `codex/r1-owned-worktree-recovery`, based on published PR head `7ce5fa9c936300d09383c1948f61b9b9b8ac8828`; the reviewed delta preserves original parent-task requirements through delegated role requests and prompts, with legacy nil payload compatibility. Local build, vet, full test, Staticcheck (277 test-inclusive package patterns), and diff checks passed before the documentation-only follow-up. The separate FW-P1 implementation remains outside this R1 checkpoint.
 
-Candidate verification on this tree passed `go build ./...`, `go vet ./...`,
-default-parallel `go test ./...`, `staticcheck ./...`, `git diff --check`,
-the graph-worker concurrency regression at 20 repetitions, and a focused race
-detector run for close/drain. The Linux CI cleanup race was traced to worker
-callbacks and command/deferred-resume work outliving `Close`; the worker now
-closes admission and drains owned callbacks/work before returning. This is a
-candidate for draft review, not evidence that the live Factory acceptance is
-complete.
+The current real Factory run `run_54b6a3649a7ab3e9cadd1301d0` completed three-lane fan-out/fan-in, received review of its sole test proposal, and applied it once. The configured `factory_pytest_selected_recovery_v1` validator ran in the run-owned worktree and exited 1 after 18 passed and 1 failed: the new blocked-resume test referenced `BLOCKED` without importing it from `production.evidence`. This is a test-source defect. The tester recorded `tests_failed`; developer visit 2 was accepted and delivered but has no terminal result yet. Its canonical deadline is 2026-10-14 21:30Z. Do not manually rerun the test, alter the applied tree, or reuse the prior approval. The run and validation evidence remain preserved.
 
-The latest real-provider Factory run, `run_9544229c6a3b2158bf82ddf6e6`, proved
-three overlapping worker intervals but failed at fan-in: research succeeded,
-implementation ended with a safe unknown/nonretryable failure, and review
-exhausted structured-output recovery after typed field feedback. It recorded
-no proposal, apply, or test result and emitted one terminal failure notice.
-Earlier failed/cancelled records remain unchanged. The selected Factory source
-snapshot is not full-game or live Studio evidence. Keep R1 open; do not claim a
-9/10 gate or successful coding acceptance. PR #86 is now part of staging; the
-separate Recall API-only test proof does not verify Prizm-to-Recall recovery.
-
-**Next action:** review this exact candidate diff and validation packet, then
-open a draft PR against staging if approved. Keep the full Factory acceptance
-gate open and diagnose only from safe typed evidence. Do not merge the PR.
+Worker observability is incomplete: the durable accepted acknowledgement is written before component construction and `RunRole`, and this path currently records no worker-start/elapsed heartbeat marker. The accepted event alone does not establish that the delegated runner began. Continue observing only the current developer delivery and review any corrective proposal against the original test requirements. R1 is not complete until validation, fresh review, final report, and one terminal notice succeed; do not claim the roadmap 9/10 gate. The current proof service remains bound to the same v4 binary/config and is not being restarted.
 
 This is the current execution plan. It is updated at the end of every project
 work session and must cite the active [roadmap](../architecture/PRIZM_ROADMAP.md)
@@ -41,28 +15,13 @@ items.
 > Prizm is source-available under an all-rights-reserved [license](../../LICENSE)
 > and is preview-stage. This plan does not change approval or policy requirements.
 
-## Current Handoff (2026-10-13)
+## Current Handoff (2026-10-14)
 
-**Active roadmap IDs:** R1 remains the platform priority; FW-001 contract
-groundwork is proceeding in parallel on branch `codex/fw001-intention-contracts`
-from staging base `e2a4421018acca7940f4d6806d5a3c2cf59a92b9`.
+**Active roadmap IDs:** R1 remains the platform priority. FW-001 contract groundwork is complete in its separate review artifact; FW-P1 runtime work is separate from this R1 checkpoint, and FW-P2 remains gated on R1 acceptance and FW-G2.
 
-PR [#91](https://github.com/emaharmony/prizm/pull/91) is an open draft R1
-checkpoint. Its latest real-provider Factory run had three parallel child
-lanes but failed during fan-in; it produced no implementation proposal, apply,
-configured validation, or final review. R1 acceptance and the roadmap 9/10 gate
-remain open. Do not start FW-P2 or describe the R1 gate as complete.
+PR [#91](https://github.com/emaharmony/prizm/pull/91) remains an open draft. The local parent-task propagation checkpoint is `8d43c8827762a1152ce829cee89785f3046541c9`; the published PR head is still `7ce5fa9c936300d09383c1948f61b9b9b8ac8828` until the checkpoint is pushed. The current run `run_54b6a3649a7ab3e9cadd1301d0` passed the reviewed fan-out and applied the sole approved patch once, but its configured test failed with 18 passed and 1 failed because the new test omitted the `BLOCKED` import. Developer visit 2 is waiting for its canonical outcome. R1 acceptance and the roadmap 9/10 gate remain open; no fresh review or terminal report has been produced for this run.
 
-FW-001 adds only pure intention/candidate contracts, structural lifecycle
-validation, disabled-by-default `freewill` flags, and ADR 0003 documentation.
-Its config flags have no runtime consumer and do not enable scheduling or
-execution. Focused tests and full repository `go test ./...`, `go build ./...`,
-`go vet ./...`, and `staticcheck ./...` passed; coordinator review approved the
-implementation. PR [#92](https://github.com/emaharmony/prizm/pull/92) is open,
-ready for review, and initially mergeable; CI is running/queued on head
-`8ca67fbc9e9b3f2a896b53a81c96244951830a21`. FW-002 is the next eligible
-Freewill task after this review checkpoint, subject to provider/scheduler
-prerequisites. FW-P2 remains blocked on R1 acceptance and FW-G2.
+The local R1 source gates passed before this plan-only correction. FW-001 adds only pure intention/candidate contracts, structural lifecycle validation, disabled-by-default `freewill` flags, and ADR 0003 documentation; its config flags have no runtime consumer and do not enable scheduling or execution. PR [#92](https://github.com/emaharmony/prizm/pull/92) remains separate. Recall is a separate repository and was not accessed in this work.
 
 ## Previous R1 delivery plan (retained for context)
 
