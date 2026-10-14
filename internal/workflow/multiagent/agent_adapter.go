@@ -419,13 +419,17 @@ func BuildRolePrompt(request RoleRunRequest) (string, error) {
 		return "", err
 	}
 
+	taskPrompt := request.Run.Task.Description
+	if request.ParentTask != nil {
+		taskPrompt = fmt.Sprintf("ORIGINAL TASK REQUIREMENTS (apply to this delegated lane):\n%s\nLANE TASK: %s", request.ParentTask.Description, taskPrompt)
+	}
 	prompt := fmt.Sprintf(
 		"ROLE: %s\nTASK ID: %s\nTASK: %s\nVISIT: %d\nTRANSITIONS USED: %d\n"+
 			"INCOMING HANDOFF JSON: %s\nLATEST REFLECTION JSON: %s\n\n%s\n"+
 			"Return exactly one JSON object. Do not wrap it in Markdown and do not add prose.",
 		request.Run.CurrentRole,
 		request.Run.Task.ID,
-		request.Run.Task.Description,
+		taskPrompt,
 		request.Run.Visit,
 		request.Run.TransitionCount,
 		handoffJSON,

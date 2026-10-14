@@ -1,9 +1,11 @@
 package multiagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -17,9 +19,10 @@ import (
 )
 
 type failOnceFanoutDispatcher struct {
-	store  DurableRunStore
-	failed bool
-	cmds   []event.Command
+	store     DurableRunStore
+	failed    bool
+	cmds      []event.Command
+	attempted []event.Command
 }
 
 type interleavedCheckpointStore struct {
@@ -38,6 +41,7 @@ func (s *interleavedCheckpointStore) Checkpoint(ctx context.Context, revision in
 }
 
 func (d *failOnceFanoutDispatcher) Dispatch(ctx context.Context, _ string, cmd event.Command) error {
+	d.attempted = append(d.attempted, cmd)
 	record, err := d.store.Load(ctx, cmd.RunID)
 	if err != nil {
 		return err
@@ -751,13 +755,40 @@ func implementationIndex(commands []event.Command, childID string) int {
 }
 
 func TestDelegationJoinRecoversPendingDispatchAfterRestart(t *testing.T) {
-	env := newDurableTestEnvironment(t)
+	dbPath := filepath.Join(t.TempDir(), "delegation-restart.db")
+	openEnv := func() durableTestEnvironment {
+		events, err := event.NewSQLiteEventStore(dbPath)
+		if err != nil {
+			t.Fatalf("open event store: %v", err)
+		}
+		store, err := NewSQLiteDurableRunStore(dbPath)
+		if err != nil {
+			_ = events.Close()
+			t.Fatalf("open durable store: %v", err)
+		}
+		return durableTestEnvironment{store: store, events: events, claimer: newMemoryRunClaimer()}
+	}
+	env := openEnv()
+	defer func() {
+		if env.store != nil {
+			if err := env.store.Close(); err != nil {
+				t.Errorf("close durable store: %v", err)
+			}
+		}
+		if env.events != nil {
+			if err := env.events.Close(); err != nil {
+				t.Errorf("close event store: %v", err)
+			}
+		}
+	}()
 	dispatch := &failOnceFanoutDispatcher{store: env.store}
 	source := &recordingOutcomeSource{store: env.store}
+	const parentCanary = "PARENT_REQUIREMENT_EVENT_PRIVACY_CANARY"
+	parentTask := TaskReference{ID: "parent-task", Description: "Implement the complete regression. Preserve the same branch, worktree, and baseline across retries. Assert every configured command gate passes on both attempts. " + parentCanary}
 	runtime := newPlannerDelegationRuntime(t, env, dispatch, source, func() time.Time {
 		return time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
 	})
-	_, err := runtime.Run(t.Context(), RunRequest{RunID: "run-graph-delegation", Task: TaskReference{ID: "parent-task", Description: "delegate"}})
+	_, err := runtime.Run(t.Context(), RunRequest{RunID: "run-graph-delegation", Task: parentTask})
 	if err == nil {
 		t.Fatal("Run unexpectedly completed")
 	}
@@ -774,8 +805,32 @@ func TestDelegationJoinRecoversPendingDispatchAfterRestart(t *testing.T) {
 	if record.DelegationJoin == nil || !record.DelegationJoin.Children[1].DispatchPending {
 		t.Fatalf("failed lane was not recoverably pending: %#v", record.DelegationJoin)
 	}
+	if record.DelegationJoin.ParentTask == nil || *record.DelegationJoin.ParentTask != parentTask {
+		t.Fatalf("durable join parent task=%#v, want original task", record.DelegationJoin.ParentTask)
+	}
+	corrupt := record
+	corruptJoin := *record.DelegationJoin
+	corruptParent := parentTask
+	corruptParent.Description += " forged"
+	corruptJoin.ParentTask = &corruptParent
+	corrupt.DelegationJoin = &corruptJoin
+	if err := corrupt.Validate(runtime.supervisor.graph); err == nil {
+		t.Fatal("durable run validation accepted a join parent task that differs from the original run task")
+	}
+	if err := env.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.events.Close(); err != nil {
+		t.Fatal(err)
+	}
+	env = openEnv()
+	dispatch.store = env.store
+	source.store = env.store
 	source.outcomes = nil
 	dispatch.failed = true
+	runtime = newPlannerDelegationRuntime(t, env, dispatch, source, func() time.Time {
+		return time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
+	})
 	_, err = runtime.Resume(t.Context(), "run-graph-delegation")
 	var waitingErr *RunWaitingError
 	if !errors.As(err, &waitingErr) {
@@ -789,6 +844,56 @@ func TestDelegationJoinRecoversPendingDispatchAfterRestart(t *testing.T) {
 		if child.DispatchPending {
 			t.Errorf("child %s still pending", child.Lane)
 		}
+	}
+	firstPayloadByKey := make(map[string][]byte)
+	seenLanes := make(map[FanOutLane]bool)
+	for _, command := range dispatch.attempted {
+		if command.JoinID == "" {
+			continue
+		}
+		var child GraphRoleCommand
+		if err := json.Unmarshal(command.Payload, &child); err != nil {
+			t.Fatal(err)
+		}
+		if child.Request.ParentTask == nil || *child.Request.ParentTask != parentTask {
+			t.Fatalf("child lane %s lost the original requirements after dispatch/restart", command.Lane)
+		}
+		prompt, err := BuildRolePrompt(child.Request)
+		if err != nil || !strings.Contains(prompt, parentTask.Description) || !strings.Contains(prompt, "LANE TASK: "+child.Task.Description) {
+			t.Fatalf("child lane %s prompt omitted parent or lane requirements: err=%v", command.Lane, err)
+		}
+		if err := ValidateDelegatedRoleCommand(t.Context(), env.store, child); err != nil {
+			t.Fatalf("validate child lane %s command: %v", command.Lane, err)
+		}
+		forged := child
+		forgedParent := *child.Request.ParentTask
+		forgedParent.Description += " forged"
+		forged.Request.ParentTask = &forgedParent
+		if err := ValidateDelegatedRoleCommand(t.Context(), env.store, forged); err == nil {
+			t.Fatalf("child lane %s accepted a forged parent task", command.Lane)
+		}
+		if prior, ok := firstPayloadByKey[command.IdempotencyKey]; ok {
+			if !bytes.Equal(prior, command.Payload) {
+				t.Fatalf("replayed lane %s changed its durable command payload", command.Lane)
+			}
+		} else {
+			firstPayloadByKey[command.IdempotencyKey] = append([]byte(nil), command.Payload...)
+		}
+		seenLanes[child.Lane] = true
+	}
+	if len(seenLanes) != 3 || !seenLanes[FanOutResearch] || !seenLanes[FanOutImplementation] || !seenLanes[FanOutReview] {
+		t.Fatalf("recovered fan-out lanes=%v", seenLanes)
+	}
+	events, err := env.events.Query(t.Context(), event.EventFilter{RunID: "run-graph-delegation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventData, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(eventData, []byte(parentCanary)) {
+		t.Fatal("original task requirements leaked into the event projection")
 	}
 }
 
@@ -945,6 +1050,63 @@ func TestTerminalFanOutFailuresPersistSafeClassificationThroughReport(t *testing
 		!strings.Contains(string(serialized), `"recovery_number":0`) ||
 		!strings.Contains(string(serialized), `"max_recoveries":0`) {
 		t.Fatalf("terminal report omitted explicit zero/false recovery facts: %s", serialized)
+	}
+}
+
+func TestCapabilityFailureIsTerminalWithoutRetryOrReasonLeak(t *testing.T) {
+	const runID = "run-capability-terminal"
+	const privateReason = "PRIVATE_CAPABILITY_REASON_CANARY"
+	runtime, env, dispatch, source := newWaitingPlannerDelegationRuntime(t, runID)
+	parentPayload, err := json.Marshal(GraphRoleOutcome{Result: RoleRunResult{Outcome: OutcomePlanReady, LocalIterations: 1, FanOut: validFanOutPlan()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.outcomes = []event.Outcome{matchingOutcome(dispatch.command, "capability-parent", event.OutcomeSucceeded, 1, parentPayload)}
+	if _, err := runtime.Resume(t.Context(), runID); err == nil {
+		t.Fatal("expected fan-out join to remain waiting")
+	}
+	source.outcomes = nil
+	dispatchCount := len(dispatch.commands)
+	record, err := env.store.Load(t.Context(), runID)
+	if err != nil || record.DelegationJoin == nil || len(record.DelegationJoin.Children) != 3 {
+		t.Fatalf("load fan-out join: join=%#v err=%v", record.DelegationJoin, err)
+	}
+	child := record.DelegationJoin.Children[0]
+	command := event.Command{EventID: child.CommandEventID, RunID: record.State.RunID, TaskID: child.ChildID,
+		DelegationID: child.DelegationID, JoinID: child.JoinID, Lane: string(child.Lane),
+		CorrelationID: child.CorrelationID, IdempotencyKey: child.DeliveryKey}
+	failure := ClassifyRoleExecutionFailure(&GovernanceError{Kind: "capability", Reason: privateReason})
+	failure.DeliveryAttemptID, failure.AttemptID = child.DeliveryAttemptID, child.Retry.AttemptID
+	payload, err := json.Marshal(GraphRoleOutcome{Failure: &failure})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.outcomes = []event.Outcome{matchingOutcome(command, "capability-terminal", event.OutcomeFailed, 1, payload)}
+	if _, err := runtime.Resume(t.Context(), runID); err == nil {
+		t.Fatal("expected join to remain waiting for the other lanes")
+	}
+	updated, err := env.store.Load(t.Context(), runID)
+	if err != nil || updated.DelegationJoin == nil {
+		t.Fatalf("load updated join: %#v err=%v", updated.DelegationJoin, err)
+	}
+	failed := updated.DelegationJoin.Children[0]
+	if failed.Status != event.OutcomeFailed || failed.DispatchPending || failed.Retry.RecoveryNumber != 0 ||
+		!failed.Retry.NextAt.IsZero() || failed.Retry.FailureClass != "governance" || failed.Retry.FailureCode != "capability" {
+		t.Fatalf("capability failure was not terminal/non-retryable: %#v", failed)
+	}
+	if len(dispatch.commands) != dispatchCount {
+		t.Fatalf("terminal failure caused a replacement dispatch: %d commands", len(dispatch.commands))
+	}
+	retries, err := env.events.Query(t.Context(), event.EventFilter{RunID: runID, Type: event.EventMultiAgentRetryScheduled})
+	if err != nil || len(retries) != 0 {
+		t.Fatalf("unexpected retry events=%d err=%v", len(retries), err)
+	}
+	serialized, err := json.Marshal(updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(serialized), privateReason) {
+		t.Fatal("private governance reason leaked into durable parent state")
 	}
 }
 

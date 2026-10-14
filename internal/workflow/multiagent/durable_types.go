@@ -260,6 +260,7 @@ type TerminalFanOutFailure struct {
 // delegations execute in parallel and converge deterministically.
 type DelegationJoinState struct {
 	JoinID             string                `json:"join_id"`
+	ParentTask         *TaskReference        `json:"parent_task,omitempty"`
 	ParentExecutionKey string                `json:"parent_execution_key"`
 	ParentRole         Role                  `json:"parent_role"`
 	ParentResult       RoleRunResult         `json:"parent_result"`
@@ -395,6 +396,8 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 				problems = append(problems, "delegation join wait requires delegation_join state")
 			} else if err := r.DelegationJoin.Validate(r.State.RunID, r.State.CurrentRole); err != nil {
 				problems = append(problems, err.Error())
+			} else if r.DelegationJoin.ParentTask != nil && *r.DelegationJoin.ParentTask != r.State.CurrentTask {
+				problems = append(problems, "delegation join parent task does not match the trusted current task")
 			}
 		}
 		if r.ApprovedTask != nil {

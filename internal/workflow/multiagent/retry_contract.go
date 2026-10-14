@@ -120,7 +120,7 @@ func knownRoleFailurePair(class, code string) bool {
 		}
 	case "governance":
 		switch code {
-		case "policy", "tool_scope", "workspace_scope", "approval", "approval_required",
+		case "policy", "tool_scope", "workspace_scope", "approval", "capability", "approval_required",
 			"invalid_read_coverage", "invalid_proposal_context":
 			return true
 		}
@@ -182,7 +182,7 @@ func classifySafeNonRetryableRoleFailure(err error) (string, string) {
 	var governance *GovernanceError
 	if errors.As(err, &governance) {
 		switch governance.Kind {
-		case "policy", "tool_scope", "workspace_scope", "approval":
+		case "policy", "tool_scope", "workspace_scope", "approval", "capability":
 			return "governance", governance.Kind
 		default:
 			return "unknown", "unknown"

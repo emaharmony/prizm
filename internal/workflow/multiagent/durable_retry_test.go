@@ -160,6 +160,7 @@ func TestNonRetryableRoleFailureRetainsOnlyAllowlistedTypedCodes(t *testing.T) {
 		{name: "safe patch validation code", err: &subagent.SafeFailureError{Code: "patch_validation_failed"}, wantClass: "tool", wantCode: "patch_validation_failed"},
 		{name: "safe governance code", err: &subagent.SafeFailureError{Code: "invalid_proposal_context"}, wantClass: "governance", wantCode: "invalid_proposal_context"},
 		{name: "governance kind", err: &GovernanceError{Kind: "workspace_scope", Reason: "PRIVATE_REASON_CANARY"}, wantClass: "governance", wantCode: "workspace_scope"},
+		{name: "missing capability", err: &GovernanceError{Kind: "capability", Reason: "PRIVATE_REASON_CANARY"}, wantClass: "governance", wantCode: "capability"},
 		{name: "cancellation", err: context.Canceled, wantClass: "cancellation", wantCode: "cancelled"},
 		{name: "unknown typed code", err: &subagent.SafeFailureError{Code: "PRIVATE_UNKNOWN_CANARY"}, wantClass: "unknown", wantCode: "unknown"},
 		{name: "raw error", err: errors.New("PRIVATE_RAW_ERROR_CANARY"), wantClass: "unknown", wantCode: "unknown"},

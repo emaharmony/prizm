@@ -40,6 +40,27 @@ func TestGraphRoleWorkerRestoresSafeCorrectionIntoRoleRequest(t *testing.T) {
 	}
 }
 
+func TestGraphRoleFailureOutcomePreservesCapabilityCodeWithoutReason(t *testing.T) {
+	const privateReason = "PRIVATE_CAPABILITY_REASON_CANARY"
+	command := graphWorkerTestCommand("run-capability-failure", time.Now().Add(time.Minute))
+	command.DeliveryAttemptID = "delivery-attempt-1"
+	result := graphRoleFailureOutcome(&multiagent.GovernanceError{Kind: "capability", Reason: privateReason}, command,
+		multiagent.RoleRunResult{LocalIterations: 0}, "attempt-1")
+	if result.Failure == nil || result.Failure.Class != "governance" || result.Failure.Code != "capability" || result.Failure.Retryable {
+		t.Fatalf("failure=%#v, want nonretryable governance/capability", result.Failure)
+	}
+	if result.Failure.DeliveryAttemptID != command.DeliveryAttemptID || result.Failure.AttemptID != "attempt-1" {
+		t.Fatalf("failure identity=%#v", result.Failure)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(privateReason)) {
+		t.Fatalf("private governance reason leaked in worker outcome: %s", encoded)
+	}
+}
+
 func TestGraphRoleWorkerEmbeddedNATSExecutesThreeFanoutLanesConcurrently(t *testing.T) {
 	runDir := t.TempDir()
 	base := graphWorkerTestCommand("run-fanout-nats", time.Now().Add(time.Minute))

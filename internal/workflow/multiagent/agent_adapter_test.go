@@ -2,6 +2,7 @@ package multiagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -225,6 +226,40 @@ func TestPlannerContractRequiresStringListElements(t *testing.T) {
 	}
 	if strings.Contains(correction.Feedback, "owner") || strings.Contains(correction.Feedback, "developer") {
 		t.Fatalf("feedback contains raw response details: %q", correction.Feedback)
+	}
+}
+
+func TestBuildRolePromptIncludesParentRequirementsForDelegatedTask(t *testing.T) {
+	request := adapterRoleRequest(RoleDeveloper)
+	request.Run.Task = TaskReference{ID: "lane-id", Description: "implement the lane"}
+	request.ParentTask = &TaskReference{ID: "parent-id", Description: "Preserve the same worktree and baseline; verify every required gate."}
+	prompt, err := BuildRolePrompt(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentIndex := strings.Index(prompt, request.ParentTask.Description)
+	laneIndex := strings.Index(prompt, "LANE TASK: "+request.Run.Task.Description)
+	if parentIndex < 0 || laneIndex <= parentIndex {
+		t.Fatalf("prompt did not retain parent requirements before lane task: %q", prompt)
+	}
+}
+
+func TestLegacyRoleRequestKeepsTaskPromptAndWireShape(t *testing.T) {
+	request := adapterRoleRequest(RolePlanner)
+	request.Run.Task = TaskReference{ID: "legacy-lane", Description: "legacy lane task"}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"parent_task"`) {
+		t.Fatalf("nil legacy parent task changed request wire shape: %s", encoded)
+	}
+	prompt, err := BuildRolePrompt(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "TASK ID: legacy-lane\nTASK: legacy lane task\nVISIT:") || strings.Contains(prompt, "ORIGINAL TASK REQUIREMENTS") {
+		t.Fatalf("legacy request prompt changed: %q", prompt)
 	}
 }
 

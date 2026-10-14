@@ -329,20 +329,24 @@ func ValidateDelegatedRoleCommand(ctx context.Context, store DurableRunStore, co
 		record.State.Status != RunStatusPaused || record.Phase != CheckpointWaiting {
 		return errors.New("multiagent: delegated command does not match active run scope")
 	}
-	request := command.Request.Run
-	if request.RunID != command.RunID || request.Task != command.Task || request.CurrentRole != command.Role ||
-		request.ExecutionKey != command.ExecutionKey || request.WorkspaceID != command.WorkspaceID {
+	request := command.Request
+	if request.Run.RunID != command.RunID || request.Run.Task != command.Task || request.Run.CurrentRole != command.Role ||
+		request.Run.ExecutionKey != command.ExecutionKey || request.Run.WorkspaceID != command.WorkspaceID {
 		return errors.New("multiagent: delegated role request does not match command identity")
 	}
 	if command.JoinID != "" {
 		child := findDelegationChild(record, command.JoinID, command.ChildID)
 		if child == nil || child.Role != command.Role || child.Task != command.Task || child.ExecutionKey != command.ExecutionKey ||
+			!sameOptionalTaskReference(request.ParentTask, record.DelegationJoin.ParentTask) ||
 			child.DelegationID != command.DelegationID || child.Lane != command.Lane || child.DeliveryKey != command.DeliveryKey ||
 			child.CorrelationID != command.CorrelationID || child.CommandEventID != command.CommandEventID || !child.Deadline.Equal(command.Deadline) ||
 			child.DeliveryAttemptID != command.DeliveryAttemptID || child.Retry == nil || child.Retry.AttemptID != command.AttemptID {
 			return ErrStaleRetryAttempt
 		}
 		return nil
+	}
+	if request.ParentTask != nil {
+		return ErrStaleRetryAttempt
 	}
 	w := record.Waiting
 	if record.ActiveExecutionKey != command.ExecutionKey || w == nil || w.Kind != "delegation_outcome" || record.State.CurrentRole != command.Role || record.State.CurrentTask != command.Task ||
@@ -352,6 +356,13 @@ func ValidateDelegatedRoleCommand(ctx context.Context, store DurableRunStore, co
 		return ErrStaleRetryAttempt
 	}
 	return nil
+}
+
+func sameOptionalTaskReference(left, right *TaskReference) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func childRetryEvent(record DurableRun, child DelegationJoinChild, kind string) event.Event {

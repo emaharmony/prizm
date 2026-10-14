@@ -195,6 +195,7 @@ type RunView struct {
 // RoleRunRequest is the complete, read-only input for one role visit.
 type RoleRunRequest struct {
 	Run              RunView
+	ParentTask       *TaskReference `json:"parent_task,omitempty"`
 	RoleConfig       RoleConfig
 	FanOutAvailable  bool                 `json:"fan_out_available,omitempty"`
 	RecoveryFeedback string               `json:"-"`

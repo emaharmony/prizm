@@ -375,7 +375,8 @@ func (r *DurableRuntime) startDelegationJoin(ctx context.Context, record Durable
 			CorrelationID: record.State.RunID + ":" + executionKey + ":delivery:0", Deadline: deadline,
 			DeliveryAttemptID: executionKey + ":delivery:0", DeliveryNumber: 0, Retry: retryState, DispatchPending: true})
 	}
-	record.DelegationJoin = &DelegationJoinState{JoinID: "join:" + record.ActiveExecutionKey,
+	parentTask := record.State.CurrentTask
+	record.DelegationJoin = &DelegationJoinState{JoinID: "join:" + record.ActiveExecutionKey, ParentTask: &parentTask,
 		ParentExecutionKey: record.ActiveExecutionKey, ParentRole: record.State.CurrentRole,
 		ParentResult: cloneRoleRunResult(parent), ParentStartedAt: startedAt, ParentFinishedAt: finishedAt,
 		StartedAt: now, Deadline: deadline, FailurePolicy: "wait_for_all_then_fail", Children: children}
@@ -440,7 +441,7 @@ func (r *DurableRuntime) dispatchPendingDelegationJoin(ctx context.Context, reco
 			DelegationID: child.DelegationID, JoinID: child.JoinID, Lane: child.Lane, DeliveryKey: child.DeliveryKey, CorrelationID: child.CorrelationID,
 			CommandEventID: child.CommandEventID, Deadline: child.Deadline, DeliveryAttemptID: child.DeliveryAttemptID,
 			AttemptID: attemptID, RecoveryFeedback: recoveryFeedback,
-			Request: RoleRunRequest{Run: view, RoleConfig: cloneRoleConfig(cfg), FanOutAvailable: false}})
+			Request: RoleRunRequest{Run: view, ParentTask: record.DelegationJoin.ParentTask, RoleConfig: cloneRoleConfig(cfg), FanOutAvailable: false}})
 		if err != nil {
 			return record, err
 		}
