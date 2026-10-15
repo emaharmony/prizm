@@ -267,6 +267,44 @@ func TestLoopRunnerFailsWhenFinalizationTurnIsEmpty(t *testing.T) {
 	}
 }
 
+func TestLoopRunnerClassifiesMalformedReservedFinalResponseForDurableRecovery(t *testing.T) {
+	tests := []struct {
+		name string
+		code string
+	}{
+		{name: "invalid final schema", code: "invalid_final_schema"},
+		{name: "malformed tool input", code: "malformed_tool_input"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backend := &scriptBackend{
+				parse: func(text string) Action {
+					if text == "read" {
+						return Action{Tool: "read_file", Input: map[string]any{"path": "README.md"}}
+					}
+					return Action{CorrectionCode: tt.code}
+				},
+				turns: []Turn{
+					{Text: "read", PromptTokens: 400, CompletionTokens: 50},
+					{Text: "malformed final", PromptTokens: 20, CompletionTokens: 10},
+				},
+			}
+			runner := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 3, MaxTokens: 1200, FinalReplyReserveTokens: 100})
+			result, err := runner.Run(context.Background(), v2.TaskPacket{TaskID: "T-malformed-final"}, AgentRuntime{AgentID: "developer"})
+			var safe *SafeFailureError
+			if !errors.As(err, &safe) || safe.Code != tt.code {
+				t.Fatalf("error=%v, want safe recoverable schema code %q", err, tt.code)
+			}
+			if strings.Contains(err.Error(), "malformed final") || result.Iterations != 2 {
+				t.Fatalf("raw output or partial metrics leaked: result=%+v err=%v", result, err)
+			}
+			if len(backend.toolCalls) != 1 || backend.toolCalls[0] != "read_file" || len(backend.messages) != 2 {
+				t.Fatalf("final recovery used unexpected tools or provider calls: tools=%v calls=%d", backend.toolCalls, len(backend.messages))
+			}
+		})
+	}
+}
+
 func TestLoopRunnerFailsBeforeFinalCallWhenReserveCannotFit(t *testing.T) {
 	backend := &scriptBackend{parse: lineParser, turns: []Turn{{Text: "TOOL read_file", PromptTokens: 600, CompletionTokens: 100}}}
 	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 3, MaxTokens: 1000, FinalReplyReserveTokens: 400})

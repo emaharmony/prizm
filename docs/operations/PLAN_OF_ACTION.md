@@ -1,5 +1,32 @@
 # Prizm Plan of Action
 
+## Current Handoff: R1 reserved-final schema recovery (2026-10-15)
+
+**Roadmap:** R1 remains incomplete. On the source-equivalent worktree based at
+`3eb34564c94a34dd0ecc3d6563a3efd12651980d`, an isolated real-provider run was
+durably accepted and the planner completed, but Developer terminated at attempt
+4 with recovery 3/10 after a completed `search_files` call. The failure path was
+the reserved-final guard in `internal/subagent/runner.go`: parser-classified
+schema errors returned as plain errors before the later correction handling,
+so the durable role classifier marked them nonretryable. The correction now
+preserves those two allowlisted categories (`invalid_final_schema` and
+`malformed_tool_input`) as typed safe failures, which schedule one durable role
+visit under the existing recovery budget. No raw model output or private
+reasoning is stored or reported. No proposal, approval, validation, or mutation
+was produced by the failed run; it remains terminal and must not be resumed.
+
+The four-file source diff is under review. Focused tests, the uncached full Go
+suite, build, vet, Staticcheck, and `git diff --check` passed on the exact
+worktree; the sandbox-only loopback and temp-cleanup failures were resolved by
+the authorized elevated run with cache/temp scoped under `D:\_projects_\prism\.tmp\r1g`.
+No provider default, approval rule, package boundary, or worktree behavior was
+changed. No commit, push, or service restart occurred.
+
+**Next action:** review the exact source diff and keep R1 acceptance open until
+a separately authorized fresh served run reaches proposal, approval, apply,
+validation, fresh review, and final report. Do not reuse or resume the terminal
+run.
+
 ## Current Handoff: R1 trusted-tree and parallel child-recovery integration (2026-10-15)
 
 **Roadmap:** R1 remains incomplete. The `codex/r1-owned-worktree-recovery` branch at `215d4904a8ca731216251eb01b00b353f7f9991f` was integrated with local staging checkpoint `07bfa94aa9a4ed45f12c94f921106853296a319f` (parallel child recovery WIP `72766bf` plus staging documentation `b935356`) in a local two-parent merge that resolved 15 conflicts. It preserves the approval-bound trusted post-apply tree basis and exact `ParentTask` identity checks while integrating staging's per-child retry, fanout adoption, worker drain, validation-profile fingerprint, and structured-output behavior. Focused tests passed for `internal/workflow/multiagent`, `internal/gitx`, `internal/approval`, `internal/tool`, `internal/mutation`, and `cmd/prizm-cli`. On the exact R1 worktree, `go build ./...`, `go vet ./...`, `go test -count=1 ./...`, `staticcheck ./...`, and `git diff --cached --check` all passed with exit code 0. The test/cache paths were scoped to the short workspace-local `D:\_projects_\prism\.tmp\r1g` root.

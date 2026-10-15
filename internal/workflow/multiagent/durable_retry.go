@@ -412,7 +412,7 @@ func classifyRetryableRoleFailure(err error) (class, code string, retryAfter tim
 	var safeFailure *subagent.SafeFailureError
 	if errors.As(err, &safeFailure) {
 		switch safeFailure.Code {
-		case "invalid_proposal_diff":
+		case "invalid_proposal_diff", "invalid_final_schema", "malformed_tool_input":
 			return "schema_correction", safeFailure.Code, 0, true
 		case "provider_turn_failed":
 			return "provider_transient", safeRetryCode(safeFailure.Code), safeFailure.RetryAfter(), true

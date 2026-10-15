@@ -1877,3 +1877,41 @@ R1 local source gates do not complete the separate live served acceptance or fre
 - Focused Windows Go tests passed: `go test ./internal/workflow/multiagent ./internal/gitx ./internal/approval ./internal/tool ./internal/mutation ./cmd/prizm-cli`. On the exact R1 worktree, `go build ./...`, `go vet ./...`, `go test -count=1 ./...`, `staticcheck ./...`, and `git diff --cached --check` all passed with exit code 0. The uncached multiagent package passed in 42.801s; temp and cache paths were scoped under `D:\_projects_\prism\.tmp\r1g` after the managed C worktree denied local cache writes. The resolved tree is now committed locally with the requested two parents. No service, immutable run, remote PR, or other worktree was changed; nothing was pushed.
 
 **Next action:** hand the verified local merge head and parent-delta review to the coordinator for guarded PR #91 publication/review, then plan a separately authorized fresh R1 served acceptance. R1 served acceptance remains incomplete.
+
+### R1 reserved-final schema recovery regression (2026-10-15)
+
+**Roadmap ID:** R1. **Source-equivalent branch/head:**
+`codex/r1-owned-worktree-recovery` at `3eb34564c94a34dd0ecc3d6563a3efd12651980d`.
+
+The isolated run `run_01M5043S4MGMHSWZ6DEV3TCR12` was durably accepted. Planner
+completed; Developer failed at attempt 4 with recovery 3/10 after one completed
+`search_files` call. The preceding recovery codes were `invalid_final_schema`
+and `malformed_tool_input`; the final reserved response was also classified as
+`invalid_final_schema`. No proposal, approval, validation, or mutation occurred.
+The run is terminal and was not resumed. No raw model output or private
+reasoning is recorded here.
+
+**Cause and change:** the reserved-final guard in `internal/subagent/runner.go`
+returned a plain error before the normal correction path, and
+`classifyRetryableRoleFailure` consequently classified the schema failure as
+nonretryable `role_execution_failed`. A parser-classified correction in that
+single reserved response now becomes a `SafeFailureError`; durable retry accepts
+only the explicit codes `invalid_final_schema` and `malformed_tool_input` from
+this path, and otherwise preserves fail-closed behavior. The recovery continues
+as a new durable role visit rather than an extra in-loop model call.
+
+**Evidence:** focused tests passed for the malformed reserved-final cases,
+existing finalization constraints, durable scheduling/resume, retry
+classification, ten-recovery exhaustion, and cancellation. The uncached
+`go test -count=1 ./...` suite passed in the elevated exact C worktree after the
+sandbox denied local loopback and Git-backed temp cleanup. `go build ./...`,
+`go vet ./...`, `staticcheck ./...`, and `git diff --check` each exited 0 with
+`GOCACHE`, `GOTMPDIR`, `TEMP`, and `TMP` scoped beneath `D:\_projects_\prism\.tmp\r1g`.
+The diff changes four source/test paths and adds no package. No provider
+configuration, approval policy, process, or Git remote was changed; no commit or
+push was made.
+
+**Risk/next action:** unclassified or empty reserved-final outputs remain
+nonretryable, and all recoveries still consume the shared role limit. Review the
+four-file diff, then use a fresh separately authorized served R1 run; do not
+resume the terminal run. R1 acceptance remains incomplete.

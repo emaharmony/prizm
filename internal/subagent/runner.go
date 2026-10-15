@@ -339,6 +339,13 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 			return usage(RunResult{Summary: strings.TrimSpace(action.Content), Artifacts: artifacts.result()}), nil
 		}
 		if finalOnly {
+			// The reserved final turn cannot request another in-loop provider
+			// turn, but a classified schema failure is still eligible for the
+			// durable role-visit recovery budget. Keep the failure category safe
+			// and let the durable runtime decide whether another visit fits.
+			if action.CorrectionCode != "" {
+				return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: action.CorrectionCode}
+			}
 			return usage(RunResult{Artifacts: artifacts.result()}), fmt.Errorf("task %q did not return a final answer during its reserved finalization turn", packet.TaskID)
 		}
 

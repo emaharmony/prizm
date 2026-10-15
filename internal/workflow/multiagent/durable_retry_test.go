@@ -116,6 +116,14 @@ func TestRetryClassificationAndPolicyDefaults(t *testing.T) {
 	if class, code, _, ok := classifyRetryableRoleFailure(&subagent.SafeFailureError{Code: "invalid_proposal_diff"}); !ok || class != "schema_correction" || code != "invalid_proposal_diff" {
 		t.Fatalf("typed malformed diff was not recoverable: class=%q code=%q ok=%t", class, code, ok)
 	}
+	for _, code := range []string{"invalid_final_schema", "malformed_tool_input"} {
+		if class, gotCode, _, ok := classifyRetryableRoleFailure(&subagent.SafeFailureError{Code: code}); !ok || class != "schema_correction" || gotCode != code {
+			t.Fatalf("reserved-final correction %q was not recoverable: class=%q code=%q ok=%t", code, class, gotCode, ok)
+		}
+	}
+	if _, _, _, ok := classifyRetryableRoleFailure(&subagent.SafeFailureError{Code: "untrusted-provider-text"}); ok {
+		t.Fatal("unrecognized safe-failure code must not become retryable")
+	}
 	if _, _, _, ok := classifyRetryableRoleFailure(&subagent.SafeFailureError{Code: "invalid_proposal_context"}); ok {
 		t.Fatal("workspace or source-context violation must remain nonretryable")
 	}
@@ -204,7 +212,7 @@ func TestDurableRetryExhaustionIsInitialPlusTenAndTerminalIsStable(t *testing.T)
 	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 	steps := make([]scriptedStep, 11)
 	for i := range steps {
-		steps[i] = scriptedStep{result: RoleRunResult{LocalIterations: 1, TokenUsage: cost.TokenUsage{PromptTokens: 1, TotalTokens: 1}}, err: retry.NewRetryableError(errors.New("503 unavailable"))}
+		steps[i] = scriptedStep{result: RoleRunResult{LocalIterations: 1, TokenUsage: cost.TokenUsage{PromptTokens: 1, TotalTokens: 1}}, err: &subagent.SafeFailureError{Code: "invalid_final_schema"}}
 	}
 	runner := &scriptedRunner{scripts: map[Role][]scriptedStep{RolePlanner: steps}}
 	runtime := newMutableClockRuntime(t, validDefinition(), runner, env, &now)
@@ -261,6 +269,43 @@ func TestDurableRetryExhaustionIsInitialPlusTenAndTerminalIsStable(t *testing.T)
 	}
 	if failed["attempt_id"] == "" || fmt.Sprint(failed["attempt"]) != "11" || fmt.Sprint(failed["recovery_number"]) != "10" {
 		t.Fatalf("terminal attempt identity=%#v", failed)
+	}
+}
+
+func TestReservedFinalSchemaCorrectionSchedulesOneDurableRoleRecovery(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	runner := &scriptedRunner{scripts: map[Role][]scriptedStep{
+		RolePlanner:   {{result: RoleRunResult{LocalIterations: 2}, err: &subagent.SafeFailureError{Code: "invalid_final_schema"}}, {result: scriptedResult(OutcomePlanReady)}},
+		RoleDeveloper: {{result: scriptedResult(OutcomeImplementationReady)}},
+		RoleTester:    {{result: scriptedResult(OutcomeTestsPassed)}},
+		RoleReviewer:  {{result: scriptedResult(OutcomeReviewApproved)}},
+	}}
+	runtime := newMutableClockRuntime(t, validDefinition(), runner, env, &now)
+	request := testRunRequest()
+	request.RunID = "run-reserved-final-schema-recovery"
+	state, err := runtime.Run(context.Background(), request)
+	var waiting *RunWaitingError
+	if !errors.As(err, &waiting) || state.Status != RunStatusPaused {
+		t.Fatalf("schema correction did not schedule a durable visit: state=%s err=%v", state.Status, err)
+	}
+	stored, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Retry == nil || stored.Retry.RecoveryNumber != 1 || stored.Retry.Number != 2 || stored.Retry.MaxRecoveries != 10 || stored.Retry.FailureClass != "schema_correction" || stored.Retry.FailureCode != "invalid_final_schema" {
+		t.Fatalf("durable retry state=%#v", stored.Retry)
+	}
+	if calls := runnerCalls(runner); len(calls) != 1 || calls[0] != RolePlanner {
+		t.Fatalf("reserved final error caused an extra same-visit call: %v", calls)
+	}
+	now = stored.Retry.NextAt.Add(time.Millisecond)
+	completed, err := runtime.Resume(context.Background(), request.RunID)
+	if err != nil || completed.Status != RunStatusCompleted {
+		t.Fatalf("resumed schema correction state=%s err=%v", completed.Status, err)
+	}
+	if calls := runnerCalls(runner); len(calls) != 5 || calls[0] != RolePlanner || calls[1] != RolePlanner {
+		t.Fatalf("role visits after durable recovery=%v", calls)
 	}
 }
 
