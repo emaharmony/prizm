@@ -99,6 +99,42 @@ func TestInvalidApplyPatchProposalPersistsNoApproval(t *testing.T) {
 	}
 }
 
+func TestApplyPatchProposalRejectsIncorrectHunkCountsBeforeApproval(t *testing.T) {
+	root := patchProposalRepo(t)
+	runs := t.TempDir()
+	ctx := context.Background()
+	base, err := gitx.CurrentSHA(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := NewRegistry()
+	RegisterBuiltinsV4(reg, root, 1024*1024, "", root)
+	cfg := PolicyConfig{WorkspaceRoot: root, AllowedPaths: []string{root}, MaxFileSize: 1024 * 1024}
+	store := approval.NewStore(runs)
+	exec := NewExecutor(reg, &cfg)
+	exec.SetApprovalStore(store)
+	var requested bool
+	exec.SetEmitter(func(eventType, _ string, _ map[string]any) {
+		if eventType == "prizm.approval.file_requested" {
+			requested = true
+		}
+	})
+	patch := "diff --git a/base.txt b/base.txt\n--- a/base.txt\n+++ b/base.txt\n@@ -1,99 +1,99 @@\n-base\n+changed\n"
+	result, err := exec.ExecuteWithPolicy(ctx, "apply_patch_proposal", "astraea", "prizm", "exec-bad-hunk-count", map[string]any{
+		"_run_id": "run-bad-hunk-count", "patch": patch, "base_sha": base,
+	})
+	if err != nil || result.Success || result.FailureEffect != FailureEffectNoEffects {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	items, err := store.List("run-bad-hunk-count")
+	if err != nil || len(items) != 0 || requested {
+		t.Fatalf("approvals=%d requested=%v err=%v", len(items), requested, err)
+	}
+	if err := gitx.EnsureClean(ctx, root); err != nil {
+		t.Fatalf("rejected proposal mutated repo: %v", err)
+	}
+}
+
 type failingPatchApprovalStore struct{}
 
 func (failingPatchApprovalStore) Save(*approval.Approval) error {

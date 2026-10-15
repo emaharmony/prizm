@@ -1950,3 +1950,58 @@ PR was changed. No commit or push occurred.
 **Next action:** coordinator reviews the minimal source/test and documentation
 change. Keep the immutable run preserved and plan a fresh served acceptance;
 R1 acceptance remains incomplete.
+
+### R1 bounded validation failure feedback (2026-10-15)
+
+**Roadmap ID:** R1. On an isolated source-equivalent scratch checkout of
+`d936950f355b384c1b094746bb9b45eae78f5bae`, validation now extracts a bounded
+diagnostic for nonzero exits into `validation.Result.FailureSummary`. Extraction
+reads at most the final 32 KiB from stdout and stderr, selects up to three
+diagnostic lines, redacts common credential formats, skips prompt/private
+reasoning markers and structured data lines, and caps the result at 512
+characters. The existing handoff JSON delivers the field to Developer visits;
+safe validation evidence also carries the bounded summary. No package was
+introduced and no allowed read root was widened.
+
+**Evidence:** deterministic tests cover the `KeyError: 'status'` diagnostic,
+credential redaction, prompt omission, fallback, truncation, bounded tail
+reading, persisted result, and Developer prompt delivery. `go test
+./internal/validation ./internal/workflow/multiagent -count=1`, `go build ./...`,
+`go vet ./...`, uncached `go test -count=1 ./...`, and `staticcheck ./...` passed.
+Go caches and temp paths were kept under `D:\_projects_\prism\.tmp`; the
+existing `r1g\gomodcache` avoided denied writes to the default cache. The local
+Ollama scout endpoint was blocked by socket permissions, so minimal filename
+search and targeted inspection were used. No live run, pending proposal,
+service, or remote PR was accessed; nothing was pushed.
+
+**Risk/next action:** unusual secret formats may require a later sanitizer rule,
+and sparse or non-diagnostic output receives only a generic exit-code summary.
+Review the local diff and use a fresh separately authorized R1 served run;
+R1 acceptance remains incomplete.
+
+### R1 strict unified-diff proposal preflight (2026-10-15)
+
+**Roadmap ID:** R1. In the source-equivalent checkout at base
+`0232ca600ba2ab7e1675c9583061b77353a6fd33`, removed `--recount` from Git patch
+preflight and corresponding expected-tree, apply/rollback, direction, and
+path-extraction operations. Proposal plans now represent only syntactically
+valid unified diffs. Replaced the test that accepted inaccurate hunk counts with
+a rejection/no-worktree-change regression, and added a tool-boundary test
+confirming malformed hunk counts save no approval and emit no approval request.
+Existing valid-patch and subagent correction tests cover successful proposals,
+one typed `patch_validation_failed` repair, and one shared retry debit.
+
+**Verification:** focused `go test ./internal/gitx ./internal/tool
+./internal/subagent ./internal/workflow/multiagent -count=1`, `go build ./...`,
+`go vet ./...`, uncached `go test ./... -count=1`, `staticcheck ./...`, and
+`git diff --check` passed. Go caches and build temp stayed under
+`D:\_projects_\prism\.tmp\r1g`; tests used the elevated Windows temp setup
+because sandboxed cleanup could not delete Git's read-only temporary object
+files. No provider prompts, live runs, approvals, service, or remote PR were
+accessed.
+
+**Risk/next action:** strict hunk-count validation may reject model-generated
+patches that were formerly auto-recounted; the bounded typed correction path is
+the recovery mechanism. Coordinator should review the local commit and run a
+fresh separately authorized served acceptance covering correction, approval,
+single apply, validation, and resume. R1 remains incomplete.

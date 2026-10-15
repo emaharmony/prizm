@@ -244,6 +244,26 @@ func TestBuildRolePromptIncludesParentRequirementsForDelegatedTask(t *testing.T)
 	}
 }
 
+func TestBuildDeveloperPromptReceivesValidationFailureSummary(t *testing.T) {
+	request := adapterRoleRequest(RoleDeveloper)
+	request.Run.IncomingHandoff = &Handoff{
+		SourceRole:      RoleTester,
+		DestinationRole: RoleDeveloper,
+		ValidationResults: []validation.Result{{
+			Profile: "pytest_selected", Status: "failed", ExitCode: 1,
+			FailureSummary: "KeyError: 'status' password=[REDACTED]",
+		}},
+	}
+	prompt, err := BuildRolePrompt(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, `"failure_summary":"KeyError: 'status' password=[REDACTED]"`) ||
+		!strings.Contains(prompt, `"status":"failed"`) || !strings.Contains(prompt, `"exit_code":1`) {
+		t.Fatalf("developer prompt omitted structured validation failure: %s", prompt)
+	}
+}
+
 func TestLegacyRoleRequestKeepsTaskPromptAndWireShape(t *testing.T) {
 	request := adapterRoleRequest(RolePlanner)
 	request.Run.Task = TaskReference{ID: "legacy-lane", Description: "legacy lane task"}

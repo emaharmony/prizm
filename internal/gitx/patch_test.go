@@ -102,6 +102,9 @@ func TestPlanAndApplyPatchAtomicallyChangesMultipleFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !CheckPatchDirection(ctx, root, patch, false) {
+		t.Fatal("valid patch was not detected in the forward direction")
+	}
 	if got := strings.Join(plan.Paths, ","); got != "README.md,doomed.txt,new.txt" {
 		t.Fatalf("paths=%q", got)
 	}
@@ -110,6 +113,9 @@ func TestPlanAndApplyPatchAtomicallyChangesMultipleFiles(t *testing.T) {
 	}
 	if err := ApplyPlannedPatch(ctx, root, patch, plan); err != nil {
 		t.Fatal(err)
+	}
+	if !CheckPatchDirection(ctx, root, patch, true) {
+		t.Fatal("valid patch was not detected in the reverse direction")
 	}
 	tree, err := WorktreeTree(ctx, root)
 	if err != nil || tree != plan.ExpectedTree {
@@ -141,35 +147,20 @@ func TestPlanPatchRejectsSecondPatchAfterFirstAppliedInSameWorktree(t *testing.T
 	}
 }
 
-func TestPlanAndApplyPatchRecountsIncorrectHunkCounts(t *testing.T) {
+func TestPlanPatchRejectsIncorrectHunkCounts(t *testing.T) {
 	root := initRepo(t)
 	ctx := context.Background()
 	base, _ := CurrentSHA(ctx, root)
 	patch := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1,99 +1,99 @@\n-hello\n+changed\n" +
 		"diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,99 @@\n+new\n"
-	plan, err := PlanPatch(ctx, root, patch, base)
-	if err != nil {
-		t.Fatalf("plan recounted patch: %v", err)
+	if _, err := PlanPatch(ctx, root, patch, base); err == nil {
+		t.Fatal("planning accepted incorrect unified-diff hunk counts")
 	}
-	sum := sha256.Sum256([]byte(patch))
-	if plan.PatchSHA256 != hex.EncodeToString(sum[:]) {
-		t.Fatalf("patch hash=%q, want exact input hash", plan.PatchSHA256)
+	if CheckPatchDirection(ctx, root, patch, false) {
+		t.Fatal("forward direction accepted incorrect unified-diff hunk counts")
 	}
-	if got := strings.Join(plan.Paths, ","); got != "README.md,new.txt" {
-		t.Fatalf("paths=%q", got)
-	}
-	if !CheckPatchDirection(ctx, root, patch, false) {
-		t.Fatal("forward direction was not detected before apply")
-	}
-	if err := ApplyPlannedPatch(ctx, root, patch, plan); err != nil {
-		t.Fatalf("apply recounted patch: %v", err)
-	}
-	actualTree, err := WorktreeTree(ctx, root)
-	if err != nil || actualTree != plan.ExpectedTree {
-		t.Fatalf("tree=%q want=%q err=%v", actualTree, plan.ExpectedTree, err)
-	}
-	if !CheckPatchDirection(ctx, root, patch, true) {
-		t.Fatal("reverse direction was not detected after apply")
+	if err := EnsureClean(ctx, root); err != nil {
+		t.Fatalf("rejected proposal mutated repository: %v", err)
 	}
 }
 

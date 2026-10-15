@@ -1,5 +1,26 @@
 # Prizm Plan of Action
 
+## Current Handoff: R1 validation failure feedback (2026-10-15)
+
+**Roadmap:** R1 remains incomplete. The source-equivalent scratch branch is
+based on `d936950f355b384c1b094746bb9b45eae78f5bae`. Nonzero validation results
+now carry a bounded sanitized diagnostic from at most the last 32 KiB of each
+output stream. The existing Tester handoff carries the summary into the
+Developer's structured incoming context; safe event/report evidence also
+includes it. The summary omits raw output, prompt/private-reasoning markers,
+structured dumps, and common credential forms. No package boundary changed.
+
+Focused validation and multiagent tests passed. Repository-wide build, vet,
+uncached tests, and Staticcheck passed with Go cache/temp paths under the D:
+project temp root (using the existing `r1g` module cache). The local Ollama
+context scout was unavailable because the localhost socket was denied; targeted
+file discovery and inspection followed the documented fallback. No live run,
+pending proposal, service, or remote PR was accessed.
+
+**Next action:** coordinator review of the local implementation and a fresh,
+separately authorized R1 served acceptance. R1 remains open; do not resume prior
+terminal runs or interact with unapproved proposals.
+
 ## Current Handoff: R1 reserved-final schema recovery (2026-10-15)
 
 **Roadmap:** R1 remains incomplete. On the source-equivalent worktree based at
@@ -343,3 +364,27 @@ not identify the response shape in the immutable provider run.
 **Next action:** coordinator reviews the minimal source/test and documentation
 diff before any commit or publication. R1 served acceptance remains incomplete;
 do not resume the terminal run.
+
+### R1 strict unified-diff proposal preflight (2026-10-15)
+
+On the source snapshot at `0232ca600ba2ab7e1675c9583061b77353a6fd33`, patch
+planning, expected-tree calculation, apply/rollback, direction checks, and path
+extraction now use strict Git unified-diff parsing without `--recount`.
+Incorrect hunk counts fail before the approval store is reached. The existing
+typed no-effects correction continues to feed bounded feedback to the model and
+consume the shared role retry allowance; successful application remains bound
+to its persisted patch plan.
+
+**Evidence:** focused Git, tool, subagent, and multiagent tests passed. The
+malformed-hunk regression proves no approval request is emitted, no approval is
+saved, and the worktree stays clean; existing valid multi-file proposal/apply
+and typed correction/retry tests pass. `go build ./...`, `go vet ./...`,
+`go test ./... -count=1`, `staticcheck ./...`, and `git diff --check` passed with
+D-drive caches and the elevated Windows temp setup. No served run, live
+approval, or provider prompt was accessed. R1 remains partial and the live
+acceptance gate is outstanding.
+
+**Next action:** review the local commit, then use a separately authorized fresh
+served run to verify malformed proposals receive correction before approval and
+that the corrected proposal is approved, applied exactly once, validated, and
+resumed. Do not reuse the immutable failed run or its proposal.

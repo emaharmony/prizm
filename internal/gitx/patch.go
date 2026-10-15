@@ -339,9 +339,9 @@ func planPatch(ctx context.Context, root, patch, expectedBase string, basis *Tru
 			return PatchPlan{}, err
 		}
 	}
-	checkArgs := []string{"apply", "--check", "--binary", "--recount", "--whitespace=nowarn", "-"}
+	checkArgs := []string{"apply", "--check", "--binary", "--whitespace=nowarn", "-"}
 	if basis == nil {
-		checkArgs = []string{"apply", "--check", "--index", "--binary", "--recount", "--whitespace=nowarn", "-"}
+		checkArgs = []string{"apply", "--check", "--index", "--binary", "--whitespace=nowarn", "-"}
 	}
 	if _, err := RunCommand(ctx, root, patch, "git", checkArgs...); err != nil {
 		return PatchPlan{}, fmt.Errorf("patch precheck failed: %w", err)
@@ -385,7 +385,7 @@ func ApplyPlannedPatch(ctx context.Context, root, patch string, plan PatchPlan) 
 	if replanned.BaseTree != plan.BaseTree || replanned.PlanningTree != plan.PlanningTree || replanned.ExpectedTree != plan.ExpectedTree || replanned.PatchSHA256 != plan.PatchSHA256 || !equalStrings(replanned.Paths, plan.Paths) || !equalTrustedTreeBasis(replanned.Basis, plan.Basis) {
 		return fmt.Errorf("patch plan does not match persisted proposal")
 	}
-	if _, err := RunCommand(ctx, root, patch, "git", "apply", "--binary", "--recount", "--whitespace=nowarn", "-"); err != nil {
+	if _, err := RunCommand(ctx, root, patch, "git", "apply", "--binary", "--whitespace=nowarn", "-"); err != nil {
 		return fmt.Errorf("apply patch: %w", err)
 	}
 	actual, treeErr := WorktreeTree(ctx, root)
@@ -394,7 +394,7 @@ func ApplyPlannedPatch(ctx context.Context, root, patch string, plan PatchPlan) 
 	}
 	// A post-apply mismatch is fail-closed. Reverse the exact patch and verify
 	// the baseline so the caller never observes a partially accepted mutation.
-	_, reverseErr := RunCommand(ctx, root, patch, "git", "apply", "--reverse", "--binary", "--recount", "--whitespace=nowarn", "-")
+	_, reverseErr := RunCommand(ctx, root, patch, "git", "apply", "--reverse", "--binary", "--whitespace=nowarn", "-")
 	rolledBack, rollbackTreeErr := WorktreeTree(ctx, root)
 	if reverseErr != nil || rollbackTreeErr != nil || rolledBack != plan.PlanningTree {
 		return fmt.Errorf("applied patch tree mismatch and rollback could not be verified")
@@ -427,7 +427,7 @@ func WorktreeTree(ctx context.Context, root string) (string, error) {
 // CheckPatchDirection checks whether the exact patch applies in the requested
 // direction without mutating the worktree.
 func CheckPatchDirection(ctx context.Context, root, patch string, reverse bool) bool {
-	args := []string{"apply", "--check", "--binary", "--recount", "--whitespace=nowarn"}
+	args := []string{"apply", "--check", "--binary", "--whitespace=nowarn"}
 	if reverse {
 		args = append(args, "--reverse")
 	}
@@ -445,7 +445,7 @@ func treeWithPatch(ctx context.Context, root, base, patch string) (string, error
 	if _, err := runGitWithIndex(ctx, root, index, "read-tree", base); err != nil {
 		return "", err
 	}
-	if _, err := runGitWithIndexInput(ctx, root, index, patch, "apply", "--cached", "--binary", "--recount", "--whitespace=nowarn", "-"); err != nil {
+	if _, err := runGitWithIndexInput(ctx, root, index, patch, "apply", "--cached", "--binary", "--whitespace=nowarn", "-"); err != nil {
 		return "", err
 	}
 	out, err := runGitWithIndex(ctx, root, index, "write-tree")
@@ -474,7 +474,7 @@ func treePathMode(ctx context.Context, root, tree, path string) (string, error) 
 }
 
 func patchPaths(ctx context.Context, root, patch string) ([]string, error) {
-	out, err := RunCommand(ctx, root, patch, "git", "apply", "--numstat", "-z", "--binary", "--recount", "-")
+	out, err := RunCommand(ctx, root, patch, "git", "apply", "--numstat", "-z", "--binary", "-")
 	if err != nil {
 		return nil, fmt.Errorf("inspect patch paths: %w", err)
 	}
