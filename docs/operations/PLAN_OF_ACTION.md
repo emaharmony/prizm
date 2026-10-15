@@ -1,6 +1,15 @@
 # Prizm Plan of Action
 
-## Current Handoff: R1 parent-task propagation and proof-v4 recovery (2026-10-14)
+## Current Handoff: R1 trusted-tree and parallel child-recovery integration (2026-10-15)
+
+**Roadmap:** R1 remains incomplete. The `codex/r1-owned-worktree-recovery` branch at `215d4904a8ca731216251eb01b00b353f7f9991f` was integrated with local staging checkpoint `07bfa94aa9a4ed45f12c94f921106853296a319f` (parallel child recovery WIP `72766bf` plus staging documentation `b935356`) in a local two-parent merge that resolved 15 conflicts. It preserves the approval-bound trusted post-apply tree basis and exact `ParentTask` identity checks while integrating staging's per-child retry, fanout adoption, worker drain, validation-profile fingerprint, and structured-output behavior. Focused tests passed for `internal/workflow/multiagent`, `internal/gitx`, `internal/approval`, `internal/tool`, `internal/mutation`, and `cmd/prizm-cli`. On the exact R1 worktree, `go build ./...`, `go vet ./...`, `go test -count=1 ./...`, `staticcheck ./...`, and `git diff --cached --check` all passed with exit code 0. The test/cache paths were scoped to the short workspace-local `D:\_projects_\prism\.tmp\r1g` root.
+
+The preserved R1 run `run_54b6a3649a7ab3e9cadd1301d0` remains terminal and immutable after one approved apply, validator result 18 passed/1 failed (missing `BLOCKED` import), ten patch-validation recovery attempts, one delivered failure report/notice, and no fresh Reviewer. Do not resume, resubmit, reuse its approval, or edit its applied tree. R1 acceptance remains open. No live service or PR state was changed by this reconciliation.
+
+FW-P1 (FW-002/003/004) remains a separate served-proof gate, and Recall remains untouched. Local source validation does not establish either served acceptance.
+
+**Next action:** hand the verified local merge head and parent-delta review to the coordinator for guarded PR #91 publication/review. R1 still needs a separately authorized fresh served acceptance.
+## Previous handoff: R1 parent-task propagation and proof-v4 recovery (2026-10-14)
 
 PR #91 remains a draft at head `dda3c3118c6b65be4ec023e63648155483f34c08` on `codex/r1-owned-worktree-recovery`, based on `staging`. The reviewed R1 change preserves original parent-task requirements through delegated role requests and prompts, with legacy nil payload compatibility. Local build, vet, full test, Staticcheck (277 test-inclusive package patterns), and diff checks passed before these documentation-only updates. The separate FW-P1 implementation remains outside this R1 checkpoint.
 

@@ -157,6 +157,33 @@ Remembrance integration events. Emitted when Prizm connects to the Remembrance m
 | `prizm.memory.context_built` | Memory context assembled | `memories_count`, `entities_count` |
 | `prizm.memory.context_failed` | Memory lookup failed | `error` |
 
+### Scoped Memory Lifecycle (R2) — `prizm.memory.*` (capture/search/sync)
+
+The R2 scoped-memory pipeline emits these alongside the context events above.
+Capture is idempotent, scoped to user/project/task, and falls back to local
+storage when Recall is unavailable.
+
+| Event | When | Key Payload |
+|-------|------|-------------|
+| `prizm.memory.capture.started` | Scoped capture begins | `scope`, `content_key` |
+| `prizm.memory.capture.pending` | Capture queued for Recall sync | `scope`, `intent_id` |
+| `prizm.memory.capture.persisted` | Capture stored locally | `scope`, `memory_id` |
+| `prizm.memory.capture.fallback` | Recall unavailable — local fallback used | `scope`, `reason` |
+| `prizm.memory.capture.synced` | Capture accepted by Recall (idempotent) | `intent_id`, `capture_id` |
+| `prizm.memory.capture.sync_pending` | Recall sync deferred for retry | `intent_id` |
+| `prizm.memory.capture.sync_retry` | Sync retry scheduled | `intent_id`, `attempt` |
+| `prizm.memory.capture.sync_failed` | Sync failed terminally | `intent_id`, `error` |
+| `prizm.memory.search.requested` | Scoped retrieval begins | `scope`, `query` |
+| `prizm.memory.search.completed` | Scoped retrieval finished | `scope`, `results_count` |
+| `prizm.memory.search.fallback` | Search fell back to local store | `scope`, `reason` |
+| `prizm.memory.extracted` | Candidate memory extracted from content | `content_key` |
+| `prizm.memory.gate_passed` | Extraction passed the relevance gate | `memory_id`, `reasoning` |
+| `prizm.memory.gate_rejected` | Extraction rejected | `reasoning` |
+| `prizm.memory.persisted` | Memory persisted to the store | `memory_id` |
+| `prizm.memory.superseded` | Older memory superseded by newer fact | `memory_id`, `superseded_by` |
+| `prizm.memory.synced` | Store sync completed | `count` |
+| `prizm.memory.sync_failed` | Store sync failed | `error` |
+
 ---
 
 ### Approval Gates (`prizm.approval.*`)
@@ -273,6 +300,69 @@ V7 workflow runtime. Named workflows compose Prizm capabilities.
 | `prizm.workflow.resumed` | Workflow resumed after approval | `workflow_id`, `approval_id` |
 | `prizm.workflow.completed` | Workflow finished | `workflow_id`, `status` |
 | `prizm.workflow.failed` | Workflow failed | `workflow_id`, `error` |
+
+### Durable Proposal & Validation Lifecycle (R1) — `prizm.workflow.proposal.*`, `prizm.workflow.validation.*`
+
+Emitted by the durable multi-agent runtime. Every proposal carries its exact
+approval identity through apply and resume; commands travel through the
+durable event outbox with idempotency keys (subjects under
+`prizm.command.*`, e.g. `prizm.command.delegation` /
+`prizm.command.graph_role_delegation`), so duplicate deliveries resolve as
+`decision_already_recorded` instead of double-applying.
+
+| Event | When | Key Payload |
+|-------|------|-------------|
+| `prizm.workflow.proposal.recorded` | Approved proposal durably recorded | `run_id`, `proposal_id`, `approval_id`, `apply_key` |
+| `prizm.workflow.proposal.approval_pending` | Proposal waiting on approval | `run_id`, `proposal_id` |
+| `prizm.workflow.proposal.approval_granted` | Exact approval matched and granted | `run_id`, `proposal_id`, `approval_id` |
+| `prizm.workflow.proposal.approval_denied` | Proposal denied | `run_id`, `proposal_id`, `reason` |
+| `prizm.workflow.proposal.apply_started` | Isolated worktree apply begins | `run_id`, `proposal_id`, `workspace_id` |
+| `prizm.workflow.proposal.applied` | Patch applied to worktree | `run_id`, `proposal_id`, `target_path`, `diff_path` |
+| `prizm.workflow.proposal.apply_failed` | Apply failed | `run_id`, `proposal_id`, `message` |
+| `prizm.workflow.proposal.reconciled` | Interrupted run reconciled on restart | `run_id`, `proposal_id` |
+| `prizm.workflow.validation.started` | Configured project validation begins | `run_id`, `profile` |
+| `prizm.workflow.validation.completed` | Validation passed | `run_id`, `status` |
+| `prizm.workflow.validation.failed` | Validation failed | `run_id`, `error` |
+
+### Interaction Runtime — `prizm.interaction.*`
+
+Live interaction-loop events (multi-agent runtime). Payloads always include
+`run_id`, `adapter`, `step`, and — when caused by another run —
+`parent_run_id`.
+
+| Event | When |
+|-------|------|
+| `prizm.interaction.observation.recorded` | Observation captured |
+| `prizm.interaction.decision.selected` | Action selection made |
+| `prizm.interaction.action.validated` | Action passed validation |
+| `prizm.interaction.action.rejected` | Action rejected by policy |
+| `prizm.interaction.action.executed` | Action executed |
+| `prizm.interaction.action.failed` | Action failed |
+| `prizm.interaction.verification.completed` | Post-action verification done |
+| `prizm.interaction.neutralized` | Run neutralized (halted) |
+| `prizm.interaction.approval.paused` | Run paused at an approval gate |
+| `prizm.interaction.resumed` | Run resumed after approval |
+
+### Reflection — `prizm.reflection.*`
+
+| Event | When | Key Payload |
+|-------|------|-------------|
+| `prizm.reflection.requested` | Bounded reflection requested | `run_id` |
+| `prizm.reflection.completed` | Reflection produced a diagnosis | `run_id`, `diagnosis` |
+| `prizm.reflection.failed` | Reflection errored | `run_id`, `error` |
+| `prizm.reflection.memory_accepted` | Reflection stored | `memory_id` |
+| `prizm.reflection.memory_rejected` | Reflection rejected by gate | `reason` |
+| `prizm.reflection.replan_requested` | Reflection triggered a revised plan | `run_id` |
+
+> **Note on coverage:** the canonical event constants live in
+> `internal/event/` (`schema.go`, `multiagent.go`, `outbox.go`). Families not
+> tabulated above — `prizm.cross.*` (Cross-Prizm bridge),
+> `prizm.autopatch.*`, `prizm.architecture.*`/`prizm.vulnerability.*`
+> (quality checks), `prizm.factory.*` (Factory monitor), `prizm.agent.status`
+> / `prizm.agent.openclaw` (serve-mode agent liveness), and
+> `prizm.dashboard.task.*` (dashboard workers) — are internal or
+> experimental integration surfaces; consult the source before relying on
+> them.
 
 ---
 

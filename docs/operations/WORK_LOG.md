@@ -1757,7 +1757,7 @@ review checkpoint, FW-002 (deduplicated bounded wake producer) is the next
 eligible Freewill task; FW-P2 stays blocked on R1 and FW-G2.
 
 
-## 2026-10-13 � R1 terminal fan-out diagnostics port
+## 2026-10-13 � R1 terminal fan-out diagnostics port
 
 **Roadmap:** R1 remains incomplete; FW-001 is separately published and FW-002/003/004 remain follow-on scope. **Branch:** `codex/r1-parallel-acceptance-staging`, PR #91 review worktree. The worktree was synchronized by merging `origin/staging` at `31a6ee783691c7a59005d6afc2b064ad73859258`; both staging FW-001 and prior R1/R6 log histories were retained.
 
@@ -1813,3 +1813,67 @@ Run `run_54b6a3649a7ab3e9cadd1301d0` reached the reviewed three-lane join, retai
 PR #91 remains a draft at `dda3c3118c6b65be4ec023e63648155483f34c08`; the current-head CI checks are green, but live R1 acceptance is incomplete. No successful real coding acceptance is claimed. FW-P1 work remains separate, and Recall was not accessed.
 
 **Next action:** Fix serial approved corrections: current PlanPatch requires a clean worktree after ApplyPlannedPatch leaves approved changes uncommitted; use a durable trusted tree basis and retain approval/out-of-band change checks. This source defect is not attributed to individual hidden retry causes.
+
+
+### R1 parallel-acceptance local checkpoint audit (2026-10-15)
+
+**Roadmap ID:** R1.
+
+The read-only audit verified branch `codex/r1-parallel-acceptance` at `b85f46aca4be910dfd3477e0efb6bee4eac2aa0e` with exactly 35 modified tracked files and 4 untracked source/test files. A byte-content hash comparison against PR #91 head `3d79f02119bca91694870eb8fcd84c616f4ab282` and local commit `215d4904a8ca731216251eb01b00b353f7f9991f` classified 17 paths identical to PR #91, 16 identical to both references, 1 additional path identical to PR #91 only, and 22 divergent from both. The source/test changes form an R1 child-retry, fan-out/adoption, resume-scheduling, worker integration, structured-output feedback, and validation-profile binding slice.
+
+This local checkpoint preserves work for review. It is not a merge-ready substitute for PR #91: the local child retry implementation omits PR #91's `sameOptionalTaskReference` binding between child and task identity. The newer `215d490` tree also contains trusted proposal tree-basis and exact approval/apply safeguards absent from this older branch. Reconcile those safeguards before integration. Plan/Work Log records prior test runs, including a full suite and build/vet/staticcheck pass before the current investigation and later focused checks; this audit ran no tests and does not establish that the final dirty tree passed validation. No ignored proof, cache, local config, run data, or credentials were included in the checkpoint.
+
+**Next action:** review the checkpoint against PR #91, restore task-reference and proposal/tree-basis guarantees, then run affected tests and full validation. Do not push or merge this snapshot.
+## 2026-10-15 — Staging merge history reconciliation and gates
+
+**Roadmap IDs:** R1, R2, R6, FW-001. **Branch/base:**
+`codex/r1-parallel-acceptance` merging staging commit
+`b9353560fd57b58db462bdaca7a3c0d954a2b658`.
+
+- Resolved the only unmerged path, this work log, retaining the local R1
+  entries through the Oct 15 checkpoint and all distinct staging history:
+  eight R6 entries from Oct 8–9, the PR #86 resolution entry from Oct 12, and
+  the FW-001 contract entry from Oct 13. The records remain in date order.
+- The merged tree passed `go test ./... -count=1`, `go build ./...`,
+  `go vet ./...`, and `git diff --cached --check`, each with exit code 0. The
+  first sandboxed suite was blocked by denied localhost test servers and
+  nested temporary Git cleanup; the full suite was rerun outside the sandbox
+  with a scoped workspace temp directory and passed. Hard line breaks in two
+  new Freewill documents were converted to equivalent Markdown backslash
+  breaks so the staged whitespace check passes.
+- The work is a staging merge checkpoint, not proof of R1 acceptance. Existing
+  local child task-reference and proposal/tree-basis gaps versus PR #91 and
+  `215d490` remain material integration risks. No ignored proof, cache,
+  local config, or run data was included in the merge resolution.
+
+**Next action:** create the local staging merge commit after final staged-path
+review; do not push. Then reconcile the noted R1 integration safeguards and
+run targeted validation before any publication.
+
+### R1 trusted-tree and FW-P1 preservation handoff (2026-10-15)
+
+**Roadmap:** R1, FW-001, and FW-P1 (FW-002/003/004). PR #91 remains draft at published head `3d79f02119bca91694870eb8fcd84c616f4ab282`. The R1 candidate has an uncommitted trusted post-apply tree-basis implementation/test change; Git status confirms dirty source files `internal/gitx/patch.go` and `internal/gitx/patch_test.go`, plus the handoff docs. No full-gate handle was available to poll. Prior passing R1 source gates do not establish gates for the dirty correction.
+
+R1 run `run_54b6a3649a7ab3e9cadd1301d0` remains terminal and immutable after one approved apply, configured test result 18 passed/1 failed due to a missing `BLOCKED` import, ten patch-validation recovery attempts, one delivered terminal failure report/notice, and no fresh Reviewer. It was not resumed, resubmitted, or edited.
+
+The separate combined FW candidate remains based on `7ce5fa9c936300d09383c1948f61b9b9b8ac8828`, with selector schema/diagnostic hardening uncommitted. The focused hardening test passed per owner report; full gates were reported running, but this handoff did not have a pollable handle. Served FW-P1 proof remains open; no service was restarted and no manual run was resubmitted. Recall was not accessed. No code source was changed by this handoff.
+
+**Next action:** obtain exact worktree diff and existing gate handle from the owner, complete/review gates for the R1 trusted-tree change and combined FW candidate, preserve active proof services and terminal runs, then proceed only with separately authorized served proof.
+
+### R1 trusted post-apply tree basis implementation and verification (2026-10-15)
+
+Implemented an approval-bound trusted tree basis for serial corrections on the same run-owned worktree. Legacy `gitx.PlanPatch` retains its clean-worktree requirement. The durable runtime derives a follow-on basis only from an applied Developer proposal receipt with matching run/workspace/role, execution/apply identity, success, exact expected-tree reconciliation, and matching operation/result plans. The basis is revalidated against the canonical approval and actual HEAD/full worktree tree, carried through the delegated role JSON request, and injected into the patch tool only by host execution context. Each correction keeps its own proposal/approval/apply identity; out-of-band tree changes fail closed.
+
+The real linked-worktree acceptance test applies A, forces post-apply validation failure, verifies the applied receipt remains in the durable approved task, creates a distinct B approval bound to A's receipt, then applies and reconciles B. Additional tests verify clean-only legacy behavior, serial A→B planning, external mutation rejection, and wrong run/workspace/role/execution/apply key, non-applied phase, observed tree, and plan tampering rejection. Final validation on this source state passed: `go build ./...`, `go vet ./...`, `go test -count=1 ./...`, and `staticcheck ./...`. No commit, push, or service restart occurred.
+
+R1 local source gates do not complete the separate live served acceptance or fresh review. Preserve terminal run `run_54b6a3649a7ab3e9cadd1301d0`; do not resume it. PR #91 remains draft. FW-P1 and Recall remain separate.
+
+## 2026-10-15 — R1 trusted-tree and parallel child-recovery reconciliation
+
+**Roadmap ID:** R1. **Branch:** `codex/r1-owned-worktree-recovery`. **Parents:** `215d4904a8ca731216251eb01b00b353f7f9991f` and staging checkpoint `07bfa94aa9a4ed45f12c94f921106853296a319f`.
+
+- Reconciled the trusted post-apply tree-basis correction with the staging parallel child-recovery candidate. The merged request continues to carry the original `ParentTask` and host-injected trusted tree basis; durable command validation compares both against the persisted run/join state. Fanout retry/adoption behavior, attempt-scoped child CAS, safe result projection, validation-profile fingerprints, structured-output correction, and worker close/drain behavior remain present.
+- Resolved the 15 content conflicts by retaining the newer identity/tree-basis invariants and preserving both R1 and staging history in the plan/work log. The work log also retains the staging branch's checkpoint audit and merge evidence. No new package was introduced; workflow retry semantics remain in `internal/workflow/multiagent`, Git patch evidence in `internal/gitx`.
+- Focused Windows Go tests passed: `go test ./internal/workflow/multiagent ./internal/gitx ./internal/approval ./internal/tool ./internal/mutation ./cmd/prizm-cli`. On the exact R1 worktree, `go build ./...`, `go vet ./...`, `go test -count=1 ./...`, `staticcheck ./...`, and `git diff --cached --check` all passed with exit code 0. The uncached multiagent package passed in 42.801s; temp and cache paths were scoped under `D:\_projects_\prism\.tmp\r1g` after the managed C worktree denied local cache writes. The resolved tree is now committed locally with the requested two parents. No service, immutable run, remote PR, or other worktree was changed; nothing was pushed.
+
+**Next action:** hand the verified local merge head and parent-delta review to the coordinator for guarded PR #91 publication/review, then plan a separately authorized fresh R1 served acceptance. R1 served acceptance remains incomplete.

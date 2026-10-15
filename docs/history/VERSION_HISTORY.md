@@ -83,3 +83,14 @@ on the current state. Each row links to the original design document.
 | V56 | Gated-loop worktree isolation | [V56](milestones/V56-WORKTREE-ISOLATION-DESIGN.md) |
 | V57 | Auto-rollback for failed loops + per-phase token budgets | [V57](milestones/V57-AUTO-ROLLBACK-DESIGN.md) |
 | V58 | Full autonomy: generic sub-agent worker (bounded tool-loop, worktree isolation, capability routing) | [V58](milestones/V58-FULL-AUTONOMY-DESIGN.md) |
+
+After V58, sequenced platform work moved from the V-series to the
+**R-series roadmap** ([Current Roadmap](../architecture/PRIZM_ROADMAP.md)),
+which tracks delivery gates R1–R8 with per-gate acceptance evidence:
+
+| ID | What | Where |
+|----|------|-------|
+| R1 (#84, #87, #89) | Durable approved-task recovery, event outbox with idempotent delegation commands, uncapped runs, private delegated outputs | [Roadmap R1](../architecture/PRIZM_ROADMAP.md) · [Work Log](../operations/WORK_LOG.md) |
+| R2 (#85) | Scoped memory lifecycle and isolation (capture/search/supersede per user/project/task) | [Roadmap R2](../architecture/PRIZM_ROADMAP.md) · [Memory design](../design/memory-store.md) |
+| R6 groundwork (#86) | Durable Recall idempotency and reconciliation with local fallback | [Roadmap R6](../architecture/PRIZM_ROADMAP.md) |
+| FW-001 (#92) | Freewill intention contracts — policy-only, flags default off | [ADR 0003](../architecture/decisions/0003-freewill-intention-contracts.md) · [Freewill roadmap](../architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md) |

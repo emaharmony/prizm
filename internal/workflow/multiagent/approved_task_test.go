@@ -19,10 +19,11 @@ import (
 )
 
 type actualPatchLifecycle struct {
-	store     *approval.Store
-	executor  *mutation.Executor
-	workspace string
-	onApply   func()
+	store           *approval.Store
+	executor        *mutation.Executor
+	workspace       string
+	sourceWorkspace string
+	onApply         func()
 }
 
 func (l actualPatchLifecycle) Decision(_ context.Context, op ProposalOperation) (ProposalDecision, string, error) {
@@ -46,6 +47,12 @@ func (l actualPatchLifecycle) Apply(ctx context.Context, op ProposalOperation) (
 	if err != nil {
 		return ProposalApplyResult{}, err
 	}
+	if a.PatchPlan != nil && l.sourceWorkspace != "" {
+		ctx, err = gitx.WithVerifiedRunWorktree(ctx, l.workspace, l.sourceWorkspace, op.RunID, a.PatchPlan.BaseSHA)
+		if err != nil {
+			return ProposalApplyResult{}, err
+		}
+	}
 	r, err := l.executor.ApplyWithRun(ctx, op.RunID, op.ApprovalID, a.ApprovedBy)
 	if err != nil {
 		return ProposalApplyResult{}, err
@@ -53,7 +60,18 @@ func (l actualPatchLifecycle) Apply(ctx context.Context, op ProposalOperation) (
 	if r.Success && l.onApply != nil {
 		l.onApply()
 	}
-	return ProposalApplyResult{Success: r.Success, TargetPath: a.TargetPath, Message: r.Message}, nil
+	applyResult := ProposalApplyResult{Success: r.Success, TargetPath: a.TargetPath, Message: r.Message}
+	if r.Success && a.PatchPlan != nil {
+		status, receipt, reconcileErr := l.Reconcile(ctx, op)
+		if reconcileErr != nil {
+			return ProposalApplyResult{}, reconcileErr
+		}
+		if status != ProposalApplied || !receipt.Success || receipt.ReconcileCode != ProposalReconcileExpectedTree {
+			return receipt, errors.New("applied patch did not reconcile to its exact expected tree")
+		}
+		return receipt, nil
+	}
+	return applyResult, nil
 }
 func (l actualPatchLifecycle) Reconcile(ctx context.Context, op ProposalOperation) (ProposalReconciliation, ProposalApplyResult, error) {
 	a, err := l.store.Load(op.RunID, op.ApprovalID)
@@ -63,14 +81,25 @@ func (l actualPatchLifecycle) Reconcile(ctx context.Context, op ProposalOperatio
 	if a.PatchPlan == nil {
 		return ProposalAmbiguous, ProposalApplyResult{}, nil
 	}
+	if l.sourceWorkspace != "" {
+		ctx, err = gitx.WithVerifiedRunWorktree(ctx, l.workspace, l.sourceWorkspace, op.RunID, a.PatchPlan.BaseSHA)
+		if err != nil {
+			return ProposalAmbiguous, ProposalApplyResult{}, nil
+		}
+	}
 	tree, err := gitx.WorktreeTree(ctx, l.workspace)
 	if err != nil {
 		return ProposalAmbiguous, ProposalApplyResult{}, nil
 	}
 	if tree == a.PatchPlan.ExpectedTree {
-		return ProposalApplied, ProposalApplyResult{Success: true, TargetPath: a.TargetPath}, nil
+		return ProposalApplied, ProposalApplyResult{Success: true, TargetPath: a.TargetPath,
+			ReconcileCode: ProposalReconcileExpectedTree, ObservedTree: tree, PatchPlan: gitxPatchPlanForTest(a.PatchPlan)}, nil
 	}
-	if tree == a.PatchPlan.BaseTree {
+	planningTree := a.PatchPlan.PlanningTree
+	if planningTree == "" {
+		planningTree = a.PatchPlan.BaseTree
+	}
+	if tree == planningTree {
 		return ProposalNotApplied, ProposalApplyResult{TargetPath: a.TargetPath}, nil
 	}
 	return ProposalAmbiguous, ProposalApplyResult{TargetPath: a.TargetPath}, nil
@@ -143,6 +172,140 @@ func TestDurableApprovedTaskRealAtomicPatchRestartThroughValidation(t *testing.T
 	}
 	if data, err := os.ReadFile(filepath.Join(workspace, "new.txt")); err != nil || strings.TrimSpace(string(data)) != "new" {
 		t.Fatalf("new file=%q err=%v", data, err)
+	}
+}
+
+func TestDurableFailedValidationRetainsReceiptForSeparatelyApprovedCorrection(t *testing.T) {
+	const runID = "run-validation-failure-correction"
+	source := filepath.Join(t.TempDir(), "source")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, args := range [][]string{{"init", "-b", "main"}, {"config", "user.email", "test@prizm.local"}, {"config", "user.name", "Prizm Test"}} {
+		if _, err := gitx.RunCommand(ctx, source, "", "git", args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(source, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitx.RunCommand(ctx, source, "", "git", "add", "."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitx.RunCommand(ctx, source, "", "git", "commit", "-m", "base"); err != nil {
+		t.Fatal(err)
+	}
+	base, err := gitx.CurrentSHA(ctx, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(source, ".prizm", "worktrees", gitx.SafeID(runID, "run"))
+	if err := os.MkdirAll(filepath.Dir(workspace), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitx.RunCommand(ctx, source, "", "git", "worktree", "add", "--detach", workspace, base); err != nil {
+		t.Fatalf("create owned run worktree: %v", err)
+	}
+	patchA := "diff --git a/base.txt b/base.txt\n--- a/base.txt\n+++ b/base.txt\n@@ -1 +1 @@\n-base\n+changed\n"
+	approvalStore := approval.NewStore(t.TempDir())
+	registry := tool.NewRegistry()
+	tool.RegisterBuiltinsV4(registry, workspace, 1024*1024, "", workspace)
+	cfg := tool.PolicyConfig{WorkspaceRoot: workspace, AllowedPaths: []string{workspace}, MaxFileSize: 1024 * 1024}
+	toolExecutor := tool.NewExecutor(registry, &cfg)
+	toolExecutor.SetApprovalStore(approvalStore)
+	proposalA, err := toolExecutor.ExecuteWithPolicy(ctx, "apply_patch_proposal", "developer", "prizm", "execution-A", map[string]any{
+		"_run_id": runID, "patch": patchA, "base_sha": base,
+	})
+	if err != nil || !proposalA.Success {
+		t.Fatalf("proposal A=%#v err=%v", proposalA, err)
+	}
+	approvalIDA, _ := proposalA.Output["approval_id"].(string)
+	proposalIDA, _ := proposalA.Output["proposal_id"].(string)
+	storedA, err := approvalStore.Load(runID, approvalIDA)
+	if err != nil || storedA.PatchPlan == nil {
+		t.Fatalf("load patch A approval: plan=%#v err=%v", storedA, err)
+	}
+	planA := gitxPatchPlanForTest(storedA.PatchPlan)
+	baseRunner := approvedTaskRunner()
+	developer := baseRunner.scripts[RoleDeveloper][0].result
+	developer.Proposals = []ProposalReference{{ProposalID: proposalIDA, ApprovalID: approvalIDA,
+		PatchPlan: planA, Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "base.txt"}}}}
+	baseRunner.scripts[RoleDeveloper][0].result = developer
+	runner := &postApplyValidationRunner{scriptedRunner: baseRunner, validationErr: errors.New("intentional validation rejection")}
+	lifecycle := actualPatchLifecycle{store: approvalStore, executor: mutation.NewExecutor(workspace, approvalStore, workspace), workspace: workspace, sourceWorkspace: source,
+		onApply: func() { runner.workspaceChanged = true }}
+	env := newDurableTestEnvironment(t)
+	runtime := newDurableRuntimeForTest(t, validDefinition(), runner, env.store, env.claimer, env.events, DurableRuntimeOptions{Proposals: lifecycle})
+	request := testRunRequest()
+	request.RunID = runID
+	state, err := runtime.Run(ctx, request)
+	var waiting *RunWaitingError
+	if !errors.As(err, &waiting) || state.Status != RunStatusPaused {
+		t.Fatalf("initial state=%q err=%v", state.Status, err)
+	}
+	approvedA, err := approvalStore.Load(runID, approvalIDA)
+	if err != nil || approvedA.PatchPlan == nil || approvedA.PatchPlan.ExpectedTree != planA.ExpectedTree {
+		t.Fatalf("load A for grant: %#v err=%v", approvedA, err)
+	}
+	if err := approvedA.Approve("operator"); err != nil {
+		t.Fatal(err)
+	}
+	if err := approvalStore.Save(approvedA); err != nil {
+		t.Fatal(err)
+	}
+	state, err = runtime.Resume(ctx, runID)
+	if err == nil || state.Status != RunStatusFailed || runner.validationCalls != 1 {
+		t.Fatalf("post-apply validation state=%q calls=%d err=%v", state.Status, runner.validationCalls, err)
+	}
+	record, err := runtime.Inspect(ctx, runID)
+	if err != nil || record.ApprovedTask == nil || len(record.ApprovedTask.Proposals) != 1 {
+		t.Fatalf("failed validation lost approved task receipt: task=%#v err=%v", record.ApprovedTask, err)
+	}
+	basis := trustedTreeBasisForRole(record, RoleDeveloper)
+	if basis == nil || basis.ApprovalID != approvalIDA || basis.ExpectedTree != planA.ExpectedTree {
+		t.Fatalf("durable A receipt did not yield correction basis: basis=%#v progress=%#v", basis, record.ApprovedTask.Proposals[0])
+	}
+	if tree, err := gitx.WorktreeTree(ctx, workspace); err != nil || tree != basis.ExpectedTree {
+		t.Fatalf("A applied tree=%q expected=%q err=%v", tree, basis.ExpectedTree, err)
+	}
+
+	patchB := "diff --git a/base.txt b/base.txt\n--- a/base.txt\n+++ b/base.txt\n@@ -1 +1 @@\n-changed\n+corrected\n"
+	proposalB, err := toolExecutor.ExecuteWithPolicy(gitx.ContextWithTrustedTreeBasis(ctx, *basis), "apply_patch_proposal", "developer", "prizm", "execution-B", map[string]any{
+		"_run_id": runID, "patch": patchB, "base_sha": base,
+	})
+	if err != nil || !proposalB.Success {
+		t.Fatalf("proposal B from trusted receipt=%#v err=%v", proposalB, err)
+	}
+	approvalIDB, _ := proposalB.Output["approval_id"].(string)
+	proposalIDB, _ := proposalB.Output["proposal_id"].(string)
+	if approvalIDB == "" || proposalIDB == "" || approvalIDB == approvalIDA || proposalIDB == proposalIDA {
+		t.Fatalf("correction reused source identity: proposal=%q approval=%q", proposalIDB, approvalIDB)
+	}
+	approvedB, err := approvalStore.Load(runID, approvalIDB)
+	if err != nil || approvedB.PatchPlan == nil || !gitx.EqualTrustedTreeBasis(approvedB.PatchPlan.Basis, basis) {
+		t.Fatalf("B approval did not bind exact A receipt: approval=%#v err=%v", approvedB, err)
+	}
+	if err := approvedB.Approve("operator"); err != nil {
+		t.Fatal(err)
+	}
+	if err := approvalStore.Save(approvedB); err != nil {
+		t.Fatal(err)
+	}
+	verifiedCtx, err := gitx.WithVerifiedRunWorktree(gitx.ContextWithTrustedTreeBasis(ctx, *basis), workspace, source, runID, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyB, err := lifecycle.executor.ApplyWithRun(verifiedCtx, runID, approvalIDB, "operator")
+	if err != nil || !applyB.Success {
+		t.Fatalf("apply separately approved B: result=%#v err=%v", applyB, err)
+	}
+	operationB := ProposalOperation{RunID: runID, ProposalID: proposalIDB, ApprovalID: approvalIDB,
+		ApplyKey: proposalApplyKey(runID, proposalIDB), WorkspaceID: record.State.WorkspaceID, ExecutionKey: "execution-B",
+		Role: RoleDeveloper, PatchPlan: gitxPatchPlanForTest(approvedB.PatchPlan)}
+	reconciled, receiptB, err := lifecycle.Reconcile(ctx, operationB)
+	if err != nil || reconciled != ProposalApplied || receiptB.Success != true {
+		t.Fatalf("recover B application: status=%q result=%#v err=%v", reconciled, receiptB, err)
 	}
 }
 
@@ -331,6 +494,76 @@ func approvedTaskRunner() *scriptedRunner {
 	result.Proposals = []ProposalReference{{ProposalID: "proposal-1", ApprovalID: "approval-1"}}
 	runner.scripts[RoleDeveloper][0].result = result
 	return runner
+}
+
+func TestTrustedTreeBasisRequiresAppliedSameRunWorkspaceRoleReceipt(t *testing.T) {
+	plan := &gitx.PatchPlan{BaseSHA: strings.Repeat("a", 40), BaseTree: strings.Repeat("b", 40),
+		PlanningTree: strings.Repeat("b", 40), ExpectedTree: strings.Repeat("c", 40),
+		PatchSHA256: strings.Repeat("d", 64), Paths: []string{"src/file.go"}}
+	operationPlan := gitx.ClonePatchPlan(*plan)
+	resultPlan := gitx.ClonePatchPlan(*plan)
+	progress := ProposalProgress{ProposalOperation: ProposalOperation{RunID: "run-a", ProposalID: "proposal-a",
+		ApprovalID: "approval-a", ApplyKey: proposalApplyKey("run-a", "proposal-a"), WorkspaceID: "workspace-a",
+		ExecutionKey: "execution-a", Role: RoleDeveloper, PatchPlan: &operationPlan},
+		Phase: "applied", Result: &ProposalApplyResult{Success: true, ReconcileCode: ProposalReconcileExpectedTree,
+			ObservedTree: plan.ExpectedTree, PatchPlan: &resultPlan}}
+	record := DurableRun{State: RunState{RunID: "run-a", WorkspaceID: "workspace-a"},
+		ApprovedTask: &ApprovedTaskState{Role: RoleDeveloper, Proposals: []ProposalProgress{progress}}}
+	if got := trustedTreeBasisForRole(record, RoleDeveloper); got == nil || got.ApprovalID != "approval-a" {
+		t.Fatalf("canonical applied receipt did not produce basis: %#v", got)
+	}
+	if got := trustedTreeBasisForRole(record, RoleTester); got != nil {
+		t.Fatalf("non-developer role received a patch basis: %#v", got)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*DurableRun)
+	}{
+		{"wrong run", func(r *DurableRun) { r.ApprovedTask.Proposals[0].RunID = "run-b" }},
+		{"wrong workspace", func(r *DurableRun) { r.ApprovedTask.Proposals[0].WorkspaceID = "workspace-b" }},
+		{"wrong role", func(r *DurableRun) { r.ApprovedTask.Proposals[0].Role = RoleTester }},
+		{"missing execution scope", func(r *DurableRun) { r.ApprovedTask.Proposals[0].ExecutionKey = "" }},
+		{"wrong apply key", func(r *DurableRun) { r.ApprovedTask.Proposals[0].ApplyKey = "other" }},
+		{"not durably applied", func(r *DurableRun) { r.ApprovedTask.Proposals[0].Phase = "waiting" }},
+		{"observed tree mismatch", func(r *DurableRun) { r.ApprovedTask.Proposals[0].Result.ObservedTree = strings.Repeat("e", 40) }},
+		{"operation plan tamper", func(r *DurableRun) { r.ApprovedTask.Proposals[0].PatchPlan.ExpectedTree = strings.Repeat("e", 40) }},
+		{"result plan tamper", func(r *DurableRun) {
+			r.ApprovedTask.Proposals[0].Result.PatchPlan.ExpectedTree = strings.Repeat("e", 40)
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := record
+			task := *record.ApprovedTask
+			task.Proposals = append([]ProposalProgress(nil), record.ApprovedTask.Proposals...)
+			candidate.ApprovedTask = &task
+			operationPlan := gitx.ClonePatchPlan(*record.ApprovedTask.Proposals[0].PatchPlan)
+			candidate.ApprovedTask.Proposals[0].ProposalOperation.PatchPlan = &operationPlan
+			result := *record.ApprovedTask.Proposals[0].Result
+			resultPlan := gitx.ClonePatchPlan(*record.ApprovedTask.Proposals[0].Result.PatchPlan)
+			result.PatchPlan = &resultPlan
+			candidate.ApprovedTask.Proposals[0].Result = &result
+			tc.mutate(&candidate)
+			if got := trustedTreeBasisForRole(candidate, RoleDeveloper); got != nil {
+				t.Fatalf("invalid receipt produced basis: %#v", got)
+			}
+		})
+	}
+}
+
+func gitxPatchPlanForTest(plan *approval.PatchPlan) *gitx.PatchPlan {
+	if plan == nil {
+		return nil
+	}
+	result := &gitx.PatchPlan{BaseSHA: plan.BaseSHA, BaseTree: plan.BaseTree, PlanningTree: plan.PlanningTree,
+		ExpectedTree: plan.ExpectedTree, PatchSHA256: plan.PatchSHA256, Paths: append([]string(nil), plan.Paths...)}
+	if plan.Basis != nil {
+		basis := *plan.Basis
+		basis.Paths = append([]string(nil), plan.Basis.Paths...)
+		result.Basis = &basis
+	}
+	return result
 }
 
 func TestReconcileApprovedTaskHandoffSupersedesOnlySettledApprovalIssue(t *testing.T) {

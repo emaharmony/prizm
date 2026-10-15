@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -86,11 +87,13 @@ type Approval struct {
 // It is persisted with the approval so application and restart recovery can
 // prove the exact pre- and post-mutation repository trees.
 type PatchPlan struct {
-	BaseSHA      string   `json:"base_sha"`
-	BaseTree     string   `json:"base_tree"`
-	ExpectedTree string   `json:"expected_tree"`
-	PatchSHA256  string   `json:"patch_sha256"`
-	Paths        []string `json:"paths"`
+	BaseSHA      string                 `json:"base_sha"`
+	BaseTree     string                 `json:"base_tree"`
+	PlanningTree string                 `json:"planning_tree,omitempty"`
+	ExpectedTree string                 `json:"expected_tree"`
+	PatchSHA256  string                 `json:"patch_sha256"`
+	Paths        []string               `json:"paths"`
+	Basis        *gitx.TrustedTreeBasis `json:"basis,omitempty"`
 }
 
 // PolicyDecision captures the policy outcome that led to this approval request.

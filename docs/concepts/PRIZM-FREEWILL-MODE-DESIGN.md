@@ -2,9 +2,9 @@
 
 **Status:** Design specification; not an implementation report
 **Implementation roadmap:** [`../architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md`](../architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md)
-**Revision:** 1.0 — consolidated decisions through October 12, 2026  
-**Replaces:** `Prism Freewill Mode — Experimental Design Notes` (October 5, 2026)  
-**Project:** Prizm (historically called Prism in earlier notes)  
+**Revision:** 1.0 — consolidated decisions through October 12, 2026\
+**Replaces:** `Prism Freewill Mode — Experimental Design Notes` (October 5, 2026)\
+**Project:** Prizm (historically called Prism in earlier notes)\
 **Default deployment state:** disabled / experimental
 
 > **Core contract: Freewill governs intention; Prizm governs authority.**

@@ -12,6 +12,7 @@ import (
 
 	prizmAdapter "github.com/emaharmony/prizm/internal/adapter"
 	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/emaharmony/prizm/internal/validation"
 )
 
@@ -895,8 +896,9 @@ func (r *DurableRuntime) executePreparedRole(
 	}
 	retryHandle := newDurableRoleRetryHandle(ctx, r, record)
 	result, runErr := r.supervisor.runner.RunRole(ctx, RoleRunRequest{
-		Run:        r.supervisor.runView(record.State),
-		RoleConfig: cloneRoleConfig(roleConfig),
+		Run:              r.supervisor.runView(record.State),
+		RoleConfig:       cloneRoleConfig(roleConfig),
+		TrustedTreeBasis: trustedTreeBasisForRole(record, role),
 		RecoveryFeedback: func() string {
 			if record.Retry != nil {
 				return record.Retry.RecoveryFeedback
@@ -1130,7 +1132,7 @@ func (r *DurableRuntime) executeFanOutAdoption(ctx context.Context, record Durab
 func proposalProgressRefs(progress []ProposalProgress) []ProposalReference {
 	refs := make([]ProposalReference, 0, len(progress))
 	for _, item := range progress {
-		refs = append(refs, ProposalReference{ProposalID: item.ProposalID, ApprovalID: item.ApprovalID})
+		refs = append(refs, ProposalReference{ProposalID: item.ProposalID, ApprovalID: item.ApprovalID, PatchPlan: cloneGitPatchPlan(item.PatchPlan)})
 	}
 	return refs
 }
@@ -1140,8 +1142,26 @@ func cloneProposalReferences(refs []ProposalReference) []ProposalReference {
 	for i, ref := range refs {
 		cloned[i] = ref
 		cloned[i].Artifacts = cloneArtifactRefs(ref.Artifacts)
+		cloned[i].PatchPlan = cloneGitPatchPlan(ref.PatchPlan)
 	}
 	return cloned
+}
+
+func cloneGitPatchPlan(plan *gitx.PatchPlan) *gitx.PatchPlan {
+	if plan == nil {
+		return nil
+	}
+	cloned := gitx.ClonePatchPlan(*plan)
+	return &cloned
+}
+
+func cloneTrustedTreeBasis(basis *gitx.TrustedTreeBasis) *gitx.TrustedTreeBasis {
+	if basis == nil {
+		return nil
+	}
+	cloned := *basis
+	cloned.Paths = append([]string(nil), basis.Paths...)
+	return &cloned
 }
 
 func cloneFanOutAdoption(adoption *FanOutAdoptionState) *FanOutAdoptionState {
@@ -1344,7 +1364,8 @@ func (r *DurableRuntime) pauseForProposals(
 		operation := ProposalOperation{
 			RunID: record.State.RunID, ProposalID: proposalID, ApprovalID: approvalID,
 			ApplyKey:    proposalApplyKey(record.State.RunID, proposalID),
-			WorkspaceID: record.State.WorkspaceID, ExecutionKey: record.ActiveExecutionKey,
+			WorkspaceID: record.State.WorkspaceID, ExecutionKey: record.ActiveExecutionKey, Role: role,
+			PatchPlan: cloneGitPatchPlan(ref.PatchPlan),
 		}
 		progress = append(progress, ProposalProgress{ProposalOperation: operation, Phase: "waiting"})
 		r.emitProposal(event.EventProposalRecorded, operation, "")
@@ -1369,6 +1390,66 @@ func (r *DurableRuntime) pauseForProposals(
 		return record, err
 	}
 	return record, waitingError(record)
+}
+
+func trustedTreeBasisForRole(record DurableRun, role Role) *gitx.TrustedTreeBasis {
+	if role != RoleDeveloper {
+		return nil
+	}
+	if record.ApprovedTask != nil && record.ApprovedTask.Role == role {
+		for index := len(record.ApprovedTask.Proposals) - 1; index >= 0; index-- {
+			if basis := trustedTreeBasisFromProposal(record, role, record.ApprovedTask.Proposals[index]); basis != nil {
+				return basis
+			}
+		}
+	}
+	for index := len(record.ProposalResults) - 1; index >= 0; index-- {
+		if basis := trustedTreeBasisFromProposal(record, role, record.ProposalResults[index]); basis != nil {
+			return basis
+		}
+	}
+	return nil
+}
+
+func trustedTreeBasisFromProposal(record DurableRun, role Role, progress ProposalProgress) *gitx.TrustedTreeBasis {
+	op := progress.ProposalOperation
+	plan := progress.ResultPlan()
+	if plan == nil || progress.Phase != "applied" || op.PatchPlan == nil ||
+		op.RunID != record.State.RunID || op.WorkspaceID != record.State.WorkspaceID ||
+		op.ProposalID == "" || op.ApprovalID == "" || op.ApplyKey != proposalApplyKey(op.RunID, op.ProposalID) ||
+		op.ExecutionKey == "" || op.Role != role || progress.Result == nil || !progress.Result.Success ||
+		progress.Result.ReconcileCode != ProposalReconcileExpectedTree || progress.Result.ObservedTree != plan.ExpectedTree ||
+		!validTrustedPatchPlan(*plan) {
+		return nil
+	}
+	if op.PatchPlan != nil && !gitx.EqualPatchPlan(*op.PatchPlan, *plan) {
+		return nil
+	}
+	return &gitx.TrustedTreeBasis{
+		RunID: op.RunID, WorkspaceID: op.WorkspaceID, ProposalID: op.ProposalID, ApprovalID: op.ApprovalID,
+		ApplyKey: op.ApplyKey, ExecutionKey: op.ExecutionKey, Role: string(role),
+		BaseSHA: plan.BaseSHA, BaseTree: plan.BaseTree, ExpectedTree: plan.ExpectedTree,
+		PatchSHA256: plan.PatchSHA256, Paths: append([]string(nil), plan.Paths...),
+	}
+}
+
+func (progress ProposalProgress) ResultPlan() *gitx.PatchPlan {
+	if progress.Result == nil || progress.Result.PatchPlan == nil {
+		return nil
+	}
+	plan := gitx.ClonePatchPlan(*progress.Result.PatchPlan)
+	return &plan
+}
+
+func validTrustedPatchPlan(plan gitx.PatchPlan) bool {
+	if plan.BaseSHA == "" || plan.BaseTree == "" || plan.ExpectedTree == "" || plan.PatchSHA256 == "" || len(plan.Paths) == 0 {
+		return false
+	}
+	planningTree := plan.PlanningTree
+	if planningTree == "" {
+		planningTree = plan.BaseTree
+	}
+	return plan.ExpectedTree != planningTree
 }
 
 func (r *DurableRuntime) advanceApprovedTask(ctx context.Context, record DurableRun) (DurableRun, error) {

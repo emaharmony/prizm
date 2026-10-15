@@ -23,7 +23,13 @@ Prizm Runtime
   - SQLite-backed sessions, tasks, approvals, events, and run artifacts
   - Agent router, tool executor, policy/guard checks, plan/state managers
   - Sub-agent worker: bounded tool-loop delegation with worktree isolation
+  - Durable multi-agent runtime: event outbox (idempotent commands, leases,
+    claim/retry), exact approval identity through apply/resume, restart
+    reconciliation (R1)
+  - Scoped memory lifecycle: capture/search/supersede scoped to
+    user/project/task, idempotent Recall sync with local fallback (R2)
   - Remembrance HTTP client and cache
+  - Freewill intention contracts (policy-only, flag-gated off)
   - HTTP API, SSE event stream, dashboard, visual workflow editor
 ```
 
@@ -40,6 +46,14 @@ Prizm Runtime
   and emit events; the gated loop drives longer autonomous runs.
 - **Persistence** — SQLite stores sessions, tasks, approvals, events, and run
   artifacts. No external database or broker is required for basic operation.
+- **Durable commands (outbox)** — delegation and proposal commands go through
+  a SQLite-backed outbox (`internal/event/outbox.go`): idempotency keys make
+  duplicate deliveries resolve as already-recorded, leases make crash-retry
+  safe, and acknowledgement happens only after state persistence (R1).
+- **Scoped memory (R2)** — the memory pipeline (`internal/memory`) scopes
+  capture, retrieval, and supersession to user/project/task; Recall sync is
+  idempotent and falls back to local storage on outage, reconciling later
+  without scope leakage.
 - **Run artifacts** — each run writes `events.jsonl`, `prompt.md`, `output.md`,
   and `summary.json`.
 

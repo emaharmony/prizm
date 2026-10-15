@@ -80,11 +80,30 @@ func worktreeInspectionError(ctx context.Context, stage WorktreeInspectionStage,
 // exact repository state. ExpectedTree identifies the complete tree produced
 // by applying Patch at BaseSHA, without mutating the real index or worktree.
 type PatchPlan struct {
-	BaseSHA      string
-	BaseTree     string
-	ExpectedTree string
-	PatchSHA256  string
-	Paths        []string
+	BaseSHA      string            `json:"base_sha"`
+	BaseTree     string            `json:"base_tree"`
+	PlanningTree string            `json:"planning_tree"`
+	ExpectedTree string            `json:"expected_tree"`
+	PatchSHA256  string            `json:"patch_sha256"`
+	Paths        []string          `json:"paths"`
+	Basis        *TrustedTreeBasis `json:"basis,omitempty"`
+}
+
+// TrustedTreeBasis identifies a prior, host-verified applied proposal in the
+// same run. It is supplied by workflow state, never by patch input.
+type TrustedTreeBasis struct {
+	RunID        string   `json:"run_id"`
+	WorkspaceID  string   `json:"workspace_id"`
+	ProposalID   string   `json:"proposal_id"`
+	ApprovalID   string   `json:"approval_id"`
+	ApplyKey     string   `json:"apply_key"`
+	ExecutionKey string   `json:"execution_key"`
+	Role         string   `json:"role"`
+	BaseSHA      string   `json:"base_sha"`
+	BaseTree     string   `json:"base_tree"`
+	ExpectedTree string   `json:"expected_tree"`
+	PatchSHA256  string   `json:"patch_sha256"`
+	Paths        []string `json:"paths"`
 }
 
 // PatchSourceRange is an old-side source range a unified-diff hunk relies on.
@@ -182,6 +201,94 @@ const (
 
 // PlanPatch validates a unified diff without changing the repository.
 func PlanPatch(ctx context.Context, root, patch, expectedBase string) (PatchPlan, error) {
+	return planPatch(ctx, root, patch, expectedBase, nil)
+}
+
+// PlanPatchOnTrustedTree validates a correction against a host-verified dirty
+// worktree produced by an earlier approved patch. Legacy callers retain the
+// strict clean-worktree behavior of PlanPatch.
+func PlanPatchOnTrustedTree(ctx context.Context, root, patch string, basis TrustedTreeBasis) (PatchPlan, error) {
+	return planPatch(ctx, root, patch, basis.BaseSHA, &basis)
+}
+
+type trustedTreeBasisContextKey struct{}
+
+// ContextWithTrustedTreeBasis carries host-derived patch provenance to the
+// apply-patch proposal tool. The basis is not a tool argument or model claim.
+func ContextWithTrustedTreeBasis(ctx context.Context, basis TrustedTreeBasis) context.Context {
+	return context.WithValue(ctx, trustedTreeBasisContextKey{}, cloneTrustedTreeBasis(&basis))
+}
+
+// TrustedTreeBasisFromContext returns a defensive copy of host-injected patch
+// provenance, if the current role visit has an approved applied predecessor.
+func TrustedTreeBasisFromContext(ctx context.Context) (TrustedTreeBasis, bool) {
+	basis, ok := ctx.Value(trustedTreeBasisContextKey{}).(*TrustedTreeBasis)
+	if !ok || basis == nil {
+		return TrustedTreeBasis{}, false
+	}
+	return *cloneTrustedTreeBasis(basis), true
+}
+
+func validTrustedTreeBasis(basis TrustedTreeBasis) bool {
+	if strings.TrimSpace(basis.RunID) == "" || strings.TrimSpace(basis.WorkspaceID) == "" ||
+		strings.TrimSpace(basis.ProposalID) == "" || strings.TrimSpace(basis.ApprovalID) == "" ||
+		strings.TrimSpace(basis.ApplyKey) == "" || strings.TrimSpace(basis.ExecutionKey) == "" ||
+		strings.TrimSpace(basis.Role) == "" || basis.BaseSHA == "" || basis.BaseTree == "" ||
+		basis.ExpectedTree == "" || len(basis.PatchSHA256) != 64 || len(basis.Paths) == 0 {
+		return false
+	}
+	for i, path := range basis.Paths {
+		if strings.TrimSpace(path) == "" || filepath.IsAbs(filepath.FromSlash(path)) ||
+			filepath.ToSlash(filepath.Clean(filepath.FromSlash(path))) != path ||
+			(i > 0 && basis.Paths[i-1] >= path) {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneTrustedTreeBasis(basis *TrustedTreeBasis) *TrustedTreeBasis {
+	if basis == nil {
+		return nil
+	}
+	cloned := *basis
+	cloned.Paths = append([]string(nil), basis.Paths...)
+	return &cloned
+}
+
+func equalTrustedTreeBasis(left, right *TrustedTreeBasis) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.RunID == right.RunID && left.WorkspaceID == right.WorkspaceID &&
+		left.ProposalID == right.ProposalID && left.ApprovalID == right.ApprovalID &&
+		left.ApplyKey == right.ApplyKey && left.ExecutionKey == right.ExecutionKey && left.Role == right.Role &&
+		left.BaseSHA == right.BaseSHA && left.BaseTree == right.BaseTree && left.ExpectedTree == right.ExpectedTree &&
+		left.PatchSHA256 == right.PatchSHA256 && equalStrings(left.Paths, right.Paths)
+}
+
+// EqualTrustedTreeBasis compares the complete receipt bound into a patch plan.
+func EqualTrustedTreeBasis(left, right *TrustedTreeBasis) bool {
+	return equalTrustedTreeBasis(left, right)
+}
+
+// ClonePatchPlan returns a defensive copy suitable for persistence or request
+// transport.
+func ClonePatchPlan(plan PatchPlan) PatchPlan {
+	plan.Paths = append([]string(nil), plan.Paths...)
+	plan.Basis = cloneTrustedTreeBasis(plan.Basis)
+	return plan
+}
+
+// EqualPatchPlan compares every approval-bound field in two patch plans.
+func EqualPatchPlan(left, right PatchPlan) bool {
+	return left.BaseSHA == right.BaseSHA && left.BaseTree == right.BaseTree &&
+		left.PlanningTree == right.PlanningTree && left.ExpectedTree == right.ExpectedTree &&
+		left.PatchSHA256 == right.PatchSHA256 && equalStrings(left.Paths, right.Paths) &&
+		equalTrustedTreeBasis(left.Basis, right.Basis)
+}
+
+func planPatch(ctx context.Context, root, patch, expectedBase string, basis *TrustedTreeBasis) (PatchPlan, error) {
 	if strings.TrimSpace(patch) == "" {
 		return PatchPlan{}, fmt.Errorf("patch is empty")
 	}
@@ -195,8 +302,27 @@ func PlanPatch(ctx context.Context, root, patch, expectedBase string) (PatchPlan
 	if expectedBase = strings.TrimSpace(expectedBase); expectedBase == "" || base != expectedBase {
 		return PatchPlan{}, fmt.Errorf("patch base mismatch: workspace is %s, proposal requires %s", base, expectedBase)
 	}
-	if err := EnsureClean(ctx, root); err != nil {
-		return PatchPlan{}, fmt.Errorf("validate patch workspace: %w", err)
+	baseTree, err := revisionTree(ctx, root, base)
+	if err != nil {
+		return PatchPlan{}, err
+	}
+	planningTree := baseTree
+	if basis == nil {
+		if err := EnsureClean(ctx, root); err != nil {
+			return PatchPlan{}, fmt.Errorf("validate patch workspace: %w", err)
+		}
+	} else {
+		if !validTrustedTreeBasis(*basis) || basis.BaseSHA != base || basis.BaseTree != baseTree {
+			return PatchPlan{}, fmt.Errorf("trusted patch basis does not match the approved repository base")
+		}
+		observedTree, treeErr := WorktreeTree(ctx, root)
+		if treeErr != nil {
+			return PatchPlan{}, fmt.Errorf("inspect trusted patch basis: %w", treeErr)
+		}
+		if observedTree != basis.ExpectedTree {
+			return PatchPlan{}, fmt.Errorf("worktree does not match trusted patch basis")
+		}
+		planningTree = basis.ExpectedTree
 	}
 	paths, err := patchPaths(ctx, root, patch)
 	if err != nil {
@@ -213,22 +339,22 @@ func PlanPatch(ctx context.Context, root, patch, expectedBase string) (PatchPlan
 			return PatchPlan{}, err
 		}
 	}
-	if _, err := RunCommand(ctx, root, patch, "git", "apply", "--check", "--index", "--binary", "--recount", "--whitespace=nowarn", "-"); err != nil {
+	checkArgs := []string{"apply", "--check", "--binary", "--recount", "--whitespace=nowarn", "-"}
+	if basis == nil {
+		checkArgs = []string{"apply", "--check", "--index", "--binary", "--recount", "--whitespace=nowarn", "-"}
+	}
+	if _, err := RunCommand(ctx, root, patch, "git", checkArgs...); err != nil {
 		return PatchPlan{}, fmt.Errorf("patch precheck failed: %w", err)
 	}
-	expectedTree, err := treeWithPatch(ctx, root, base, patch)
+	expectedTree, err := treeWithPatch(ctx, root, planningTree, patch)
 	if err != nil {
 		return PatchPlan{}, fmt.Errorf("compute expected patch tree: %w", err)
 	}
-	baseTree, err := revisionTree(ctx, root, base)
-	if err != nil {
-		return PatchPlan{}, err
-	}
-	if expectedTree == baseTree {
+	if expectedTree == planningTree {
 		return PatchPlan{}, fmt.Errorf("patch produces no tree change")
 	}
 	for _, path := range paths {
-		for _, tree := range []string{baseTree, expectedTree} {
+		for _, tree := range []string{planningTree, expectedTree} {
 			mode, modeErr := treePathMode(ctx, root, tree, path)
 			if modeErr != nil {
 				return PatchPlan{}, modeErr
@@ -239,18 +365,24 @@ func PlanPatch(ctx context.Context, root, patch, expectedBase string) (PatchPlan
 		}
 	}
 	sum := sha256.Sum256([]byte(patch))
-	return PatchPlan{BaseSHA: base, BaseTree: baseTree, ExpectedTree: expectedTree, PatchSHA256: hex.EncodeToString(sum[:]), Paths: paths}, nil
+	return PatchPlan{BaseSHA: base, BaseTree: baseTree, PlanningTree: planningTree, ExpectedTree: expectedTree, PatchSHA256: hex.EncodeToString(sum[:]), Paths: paths, Basis: cloneTrustedTreeBasis(basis)}, nil
 }
 
 // ApplyPlannedPatch revalidates and atomically applies a previously planned
 // patch. git apply is invoked without --reject so a failing hunk cannot leave a
 // partial result. The resulting full tree must match the persisted plan.
 func ApplyPlannedPatch(ctx context.Context, root, patch string, plan PatchPlan) error {
-	replanned, err := PlanPatch(ctx, root, patch, plan.BaseSHA)
+	var replanned PatchPlan
+	var err error
+	if plan.Basis == nil {
+		replanned, err = PlanPatch(ctx, root, patch, plan.BaseSHA)
+	} else {
+		replanned, err = PlanPatchOnTrustedTree(ctx, root, patch, *plan.Basis)
+	}
 	if err != nil {
 		return err
 	}
-	if replanned.BaseTree != plan.BaseTree || replanned.ExpectedTree != plan.ExpectedTree || replanned.PatchSHA256 != plan.PatchSHA256 || !equalStrings(replanned.Paths, plan.Paths) {
+	if replanned.BaseTree != plan.BaseTree || replanned.PlanningTree != plan.PlanningTree || replanned.ExpectedTree != plan.ExpectedTree || replanned.PatchSHA256 != plan.PatchSHA256 || !equalStrings(replanned.Paths, plan.Paths) || !equalTrustedTreeBasis(replanned.Basis, plan.Basis) {
 		return fmt.Errorf("patch plan does not match persisted proposal")
 	}
 	if _, err := RunCommand(ctx, root, patch, "git", "apply", "--binary", "--recount", "--whitespace=nowarn", "-"); err != nil {
@@ -264,13 +396,10 @@ func ApplyPlannedPatch(ctx context.Context, root, patch string, plan PatchPlan) 
 	// the baseline so the caller never observes a partially accepted mutation.
 	_, reverseErr := RunCommand(ctx, root, patch, "git", "apply", "--reverse", "--binary", "--recount", "--whitespace=nowarn", "-")
 	rolledBack, rollbackTreeErr := WorktreeTree(ctx, root)
-	baseTree, baseTreeErr := revisionTree(ctx, root, plan.BaseSHA)
-	if reverseErr != nil || rollbackTreeErr != nil || baseTreeErr != nil || rolledBack != baseTree {
+	if reverseErr != nil || rollbackTreeErr != nil || rolledBack != plan.PlanningTree {
 		return fmt.Errorf("applied patch tree mismatch and rollback could not be verified")
 	}
-	if treeErr != nil {
-		return fmt.Errorf("verify applied patch tree: %w", treeErr)
-	}
+	_ = treeErr
 	return fmt.Errorf("applied patch tree mismatch")
 }
 

@@ -95,7 +95,7 @@ func (r *DurableRuntime) dispatchPendingDelegation(ctx context.Context, record D
 	role := record.State.CurrentRole
 	roleConfig, _ := r.supervisor.graph.RoleConfig(role)
 	request := RoleRunRequest{Run: r.supervisor.runView(record.State), RoleConfig: cloneRoleConfig(roleConfig),
-		FanOutAvailable: role == RolePlanner}
+		TrustedTreeBasis: trustedTreeBasisForRole(record, role), FanOutAvailable: role == RolePlanner}
 	payload, err := json.Marshal(GraphRoleCommand{ChildID: waiting.ChildID, Role: role,
 		Task: record.State.CurrentTask, ExecutionKey: record.ActiveExecutionKey,
 		RunID: record.State.RunID, WorkspaceID: record.State.WorkspaceID,
@@ -441,7 +441,8 @@ func (r *DurableRuntime) dispatchPendingDelegationJoin(ctx context.Context, reco
 			DelegationID: child.DelegationID, JoinID: child.JoinID, Lane: child.Lane, DeliveryKey: child.DeliveryKey, CorrelationID: child.CorrelationID,
 			CommandEventID: child.CommandEventID, Deadline: child.Deadline, DeliveryAttemptID: child.DeliveryAttemptID,
 			AttemptID: attemptID, RecoveryFeedback: recoveryFeedback,
-			Request: RoleRunRequest{Run: view, ParentTask: record.DelegationJoin.ParentTask, RoleConfig: cloneRoleConfig(cfg), FanOutAvailable: false}})
+			Request: RoleRunRequest{Run: view, ParentTask: record.DelegationJoin.ParentTask, RoleConfig: cloneRoleConfig(cfg),
+				TrustedTreeBasis: trustedTreeBasisForRole(record, child.Role), FanOutAvailable: false}})
 		if err != nil {
 			return record, err
 		}
@@ -1012,7 +1013,7 @@ func updateDelegationJoinChild(
 func cloneRoleRunResult(result RoleRunResult) RoleRunResult {
 	cloned := result
 	cloned.OutgoingHandoff = cloneHandoffDraft(result.OutgoingHandoff)
-	cloned.Proposals = append([]ProposalReference(nil), result.Proposals...)
+	cloned.Proposals = cloneProposalReferences(result.Proposals)
 	cloned.FanOut = cloneFanOutPlan(result.FanOut)
 	return cloned
 }

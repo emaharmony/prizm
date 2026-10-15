@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/emaharmony/prizm/internal/cost"
+	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/emaharmony/prizm/internal/subagent"
 	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 )
@@ -25,6 +26,12 @@ func (e SubagentExecutor) ExecuteAgent(
 ) (AgentExecutionResult, error) {
 	if e.Runner == nil {
 		return AgentExecutionResult{}, fmt.Errorf("multiagent: sub-agent task runner is required")
+	}
+	if basis := request.TrustedTreeBasis; basis != nil {
+		if basis.RunID != request.RunID || basis.WorkspaceID != request.Workspace.ID || basis.Role != string(RoleDeveloper) || request.Role != RoleDeveloper {
+			return AgentExecutionResult{}, fmt.Errorf("multiagent: trusted patch basis scope does not match role execution")
+		}
+		ctx = gitx.ContextWithTrustedTreeBasis(ctx, *basis)
 	}
 
 	deadlineValue := ""

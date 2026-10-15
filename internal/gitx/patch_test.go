@@ -120,6 +120,27 @@ func TestPlanAndApplyPatchAtomicallyChangesMultipleFiles(t *testing.T) {
 	}
 }
 
+func TestPlanPatchRejectsSecondPatchAfterFirstAppliedInSameWorktree(t *testing.T) {
+	root := initRepo(t)
+	ctx := context.Background()
+	base, err := CurrentSHA(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-hello\n+approved change\n"
+	firstPlan, err := PlanPatch(ctx, root, first, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyPlannedPatch(ctx, root, first, firstPlan); err != nil {
+		t.Fatal(err)
+	}
+	second := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-approved change\n+approved correction\n"
+	if _, err := PlanPatch(ctx, root, second, base); !errors.Is(err, ErrDirtyWorktree) {
+		t.Fatalf("second plan error=%v, want existing clean-worktree rejection", err)
+	}
+}
+
 func TestPlanAndApplyPatchRecountsIncorrectHunkCounts(t *testing.T) {
 	root := initRepo(t)
 	ctx := context.Background()
@@ -208,6 +229,53 @@ func TestPatchPlanningAndWorktreeTreeUseLinkedGitMetadataWhenOSTempIsUnavailable
 	}
 	if len(leftovers) != 0 {
 		t.Fatalf("temporary metadata indexes were not cleaned up: %v", leftovers)
+	}
+}
+
+func TestTrustedTreeBasisAllowsApprovedSerialPatchAndRejectsForeignMutation(t *testing.T) {
+	ctx := context.Background()
+	root := initRepo(t)
+	base, err := CurrentSHA(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patchA := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-hello\n+changed\n"
+	planA, err := PlanPatch(ctx, root, patchA, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyPlannedPatch(ctx, root, patchA, planA); err != nil {
+		t.Fatalf("apply approved patch A: %v", err)
+	}
+	basis := TrustedTreeBasis{
+		RunID: "run", WorkspaceID: "workspace", ProposalID: "proposal-a", ApprovalID: "approval-a",
+		ApplyKey: "apply-a", ExecutionKey: "execution-a", Role: "developer", BaseSHA: planA.BaseSHA,
+		BaseTree: planA.BaseTree, ExpectedTree: planA.ExpectedTree, PatchSHA256: planA.PatchSHA256, Paths: append([]string(nil), planA.Paths...),
+	}
+	patchB := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-changed\n+corrected\n"
+	if _, err := PlanPatch(ctx, root, patchB, base); err == nil {
+		t.Fatal("legacy clean-HEAD planner accepted a dirty worktree")
+	}
+	planB, err := PlanPatchOnTrustedTree(ctx, root, patchB, basis)
+	if err != nil {
+		t.Fatalf("plan approved correction B from A receipt: %v", err)
+	}
+	if planB.BaseTree != planA.BaseTree || planB.PlanningTree != planA.ExpectedTree || planB.Basis == nil || !EqualTrustedTreeBasis(planB.Basis, &basis) {
+		t.Fatalf("correction plan did not preserve both source and planning trees: %#v", planB)
+	}
+	if err := ApplyPlannedPatch(ctx, root, patchB, planB); err != nil {
+		t.Fatalf("apply approved correction B: %v", err)
+	}
+	if tree, err := WorktreeTree(ctx, root); err != nil || tree != planB.ExpectedTree {
+		t.Fatalf("correction tree=%q want=%q err=%v", tree, planB.ExpectedTree, err)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("foreign edit\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	patchC := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-foreign edit\n+third\n"
+	if _, err := PlanPatchOnTrustedTree(ctx, root, patchC, basis); err == nil {
+		t.Fatal("trusted basis accepted an out-of-band worktree mutation")
 	}
 }
 

@@ -108,6 +108,19 @@ func (r *AgentRoleRunner) RunRole(
 			),
 		}
 	}
+	if basis := request.TrustedTreeBasis; basis != nil {
+		if request.Run.CurrentRole != RoleDeveloper || basis.RunID != request.Run.RunID || basis.WorkspaceID != workspace.ID ||
+			basis.ExecutionKey == "" || basis.Role != string(RoleDeveloper) || r.proposals == nil {
+			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "trusted patch basis does not match this developer visit"}
+		}
+		resolver, ok := r.proposals.(TrustedTreeBasisResolver)
+		if !ok {
+			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "trusted patch basis resolver is unavailable"}
+		}
+		if err := resolver.ValidateTrustedTreeBasis(ctx, *basis, workspace); err != nil {
+			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "trusted patch basis could not be verified"}
+		}
+	}
 
 	approvalStatus, err := r.checkApproval(ctx, request, profile)
 	if err != nil {
@@ -138,6 +151,7 @@ func (r *AgentRoleRunner) RunRole(
 		Profile:               profile,
 		Prompt:                prompt,
 		Workspace:             workspace,
+		TrustedTreeBasis:      cloneTrustedTreeBasis(request.TrustedTreeBasis),
 		AllowedTools:          append([]string(nil), request.RoleConfig.AllowedTools...),
 		RequiredCapabilities:  append([]string(nil), request.RoleConfig.Capabilities...),
 		FinalResponseContract: finalResponseContract,

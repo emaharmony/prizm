@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/gitx"
 )
 
 // DurableRunSchemaVersion is the serialized recovery-envelope version.
@@ -93,12 +94,14 @@ const (
 // ProposalOperation is the stable request passed to approval/application
 // authorities. ApplyKey is deterministic for the run and proposal.
 type ProposalOperation struct {
-	RunID        string `json:"run_id"`
-	ProposalID   string `json:"proposal_id"`
-	ApprovalID   string `json:"approval_id"`
-	ApplyKey     string `json:"apply_key"`
-	WorkspaceID  string `json:"workspace_id"`
-	ExecutionKey string `json:"execution_key"`
+	RunID        string          `json:"run_id"`
+	ProposalID   string          `json:"proposal_id"`
+	ApprovalID   string          `json:"approval_id"`
+	ApplyKey     string          `json:"apply_key"`
+	WorkspaceID  string          `json:"workspace_id"`
+	ExecutionKey string          `json:"execution_key"`
+	Role         Role            `json:"role,omitempty"`
+	PatchPlan    *gitx.PatchPlan `json:"patch_plan,omitempty"`
 }
 
 // ProposalApplyResult is bounded application evidence retained in the run.
@@ -110,6 +113,7 @@ type ProposalApplyResult struct {
 	DiffStat           string                `json:"diff_stat,omitempty"`
 	ReconcileCode      ProposalReconcileCode `json:"reconcile_code,omitempty"`
 	ObservedTree       string                `json:"observed_tree,omitempty"`
+	PatchPlan          *gitx.PatchPlan       `json:"patch_plan,omitempty"`
 	InspectionStage    string                `json:"inspection_stage,omitempty"`
 	InspectionCategory string                `json:"inspection_category,omitempty"`
 	InspectionExitCode int                   `json:"inspection_exit_code,omitempty"`

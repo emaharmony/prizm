@@ -7,6 +7,7 @@ import (
 
 	"github.com/emaharmony/prizm/internal/agent"
 	"github.com/emaharmony/prizm/internal/cost"
+	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/emaharmony/prizm/internal/validation"
 )
 
@@ -132,6 +133,9 @@ type WorkspaceValidationRunner interface {
 type ProposalReference struct {
 	ProposalID string `json:"proposal_id"`
 	ApprovalID string `json:"approval_id"`
+	// PatchPlan is host-read from the canonical stored approval. It is never
+	// populated from model-authored role output.
+	PatchPlan *gitx.PatchPlan `json:"patch_plan,omitempty"`
 	// Artifacts are canonical workspace-relative facts derived from the
 	// persisted proposal, never from model-reported change claims.
 	Artifacts []ArtifactRef `json:"artifacts,omitempty"`
@@ -149,6 +153,12 @@ type ProposalQuery struct {
 // It does not grant approval or apply mutations.
 type ProposalResolver interface {
 	ResolveProposals(context.Context, ProposalQuery) ([]ProposalReference, error)
+}
+
+// TrustedTreeBasisResolver verifies a host-derived predecessor receipt against
+// the canonical approval store and the currently resolved run workspace.
+type TrustedTreeBasisResolver interface {
+	ValidateTrustedTreeBasis(context.Context, gitx.TrustedTreeBasis, Workspace) error
 }
 
 // ProposalResolverFunc adapts a function to ProposalResolver.
@@ -181,6 +191,7 @@ type AgentExecutionRequest struct {
 	Profile                      AgentProfile
 	Prompt                       string
 	Workspace                    Workspace
+	TrustedTreeBasis             *gitx.TrustedTreeBasis `json:"trusted_tree_basis,omitempty"`
 	AllowedTools                 []string
 	RequiredCapabilities         []string
 	FinalizationPrerequisiteTool string

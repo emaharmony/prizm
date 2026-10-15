@@ -9,6 +9,7 @@ import (
 
 	"github.com/emaharmony/prizm/internal/cost"
 	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/emaharmony/prizm/internal/validation"
 )
 
@@ -195,7 +196,8 @@ type RunView struct {
 // RoleRunRequest is the complete, read-only input for one role visit.
 type RoleRunRequest struct {
 	Run              RunView
-	ParentTask       *TaskReference `json:"parent_task,omitempty"`
+	ParentTask       *TaskReference         `json:"parent_task,omitempty"`
+	TrustedTreeBasis *gitx.TrustedTreeBasis `json:"trusted_tree_basis,omitempty"`
 	RoleConfig       RoleConfig
 	FanOutAvailable  bool                 `json:"fan_out_available,omitempty"`
 	RecoveryFeedback string               `json:"-"`

@@ -3,6 +3,7 @@ package multiagent
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"time"
 
@@ -333,6 +334,9 @@ func ValidateDelegatedRoleCommand(ctx context.Context, store DurableRunStore, co
 	if request.Run.RunID != command.RunID || request.Run.Task != command.Task || request.Run.CurrentRole != command.Role ||
 		request.Run.ExecutionKey != command.ExecutionKey || request.Run.WorkspaceID != command.WorkspaceID {
 		return errors.New("multiagent: delegated role request does not match command identity")
+	}
+	if expected := trustedTreeBasisForRole(record, command.Role); !reflect.DeepEqual(request.TrustedTreeBasis, expected) {
+		return errors.New("multiagent: delegated role trusted patch basis does not match durable applied receipt")
 	}
 	if command.JoinID != "" {
 		child := findDelegationChild(record, command.JoinID, command.ChildID)

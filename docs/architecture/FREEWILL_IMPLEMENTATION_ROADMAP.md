@@ -1,8 +1,8 @@
 # Prizm Freewill — Repository-Aligned Development Roadmap
 
-**Status:** Proposed implementation plan / readiness assessment (not a claim of completed feature work)  
-**Reviewed target:** [`emaharmony/prizm`, `staging`](https://github.com/emaharmony/prizm/tree/staging)  
-**Assessment date:** October 12, 2026  
+**Status:** Proposed implementation plan / readiness assessment (not a claim of completed feature work)\
+**Reviewed target:** [`emaharmony/prizm`, `staging`](https://github.com/emaharmony/prizm/tree/staging)\
+**Assessment date:** October 12, 2026\
 **Companion product specification:** [`../concepts/PRIZM-FREEWILL-MODE-DESIGN.md`](../concepts/PRIZM-FREEWILL-MODE-DESIGN.md) (user-confirmed product decisions)
 **Core invariant:** **Freewill owns intention proposals; Prizm runtime owns authorization, execution, persistence, and auditing.**
 
@@ -127,9 +127,9 @@ This is the detailed **FW track** underneath the authoritative [`PRIZM_ROADMAP.m
 
 ### FW-P0 — Contracts, threat model, and repo alignment
 
-**Requires:** G0; immediately startable.  
+**Requires:** G0; immediately startable.\
 **Build:** Spec-to-code mapping; state machine (`disabled`, `sleeping`, `waking`, `selecting`, `proposed`, `approval_pending`, `denied`, `paused`, `running`, `halted`); typed `IntentionRequest` and `CandidateIntention`; separate feature and scheduling flags off by default; threat model and architecture decision distinguishing Freedom from Freewill.
-**Tests:** Schema validation, state-transition invariants, disabled-by-default regression tests.  
+**Tests:** Schema validation, state-transition invariants, disabled-by-default regression tests.\
 **Done when:** A developer can implement next milestone without defining missing authority or lifecycle semantics.
 
 **Implementation checkpoint (2026-10-13):** FW-001 contracts and config schema
@@ -141,58 +141,58 @@ open.
 
 ### FW-P1 — Read-only Decision Loop (first demonstrable Freewill)
 
-**Requires:** FW-P0; reusable provider and scheduler paths; no write capability.  
-**Build:** Config and CLI on/off/status; timer and allowed-trigger wake adapters; candidate generation (three new candidates + optional resume), sleep; scoring for curiosity, novelty, interests and obligations (initially stubbed); selection reason summary; policy-only dry-run for `IntentionRequest`.  
-**Tests:** No wake while disabled, one wake per dedupe key, no task forced on sleep, no tool side effects, budget-limited model calls, event trace across selection.  
+**Requires:** FW-P0; reusable provider and scheduler paths; no write capability.\
+**Build:** Config and CLI on/off/status; timer and allowed-trigger wake adapters; candidate generation (three new candidates + optional resume), sleep; scoring for curiosity, novelty, interests and obligations (initially stubbed); selection reason summary; policy-only dry-run for `IntentionRequest`.\
+**Tests:** No wake while disabled, one wake per dedupe key, no task forced on sleep, no tool side effects, budget-limited model calls, event trace across selection.\
 **Done when:** An agent autonomously considers ideas, chooses among them and sleep, and records a reproducible proposal without executing a write.
 
 ### FW-P2 — Authorized Execution in Isolated Workspace
 
-**Requires:** G1 + G2.  
-**Build:** Intention approval/edit/deny/exceptions; exact capability grants; dedicated `.prism/autonomous` (or final configured) workspace, per-run isolated worktree/container; guarded dispatch to existing workflow engine and tool policy; user review through authenticated CLI; resource meter and immediate halt.  
-**Tests:** edited scope rechecks; forbidden tool denied; escapes/privilege escalation blocked; rejected intent never executes; one approved change applies once.  
+**Requires:** G1 + G2.\
+**Build:** Intention approval/edit/deny/exceptions; exact capability grants; dedicated `.prism/autonomous` (or final configured) workspace, per-run isolated worktree/container; guarded dispatch to existing workflow engine and tool policy; user review through authenticated CLI; resource meter and immediate halt.\
+**Tests:** edited scope rechecks; forbidden tool denied; escapes/privilege escalation blocked; rejected intent never executes; one approved change applies once.\
 **Done when:** One small autonomous coding/research project starts by agent choice, is approved as needed, executes only within its exact envelope, and produces a validated report.
 
 ### FW-P3 — Persistence, Lifecycle, and Recovery
 
-**Requires:** FW-P2 + G1.  
-**Build:** Durable intention record, checkpoint/resume across wake cycles, safe disable, dedupe, lease ownership, cancellation; verification/reconciliation of ambiguous side effects; budget renewal requests; status and trace inspection.  
-**Tests:** power loss at each state boundary, repeat event delivery, expiry/revocation during resume, store/outbox failure, no duplicate external action.  
+**Requires:** FW-P2 + G1.\
+**Build:** Durable intention record, checkpoint/resume across wake cycles, safe disable, dedupe, lease ownership, cancellation; verification/reconciliation of ambiguous side effects; budget renewal requests; status and trace inspection.\
+**Tests:** power loss at each state boundary, repeat event delivery, expiry/revocation during resume, store/outbox failure, no duplicate external action.\
 **Done when:** A multi-session intention survives restart; no unauthorized or double action occurs.
 
 ### FW-P4 — Factual Memory + Agent Diary (local-first)
 
-**Requires:** G3, FW-P1; optimized once FW-P3 available.  
-**Build:** Local evidence ledger, summary capture, distinct self-report narrative, append-only/versioned diary entries and annotations, snapshot metadata, configurable visibility and owner-only reads, privacy redaction. Then integrate R2/R6 when proven.  
-**Tests:** contradictory diary and logs preserved; provenance respected; memory denied outside scope; local storage survives memory-provider outage.  
+**Requires:** G3, FW-P1; optimized once FW-P3 available.\
+**Build:** Local evidence ledger, summary capture, distinct self-report narrative, append-only/versioned diary entries and annotations, snapshot metadata, configurable visibility and owner-only reads, privacy redaction. Then integrate R2/R6 when proven.\
+**Tests:** contradictory diary and logs preserved; provenance respected; memory denied outside scope; local storage survives memory-provider outage.\
 **Done when:** An owner can follow an intention from executed facts to an agent's revisable diary interpretation across restarts.
 
 ### FW-P5 — Enjoyment Telemetry, Reflection Probe Engine, and Learning
 
-**Requires:** FW-P4, stable telemetry source and provider.  
-**Build:** Self-assessment + behavioral measurements, separate immediate/trend/historical preferences, prediction surprise, negative-experience attribution, question budgets, agent challenges, confidence calibration, strategy experiments and learning hypotheses; candidate-ranking influences but **never** tool authority.  
-**Tests:** inconsistent self-reports reduce confidence; learning only promoted after repeated evidence; evidence version history stays inspectable; reflection respects token budget and avoids recursive infinite loops.  
+**Requires:** FW-P4, stable telemetry source and provider.\
+**Build:** Self-assessment + behavioral measurements, separate immediate/trend/historical preferences, prediction surprise, negative-experience attribution, question budgets, agent challenges, confidence calibration, strategy experiments and learning hypotheses; candidate-ranking influences but **never** tool authority.\
+**Tests:** inconsistent self-reports reduce confidence; learning only promoted after repeated evidence; evidence version history stays inspectable; reflection respects token budget and avoids recursive infinite loops.\
 **Done when:** Later candidate choices can be explained using actual prior evidence and provisional preference state.
 
 ### FW-P6 — Persistent Goals, Commitments, and Collaboration
 
-**Requires:** FW-P3 + FW-P5, plus suitable existing governed delegation.  
-**Build:** Revocable long-term goals/subgoals, self-development suggestions and evidence, contextual resilience and transfer, balanced priority scoring, adaptive preemption, checkpoint/resume, promises and negotiated renegotiation, authorized agent assistance, collaboration attribution.  
-**Tests:** no priority switch silently alters a user promise; preempted tasks resume from checkpoint; delegation does not widen effective permissions; conflicting commitments produce transparent resolution.  
+**Requires:** FW-P3 + FW-P5, plus suitable existing governed delegation.\
+**Build:** Revocable long-term goals/subgoals, self-development suggestions and evidence, contextual resilience and transfer, balanced priority scoring, adaptive preemption, checkpoint/resume, promises and negotiated renegotiation, authorized agent assistance, collaboration attribution.\
+**Tests:** no priority switch silently alters a user promise; preempted tasks resume from checkpoint; delegation does not widen effective permissions; conflicting commitments produce transparent resolution.\
 **Done when:** An agent manages two competing goals and one user obligation over multiple cycles with a complete, safe trace.
 
 ### FW-P7 — Identity, RBAC, Diary Sharing, and Relational Perception
 
-**Requires:** G4 + FW-P4 + reliable privacy controls; security review.  
-**Build:** Secure local superuser bootstrap; principal binding for CLI/Discord; scoped/time-limited delegation, break-glass inspection; per-entry frozen-view sharing/excerpts/collections and revocation; optional consented per-user opinions/appraisals, agent disagreement, challenges, contextual forgiveness.  
-**Tests:** forged owner / role spoof denied; private diary accidental leak denied; expired grants denied; consent withdrawal stops profiling; forgiveness does not erase required safety records; third-party data boundaries intact.  
+**Requires:** G4 + FW-P4 + reliable privacy controls; security review.\
+**Build:** Secure local superuser bootstrap; principal binding for CLI/Discord; scoped/time-limited delegation, break-glass inspection; per-entry frozen-view sharing/excerpts/collections and revocation; optional consented per-user opinions/appraisals, agent disagreement, challenges, contextual forgiveness.\
+**Tests:** forged owner / role spoof denied; private diary accidental leak denied; expired grants denied; consent withdrawal stops profiling; forgiveness does not erase required safety records; third-party data boundaries intact.\
 **Done when:** Multi-user interaction is auditable and privacy-safe; opt-out works and privilege cannot be self-granted.
 
 ### FW-P8 — Controlled Longitudinal Experimental Platform
 
-**Requires:** G5 + FW-P5 minimum; richer tests benefit from FW-P6/P7.  
-**Build:** Experiment groups, clean-slate vs seeded agent comparisons, control agent with same runtime, frozen prompts/providers or tracked changes, repeated tasks, snapshots, trace replays, uncertainty calibration analysis, reliability and preference stability reports.  
-**Tests:** reproducible battery, retention limits and privacy checks, blinded outcome scoring where possible, no subjective-experience claim inferred from agent self-report.  
+**Requires:** G5 + FW-P5 minimum; richer tests benefit from FW-P6/P7.\
+**Build:** Experiment groups, clean-slate vs seeded agent comparisons, control agent with same runtime, frozen prompts/providers or tracked changes, repeated tasks, snapshots, trace replays, uncertainty calibration analysis, reliability and preference stability reports.\
+**Tests:** reproducible battery, retention limits and privacy checks, blinded outcome scoring where possible, no subjective-experience claim inferred from agent self-report.\
 **Done when:** An external reviewer can understand what changed, what evidence supports it, and what alternative explanations remain.
 
 ### Dependency picture

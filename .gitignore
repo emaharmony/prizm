@@ -104,3 +104,11 @@ docs/PUDGYPOWER-FACTORY-RUNBOOK.md
 
 # Test-run artifact: relative default embedding index path resolves inside source tree
 internal/memory/memory/
+/.codex-go-cache
+/.tmp-gocache
+/.tmp-gomodcache
+/.tmp-localappdata
+/.tmp-staticcheck
+/.tmp-worker-lifecycle-tests
+/.worktrees
+.tmp-pr87-body.md
