@@ -194,7 +194,7 @@ func prepareGraphRunWithID(
 	runID, runDir, dbPath, configPath, workspace string,
 	reg multiagent.RegisteredDefinition,
 ) (string, *referenceRuntime, error) {
-	manifest, err := prepareGraphRunManifestWithID(runID, runDir, dbPath, workspace, reg)
+	manifest, err := prepareGraphRunManifestWithID(runID, runDir, dbPath, configPath, workspace, reg)
 	if err != nil {
 		return "", nil, err
 	}
@@ -206,7 +206,7 @@ func prepareGraphRunWithID(
 }
 
 func prepareGraphRunManifestWithID(
-	runID, runDir, dbPath, workspace string,
+	runID, runDir, dbPath, configPath, workspace string,
 	reg multiagent.RegisteredDefinition,
 ) (referenceWorkflowManifest, error) {
 	workspacePath, workspaceID, sourceWorkspacePath, err := isolatedReferenceWorkspace(context.Background(), workspace, runID)
@@ -223,6 +223,9 @@ func prepareGraphRunManifestWithID(
 		WorkspaceID:         workspaceID,
 		WorkspacePath:       workspacePath,
 		SourceWorkspacePath: sourceWorkspacePath,
+	}
+	if err := bindManifestValidationProfiles(configPath, &manifest); err != nil {
+		return referenceWorkflowManifest{}, err
 	}
 	if err := writeReferenceManifest(runDir, manifest); err != nil {
 		return referenceWorkflowManifest{}, err
@@ -318,7 +321,7 @@ func (g *graphRunStarter) StartRun(
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return "", statErr
 	}
-	manifest, err := prepareGraphRunManifestWithID(runID, g.runDir, g.dbPath, g.workspace, reg)
+	manifest, err := prepareGraphRunManifestWithID(runID, g.runDir, g.dbPath, g.configPath, g.workspace, reg)
 	if err != nil {
 		return "", err
 	}
@@ -334,7 +337,6 @@ func (g *graphRunStarter) StartRun(
 	go driveAcceptedGraphRun(g.runDir, runID, g.configPath)
 	return record.RunID, nil
 }
-
 
 func stableRequestRunID(identity *multiagent.RequestIdentity) string {
 	key := strings.Join([]string{

@@ -1,5 +1,102 @@
 # Prizm Plan of Action
 
+## Current Handoff: R1 Parallel Child Recovery (2026-10-12)
+
+PR #89 is the prior durable-task-retry win; it is not this active R1 acceptance.
+The uncommitted working branch is `codex/r1-parallel-acceptance`, with the
+fan-out capability, adoption, validation-profile binding, retry diagnostics,
+and stale-attempt checkpoint fix. The latest default-parallel `go test ./...`,
+`go build ./...`, `go vet ./...`, and `staticcheck ./...` passed before the
+current investigation.
+
+Live evidence remains incomplete. Run `run_fe4abeef67a31032461f2b778a` was
+cancelled and preserved after its isolated service restart omitted the graph
+delegation opt-in; it has one failure notification and no proposal or apply.
+Run `run_cbd0dd33262acf1d7a46f4f84a` used the corrected isolated service and
+persisted a trusted planner request with fan-out enabled. Three correlated
+lanes were accepted concurrently; research succeeded, while implementation
+failed with `invalid_proposal_context` and review failed structured-output
+decoding. The run terminalized truthfully as failed with one notification and
+no proposal or apply. These runs do not satisfy the parallel coding acceptance.
+Earlier terminal runs `run_d1df5d4543fd5a66d358902bdb`,
+`run_0697b0e667e3423b2793a4660e`, and `run_5d3cfb74d13a7ddcf670883351` remain
+unchanged. The independent 19-test result remains out-of-band, and the Factory
+snapshot is selected production-package source, not full game or live Studio
+evidence.
+
+**Next action:** implement parent-owned retry state per `DelegationJoinChild`
+through the existing multi-agent `DurableRunStore`, with child-only CAS updates,
+active-attempt checks, bounded safe worker failure classifications, shared
+initial-plus-ten recovery attempts, and service-scheduler resume from persisted
+`NextAt`. First add a real SQLite concurrency regression proving two child
+updates cannot overwrite one another and Resume reloads the latest revision.
+Keep each child’s scoped task/workspace/proposal identity intact; distinguish
+recoverable malformed proposal context from path/scope failures without
+weakening policy. Then test stale outcomes, retries shared across tool/schema/
+provider failures, restart scheduling, nonretryable governance/cancellation/
+ambiguous mutation, and no duplicate effects. Keep R1 open until a fresh,
+configured real-provider run produces three successful overlapping lanes,
+approved exact change, configured tester, fresh reviewer, and served report.
+Preserve the Factory main checkout and all unrelated temp/worktree artifacts.
+
+**Current correction:** handoff summary compatibility now reaches the actual
+`AgentRoleRunner` schema contract and prompt; a fake-executor test verifies a
+reviewer's descriptive handoff still maps through the compiled graph, while
+approved reviews with handoffs remain rejected. The current-provider run
+`run_9544229c6a3b2158bf82ddf6e6` verified real three-lane overlap but failed
+truthfully at fan-in: research succeeded, implementation ended
+`unknown/unknown` and nonretryable after tool/schema failures, and review
+ended with `invalid_field_value` after typed handoff corrections. Its report
+records tests as `not_recorded`, there were no proposals or applies, and one
+dashboard failure notification was emitted. This is not successful Factory
+acceptance. The active provider, selected profile fingerprint, source snapshot,
+and source Factory checkout were preserved; the run record is immutable.
+
+**Next action:** coordinator reviews the final prompt/type-feedback adjustment
+and this failed-run evidence. Any continuation must first diagnose the safe
+implementation-child `unknown` terminal cause and repeated reviewer output
+schema failures from typed evidence, without reading raw model output or
+loosening review, mutation, or approval guards. Proposal-to-action receipt
+fallback remains deferred until an existing trusted store boundary can prove
+one exact pending proposal for the current action and attempt. Keep R1 open;
+do not resubmit another live run, alter prior records, push, or merge in this
+slice.
+
+## R1 current handoff: safe schema feedback and parallel Factory run (2026-10-12)
+
+The current uncommitted slice on `codex/r1-parallel-acceptance` carries safe
+structured-output details across delegated retries. Typed field feedback and
+allowlisted enum values are reconstructed from local role schemas; provider
+values and raw errors are not persisted. Focused feedback tests pass, including
+the actual reviewer provider-prompt path. Build, vet, staticcheck, and the full
+Go suite passed; one later prompt-path test also passed in its targeted package
+run. The original Ollama `glm-5.3:cloud` provider and validation-profile binding
+remain unchanged.
+
+The fresh Factory snapshot acceptance `run_40fe53464a76d1f7ddb65a6900`
+verified trusted planner fan-out and overlapping research, implementation,
+and review worker claims. Research succeeded; implementation ended with safe
+`unknown/unknown` after two read-file execution errors; review exhausted
+structured-output recovery despite receiving field/type feedback. The run
+failed before proposal or apply, with `test_outcome=not_recorded` and one
+delivered terminal notification. This is not Factory feature completion or a
+Tester success. Prior failed run records remain unchanged; the source Factory
+checkout was not edited.
+
+The current focused follow-up accepts handoff summaries as descriptive text
+while keeping handoff objects strict and routing graph-derived. It also retains
+only explicitly allowlisted typed nonretryable diagnostics; unknown failures
+remain `unknown/unknown`. The focused multiagent, subagent, and CLI package
+tests pass. Live runs `run_245ca10fd5ce59921c3b418853` and
+`run_40fe53464a76d1f7ddb65a6900` remain unchanged and failed; neither produced
+a proposal or apply.
+
+**Next action:** coordinator reviews the handoff-normalization and diagnostic
+classification diff. Separately inspect a safe proposal-to-tool-action receipt
+hook only if it can be proven from existing execution/store boundaries; hashed
+mutation IDs alone do not authorize bypassing the retry ledger. Keep R1 open;
+no live resubmission, push, or merge is authorized by this slice.
+
 This is the current execution plan. It is updated at the end of every project
 work session and must cite the active [roadmap](../architecture/PRIZM_ROADMAP.md)
 items.
@@ -222,3 +319,35 @@ The run list was rendered from `http://127.0.0.1:20822/multiagent-runs.html`. It
 Feature commit `b798578f5b7ac175b94fed6d5f8036811625e3d8` is pushed on `codex/durable-task-retries` from `origin/staging` `d7f76efbd913b165bd695ff295a051e74cf828c2`. Pull request [#89](https://github.com/emaharmony/prizm/pull/89) targets `staging`; it is open and not a draft. At handoff, CI jobs `lint-linux` and `test-linux` were running, with `test-windows` and `test-python` queued. The tracked worktree is clean; pre-existing caches and temporary directories remain untracked and are excluded. No merge was performed.
 
 **Next action:** CI follow-up on PR #89 resolved the deprecated `Temporary` classifier and three concrete gates; verify the newly pushed head's CI. R1 overall and its additional roadmap scenarios remain open.
+
+### R6 Recall API dependency proof (2026-10-12)
+
+A test-only proof was run in the separate Recall repository, isolated at
+`D:\_projects_\remembrance-mcp\.worktrees\r6-api-recovery-proof` on branch
+`codex/r6-api-recovery-proof`, based on feature commit
+`d68784e57dd5fa5aa2fb1271ed0106c2edd13cca`. The change is confined to
+`tests/test_rest_api.py`: six concurrent REST requests with one scoped key
+produce one durable raw capture/outbox job; the real local outbox worker
+completes it, and a same-key replay returns the one canonical memory ID. A
+separate test closes and joins the old HTTP server, closes its pipeline,
+recreates both against the same SQLite file, and verifies replay returns that
+same completed memory ID and does not create another capture, job, or memory.
+Focused idempotency tests passed (6 passed, 32 deselected); the full REST test
+module passed (37 passed, 1 skipped). No Recall production code changed.
+
+This is API-level dependency evidence only. It does not prove Prizm's
+local-to-Recall reconciler, a live Recall deployment, or cross-repository
+recovery. Recall main's existing dirty `.gitignore` and `.claude/` were left
+untouched; the isolated Recall worktree remains uncommitted and unpublished.
+PR #86 remains a separate open draft on Prizm and was not modified here.
+
+**Next action:** keep R1 as the active delivery priority and address its
+recorded parallel-child/recovery failures. When returning to R6, integrate the
+existing idempotent API contract through the Prizm reconciler and add a scoped
+outage/replay test; do not treat this API-only proof as R6 completion.
+
+### Local checkpoint audit (2026-10-15)
+
+The dirty parallel-acceptance slice is being preserved on `codex/r1-parallel-acceptance` at the verified `b85f46a` base. It adds durable child retry state, fan-out adoption, resume scheduling, worker integration, typed failure reporting, validation-profile binding, and regression coverage. Content-hash comparison found 17 dirty paths identical to PR #91's `codex/r1-parallel-acceptance-staging` head and 16 identical to commit `215d490` (these overlap); one additional path matches PR #91 only; 22 paths diverge from both.
+
+Integration risk is material: the local `durable_child_retry.go` does not include PR #91's `sameOptionalTaskReference` check, and this branch's proposal-apply path lacks safeguards added by `215d490` for trusted tree basis and exact approval/apply evidence. Treat this commit as a recovery checkpoint, not an integration-ready replacement for PR #91. Next action: reconcile the child task-reference guard and proposal/tree-basis safeguards on top of the newer PR branch, then run affected tests and full validation before integration. No push or merge is authorized by this checkpoint.

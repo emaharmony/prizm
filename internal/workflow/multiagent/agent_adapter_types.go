@@ -249,11 +249,12 @@ type StructuredOutputError struct {
 // SchemaCorrectionError marks a recoverable structured-output failure. Code
 // is deliberately a stable allowlisted identifier, never provider content.
 type SchemaCorrectionError struct {
-	Role     Role
-	Code     string
-	Fields   []string
-	Feedback string
-	Cause    error
+	Role          Role
+	Code          string
+	Fields        []string
+	AllowedValues []string
+	Feedback      string
+	Cause         error
 }
 
 func (e *SchemaCorrectionError) Error() string {

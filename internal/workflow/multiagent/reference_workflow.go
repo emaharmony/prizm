@@ -332,10 +332,20 @@ type ReferenceRunReport struct {
 
 // ReferenceFanOutLane is a sanitized, event-derived lane summary.
 type ReferenceFanOutLane struct {
-	JoinID string `json:"join_id"`
-	Lane   string `json:"lane"`
-	Role   string `json:"role,omitempty"`
-	Status string `json:"status"`
+	JoinID          string   `json:"join_id"`
+	Lane            string   `json:"lane"`
+	Role            string   `json:"role,omitempty"`
+	Status          string   `json:"status"`
+	AttemptID       string   `json:"attempt_id,omitempty"`
+	FailureClass    string   `json:"failure_class,omitempty"`
+	FailureCode     string   `json:"failure_code,omitempty"`
+	FailureReason   string   `json:"failure_reason,omitempty"`
+	Retryable       bool     `json:"retryable"`
+	RecoveryNumber  int      `json:"recovery_number"`
+	MaxRecoveries   int      `json:"max_recoveries"`
+	CorrectionField string   `json:"correction_field,omitempty"`
+	ExpectedType    string   `json:"expected_type,omitempty"`
+	AllowedValues   []string `json:"allowed_values,omitempty"`
 }
 
 // ReferenceLoopEntry is one canonical correction traversal.
@@ -430,7 +440,7 @@ func BuildReferenceRunReport(
 	}
 	for _, evt := range events {
 		if evt.Type == event.EventMultiAgentFanoutChildCompleted {
-			report.FanOut = append(report.FanOut, ReferenceFanOutLane{JoinID: payloadString(evt.Payload, "join_id"), Lane: payloadString(evt.Payload, "lane"), Role: payloadString(evt.Payload, "role"), Status: payloadString(evt.Payload, "status")})
+			report.FanOut = append(report.FanOut, referenceFanOutLane(evt.Payload))
 		}
 		if evt.Type != event.EventMultiAgentLoopTraversal {
 			continue
@@ -453,6 +463,94 @@ func BuildReferenceRunReport(
 		report.Warnings = append(report.Warnings, "run cancelled: "+state.CancellationReason)
 	}
 	return report
+}
+
+func referenceFanOutLane(payload map[string]any) ReferenceFanOutLane {
+	role := safeFanOutRole(payloadString(payload, "role"))
+	lane := ReferenceFanOutLane{
+		JoinID: safeRetryFact(payloadString(payload, "join_id")), Lane: safeFanOutLane(payloadString(payload, "lane")),
+		Role: string(role), Status: safeFanOutStatus(payloadString(payload, "status")),
+	}
+	if payloadString(payload, "failure_code") == "" {
+		return lane
+	}
+	values := payloadStringSlice(payload["allowed_values"])
+	failure := sanitizeTerminalRoleFailure(role, RoleExecutionFailure{
+		Class: payloadString(payload, "failure_class"), Code: payloadString(payload, "failure_code"),
+		CorrectionField: payloadString(payload, "correction_field"), ExpectedType: payloadString(payload, "expected_type"),
+		AllowedValues: values, Retryable: payloadBool(payload, "retryable"),
+	})
+	if failure.Class == "unknown" && failure.Code == "unknown" {
+		return lane
+	}
+	failure.AttemptID = payloadString(payload, "attempt_id")
+	if !validAttemptIdentity(failure.AttemptID) {
+		failure.AttemptID = ""
+	}
+	failure.RecoveryNumber = max(0, payloadInt(payload, "recovery_number"))
+	failure.MaxRecoveries = max(0, payloadInt(payload, "max_recoveries"))
+	failure.Reason = safeTerminalFailureReason(payloadString(payload, "failure_reason"))
+	lane.AttemptID, lane.FailureClass, lane.FailureCode = failure.AttemptID, failure.Class, failure.Code
+	lane.FailureReason, lane.Retryable = failure.Reason, failure.Retryable
+	lane.RecoveryNumber, lane.MaxRecoveries = failure.RecoveryNumber, failure.MaxRecoveries
+	lane.CorrectionField, lane.ExpectedType, lane.AllowedValues = failure.CorrectionField, failure.ExpectedType, failure.AllowedValues
+	return lane
+}
+
+func payloadStringSlice(value any) []string {
+	switch values := value.(type) {
+	case []string:
+		return append([]string(nil), values...)
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, item := range values {
+			if text, ok := item.(string); ok {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func payloadBool(payload map[string]any, key string) bool {
+	value, _ := payload[key].(bool)
+	return value
+}
+
+func safeTerminalFailureReason(reason string) string {
+	if knownTerminalFailureReason(reason) {
+		return reason
+	}
+	return "unknown"
+}
+
+func safeFanOutRole(value string) Role {
+	switch Role(value) {
+	case RolePlanner, RoleDeveloper, RoleTester, RoleReviewer, RoleReflector:
+		return Role(value)
+	default:
+		return ""
+	}
+}
+
+func safeFanOutLane(value string) string {
+	switch FanOutLane(value) {
+	case FanOutResearch, FanOutImplementation, FanOutReview:
+		return value
+	default:
+		return "unknown"
+	}
+}
+
+func safeFanOutStatus(value string) string {
+	switch event.OutcomeStatus(value) {
+	case event.OutcomeSucceeded, event.OutcomeFailed, event.OutcomeTimedOut, event.OutcomeRejected:
+		return value
+	default:
+		return "unknown"
+	}
 }
 
 func cloneRoleState(state RoleState) RoleState {

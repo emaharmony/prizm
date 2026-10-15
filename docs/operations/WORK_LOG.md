@@ -1501,3 +1501,208 @@ The original local run `run_01M4PWEE6MX1FCE76G3WYANSKF` remains unchanged and ha
 - Verification on this tree: `go test ./... -count=1`, `go build ./...`, `go vet ./...`, `staticcheck ./...`, seven dashboard JS tests, focused retry/safety/workflow/CLI regressions, and Windows compilation of `internal/retry` passed. The scoped prompt-memory test passed 30 consecutive runs before the full suite. No PR merge was performed; latest CI state is pending the follow-up push.
 
 **Next action:** push the reviewed CI correction commit to PR #89 and check CI for that exact head; continue to leave R1's other multi-task scenarios open.
+
+### R1 parallel child acceptance and retry gap (2026-10-12)
+
+- Current branch: `codex/r1-parallel-acceptance`; work is uncommitted. PR #89 is
+  the prior merged durable-task-retry milestone, not completion of this R1
+  slice. Default-parallel `go test ./...`, `go build ./...`, `go vet ./...`,
+  and `staticcheck ./...` passed after the stale-attempt refresh fix in
+  `internal/subagent/runner.go`; the regression verifies the failed action’s
+  diagnostic identity stays stable while later progress uses the newly active
+  attempt.
+- Preserved prior terminal records: `run_d1df5d4543fd5a66d358902bdb` failed
+  after duplicate implementation; `run_0697b0e667e3423b2793a4660e` failed at
+  Planner with no proposal; `run_5d3cfb74d13a7ddcf670883351` failed because
+  stale attempt identity reached the no-progress checkpoint. No old record was
+  rewritten. An isolated run `run_fe4abeef67a31032461f2b778a` was cancelled
+  through the run-scoped API after confirming the service had omitted
+  `PRIZM_GRAPH_ROLE_DELEGATION=1`; it produced one failure notification and no
+  proposal/apply.
+- Fresh delegation-enabled run `run_cbd0dd33262acf1d7a46f4f84a` verified the
+  parent command’s trusted `fan_out_available=true`. Its durable join
+  `join:run_cbd0dd33262acf1d7a46f4f84a:planner:1` accepted research,
+  implementation, and review workers at 17:53:45.654, .682, and .706 UTC.
+  Research succeeded at 17:54:42.215; implementation failed with safe code
+  `invalid_proposal_context`; review failed with structured-output correction.
+  The parent run terminalized as failed with one dashboard failure event and
+  no proposal, approval, or apply. Out-of-band database inspection showed one
+  acceptance and one terminal outcome per child; child failures do not yet
+  carry retry attempts/provider metadata. The independent 19-pass result is not
+  a workflow Tester success; the allowlisted Factory source snapshot is not
+  full game or live Studio evidence.
+- The proposal guard failure is not a root/child task-ID comparison: it is the
+  source coverage parse/path/hash guard in `internal/subagent/runner.go`, which
+  currently collapses its underlying cause into `invalid_proposal_context`.
+  Normal durable `RoleRunRequest` gets a per-visit `RetryHandle` from
+  `DurableRun.Retry`; fan-out children do not serialize that hook, and the CLI
+  graph worker terminalizes a `RunRole` error after one call. The `event`
+  package owns the event contract, while multi-agent workflow owns transition
+  and recovery policy; no new package or coordinator is warranted.
+- A prior workspace-local Factory pytest temp directory had uncertain ownership
+  and was preserved without reconstruction or deletion; the later acceptance
+  used a separately verified owned temp path. No main Factory files were
+  changed. All unrelated cache/worktree/temp artifacts remain untouched.
+
+**Next action:** add a real-SQLite concurrent child-only checkpoint/CAS test
+first, then implement per-`DelegationJoinChild` retry state in the existing
+multi-agent RunStore and route worker retryable outcomes through the existing
+service scheduler/outbox. Preserve stable logical child task/workspace/proposal
+identity, use attempt-specific delivery identity, and fail closed for stale
+outcomes, governance/auth/cancel, unknown errors, and ambiguous mutations. Add
+shared ten-recovery, restart, duplicate-result, no-double-effect, and
+nonretryable tests before registering a fresh acceptance run. R1 remains open.
+
+### R1 safe correction feedback and parallel acceptance (2026-10-12)
+
+- In `internal/workflow/multiagent`, typed structured-output field and enum
+  details now cross the trusted role-failure boundary only as allowlisted
+  schema field IDs, expected JSON types, and static allowed-value lists.
+  Parent and child retry feedback is reconstructed from their local role
+  schema; unknown pairs fall back to generic feedback. Provider values, raw
+  errors, and model output are excluded. Added a reviewer prompt-path test to
+  confirm the reconstructed `handoff` type correction reaches the actual
+  `AgentRoleRunner` provider request and matches the documented object shape.
+- Focused correction, parent/child durable retry, worker restoration, and
+  provider-prompt tests passed. `go build ./...`, `go vet ./...`,
+  `staticcheck ./...`, and `go test ./...` passed; the newly added prompt-path
+  test passed in a targeted run after the full suite.
+- Prior immutable run `run_245ca10fd5ce59921c3b418853` remains terminal failed at
+  the retry limit with one delivered notice. Fresh run
+  `run_40fe53464a76d1f7ddb65a6900` proved three real overlapping delegated
+  lanes and transported reviewer `handoff` type feedback, but failed at the
+  join: research succeeded, implementation failed as `unknown/unknown` after
+  two safe `read_file/execution_error` diagnostics, and review exhausted
+  structured-output retries. The final report says `test_outcome=not_recorded`;
+  there were no proposal/apply events and exactly one delivered terminal
+  notification. This is not successful Factory acceptance. The user Factory
+  checkout was unchanged; only the allowlisted production-package snapshot was
+  used.
+- No old run was altered; no push or merge occurred. Unrelated user edits,
+  worktrees, and workspace caches remain preserved.
+
+**Next action:** coordinator reviews the code and truthful run evidence. If
+continuing, diagnose the implementation child's unknown terminal result from
+safe evidence, preserve the previous run, and require a new reviewed proposal
+before any grant or apply. R1 remains open.
+
+### R1 descriptive handoff compatibility and typed failure retention (2026-10-12)
+
+- Added optional handoff summary-string normalization in
+  `internal/workflow/multiagent/structured_output.go`. String summaries become
+  descriptive Objective/Notes with a fixed descriptive Reason; strict object
+  decoding still rejects unknown fields and trailing JSON. Reviewer decisions,
+  required corrections, approved-with-handoff rejection, and graph-derived
+  routing remain unchanged.
+- `ClassifyRoleExecutionFailure` now preserves only enumerated nonretryable
+  SafeFailureError and governance codes. Unknown codes and raw errors remain
+  `unknown/unknown`; tests assert private sentinel values do not enter durable
+  failure payloads.
+- `go test ./internal/workflow/multiagent ./internal/subagent ./cmd/prizm-cli`
+  passed using the existing workspace-local Go cache. Go emitted a telemetry
+  upload-token Access Denied warning for its default user telemetry directory;
+  test execution completed successfully. Initial no-cache invocation also hit
+  access denied in the default Go cache and was not treated as a code failure.
+- Immutable live runs `run_245ca10fd5ce59921c3b418853` and
+  `run_40fe53464a76d1f7ddb65a6900` were not changed or retried. Neither has a
+  proposal or apply; the latter's three-lane execution is not successful task
+  acceptance. Proposal fallback remains out of scope until an
+  action-attributed receipt can be proven; hashed mutation IDs alone are not
+  sufficient authority.
+
+**Next action:** coordinator reviews the exact diff and test evidence. Continue
+the read-only proposal/action attribution investigation only if existing
+approval, execution, and retry state can jointly prove one pending proposal
+for the current action/attempt and no workspace mutation. R1 remains open.
+
+### R1 stage 1+3 frozen validation update (2026-10-12)
+
+`go build ./...` and `go vet ./...` exited 0. `staticcheck ./...` exited 0
+with `STATICCHECK_CACHE` redirected to the existing workspace-local cache.
+The full default-parallel `go test ./...` run emitted passing results for all
+listed packages and no `FAIL`; its detached shell session did not retain the
+final process exit code, so this entry records observed package results rather
+than an exit code. Focused owning-package tests exited 0. `git diff --check`
+passed. No source changes followed these checks. An initial cache attempt was
+blocked by access denied in the default user cache/telemetry paths; no cache
+contents were deleted or overwritten.
+
+**Next action:** coordinator reviews the literal implementation and gate
+evidence before any fresh live acceptance. The currently observed service PID
+and listener state differed from an older recorded PID, so do not restart a
+process until exact current path, start time, config, and ownership are
+confirmed. R1 remains open; no commit, push, or merge occurred.
+
+### R1 handoff-prompt and parallel acceptance follow-up (2026-10-12)
+
+- The actual `AgentRoleRunner` response contract now documents that a handoff
+  may be a concise descriptive JSON string; Reviewer guidance still requires
+  it only for `changes_requested` and omits it for `approved`. The safe
+  expected-type feedback describes the accepted object/string/null forms.
+  A fake executor traverses `AgentRoleRunner` and verifies the resulting
+  reviewer outcome resolves to the compiled Developer edge; a second test
+  verifies approved-with-handoff remains rejected. Existing focused
+  compatibility and package tests pass. Latest `go build ./...`,
+  `go vet ./...`, and `staticcheck ./...` exited 0. The default-parallel full
+  suite had passed before this narrow change; no full rerun was made. One
+  initial Staticcheck invocation hit denied default-cache writes; rerunning
+  with the existing workspace-local cache exited 0. `git diff --check` passed.
+- Read-only source tracing confirmed strict final role JSON goes through
+  `decodeStrictJSON` into `OutputHandoff.UnmarshalJSON`; the live
+  `invalid_field_type` record cannot distinguish a string from another
+  malformed nested handoff shape. No raw provider output was inspected or
+  retained.
+- Fresh run `run_9544229c6a3b2158bf82ddf6e6` used the unchanged Factory package
+  snapshot, provider, task-specific immutable workflow, and selected pytest
+  profile fingerprint. Trusted worker records showed research, implementation,
+  and review accepted with overlapping execution intervals. Research
+  succeeded; implementation ended `unknown/unknown`, nonretryable, with its
+  usage retained; review exhausted repeated structured-output corrections,
+  ending `invalid_field_value`. The run failed at fan-in with
+  `test_outcome=not_recorded`, no proposal or apply, and one dashboard failure
+  notification. The run is preserved as terminal failed. The user Factory
+  checkout remains untouched; no proposal was approved and no commit, push,
+  or merge occurred.
+
+**Next action:** coordinator reviews the actual source diff and latest failed
+run evidence. Diagnose the implementation child’s safe unknown terminal class
+and reviewer schema failures before considering another live run. Do not infer
+from out-of-band Factory tests, weaken mutation guards, rewrite immutable run
+records, or claim R1 completion.
+
+### R6 separate-repository API idempotency proof (2026-10-12)
+
+**Roadmap ID:** R6 (dependency verification only; no Prizm implementation).
+
+In the authorized Recall worktree
+`D:\_projects_\remembrance-mcp\.worktrees\r6-api-recovery-proof`, branch
+`codex/r6-api-recovery-proof` at base
+`d68784e57dd5fa5aa2fb1271ed0106c2edd13cca`, `tests/test_rest_api.py` adds
+concurrent same-key requests through independent HTTP clients and restart
+replay through a fresh server/pipeline using the same SQLite database. The
+real local outbox worker is allowed to complete the capture; assertions verify
+one raw row, one outbox job, one canonical memory, and the same returned
+primary memory ID after replay. Focused tests: 6 passed, 32 deselected. Full
+REST module: 37 passed, 1 skipped. No production source was changed, and no
+commit, push, PR, or merge was made.
+
+Limits: this verifies the Recall API idempotency behavior only. It does not
+run the Prizm reconciler, simulate a live Recall outage, or complete R6. The
+Recall main checkout's pre-existing `.gitignore` and `.claude/` changes were
+preserved. The separate test branch is uncommitted/unpublished. Prizm PR #86
+remains an open draft and was not changed.
+
+**Next action:** R1 remains active: resolve the recorded parallel child
+recovery/fan-in failures. R6 follow-up should compose Prizm's existing durable
+reconciler with the verified Recall key/replay contract, then prove outage and
+recovery without duplicate primary memories.
+
+### R1 parallel-acceptance local checkpoint audit (2026-10-15)
+
+**Roadmap ID:** R1.
+
+The read-only audit verified branch `codex/r1-parallel-acceptance` at `b85f46aca4be910dfd3477e0efb6bee4eac2aa0e` with exactly 35 modified tracked files and 4 untracked source/test files. A byte-content hash comparison against PR #91 head `3d79f02119bca91694870eb8fcd84c616f4ab282` and local commit `215d4904a8ca731216251eb01b00b353f7f9991f` classified 17 paths identical to PR #91, 16 identical to both references, 1 additional path identical to PR #91 only, and 22 divergent from both. The source/test changes form an R1 child-retry, fan-out/adoption, resume-scheduling, worker integration, structured-output feedback, and validation-profile binding slice.
+
+This local checkpoint preserves work for review. It is not a merge-ready substitute for PR #91: the local child retry implementation omits PR #91's `sameOptionalTaskReference` binding between child and task identity. The newer `215d490` tree also contains trusted proposal tree-basis and exact approval/apply safeguards absent from this older branch. Reconcile those safeguards before integration. Plan/Work Log records prior test runs, including a full suite and build/vet/staticcheck pass before the current investigation and later focused checks; this audit ran no tests and does not establish that the final dirty tree passed validation. No ignored proof, cache, local config, run data, or credentials were included in the checkpoint.
+
+**Next action:** review the checkpoint against PR #91, restore task-reference and proposal/tree-basis guarantees, then run affected tests and full validation. Do not push or merge this snapshot.

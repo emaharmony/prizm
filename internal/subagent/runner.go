@@ -397,7 +397,7 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 			patch, _ := action.Input["patch"].(string)
 			missing, coverageErr := coverage.missingPatchContext(patch)
 			if coverageErr != nil {
-				return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "invalid_proposal_context"}
+				return usage(RunResult{Artifacts: artifacts.result()}), proposalCoverageFailure(coverageErr)
 			}
 			if len(missing) > 0 {
 				if prerequisiteOnly {
@@ -504,6 +504,13 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 					return usage(RunResult{Artifacts: artifacts.result()}), ctx.Err()
 				}
 				return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "tool_recovery_failed"}
+			}
+			// recordCorrection consumes a durable recovery and rotates the
+			// attempt ID. The failed action's diagnostic above remains bound to
+			// its original attempt, but the shared observation-count checkpoint
+			// below must use the newly active attempt identity.
+			if runtime.RetryHooks != nil {
+				toolAttemptID = runtime.RetryHooks.CurrentAttempt().AttemptID
 			}
 			messages = append(messages, v2.Message{Role: "user", Content: withBudgetNotice(fmt.Sprintf("Tool %q failed: %v. Try another approach or give your final answer.", action.Tool, terr), maxIterations-i-1, remainingTokens(maxTokens, usedTokens))})
 		} else {
@@ -729,6 +736,19 @@ type sourceCoverage struct {
 	pages map[string][]observedSourcePage
 }
 
+type malformedProposalDiffError struct{}
+
+func (malformedProposalDiffError) Error() string { return "subagent: malformed proposal diff" }
+
+func proposalCoverageFailure(err error) *SafeFailureError {
+	var malformed malformedProposalDiffError
+	if errors.As(err, &malformed) {
+		return &SafeFailureError{Code: "invalid_proposal_diff"}
+	}
+	// Path, hash, symlink, and workspace-scope errors remain nonretryable.
+	return &SafeFailureError{Code: "invalid_proposal_context"}
+}
+
 func newSourceCoverage(root string) *sourceCoverage {
 	return &sourceCoverage{root: root, pages: map[string][]observedSourcePage{}}
 }
@@ -749,7 +769,7 @@ func (c *sourceCoverage) recordRead(result string) error {
 func (c *sourceCoverage) missingPatchContext(patch string) ([]gitx.PatchSourceRange, error) {
 	ranges, err := gitx.PatchSourceRanges(patch)
 	if err != nil {
-		return nil, err
+		return nil, malformedProposalDiffError{}
 	}
 	missing := make([]gitx.PatchSourceRange, 0)
 	for _, required := range ranges {

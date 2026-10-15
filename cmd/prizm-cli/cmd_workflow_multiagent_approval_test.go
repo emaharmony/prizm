@@ -94,9 +94,9 @@ func TestPatchProposalResolvesManyArtifactsAndReconcilesTrees(t *testing.T) {
 	}
 	lifecycle := newApprovalProposalLifecycle(store, workspace, t.TempDir())
 	op := multiagent.ProposalOperation{RunID: item.RunID, ProposalID: item.ProposalID, ApprovalID: item.ApprovalID, ApplyKey: "apply-patch", ExecutionKey: item.CorrelationID}
-	status, _, err := lifecycle.Reconcile(ctx, op)
-	if err != nil || status != multiagent.ProposalNotApplied {
-		t.Fatalf("base status=%q err=%v", status, err)
+	status, baseResult, err := lifecycle.Reconcile(ctx, op)
+	if err != nil || status != multiagent.ProposalNotApplied || baseResult.ReconcileCode != multiagent.ProposalReconcileBaseTree || baseResult.ObservedTree != plan.BaseTree {
+		t.Fatalf("base status=%q result=%#v err=%v", status, baseResult, err)
 	}
 	if err := item.Approve("operator"); err != nil {
 		t.Fatal(err)
@@ -112,16 +112,16 @@ func TestPatchProposalResolvesManyArtifactsAndReconcilesTrees(t *testing.T) {
 	if err != nil || string(data) != patch {
 		t.Fatalf("evidence is not exact approved patch: err=%v", err)
 	}
-	status, _, err = lifecycle.Reconcile(ctx, op)
-	if err != nil || status != multiagent.ProposalApplied {
-		t.Fatalf("applied status=%q err=%v", status, err)
+	status, appliedResult, err := lifecycle.Reconcile(ctx, op)
+	if err != nil || status != multiagent.ProposalApplied || appliedResult.ReconcileCode != multiagent.ProposalReconcileExpectedTree || appliedResult.ObservedTree != plan.ExpectedTree {
+		t.Fatalf("applied status=%q result=%#v err=%v", status, appliedResult, err)
 	}
 	if err := os.WriteFile(filepath.Join(workspace, "unrelated.txt"), []byte("drift"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	status, _, err = lifecycle.Reconcile(ctx, op)
-	if err != nil || status != multiagent.ProposalAmbiguous {
-		t.Fatalf("drift status=%q err=%v", status, err)
+	status, driftResult, err := lifecycle.Reconcile(ctx, op)
+	if err != nil || status != multiagent.ProposalAmbiguous || driftResult.ReconcileCode != multiagent.ProposalReconcileTreeMismatch || driftResult.ObservedTree == "" || driftResult.ObservedTree == plan.ExpectedTree || driftResult.ObservedTree == plan.BaseTree {
+		t.Fatalf("drift status=%q result=%#v err=%v", status, driftResult, err)
 	}
 }
 
@@ -211,12 +211,15 @@ func TestApprovalProposalLifecycleAppliesAndReconcilesExactContent(t *testing.T)
 func TestWorkspaceValidationRunnerUsesResolvedWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	registry := validation.NewEmptyRegistry()
-	if err := registry.Register(validation.Profile{Name: "go_version", Command: "go", Args: []string{"version"}, TimeoutSeconds: 10, AllowedExitCodes: []int{0}}); err != nil {
+	if err := registry.Register(validation.Profile{Name: "factory_pytest_selected_v1", Command: "go", Args: []string{"version"}, WorkingDir: ".", TimeoutSeconds: 10, AllowedExitCodes: []int{0}}); err != nil {
 		t.Fatal(err)
 	}
 	runner := workspaceValidationRunner{registry: registry, fallbackRoot: t.TempDir(), artifactRoot: t.TempDir()}
-	result, err := runner.RunValidationInWorkspace(context.Background(), "go_version", "run-1", multiagent.Workspace{ID: "workspace-1", Path: workspace})
-	if err != nil || result.Status != "passed" {
+	result, err := runner.RunValidationInWorkspace(context.Background(), "factory_pytest_selected_v1", "run-1", multiagent.Workspace{ID: "workspace-1", Path: workspace})
+	if err != nil || result.Status != "passed" || result.Profile != "factory_pytest_selected_v1" || result.WorkingDir != workspace {
 		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if _, err := runner.RunValidationInWorkspace(context.Background(), "unapproved_factory_profile", "run-2", multiagent.Workspace{ID: "workspace-1", Path: workspace}); err == nil {
+		t.Fatal("unregistered profile ID was executed")
 	}
 }

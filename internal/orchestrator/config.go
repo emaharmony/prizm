@@ -14,6 +14,7 @@ import (
 
 	"github.com/emaharmony/prizm/internal/agent"
 	"github.com/emaharmony/prizm/internal/cost"
+	"github.com/emaharmony/prizm/internal/validation"
 	"gopkg.in/yaml.v3"
 )
 
@@ -64,6 +65,9 @@ type Config struct {
 	// Projects defines the assignable projects the gated loop can work on.
 	// Replaces hardcoded repo paths so projects are dynamic/assignable.
 	Projects []ProjectConfig `yaml:"projects"`
+
+	// ValidationProfiles registers host-authored command profiles available to workflows.
+	ValidationProfiles []validation.Profile `yaml:"validation_profiles"`
 
 	// Channels defines messaging channels (Discord, Telegram, etc.).
 	Channels []ChannelConfig `yaml:"channels"`
@@ -1136,6 +1140,12 @@ func DefaultConfig() *Config {
 
 // Validate checks that the configuration is valid.
 func (c *Config) Validate() error {
+	validationProfiles := validation.NewEmptyRegistry()
+	for _, profile := range c.ValidationProfiles {
+		if err := validationProfiles.Register(profile); err != nil {
+			return fmt.Errorf("config: invalid validation profile: %w", err)
+		}
+	}
 	// Validate agents
 	seenIDs := make(map[string]bool)
 	autoGenCounter := 0

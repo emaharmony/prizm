@@ -1,13 +1,16 @@
 package multiagent
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/emaharmony/prizm/internal/cost"
+	"github.com/emaharmony/prizm/internal/subagent"
 )
 
 const maxRoleRecoveryRetries = 10
@@ -42,6 +45,172 @@ type RetryAttempt struct {
 	RecoveryNumber int
 	Remaining      int
 	NextAt         time.Time
+}
+
+// RoleExecutionFailure is a safe typed summary returned by the trusted graph
+// worker. It contains no raw model/provider error text.
+type RoleExecutionFailure struct {
+	DeliveryAttemptID string          `json:"delivery_attempt_id"`
+	AttemptID         string          `json:"attempt_id"`
+	Class             string          `json:"class"`
+	Code              string          `json:"code"`
+	CorrectionField   string          `json:"correction_field,omitempty"`
+	ExpectedType      string          `json:"expected_type,omitempty"`
+	AllowedValues     []string        `json:"allowed_values,omitempty"`
+	RetryAfter        time.Duration   `json:"retry_after,omitempty"`
+	Retryable         bool            `json:"retryable"`
+	Usage             cost.TokenUsage `json:"usage,omitempty"`
+}
+
+// ClassifyRoleExecutionFailure returns only allowlisted retry categories.
+// Unknown failures remain nonretryable and do not expose their error string.
+func ClassifyRoleExecutionFailure(err error) RoleExecutionFailure {
+	class, code, retryAfter, retryable := classifyRetryableRoleFailure(err)
+	if !retryable {
+		class, code = classifySafeNonRetryableRoleFailure(err)
+		return RoleExecutionFailure{Class: class, Code: code}
+	}
+	failure := RoleExecutionFailure{Class: safeRetryCode(class), Code: safeRetryCode(code), RetryAfter: retryAfter, Retryable: true}
+	var schema *SchemaCorrectionError
+	if errors.As(err, &schema) && schema != nil {
+		failure.CorrectionField, failure.ExpectedType, failure.AllowedValues = safeSchemaCorrectionDetails(schema.Role, schema.Code, schema.Fields, schema.AllowedValues)
+	}
+	return failure
+}
+
+// sanitizeTerminalRoleFailure accepts only known failure pairs and schema
+// identifiers owned by the role contract. Worker payloads are never copied
+// directly into durable or public diagnostics.
+func sanitizeTerminalRoleFailure(role Role, failure RoleExecutionFailure) TerminalRoleFailure {
+	class, code := failure.Class, failure.Code
+	if !knownRoleFailurePair(class, code) {
+		class, code = "unknown", "unknown"
+	}
+	field, expected, values := safeSchemaCorrectionDetails(role, code,
+		[]string{failure.CorrectionField}, failure.AllowedValues)
+	return TerminalRoleFailure{
+		Class: class, Code: code, CorrectionField: field, ExpectedType: expected,
+		AllowedValues: values, Retryable: failure.Retryable && knownRoleFailurePair(failure.Class, failure.Code),
+	}
+}
+
+func knownRoleFailurePair(class, code string) bool {
+	switch class {
+	case "schema_correction":
+		switch code {
+		case "invalid_json_syntax", "missing_required_fields", "invalid_field_type",
+			"invalid_field_value", "invalid_structured_output", "invalid_proposal_diff":
+			return true
+		}
+	case "provider_transient":
+		return code == "provider_transient" || code == "provider_turn_failed"
+	case "execution_transient":
+		return code == "deadline_exceeded" || code == "execution_error"
+	case "execution":
+		switch code {
+		case "backend_bind_failed", "progress_checkpoint_failed", "schema_recovery_failed",
+			"tool_diagnostic_checkpoint_failed", "no_effects_checkpoint_failed", "tool_recovery_failed",
+			"no_progress_checkpoint_failed", "no_progress_recovery_failed":
+			return true
+		}
+	case "tool":
+		switch code {
+		case "patch_validation_failed", "permission_denied", "not_found", "invalid_input":
+			return true
+		}
+	case "governance":
+		switch code {
+		case "policy", "tool_scope", "workspace_scope", "approval", "approval_required",
+			"invalid_read_coverage", "invalid_proposal_context":
+			return true
+		}
+	case "cancellation":
+		return code == "cancelled"
+	case "unknown":
+		return code == "unknown"
+	}
+	return false
+}
+
+func validTerminalRoleFailure(role Role, failure TerminalRoleFailure) bool {
+	if !knownRoleFailurePair(failure.Class, failure.Code) || !knownTerminalFailureReason(failure.Reason) {
+		return false
+	}
+	clean := sanitizeTerminalRoleFailure(role, RoleExecutionFailure{
+		Class: failure.Class, Code: failure.Code, CorrectionField: failure.CorrectionField,
+		ExpectedType: failure.ExpectedType, AllowedValues: failure.AllowedValues, Retryable: failure.Retryable,
+	})
+	return clean.Class == failure.Class && clean.Code == failure.Code && clean.Retryable == failure.Retryable &&
+		clean.CorrectionField == failure.CorrectionField && clean.ExpectedType == failure.ExpectedType &&
+		equalStrings(clean.AllowedValues, failure.AllowedValues) && failure.RecoveryNumber >= 0 &&
+		failure.MaxRecoveries >= 0 && failure.RecoveryNumber <= failure.MaxRecoveries &&
+		(failure.AttemptID == "" || validAttemptIdentity(failure.AttemptID))
+}
+
+func knownTerminalFailureReason(reason string) bool {
+	switch reason {
+	case "not_retryable", "retry_state_unavailable", "recovery_limit_reached", "unsafe_replay_state",
+		"deadline_would_expire", "retry_not_scheduled", "unmatched_outcome":
+		return true
+	default:
+		return false
+	}
+}
+
+func validAttemptIdentity(value string) bool {
+	if len(value) != 27 || !strings.HasPrefix(value, "ra_") {
+		return false
+	}
+	for _, r := range value[3:] {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+// classifySafeNonRetryableRoleFailure retains only server-defined diagnostic
+// codes. It never serializes arbitrary error strings or unknown SafeFailure
+// codes across the durable worker boundary.
+func classifySafeNonRetryableRoleFailure(err error) (string, string) {
+	if err == nil {
+		return "unknown", "unknown"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "cancellation", "cancelled"
+	}
+	var governance *GovernanceError
+	if errors.As(err, &governance) {
+		switch governance.Kind {
+		case "policy", "tool_scope", "workspace_scope", "approval":
+			return "governance", governance.Kind
+		default:
+			return "unknown", "unknown"
+		}
+	}
+	var approval *ApprovalRequiredError
+	if errors.As(err, &approval) {
+		return "governance", "approval_required"
+	}
+	var safeFailure *subagent.SafeFailureError
+	if errors.As(err, &safeFailure) && safeFailure != nil {
+		switch safeFailure.Code {
+		case "patch_validation_failed", "permission_denied", "not_found", "invalid_input":
+			return "tool", safeFailure.Code
+		case "backend_bind_failed", "progress_checkpoint_failed", "schema_recovery_failed",
+			"tool_diagnostic_checkpoint_failed", "no_effects_checkpoint_failed",
+			"tool_recovery_failed", "invalid_read_coverage", "no_progress_checkpoint_failed",
+			"no_progress_recovery_failed", "invalid_proposal_context":
+			class := "execution"
+			if safeFailure.Code == "invalid_read_coverage" || safeFailure.Code == "invalid_proposal_context" {
+				class = "governance"
+			}
+			return class, safeFailure.Code
+		default:
+			return "unknown", "unknown"
+		}
+	}
+	return "unknown", "unknown"
 }
 
 // RoleVisitRetryHandle is the only way an executing role may debit the shared

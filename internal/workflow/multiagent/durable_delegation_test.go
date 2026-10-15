@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/emaharmony/prizm/internal/cost"
 	"github.com/emaharmony/prizm/internal/event"
 )
 
@@ -42,6 +45,7 @@ func (d *recordingDelegationDispatcher) Dispatch(ctx context.Context, _ string, 
 
 type recordingOutcomeSource struct {
 	store    DurableRunStore
+	runID    string
 	outcomes []event.Outcome
 	acked    []string
 }
@@ -83,7 +87,11 @@ func (s *recordingOutcomeSource) PendingOutcomes(context.Context, string) ([]eve
 }
 
 func (s *recordingOutcomeSource) MarkOutcomeConsumed(ctx context.Context, eventID string) error {
-	record, err := s.store.Load(ctx, "run-graph-delegation")
+	runID := s.runID
+	if runID == "" {
+		runID = "run-graph-delegation"
+	}
+	record, err := s.store.Load(ctx, runID)
 	if err != nil {
 		return err
 	}
@@ -131,6 +139,190 @@ func TestDurableGraphDelegationCheckpointsBeforeDispatchAndRoutesOutcome(t *test
 	stored, err = env.store.Load(t.Context(), request.RunID)
 	if err != nil || stored.Phase != CheckpointTerminal || stored.State.LatestCompletedRole != Role("start") {
 		t.Fatalf("terminal checkpoint=%#v err=%v", stored, err)
+	}
+}
+
+func TestDelegatedParentRetryHookIsAttemptScopedAndSuccessfulDeliveryCompletes(t *testing.T) {
+	runtime, env, dispatch, source := newWaitingDelegationRuntime(t, "run-parent-retry-hook")
+	source.runID = "run-parent-retry-hook"
+	record, err := env.store.Load(t.Context(), "run-parent-retry-hook")
+	if err != nil || record.Waiting == nil || record.Waiting.AttemptID == "" || record.Waiting.DeliveryAttemptID == "" {
+		t.Fatalf("outer delivery lacks trusted retry identity: waiting=%#v err=%v", record.Waiting, err)
+	}
+	initial := record.Waiting.AttemptID
+	handle, toolSink, err := NewDelegatedRoleRetryHandle(t.Context(), env.store, "run-parent-retry-hook", record.Waiting.DeliveryAttemptID, initial)
+	if err != nil || toolSink == nil {
+		t.Fatalf("bind outer role retry hook: handle=%T sink=%v err=%v", handle, toolSink != nil, err)
+	}
+	if _, err := handle.ConsumeRecovery(initial, "invalid_schema"); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := env.store.Load(t.Context(), "run-parent-retry-hook")
+	if err != nil || updated.Retry.RecoveryNumber != 1 || updated.Waiting.AttemptID != handle.CurrentAttempt().AttemptID || updated.Waiting.DeliveryAttemptID != record.Waiting.DeliveryAttemptID {
+		t.Fatalf("retry hook lost scope or allowance: retry=%#v waiting=%#v err=%v", updated.Retry, updated.Waiting, err)
+	}
+	if err := handle.RecordProgress(initial, "evidence", "tool:read_file", "old"); !errors.Is(err, ErrStaleRetryAttempt) {
+		t.Fatalf("stale attempt was allowed to write: %v", err)
+	}
+	activeAttempt := handle.CurrentAttempt().AttemptID
+	payload, _ := json.Marshal(GraphRoleOutcome{Result: RoleRunResult{Outcome: TransitionOutcome("ok"), LocalIterations: 1}})
+	cmd := dispatch.command
+	source.outcomes = []event.Outcome{matchingOutcome(cmd, "parent-retry-success", event.OutcomeSucceeded, 1, payload)}
+	state, err := runtime.Resume(t.Context(), "run-parent-retry-hook")
+	if err != nil || state.Status != RunStatusCompleted || activeAttempt == initial {
+		t.Fatalf("successful outer delivery after recovery: status=%s activeChanged=%t err=%v", state.Status, activeAttempt != initial, err)
+	}
+}
+
+func TestValidateDelegatedRoleCommandBindsOuterAndChildScope(t *testing.T) {
+	outerRuntime, outerEnv, outerDispatch, _ := newWaitingDelegationRuntime(t, "run-command-scope-outer")
+	_ = outerRuntime
+	var outer GraphRoleCommand
+	if err := json.Unmarshal(outerDispatch.command.Payload, &outer); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateDelegatedRoleCommand(t.Context(), outerEnv.store, outer); err != nil {
+		t.Fatalf("valid outer command rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*GraphRoleCommand){
+		"role":              func(c *GraphRoleCommand) { c.Role = RoleReviewer },
+		"task":              func(c *GraphRoleCommand) { c.Task.ID = "other-task" },
+		"workspace":         func(c *GraphRoleCommand) { c.WorkspaceID = "other-workspace" },
+		"delivery":          func(c *GraphRoleCommand) { c.DeliveryAttemptID += ":stale" },
+		"request-role":      func(c *GraphRoleCommand) { c.Request.Run.CurrentRole = RoleReviewer },
+		"request-task":      func(c *GraphRoleCommand) { c.Request.Run.Task.ID = "other-task" },
+		"request-workspace": func(c *GraphRoleCommand) { c.Request.Run.WorkspaceID = "other-workspace" },
+		"request-execution": func(c *GraphRoleCommand) { c.Request.Run.ExecutionKey += ":other" },
+	} {
+		t.Run("outer/"+name, func(t *testing.T) {
+			candidate := outer
+			mutate(&candidate)
+			if err := ValidateDelegatedRoleCommand(t.Context(), outerEnv.store, candidate); err == nil {
+				t.Fatalf("scope mismatch accepted: %v", err)
+			}
+		})
+	}
+
+	runtime, env, dispatch, source := newWaitingPlannerDelegationRuntime(t, "run-command-scope-child")
+	parentPayload, _ := json.Marshal(GraphRoleOutcome{Result: RoleRunResult{Outcome: OutcomePlanReady, LocalIterations: 1, FanOut: validFanOutPlan()}})
+	source.outcomes = []event.Outcome{matchingOutcome(dispatch.command, "parent-fanout", event.OutcomeSucceeded, 1, parentPayload)}
+	if _, err := runtime.Resume(t.Context(), "run-command-scope-child"); err == nil {
+		t.Fatal("expected child join to remain waiting")
+	}
+	var child GraphRoleCommand
+	for _, command := range dispatch.commands {
+		if command.JoinID != "" && command.Lane == string(FanOutImplementation) {
+			if err := json.Unmarshal(command.Payload, &child); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	if child.JoinID == "" {
+		t.Fatal("implementation child command not dispatched")
+	}
+	if err := ValidateDelegatedRoleCommand(t.Context(), env.store, child); err != nil {
+		t.Fatalf("valid child command rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*GraphRoleCommand){
+		"role":              func(c *GraphRoleCommand) { c.Role = RoleReviewer },
+		"task":              func(c *GraphRoleCommand) { c.Task.ID = "other-task" },
+		"workspace":         func(c *GraphRoleCommand) { c.WorkspaceID = "other-workspace" },
+		"delivery":          func(c *GraphRoleCommand) { c.DeliveryAttemptID += ":stale" },
+		"request-role":      func(c *GraphRoleCommand) { c.Request.Run.CurrentRole = RoleReviewer },
+		"request-task":      func(c *GraphRoleCommand) { c.Request.Run.Task.ID = "other-task" },
+		"request-workspace": func(c *GraphRoleCommand) { c.Request.Run.WorkspaceID = "other-workspace" },
+		"request-execution": func(c *GraphRoleCommand) { c.Request.Run.ExecutionKey += ":other" },
+	} {
+		t.Run("child/"+name, func(t *testing.T) {
+			candidate := child
+			mutate(&candidate)
+			if err := ValidateDelegatedRoleCommand(t.Context(), env.store, candidate); err == nil {
+				t.Fatalf("scope mismatch accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestDelegatedParentTypedFailureSchedulesDurableRetryThenSuccess(t *testing.T) {
+	runtime, env, dispatch, source := newWaitingPlannerDelegationRuntime(t, "run-parent-retry-routing")
+	source.runID = "run-parent-retry-routing"
+	now := time.Now().UTC()
+	runtime.now = func() time.Time { return now }
+	record, err := env.store.Load(t.Context(), "run-parent-retry-routing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Waiting.Deadline = now.Add(10 * time.Minute)
+	if _, err := env.store.Checkpoint(t.Context(), record.Revision, record, nil); err != nil {
+		t.Fatal(err)
+	}
+	record, _ = env.store.Load(t.Context(), "run-parent-retry-routing")
+	handle, _, err := NewDelegatedRoleRetryHandle(t.Context(), env.store, "run-parent-retry-routing", record.Waiting.DeliveryAttemptID, record.Waiting.AttemptID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handle.ConsumeRecovery(record.Waiting.AttemptID, "invalid_schema"); err != nil {
+		t.Fatal(err)
+	}
+	currentAttempt := handle.CurrentAttempt().AttemptID
+	typedSchemaFailure := structuredError(record.State.CurrentRole, &json.UnmarshalTypeError{
+		Value: "object", Type: reflect.TypeOf([]string{}), Field: "task_breakdown",
+	})
+	failure := ClassifyRoleExecutionFailure(typedSchemaFailure)
+	failure.DeliveryAttemptID, failure.AttemptID = record.Waiting.DeliveryAttemptID, currentAttempt
+	failure.Usage = cost.TokenUsage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}
+	failurePayload, _ := json.Marshal(GraphRoleOutcome{Failure: &failure})
+	failed := matchingOutcome(dispatch.command, "outer-schema-failure", event.OutcomeFailed, 1, failurePayload)
+	failed.OccurredAt = now
+	source.outcomes = []event.Outcome{failed}
+	if _, err := runtime.Resume(t.Context(), "run-parent-retry-routing"); err == nil {
+		t.Fatal("expected scheduled retry wait")
+	}
+	record, err = env.store.Load(t.Context(), "run-parent-retry-routing")
+	if err != nil || record.Waiting == nil || !record.Waiting.DispatchPending || record.Retry.RecoveryNumber != 2 || record.Waiting.DeliveryNumber != 1 || record.PendingDelegationOutcomeAck != "" {
+		t.Fatalf("typed failure was not durably scheduled and acknowledged: retry=%#v waiting=%#v ack=%s err=%v", record.Retry, record.Waiting, record.PendingDelegationOutcomeAck, err)
+	}
+	if !strings.Contains(record.Retry.RecoveryFeedback, "task_breakdown") || !strings.Contains(record.Retry.RecoveryFeedback, "a JSON array of strings") {
+		t.Fatalf("outer retry feedback omitted safe field/type: %q", record.Retry.RecoveryFeedback)
+	}
+	if got := describeRecoveryCandidate(record, record.Retry.NextAt.Add(time.Second)); !got.Ready || got.WaitingKind != "delegation_outcome" {
+		t.Fatalf("retry missing from recovery scanner: %#v", got)
+	}
+	now = record.Retry.NextAt.Add(time.Second)
+	source.outcomes = nil
+	if _, err := runtime.Resume(t.Context(), "run-parent-retry-routing"); err == nil {
+		t.Fatal("expected second delivery to wait")
+	}
+	if len(dispatch.commands) != 2 {
+		t.Fatalf("parent recovery delivery count=%d", len(dispatch.commands))
+	}
+	record, err = env.store.Load(t.Context(), "run-parent-retry-routing")
+	if err != nil || record.Waiting.DispatchPending || record.Waiting.DeliveryNumber != 1 || !record.Retry.NextAt.IsZero() {
+		t.Fatalf("new attempt was not dispatched with shared retry state: waiting=%#v retry=%#v err=%v", record.Waiting, record.Retry, err)
+	}
+	var retryCommand GraphRoleCommand
+	if err := json.Unmarshal(dispatch.commands[1].Payload, &retryCommand); err != nil {
+		t.Fatalf("decode replacement parent command: %v", err)
+	}
+	if !strings.Contains(retryCommand.RecoveryFeedback, "task_breakdown") ||
+		!strings.Contains(retryCommand.RecoveryFeedback, "a JSON array of strings") {
+		t.Fatalf("replacement parent worker command omitted specific safe correction: %q", retryCommand.RecoveryFeedback)
+	}
+	newHandle, _, err := NewDelegatedRoleRetryHandle(t.Context(), env.store, "run-parent-retry-routing", record.Waiting.DeliveryAttemptID, record.Waiting.AttemptID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	successPayload, _ := json.Marshal(GraphRoleOutcome{Result: RoleRunResult{Outcome: TransitionOutcome("ok"), LocalIterations: 1}})
+	success := matchingOutcome(dispatch.commands[1], "outer-retry-success", event.OutcomeSucceeded, 1, successPayload)
+	success.OccurredAt = now
+	source.outcomes = []event.Outcome{success}
+	state, err := runtime.Resume(t.Context(), "run-parent-retry-routing")
+	if err != nil || state.Status != RunStatusCompleted || newHandle.CurrentAttempt().AttemptID == "" {
+		t.Fatalf("outer recovery did not complete: status=%s err=%v", state.Status, err)
+	}
+	if state.BudgetUsage.Tokens.TotalTokens != 15 {
+		t.Fatalf("failed provider usage was not retained exactly once: usage=%#v", state.BudgetUsage.Tokens)
 	}
 }
 

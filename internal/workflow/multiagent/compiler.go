@@ -769,6 +769,22 @@ func (g *CompiledGraph) Node(id string) (CompiledNode, bool) {
 	return cloneCompiledNode(n), true
 }
 
+// NodeIDForRole returns the compiled node identity for a semantic role. It
+// resolves through the compiled graph rather than assuming source YAML node
+// names or role string literals are node IDs.
+func (g *CompiledGraph) NodeIDForRole(role Role) (string, bool) {
+	if g == nil {
+		return "", false
+	}
+	for _, id := range g.nodeOrder {
+		node, ok := g.nodes[id]
+		if ok && node.Kind == "role" && node.Role == role {
+			return node.ID, true
+		}
+	}
+	return "", false
+}
+
 // TerminalNodeIDs returns an independent copy of every terminal node's
 // stable ID, in source declaration order.
 func (g *CompiledGraph) TerminalNodeIDs() []string {

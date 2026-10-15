@@ -59,6 +59,9 @@ type WaitingState struct {
 	DeliveryKey         string    `json:"delivery_key,omitempty"`
 	CommandEventID      string    `json:"command_event_id,omitempty"`
 	CorrelationID       string    `json:"correlation_id,omitempty"`
+	DeliveryAttemptID   string    `json:"delivery_attempt_id,omitempty"`
+	DeliveryNumber      int       `json:"delivery_number,omitempty"`
+	AttemptID           string    `json:"attempt_id,omitempty"`
 	LastOutcomeSequence int64     `json:"last_outcome_sequence,omitempty"`
 	StartedAt           time.Time `json:"started_at,omitempty"`
 	Deadline            time.Time `json:"deadline,omitempty"`
@@ -100,12 +103,27 @@ type ProposalOperation struct {
 
 // ProposalApplyResult is bounded application evidence retained in the run.
 type ProposalApplyResult struct {
-	Success    bool   `json:"success"`
-	TargetPath string `json:"target_path,omitempty"`
-	Message    string `json:"message,omitempty"`
-	DiffPath   string `json:"diff_path,omitempty"`
-	DiffStat   string `json:"diff_stat,omitempty"`
+	Success       bool                  `json:"success"`
+	TargetPath    string                `json:"target_path,omitempty"`
+	Message       string                `json:"message,omitempty"`
+	DiffPath      string                `json:"diff_path,omitempty"`
+	DiffStat      string                `json:"diff_stat,omitempty"`
+	ReconcileCode ProposalReconcileCode `json:"reconcile_code,omitempty"`
+	ObservedTree  string                `json:"observed_tree,omitempty"`
 }
+
+// ProposalReconcileCode is a bounded diagnostic from the trusted tree checker.
+// It intentionally excludes raw Git errors, paths, and file contents.
+type ProposalReconcileCode string
+
+const (
+	ProposalReconcilePlanMissing      ProposalReconcileCode = "patch_plan_missing"
+	ProposalReconcileInspectFailed    ProposalReconcileCode = "worktree_inspection_failed"
+	ProposalReconcileContextCancelled ProposalReconcileCode = "context_cancelled"
+	ProposalReconcileExpectedTree     ProposalReconcileCode = "expected_tree_present"
+	ProposalReconcileBaseTree         ProposalReconcileCode = "base_tree_present"
+	ProposalReconcileTreeMismatch     ProposalReconcileCode = "tree_mismatch"
+)
 
 // ProposalLifecycle composes existing approval and mutation authorities. The
 // workflow owns sequencing; the implementation owns approval and application
@@ -127,32 +145,94 @@ type ProposalProgress struct {
 // ApprovedTaskState retains a completed role result while its exact mutation
 // proposals wait for approval and recoverable application.
 type ApprovedTaskState struct {
-	Role       Role               `json:"role"`
-	Result     RoleRunResult      `json:"result"`
-	StartedAt  time.Time          `json:"started_at"`
-	FinishedAt time.Time          `json:"finished_at"`
-	Proposals  []ProposalProgress `json:"proposals"`
+	Role           Role                 `json:"role"`
+	Result         RoleRunResult        `json:"result"`
+	StartedAt      time.Time            `json:"started_at"`
+	FinishedAt     time.Time            `json:"finished_at"`
+	Proposals      []ProposalProgress   `json:"proposals"`
+	FanOutAdoption *FanOutAdoptionState `json:"fan_out_adoption,omitempty"`
+}
+
+// FanOutAdoptionState is a trusted implementation-lane result retained across
+// approval and application. Its source identity is rechecked before the
+// result can satisfy the immediate Developer successor.
+type FanOutAdoptionState struct {
+	RunID               string              `json:"run_id"`
+	Task                TaskReference       `json:"task"`
+	WorkflowID          string              `json:"workflow_id"`
+	WorkflowFingerprint string              `json:"workflow_fingerprint"`
+	WorkspaceID         string              `json:"workspace_id"`
+	ParentRole          Role                `json:"parent_role"`
+	ParentExecutionKey  string              `json:"parent_execution_key"`
+	ParentVisit         int                 `json:"parent_visit"`
+	JoinID              string              `json:"join_id"`
+	ChildID             string              `json:"child_id"`
+	ChildExecutionKey   string              `json:"child_execution_key"`
+	DelegationID        string              `json:"delegation_id"`
+	DeliveryKey         string              `json:"delivery_key"`
+	DeliveryAttemptID   string              `json:"delivery_attempt_id"`
+	DeliveryNumber      int                 `json:"delivery_number"`
+	AttemptID           string              `json:"attempt_id"`
+	AttemptNumber       int                 `json:"attempt_number"`
+	RecoveryNumber      int                 `json:"recovery_number"`
+	MaxRecoveries       int                 `json:"max_recoveries"`
+	CommandEventID      string              `json:"command_event_id"`
+	CorrelationID       string              `json:"correlation_id"`
+	ExpectedRole        Role                `json:"expected_role"`
+	ExpectedNodeID      string              `json:"expected_node_id"`
+	ExpectedVisit       int                 `json:"expected_visit"`
+	Proposals           []ProposalReference `json:"proposals"`
+	Result              RoleRunResult       `json:"result"`
 }
 
 // DelegationJoinChild is the durable identity and bounded result state for one
 // parallel fan-out lane.
 type DelegationJoinChild struct {
-	ChildID         string              `json:"child_id"`
-	Lane            FanOutLane          `json:"lane"`
-	Role            Role                `json:"role"`
-	Task            TaskReference       `json:"task"`
-	ExecutionKey    string              `json:"execution_key"`
-	DelegationID    string              `json:"delegation_id"`
-	JoinID          string              `json:"join_id"`
-	DeliveryKey     string              `json:"delivery_key"`
-	CommandEventID  string              `json:"command_event_id"`
-	CorrelationID   string              `json:"correlation_id"`
-	Deadline        time.Time           `json:"deadline"`
-	DispatchPending bool                `json:"dispatch_pending"`
-	Status          event.OutcomeStatus `json:"status"`
-	LastSequence    int64               `json:"last_sequence,omitempty"`
-	Result          *RoleRunResult      `json:"result,omitempty"`
-	Error           string              `json:"error,omitempty"`
+	ChildID           string               `json:"child_id"`
+	Lane              FanOutLane           `json:"lane"`
+	Role              Role                 `json:"role"`
+	Task              TaskReference        `json:"task"`
+	ExecutionKey      string               `json:"execution_key"`
+	DelegationID      string               `json:"delegation_id"`
+	JoinID            string               `json:"join_id"`
+	DeliveryKey       string               `json:"delivery_key"`
+	CommandEventID    string               `json:"command_event_id"`
+	CorrelationID     string               `json:"correlation_id"`
+	Deadline          time.Time            `json:"deadline"`
+	DeliveryAttemptID string               `json:"delivery_attempt_id,omitempty"`
+	DeliveryNumber    int                  `json:"delivery_number,omitempty"`
+	Retry             *RetryState          `json:"retry,omitempty"`
+	DispatchPending   bool                 `json:"dispatch_pending"`
+	Status            event.OutcomeStatus  `json:"status"`
+	LastSequence      int64                `json:"last_sequence,omitempty"`
+	Result            *RoleRunResult       `json:"result,omitempty"`
+	Error             string               `json:"error,omitempty"`
+	TerminalFailure   *TerminalRoleFailure `json:"terminal_failure,omitempty"`
+}
+
+// TerminalRoleFailure is an allowlisted diagnosis for a completed delegated
+// attempt. It contains schema-owned identifiers only, never provider output.
+type TerminalRoleFailure struct {
+	AttemptID       string   `json:"attempt_id,omitempty"`
+	Class           string   `json:"class"`
+	Code            string   `json:"code"`
+	CorrectionField string   `json:"correction_field,omitempty"`
+	ExpectedType    string   `json:"expected_type,omitempty"`
+	AllowedValues   []string `json:"allowed_values,omitempty"`
+	RecoveryNumber  int      `json:"recovery_number"`
+	MaxRecoveries   int      `json:"max_recoveries"`
+	Retryable       bool     `json:"retryable"`
+	Reason          string   `json:"reason"`
+}
+
+// TerminalFanOutFailure preserves failed child identity after the active join
+// is cleared from a terminal run.
+type TerminalFanOutFailure struct {
+	JoinID  string              `json:"join_id"`
+	ChildID string              `json:"child_id"`
+	Lane    FanOutLane          `json:"lane"`
+	Role    Role                `json:"role"`
+	Failure TerminalRoleFailure `json:"failure"`
 }
 
 // DelegationJoinState retains the parent result while three bounded child
@@ -173,9 +253,19 @@ type DelegationJoinState struct {
 // PersistedFailure is bounded diagnostic information. It never contains
 // prompts, credentials, or provider output.
 type PersistedFailure struct {
-	Kind    string    `json:"kind"`
-	Message string    `json:"message"`
-	At      time.Time `json:"at"`
+	Kind           string                  `json:"kind"`
+	Message        string                  `json:"message"`
+	At             time.Time               `json:"at"`
+	AttemptID      string                  `json:"attempt_id,omitempty"`
+	Attempt        int                     `json:"attempt,omitempty"`
+	RecoveryNumber int                     `json:"recovery_number,omitempty"`
+	MaxRecoveries  int                     `json:"max_recoveries,omitempty"`
+	FailureClass   string                  `json:"failure_class,omitempty"`
+	FailureCode    string                  `json:"failure_code,omitempty"`
+	FailureReason  string                  `json:"failure_reason,omitempty"`
+	Retryable      bool                    `json:"retryable,omitempty"`
+	RetryExhausted bool                    `json:"retry_exhausted,omitempty"`
+	FanOutFailures []TerminalFanOutFailure `json:"fanout_failures,omitempty"`
 }
 
 // DurableRun is the atomic persistence envelope around canonical RunState.
@@ -192,6 +282,7 @@ type DurableRun struct {
 	RetryHistory                []RetryState         `json:"retry_history,omitempty"`
 	DelegationJoin              *DelegationJoinState `json:"delegation_join,omitempty"`
 	ApprovedTask                *ApprovedTaskState   `json:"approved_task,omitempty"`
+	PendingFanOutAdoption       *FanOutAdoptionState `json:"pending_fan_out_adoption,omitempty"`
 	ProposalResults             []ProposalProgress   `json:"proposal_results,omitempty"`
 	Failure                     *PersistedFailure    `json:"failure,omitempty"`
 	Reflections                 []ReflectionRecord   `json:"reflections,omitempty"`
@@ -211,6 +302,22 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 	}
 	if !r.Phase.Valid() {
 		problems = append(problems, fmt.Sprintf("unknown checkpoint phase %q", r.Phase))
+	}
+	if r.Failure != nil {
+		seenFailureChildren := make(map[string]struct{}, len(r.Failure.FanOutFailures))
+		laneRoles := map[FanOutLane]Role{FanOutResearch: RolePlanner, FanOutImplementation: RoleDeveloper, FanOutReview: RoleReviewer}
+		for _, failure := range r.Failure.FanOutFailures {
+			if failure.JoinID == "" || failure.ChildID == "" || laneRoles[failure.Lane] == "" || failure.Role != laneRoles[failure.Lane] ||
+				!validTerminalRoleFailure(failure.Role, failure.Failure) {
+				problems = append(problems, "persisted fan-out failure summary is invalid")
+				break
+			}
+			if _, exists := seenFailureChildren[failure.ChildID]; exists {
+				problems = append(problems, "persisted fan-out failure child is duplicated")
+				break
+			}
+			seenFailureChildren[failure.ChildID] = struct{}{}
+		}
 	}
 	if err := r.State.Validate(graph); err != nil {
 		problems = append(problems, err.Error())
@@ -251,6 +358,16 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 				strings.TrimSpace(r.Waiting.CorrelationID) == "" || r.Waiting.StartedAt.IsZero() || r.Waiting.Deadline.IsZero() {
 				problems = append(problems, "delegation outcome wait requires exact child, delegation, delivery, command, correlation, and start identity")
 			}
+			if (r.Waiting.DeliveryAttemptID == "") != (r.Waiting.AttemptID == "") {
+				problems = append(problems, "delegation outcome retry identity must be complete")
+			}
+			if r.Waiting.AttemptID != "" && (r.Retry == nil || r.Retry.AttemptID != r.Waiting.AttemptID ||
+				r.Waiting.DeliveryAttemptID != fmt.Sprintf("%s:delivery:%d", r.ActiveExecutionKey, r.Waiting.DeliveryNumber) ||
+				r.Waiting.DeliveryKey != fmt.Sprintf("%s:%d", r.Waiting.DelegationID, r.Waiting.DeliveryNumber) ||
+				r.Waiting.CommandEventID != event.CommandEventID(r.Waiting.DeliveryKey) ||
+				r.Waiting.CorrelationID != fmt.Sprintf("%s:%s:delivery:%d", r.State.RunID, r.ActiveExecutionKey, r.Waiting.DeliveryNumber)) {
+				problems = append(problems, "delegation outcome retry identity does not match active role visit")
+			}
 		}
 		if r.Waiting != nil && r.Waiting.Kind == "delegation_join" {
 			if r.DelegationJoin == nil {
@@ -263,6 +380,9 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 			if r.ApprovedTask.Role != r.State.CurrentRole || len(r.ApprovedTask.Proposals) == 0 {
 				problems = append(problems, "approved_task must belong to the current role and contain proposals")
 			}
+			if a := r.ApprovedTask.FanOutAdoption; a != nil && !validFanOutAdoptionSource(*a, r.State, graph) {
+				problems = append(problems, "approved_task fan-out adoption source scope is invalid")
+			}
 			for _, proposal := range r.ApprovedTask.Proposals {
 				if strings.TrimSpace(proposal.ProposalID) == "" || strings.TrimSpace(proposal.ApprovalID) == "" ||
 					proposal.ApplyKey != proposalApplyKey(r.State.RunID, proposal.ProposalID) ||
@@ -270,11 +390,31 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 					problems = append(problems, "approved_task contains an invalid proposal checkpoint")
 					break
 				}
+				if result := proposal.Result; result != nil && result.ReconcileCode != "" &&
+					(!validProposalReconcileCode(result.ReconcileCode) || result.ObservedTree != "" && !validGitTreeID(result.ObservedTree)) {
+					problems = append(problems, "approved_task contains an invalid reconciliation diagnostic")
+					break
+				}
 			}
 		}
 	case CheckpointTerminal:
 		if !r.State.Status.Terminal() {
 			problems = append(problems, "terminal checkpoint requires terminal run state")
+		}
+	}
+	if a := r.PendingFanOutAdoption; a != nil {
+		if r.ApprovedTask != nil || !validFanOutAdoptionSource(*a, r.State, graph) ||
+			(a.ExpectedRole != r.State.CurrentRole && r.State.CurrentRole != a.ParentRole) {
+			problems = append(problems, "pending fan-out adoption does not match the active or immediate successor role")
+		}
+		switch r.Phase {
+		case CheckpointTransitionPending, CheckpointPendingRole, CheckpointRoleRunning:
+		case CheckpointWaiting:
+			if r.Waiting == nil || r.Waiting.Kind != "operator_pause" {
+				problems = append(problems, "pending fan-out adoption may wait only at an operator pause")
+			}
+		default:
+			problems = append(problems, "pending fan-out adoption is not at a recoverable role boundary")
 		}
 	}
 	if r.DelegationJoin != nil && (r.Phase != CheckpointWaiting || r.Waiting == nil || r.Waiting.Kind != "delegation_join") {
@@ -329,6 +469,28 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 	return nil
 }
 
+func validFanOutAdoptionSource(a FanOutAdoptionState, state RunState, graph *CompiledGraph) bool {
+	developerNodeID, hasDeveloperNode := graph.NodeIDForRole(RoleDeveloper)
+	return a.RunID == state.RunID && a.Task == state.CurrentTask && a.WorkflowID == state.WorkflowID &&
+		a.WorkflowFingerprint != "" && a.WorkflowFingerprint == state.WorkflowFingerprint &&
+		a.WorkspaceID != "" && a.WorkspaceID == state.WorkspaceID && a.ParentRole == RolePlanner &&
+		a.ParentVisit > 0 && a.ParentExecutionKey == roleExecutionKey(state.RunID, a.ParentRole, a.ParentVisit) &&
+		a.JoinID == "join:"+a.ParentExecutionKey &&
+		a.ChildID == a.Task.ID+":"+string(FanOutImplementation) &&
+		a.ChildExecutionKey == a.ParentExecutionKey+":fanout:"+string(FanOutImplementation) &&
+		a.DelegationID == "graph:join:"+a.ParentExecutionKey+":"+string(FanOutImplementation) &&
+		a.DeliveryNumber >= 0 && a.DeliveryKey == fmt.Sprintf("%s:%d", a.DelegationID, a.DeliveryNumber) &&
+		a.DeliveryAttemptID == fmt.Sprintf("%s:delivery:%d", a.ChildExecutionKey, a.DeliveryNumber) &&
+		a.AttemptID == retryAttemptID(a.ChildExecutionKey, a.AttemptNumber) && a.AttemptNumber > 0 &&
+		a.MaxRecoveries >= 0 && a.RecoveryNumber >= 0 && a.RecoveryNumber <= a.MaxRecoveries &&
+		a.AttemptNumber == a.RecoveryNumber+1 && a.AttemptNumber <= a.MaxRecoveries+1 &&
+		a.DeliveryNumber <= a.RecoveryNumber &&
+		a.CommandEventID == event.CommandEventID(a.DeliveryKey) &&
+		a.CorrelationID == fmt.Sprintf("%s:%s:delivery:%d", state.RunID, a.ChildExecutionKey, a.DeliveryNumber) && a.ExpectedRole == RoleDeveloper && hasDeveloperNode &&
+		a.ExpectedNodeID == developerNodeID && a.ExpectedVisit > 0 &&
+		sameProposalSet(a.Proposals, a.Result.Proposals)
+}
+
 func (j DelegationJoinState) Validate(runID string, currentRole Role) error {
 	if strings.TrimSpace(j.JoinID) == "" || strings.TrimSpace(j.ParentExecutionKey) == "" ||
 		j.ParentRole != currentRole || j.ParentStartedAt.IsZero() || j.ParentFinishedAt.IsZero() ||
@@ -367,6 +529,28 @@ func (j DelegationJoinState) Validate(runID string, currentRole Role) error {
 		}
 		if child.Result != nil && child.Result.FanOut != nil {
 			return fmt.Errorf("delegation join child %q cannot nest a fan-out plan", child.ChildID)
+		}
+		if child.TerminalFailure != nil {
+			failure := child.TerminalFailure
+			if !child.Status.Terminal() || !validTerminalRoleFailure(child.Role, *failure) ||
+				(child.Retry != nil && (failure.AttemptID != child.Retry.AttemptID || failure.RecoveryNumber != child.Retry.RecoveryNumber || failure.MaxRecoveries != child.Retry.MaxRecoveries)) {
+				return fmt.Errorf("delegation join child %q has invalid terminal failure summary", child.ChildID)
+			}
+		}
+		if child.Retry != nil {
+			state := child.Retry
+			if state.Role != child.Role || state.ExecutionKey != child.ExecutionKey || state.VisitID != child.ExecutionKey ||
+				state.AttemptID != retryAttemptID(state.VisitID, state.Number) || state.Number != state.RecoveryNumber+1 ||
+				state.RecoveryNumber < 0 || state.MaxRecoveries < 0 || state.MaxRecoveries > maxRoleRecoveryRetries ||
+				state.RecoveryNumber > state.MaxRecoveries || child.DeliveryAttemptID != fmt.Sprintf("%s:delivery:%d", child.ExecutionKey, child.DeliveryNumber) ||
+				child.DeliveryNumber < 0 || child.DeliveryKey != fmt.Sprintf("%s:%d", child.DelegationID, child.DeliveryNumber) ||
+				child.CommandEventID != event.CommandEventID(child.DeliveryKey) ||
+				child.CorrelationID != fmt.Sprintf("%s:%s:delivery:%d", runID, child.ExecutionKey, child.DeliveryNumber) {
+				return fmt.Errorf("delegation join child %q retry identity or counters are invalid", child.ChildID)
+			}
+			if len(state.UnsafeMutationIDs) > 128 || len(state.ProvenNoEffectIDs) > 128 || len(state.Progress) > 24 || len(state.Corrections) > 16 || len(state.Observations) > 64 {
+				return fmt.Errorf("delegation join child %q retry ledger exceeds its bound", child.ChildID)
+			}
 		}
 	}
 	return nil

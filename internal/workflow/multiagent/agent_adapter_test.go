@@ -101,6 +101,27 @@ func TestAgentRoleRunnerBuildsGovernedExecutionRequest(t *testing.T) {
 	}
 }
 
+func TestAgentRoleRunnerIncludesSafeSchemaCorrectionInProviderPrompt(t *testing.T) {
+	const feedback = "Field handoff must be a JSON object, a concise JSON string summary, or null. Match its type and structure to the required role schema, then return exactly one JSON object."
+	var captured AgentExecutionRequest
+	runner := newAdapterForTest(t, agentExecutorFunc(func(_ context.Context, request AgentExecutionRequest) (AgentExecutionResult, error) {
+		captured = request
+		return AgentExecutionResult{Output: `{"schema_version":1,"decision":"approved","findings":[],"evidence":[]}`}, nil
+	}), nil, nil)
+	request := adapterRoleRequest(RoleReviewer)
+	request.RecoveryFeedback = feedback
+	if _, err := runner.RunRole(context.Background(), request); err != nil {
+		t.Fatalf("run reviewer role: %v", err)
+	}
+	if !strings.Contains(captured.Prompt, "RECOVERY CORRECTION: "+feedback) {
+		t.Fatalf("provider prompt omitted safe correction feedback")
+	}
+	if !strings.Contains(captured.FinalResponseContract, `"handoff":{"objective":"...","reason":"..."`) ||
+		!strings.Contains(captured.FinalResponseContract, "Omit handoff when approved") {
+		t.Fatalf("reviewer contract has no matching handoff object example/omit rule")
+	}
+}
+
 func TestAgentRoleRunnerSetsFinalizationPrerequisiteOnlyWithProposalResolver(t *testing.T) {
 	for _, active := range []bool{false, true} {
 		t.Run(fmt.Sprintf("proposal_resolver_%t", active), func(t *testing.T) {
@@ -145,7 +166,7 @@ func TestAgentRoleRunnerPropagatesCanonicalFinalResponseContract(t *testing.T) {
 				return AgentExecutionResult{}, errors.New("stop after capture")
 			}), nil, nil)
 			_, _ = runner.RunRole(context.Background(), adapterRoleRequest(role))
-			want, err := roleSchemaInstruction(role)
+			want, err := roleSchemaInstructionForRequest(adapterRoleRequest(role))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -153,6 +174,39 @@ func TestAgentRoleRunnerPropagatesCanonicalFinalResponseContract(t *testing.T) {
 				t.Fatalf("contract=%q, want canonical %q", captured.FinalResponseContract, want)
 			}
 		})
+	}
+}
+
+func TestAgentRoleRunnerAcceptsDescriptiveReviewerHandoffAndKeepsRoutingInGraph(t *testing.T) {
+	runner := newAdapterForTest(t, agentExecutorFunc(func(_ context.Context, _ AgentExecutionRequest) (AgentExecutionResult, error) {
+		return AgentExecutionResult{Output: `{"schema_version":1,"decision":"changes_requested","findings":[],"required_corrections":["Fix the reported issue"],"handoff":"Please fix the reported issue"}`}, nil
+	}), nil, nil)
+	result, err := runner.RunRole(context.Background(), adapterRoleRequest(RoleReviewer))
+	if err != nil {
+		t.Fatalf("run reviewer: %v", err)
+	}
+	if result.Outcome != OutcomeChangesRequested || result.OutgoingHandoff == nil || result.OutgoingHandoff.Objective != "Please fix the reported issue" {
+		t.Fatalf("review result = %#v", result)
+	}
+	graph, err := CompatAdaptDefinition(DefaultReferenceDefinition())
+	if err != nil {
+		t.Fatalf("compile canonical graph: %v", err)
+	}
+	transition, err := graph.Resolve(RoleReviewer, result.Outcome)
+	if err != nil || transition.To != RoleDeveloper {
+		t.Fatalf("reviewer routing = %#v, err=%v; want compiled Developer edge", transition, err)
+	}
+	if result.OutgoingHandoff.Objective == string(RoleDeveloper) {
+		t.Fatal("descriptive handoff unexpectedly supplied routing authority")
+	}
+}
+
+func TestAgentRoleRunnerRejectsDescriptiveHandoffOnApprovedReview(t *testing.T) {
+	runner := newAdapterForTest(t, agentExecutorFunc(func(_ context.Context, _ AgentExecutionRequest) (AgentExecutionResult, error) {
+		return AgentExecutionResult{Output: `{"schema_version":1,"decision":"approved","findings":[],"required_corrections":[],"handoff":"Do more work"}`}, nil
+	}), nil, nil)
+	if _, err := runner.RunRole(context.Background(), adapterRoleRequest(RoleReviewer)); err == nil {
+		t.Fatalf("approved review with descriptive handoff error = %v", err)
 	}
 }
 
@@ -171,6 +225,43 @@ func TestPlannerContractRequiresStringListElements(t *testing.T) {
 	}
 	if strings.Contains(correction.Feedback, "owner") || strings.Contains(correction.Feedback, "developer") {
 		t.Fatalf("feedback contains raw response details: %q", correction.Feedback)
+	}
+}
+
+func TestPlannerFanOutContractIsCapabilityGated(t *testing.T) {
+	request := adapterRoleRequest(RolePlanner)
+	without, err := BuildRolePrompt(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(without, `"fan_out"`) {
+		t.Fatal("planner prompt advertised fan-out without trusted runtime capability")
+	}
+	request.FanOutAvailable = true
+	with, err := BuildRolePrompt(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{`"fan_out"`, `"research","role":"planner"`, `"implementation","role":"developer"`, `"review","role":"reviewer"`, "omit for a simple plan"} {
+		if !strings.Contains(with, required) {
+			t.Errorf("capable planner prompt missing %q", required)
+		}
+	}
+}
+
+func TestAgentRoleRunnerRejectsFanOutWithoutTrustedCapability(t *testing.T) {
+	output := `{"schema_version":1,"understanding":"bounded parallel work","implementation_plan":["research","implement","review"],"task_breakdown":["three lanes"],"acceptance_criteria":["all lanes complete"],"risks":[],"assumptions":[],"fan_out":{"tasks":[{"lane":"research","role":"planner","description":"research"},{"lane":"implementation","role":"developer","description":"implement"},{"lane":"review","role":"reviewer","description":"review"}]},"handoff":{"objective":"execute","reason":"plan ready"}}`
+	runner := newAdapterForTest(t, agentExecutorFunc(func(context.Context, AgentExecutionRequest) (AgentExecutionResult, error) {
+		return AgentExecutionResult{Output: output, LocalIterations: 1}, nil
+	}), nil, nil)
+	request := adapterRoleRequest(RolePlanner)
+	if _, err := runner.RunRole(context.Background(), request); err == nil || !strings.Contains(err.Error(), "fan-out is unavailable") {
+		t.Fatalf("fan-out without capability error=%v", err)
+	}
+	request.FanOutAvailable = true
+	result, err := runner.RunRole(context.Background(), request)
+	if err != nil || result.FanOut == nil {
+		t.Fatalf("capable planner fan-out result=%#v err=%v", result, err)
 	}
 }
 
@@ -472,21 +563,25 @@ func TestAgentRoleRunnerEmitsValidationLifecycleEvents(t *testing.T) {
 	runner := newAdapterForTest(t, agentExecutorFunc(func(context.Context, AgentExecutionRequest) (AgentExecutionResult, error) {
 		return AgentExecutionResult{Output: testerPassedJSON(), LocalIterations: 1}, nil
 	}), ValidationRunnerFunc(func(context.Context, string, string) (*validation.Result, error) {
-		return &validation.Result{Profile: "go_test_all", Status: "passed"}, nil
+		return &validation.Result{Profile: "factory_pytest_selected_v1", Status: "passed", ExitCode: 0}, nil
 	}), nil)
 	sink := &captureEventSink{}
 	runner.SetEventSink(sink)
 	request := adapterRoleRequest(RoleTester)
-	request.RoleConfig.ValidationProfiles = []string{"go_test_all"}
-	if _, err := runner.RunRole(context.Background(), request); err != nil {
+	request.RoleConfig.ValidationProfiles = []string{"factory_pytest_selected_v1"}
+	result, err := runner.RunRole(context.Background(), request)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if result.Metadata.ValidationStatus != "passed" || len(result.OutgoingHandoff.ValidationResults) != 1 || result.OutgoingHandoff.ValidationResults[0].Profile != "factory_pytest_selected_v1" {
+		t.Fatalf("host validation evidence was not authoritative: %#v", result.OutgoingHandoff.ValidationResults)
 	}
 	events := sink.snapshot()
 	if len(events) != 2 || events[0].Type != event.EventValidationStarted || events[1].Type != event.EventValidationCompleted {
 		t.Fatalf("validation events = %#v", events)
 	}
 	for _, evt := range events {
-		if evt.CorrelationID != request.Run.RunID || evt.Payload["profile"] != "go_test_all" {
+		if evt.CorrelationID != request.Run.RunID || evt.Payload["profile"] != "factory_pytest_selected_v1" {
 			t.Fatalf("uncorrelated validation event: %#v", evt)
 		}
 	}

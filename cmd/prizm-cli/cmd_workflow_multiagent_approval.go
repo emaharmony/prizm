@@ -152,19 +152,31 @@ func (l approvalProposalLifecycle) Reconcile(ctx context.Context, op multiagent.
 	switch item.MutationType {
 	case approval.MutationApplyPatch:
 		if item.PatchPlan == nil {
+			result.ReconcileCode = multiagent.ProposalReconcilePlanMissing
 			return multiagent.ProposalAmbiguous, result, nil
 		}
 		tree, treeErr := gitx.WorktreeTree(ctx, l.workspace)
 		if treeErr != nil {
+			if ctx.Err() != nil {
+				result.ReconcileCode = multiagent.ProposalReconcileContextCancelled
+			} else {
+				result.ReconcileCode = multiagent.ProposalReconcileInspectFailed
+			}
 			return multiagent.ProposalAmbiguous, result, nil
 		}
 		switch tree {
 		case item.PatchPlan.ExpectedTree:
 			result.Success, result.Message = true, "approved patch tree present"
+			result.ReconcileCode = multiagent.ProposalReconcileExpectedTree
+			result.ObservedTree = tree
 			return multiagent.ProposalApplied, l.withDiffEvidence(op, result), nil
 		case item.PatchPlan.BaseTree:
+			result.ReconcileCode = multiagent.ProposalReconcileBaseTree
+			result.ObservedTree = tree
 			return multiagent.ProposalNotApplied, result, nil
 		default:
+			result.ReconcileCode = multiagent.ProposalReconcileTreeMismatch
+			result.ObservedTree = tree
 			return multiagent.ProposalAmbiguous, result, nil
 		}
 	case approval.MutationWriteFile:

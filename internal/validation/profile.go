@@ -10,13 +10,13 @@ import (
 
 // Profile defines a validation profile with a safe, hardcoded command.
 type Profile struct {
-	Name             string   `json:"name"`
-	Description      string   `json:"description"`
-	Command          string   `json:"command"`
-	Args             []string `json:"args"`
-	WorkingDir       string   `json:"working_dir"`
-	TimeoutSeconds   int      `json:"timeout_seconds"`
-	AllowedExitCodes []int    `json:"allowed_exit_codes,omitempty"`
+	Name             string   `json:"name" yaml:"name"`
+	Description      string   `json:"description" yaml:"description"`
+	Command          string   `json:"command" yaml:"command"`
+	Args             []string `json:"args" yaml:"args"`
+	WorkingDir       string   `json:"working_dir" yaml:"working_dir"`
+	TimeoutSeconds   int      `json:"timeout_seconds" yaml:"timeout_seconds"`
+	AllowedExitCodes []int    `json:"allowed_exit_codes,omitempty" yaml:"allowed_exit_codes"`
 }
 
 // Validate checks that the profile has required fields.

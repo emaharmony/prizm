@@ -118,7 +118,7 @@ func (r *AgentRoleRunner) RunRole(
 	if err != nil {
 		return RoleRunResult{}, err
 	}
-	finalResponseContract, err := roleSchemaInstruction(request.Run.CurrentRole)
+	finalResponseContract, err := roleSchemaInstructionForRequest(request)
 	if err != nil {
 		return RoleRunResult{}, err
 	}
@@ -230,6 +230,9 @@ func (r *AgentRoleRunner) RunRole(
 	}
 	if err != nil {
 		return RoleRunResult{}, err
+	}
+	if decoded.FanOut != nil && (!request.FanOutAvailable || request.Run.CurrentRole != RolePlanner) {
+		return RoleRunResult{}, &StructuredOutputError{Role: request.Run.CurrentRole, Cause: errors.New("fan-out is unavailable for this role visit")}
 	}
 	finishedAt := r.now().UTC()
 	validationStatus := "not_required"
@@ -411,7 +414,7 @@ func BuildRolePrompt(request RoleRunRequest) (string, error) {
 		}
 		reflectionJSON = string(data)
 	}
-	schema, err := roleSchemaInstruction(request.Run.CurrentRole)
+	schema, err := roleSchemaInstructionForRequest(request)
 	if err != nil {
 		return "", err
 	}
@@ -600,6 +603,26 @@ func roleSchemaInstruction(role Role) (string, error) {
 	default:
 		return "", fmt.Errorf("multiagent: unsupported role %q", role)
 	}
+}
+
+func roleSchemaInstructionForRequest(request RoleRunRequest) (string, error) {
+	schema, err := roleSchemaInstruction(request.Run.CurrentRole)
+	if err != nil {
+		return schema, err
+	}
+	if request.Run.CurrentRole == RolePlanner && request.FanOutAvailable {
+		schema = strings.Replace(schema,
+			`"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"file","uri":"path"}],"unresolved_issues":[{"id":"issue-1","summary":"...","blocking":false}],"notes":"..."}}.`,
+			`"fan_out":{"tasks":[{"lane":"research","role":"planner","description":"..."},{"lane":"implementation","role":"developer","description":"..."},{"lane":"review","role":"reviewer","description":"..."}]}, optional when three independent lanes are useful; omit for a simple plan. `+
+				`"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"file","uri":"path"}],"unresolved_issues":[{"id":"issue-1","summary":"...","blocking":false}],"notes":"..."}}.`, 1)
+	}
+	switch request.Run.CurrentRole {
+	case RoleReviewer:
+		schema += ` For changes_requested, handoff may be this object or a concise descriptive JSON string; omit handoff when approved. Prizm derives routing from the compiled graph.`
+	case RolePlanner, RoleDeveloper, RoleTester:
+		schema += ` Handoff may be this object or a concise descriptive JSON string. Prizm derives routing from the compiled graph.`
+	}
+	return schema, nil
 }
 
 func mergeArtifacts(primary []ArtifactRef, additional []ArtifactRef) []ArtifactRef {

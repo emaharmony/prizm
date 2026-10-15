@@ -7,8 +7,12 @@ func init() {
 	Schemas[EventMultiAgentRunCreated] = Schema{
 		Required: []string{"run_id", "workflow_id", "status"},
 	}
+	Schemas[EventProposalApplyFailed] = Schema{
+		Required: []string{"run_id", "proposal_id", "approval_id", "apply_key", "execution_key", "workspace_id", "reason"},
+		Optional: []string{"reconcile_code", "observed_tree"},
+	}
 	for _, eventType := range []string{EventMultiAgentFanoutStarted, EventMultiAgentFanoutChildDispatched, EventMultiAgentFanoutChildCompleted, EventMultiAgentFanoutJoined} {
-		Schemas[eventType] = Schema{Required: []string{"run_id", "join_id"}, Optional: []string{"lane", "role", "status", "reason", "child_id", "delivery_key"}}
+		Schemas[eventType] = Schema{Required: []string{"run_id", "join_id"}, Optional: []string{"lane", "role", "status", "reason", "child_id", "delivery_key", "child_summaries", "attempt_id", "failure_class", "failure_code", "failure_reason", "retryable", "recovery_number", "max_recoveries", "correction_field", "expected_type", "allowed_values"}}
 	}
 	Schemas[EventMultiAgentRetryScheduled] = Schema{Required: []string{"run_id", "workflow_id", "role", "execution_key", "visit_id", "attempt_id", "attempt", "recovery_number", "next_at", "failure_class", "failure_code"}}
 	Schemas[EventMultiAgentRetryAttemptStarted] = Schema{Required: []string{"run_id", "workflow_id", "role", "execution_key", "visit_id", "attempt_id", "attempt", "recovery_number"}}
@@ -100,6 +104,7 @@ func init() {
 	}
 	Schemas[EventMultiAgentRunFailed] = Schema{
 		Required: []string{"run_id", "workflow_id", "status", "terminal_condition", "reason"},
+		Optional: []string{"attempt_id", "attempt", "recovery_number", "max_recoveries", "failure_class", "failure_code", "failure_reason", "retryable", "retry_exhausted"},
 	}
 	Schemas[EventMultiAgentRunCancelled] = Schema{
 		Required: []string{"run_id", "workflow_id", "status", "terminal_condition", "reason"},

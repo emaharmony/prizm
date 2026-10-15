@@ -61,6 +61,23 @@ const (
 	EventReflectionFailed                = "prizm.reflection.failed"
 )
 
+// MultiAgentFanoutChildSummary is bounded execution evidence for one joined
+// delegated role. It intentionally excludes task content and model output.
+type MultiAgentFanoutChildSummary struct {
+	ChildID      string     `json:"child_id"`
+	Lane         string     `json:"lane"`
+	Role         string     `json:"role"`
+	ExecutionKey string     `json:"execution_key"`
+	DeliveryKey  string     `json:"delivery_key"`
+	Status       string     `json:"status"`
+	Provider     string     `json:"provider,omitempty"`
+	Model        string     `json:"model,omitempty"`
+	TokenUsage   TokenUsage `json:"token_usage"`
+	StartedAt    string     `json:"started_at,omitempty"`
+	FinishedAt   string     `json:"finished_at,omitempty"`
+	DurationMs   int64      `json:"duration_ms,omitempty"`
+}
+
 // MultiAgentRunEventPayload is shared by run lifecycle events.
 type MultiAgentRunEventPayload struct {
 	RunID             string `json:"run_id"`

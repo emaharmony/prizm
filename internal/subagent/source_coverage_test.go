@@ -3,6 +3,7 @@ package subagent
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,29 @@ import (
 
 	"github.com/emaharmony/prizm/internal/gitx"
 )
+
+func TestMalformedProposalDiffIsCorrectableButCoverageScopeIsNot(t *testing.T) {
+	coverage := newSourceCoverage(t.TempDir())
+	if _, err := coverage.missingPatchContext("--- a/x.txt\n+++ b/x.txt\n@@ nope @@\n-old\n+new\n"); err == nil {
+		t.Fatal("malformed diff accepted")
+	} else {
+		failure := proposalCoverageFailure(err)
+		if failure.Code != "invalid_proposal_diff" {
+			t.Fatalf("malformed diff failure code=%q", failure.Code)
+		}
+		var typed malformedProposalDiffError
+		if !errors.As(err, &typed) {
+			t.Fatalf("parser boundary lost typed category: %T", err)
+		}
+	}
+
+	patch := "diff --git a/missing.txt b/missing.txt\n--- a/missing.txt\n+++ b/missing.txt\n@@ -1 +1 @@\n-old\n+new\n"
+	if _, err := coverage.missingPatchContext(patch); err == nil {
+		t.Fatal("missing source path accepted")
+	} else if failure := proposalCoverageFailure(err); failure.Code != "invalid_proposal_context" {
+		t.Fatalf("source scope failure became corrective: %q", failure.Code)
+	}
+}
 
 func TestMissingPatchContextCannotBeCoveredThroughRemovedHeaderLikeLine(t *testing.T) {
 	root := t.TempDir()
