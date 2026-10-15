@@ -1876,6 +1876,7 @@ func (r *DurableRuntime) persistRoleFailure(
 	record.Failure.Message = failureCode
 	record.Failure.At = r.now().UTC()
 	record.PendingTransition = nil
+	record.Waiting = nil
 	record, checkpointErr := r.checkpoint(ctx, record)
 	if checkpointErr != nil {
 		return record, checkpointErr

@@ -94,3 +94,20 @@ func TestBuildDashboardSnapshotEventCursorEmptyWithoutEvents(t *testing.T) {
 		t.Errorf("waiting = %+v, want nil when record.Waiting is nil", snapshot.Waiting)
 	}
 }
+
+func TestBuildDashboardSnapshotHidesStaleWaitingOnTerminalRun(t *testing.T) {
+	state := validRunState()
+	state.Status = RunStatusFailed
+	record := DurableRun{
+		SchemaVersion: DurableRunSchemaVersion,
+		Revision:      6,
+		State:         state,
+		Phase:         CheckpointTerminal,
+		Waiting:       &WaitingState{Kind: "proposal_approval", Reason: "legacy stale approval"},
+	}
+
+	snapshot := BuildDashboardSnapshot(validDefinition(), record, nil)
+	if snapshot.Waiting != nil {
+		t.Fatalf("terminal snapshot exposed waiting state: %+v", snapshot.Waiting)
+	}
+}

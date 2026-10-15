@@ -2005,3 +2005,29 @@ patches that were formerly auto-recounted; the bounded typed correction path is
 the recovery mechanism. Coordinator should review the local commit and run a
 fresh separately authorized served acceptance covering correction, approval,
 single apply, validation, and resume. R1 remains incomplete.
+
+### R1 terminal waiting-state cleanup (2026-10-15)
+
+**Roadmap ID:** R1. Confirmed `persistRoleFailure` persisted terminal failures
+while retaining `record.Waiting`, allowing a denied proposal's terminal record
+to carry a stale `proposal_approval` pointer. Terminal failure persistence now
+clears `Waiting`; dashboard snapshots also omit waiting metadata for terminal
+records so older persisted records cannot expose stale approval controls. Kept
+`DurableRun.Validate` backward-compatible rather than rejecting old terminal
+records with waiting metadata.
+
+**Verification:** deterministic tests confirm a denied proposal is checkpointed
+terminal without waiting metadata and a legacy terminal record's dashboard
+snapshot hides the stale approval wait. The focused tests passed. Initial full
+package testing hit two Windows temp cleanup denials for Git object files;
+rerunning with elevated access and Go/test temp paths under
+`D:\_projects_\prism\.tmp` passed `go test ./internal/workflow/multiagent
+-count=1`. The same setup passed uncached `go test -count=1 ./...`; `go build
+./...`, `go vet ./...`, `staticcheck ./...`, and `git diff --check` also passed.
+No live run, pending proposal, service, or remote PR was accessed; no allowed
+roots or package boundaries changed.
+
+**Risk/next action:** older stored records retain their raw stale pointer until
+rewritten, but read models suppress it and backend terminal guards remain in
+place. Coordinator review is needed; R1 acceptance still requires a fresh,
+separately authorized served run.

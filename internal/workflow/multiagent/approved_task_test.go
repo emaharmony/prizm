@@ -765,6 +765,13 @@ func TestDurableApprovedTaskDenialFailsClosed(t *testing.T) {
 	if err == nil || state.Status != RunStatusFailed || len(lifecycle.applyCalls) != 0 {
 		t.Fatalf("denial state=%q calls=%d err=%v", state.Status, len(lifecycle.applyCalls), err)
 	}
+	stored, loadErr := env.store.Load(context.Background(), request.RunID)
+	if loadErr != nil {
+		t.Fatalf("load denied run: %v", loadErr)
+	}
+	if stored.Phase != CheckpointTerminal || stored.Waiting != nil {
+		t.Fatalf("denied terminal checkpoint phase=%q waiting=%+v, want no waiting state", stored.Phase, stored.Waiting)
+	}
 }
 
 func TestDurableApprovedTaskRestartReconcilesWithoutDuplicateApply(t *testing.T) {

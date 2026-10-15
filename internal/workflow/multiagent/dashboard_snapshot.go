@@ -71,6 +71,11 @@ func BuildDashboardSnapshot(definition Definition, record DurableRun, allEvents 
 		CancellationReason: record.State.CancellationReason,
 		EventCursor:        lastEventID(allEvents),
 	}
+	if record.State.Status.Terminal() {
+		// Older durable records may retain a stale wait pointer after a terminal
+		// failure. Do not expose approval or retry controls for terminal runs.
+		snapshot.Waiting = nil
+	}
 	return snapshot
 }
 

@@ -1,6 +1,6 @@
 # Prizm Plan of Action
 
-## Current Handoff: R1 validation failure feedback (2026-10-15)
+## Current Handoff: R1 validation and terminal-state hardening (2026-10-15)
 
 **Roadmap:** R1 remains incomplete. The source-equivalent scratch branch is
 based on `d936950f355b384c1b094746bb9b45eae78f5bae`. Nonzero validation results
@@ -10,9 +10,15 @@ Developer's structured incoming context; safe event/report evidence also
 includes it. The summary omits raw output, prompt/private-reasoning markers,
 structured dumps, and common credential forms. No package boundary changed.
 
-Focused validation and multiagent tests passed. Repository-wide build, vet,
-uncached tests, and Staticcheck passed with Go cache/temp paths under the D:
-project temp root (using the existing `r1g` module cache). The local Ollama
+Terminal failure persistence now also clears stale waiting metadata, and the
+dashboard read model suppresses waiting controls for terminal records, including
+legacy records. `DurableRun.Validate` remains permissive for terminal records
+with old waiting metadata to preserve compatibility. Focused denial and
+dashboard regressions passed. The first full package run encountered Windows
+cleanup denials for temporary Git objects; rerunning with elevated access and
+Go/test temp paths under `D:\_projects_\prism\.tmp` passed the full multiagent
+package suite and uncached repository-wide tests. Build, vet, Staticcheck, and
+`git diff --check` also passed. The local Ollama
 context scout was unavailable because the localhost socket was denied; targeted
 file discovery and inspection followed the documented fallback. No live run,
 pending proposal, service, or remote PR was accessed.
