@@ -244,8 +244,9 @@ func TestLoopRunnerFailsWhenToolRequestedDuringFinalization(t *testing.T) {
 	}}
 	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 3, MaxTokens: 1200, FinalReplyReserveTokens: 100})
 	_, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T-ignore-reserve"}, AgentRuntime{AgentID: "planner"})
-	if err == nil || !strings.Contains(err.Error(), "did not return a final answer during its reserved finalization turn") {
-		t.Fatalf("err=%v", err)
+	var safe *SafeFailureError
+	if !errors.As(err, &safe) || safe.Code != "invalid_final_schema" {
+		t.Fatalf("error=%v, want safe invalid_final_schema failure", err)
 	}
 	if len(backend.toolCalls) != 1 || backend.toolCalls[0] != "read_file" {
 		t.Fatalf("unexpected tool executions across finalization: %v", backend.toolCalls)

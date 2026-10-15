@@ -315,3 +315,31 @@ The latest weak-proposal run `run_8319183840de58c95c36763e94` was denied through
 The proof-v4 run `run_54b6a3649a7ab3e9cadd1301d0` passed the reviewed fan-out and applied its sole approved patch once. The configured `factory_pytest_selected_recovery_v1` command ran in the run-owned worktree and returned exit 1: 18 tests passed and the new blocked-resume test failed with `NameError` because `BLOCKED` was used without importing it from `production.evidence`. This is a test-source defect, not a basetemp setup failure. The tester recorded `tests_failed`; developer visit 2 is waiting on the canonical delivered command, with no terminal outcome or later correlated role/tool event observed as of 2026-10-14 21:06Z. The run, applied tree, and validation result remain unchanged; do not rerun pytest manually or reuse this approval. Worker accepted status is not evidence that `RunRole` began: the current worker records acceptance before runtime construction and has no persisted start/elapsed marker. R1 is incomplete; PR #91 remains draft.
 
 **Next action:** continue observing only the current developer visit until its canonical result/deadline. Review any new proposal for the missing import and the original required assertions before another approval. Add a bounded worker-stage trace as a separately reviewed follow-up; do not infer active execution from accepted status alone.
+
+### R1 Tester outcome and reserved-final tool recovery follow-up (2026-10-15)
+
+The follow-up run `run_01M505NB4QXFHZFVEMJVSVGF8F` is terminal and unchanged.
+Tester completed with `validation_status=passed` and `LastOutcome=tests_failed`,
+so the declared `tests_failed -> developer` edge correctly scheduled Developer
+visit 2. The strict Tester contract permits a failed result when another
+reported check is nonpassing and has failure evidence or a reproduction;
+configured profile success alone does not override the Tester result.
+
+The reserved-final guard now reports a rejected tool request as the allowlisted
+`invalid_final_schema` safe failure. The request is rejected before execution,
+and recovery stays within the shared durable role limit. Empty or unclassified
+final responses still fail closed. Run metadata does not identify the response
+shape that caused its generic terminal failure; raw provider content remains
+uninspected.
+
+**Evidence:** focused `go test` passed for the reserved-final tool request,
+empty final response, parser-classified reserved-final failures, durable
+recovery scheduling, initial-plus-ten exhaustion, retry classification, and
+cancellation. On the exact worktree at HEAD `4097d5a5f43b7f7086650391f41e494bd29bef05`,
+`go build ./...`, `go vet ./...`, uncached `go test -count=1 ./...`,
+`staticcheck ./...`, and final `git diff --check` all exited 0. These tests do
+not identify the response shape in the immutable provider run.
+
+**Next action:** coordinator reviews the minimal source/test and documentation
+diff before any commit or publication. R1 served acceptance remains incomplete;
+do not resume the terminal run.

@@ -1915,3 +1915,38 @@ push was made.
 nonretryable, and all recoveries still consume the shared role limit. Review the
 four-file diff, then use a fresh separately authorized served R1 run; do not
 resume the terminal run. R1 acceptance remains incomplete.
+
+### R1 Tester outcome and reserved-final tool recovery follow-up (2026-10-15)
+
+**Roadmap ID:** R1. The immutable run `run_01M505NB4QXFHZFVEMJVSVGF8F` is
+terminal and was not resumed. Allowlisted run metadata shows Tester completed
+with `validation_status=passed`, `LastOutcome=tests_failed`, and transition
+`Tester/tests_failed -> Developer`; this matches the default graph. The strict
+Tester contract allows a failed result when at least one reported check is
+nonpassing and failure evidence or a reproduction is present. A passing
+configured validation profile does not independently force the overall Tester
+outcome to passed.
+
+Source inspection found that reserved-final tool requests were safely rejected
+before tool execution but returned a plain error. This branch now returns the
+allowlisted `invalid_final_schema` safe failure so the durable runtime may
+schedule recovery within its shared limit. Empty or unclassified final output
+remains nonretryable. The run's generic terminal metadata does not identify its
+response shape, so this code-path fix is not attributed as the proven cause of
+that specific terminal outcome. No raw model output or private reasoning was
+read or recorded.
+
+**Evidence:** deterministic coverage asserts the safe failure and that the
+reserved tool is not executed. Focused subagent and multiagent tests passed for
+reserved-final tool rejection, empty finals, parser-classified final errors,
+shared recovery scheduling, ten-recovery exhaustion, allowlist classification,
+and cancellation. On exact C worktree HEAD
+`4097d5a5f43b7f7086650391f41e494bd29bef05`, `go build ./...`, `go vet ./...`,
+uncached `go test -count=1 ./...`, and `staticcheck ./...` exited 0; final
+`git diff --check` also exited 0. Go cache and temp paths were scoped under
+`D:\_projects_\prism\.tmp\r1g`. No provider task, approval, service, or remote
+PR was changed. No commit or push occurred.
+
+**Next action:** coordinator reviews the minimal source/test and documentation
+change. Keep the immutable run preserved and plan a fresh served acceptance;
+R1 acceptance remains incomplete.

@@ -346,6 +346,12 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 			if action.CorrectionCode != "" {
 				return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: action.CorrectionCode}
 			}
+			if action.Tool != "" {
+				// A tool request is a known violation of the reserved final
+				// response contract. It is safe to retry the role visit because
+				// this branch rejects it before tool execution.
+				return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "invalid_final_schema"}
+			}
 			return usage(RunResult{Artifacts: artifacts.result()}), fmt.Errorf("task %q did not return a final answer during its reserved finalization turn", packet.TaskID)
 		}
 
