@@ -32,6 +32,7 @@ Every major feature in Prizm is assigned a stability level to set expectations f
 | Discord Adapter | **Preview** | No | `channels` config | Evaluation |
 | MCP Integration | **Experimental** | No | `mcp.enabled` | Lab only |
 | Cross-Prizm Delegation | **Experimental** | No | `bridge.enabled` | Lab only |
+| Freewill intention contracts | **Experimental** | No | `freewill.enabled` (independent from `freewill.scheduling.enabled`) | Do not enable — policy-only contracts; no runtime consumer |
 | Sub-agents | **Experimental** | No | `subagents.enabled` | Lab only |
 | Autopatch | **Experimental** | No | `autopatch.enabled` | Lab only |
 | Codex Worker | **Preview** | No | `agents.capabilities` | Evaluation |

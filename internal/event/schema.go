@@ -94,6 +94,8 @@ var Schemas = map[string]Schema{
 	"prizm.memory.capture.persisted":    {Required: []string{"memory_id", "capture_key", "project_id", "task_id"}, Optional: []string{"user_id", "duplicate"}},
 	"prizm.memory.capture.sync_pending": {Required: []string{"memory_id", "sync_key", "project_id", "task_id", "reason"}, Optional: []string{"user_id"}},
 	"prizm.memory.capture.synced":       {Required: []string{"memory_id", "primary_id", "project_id", "task_id"}, Optional: []string{"user_id"}},
+	"prizm.memory.capture.sync_retry":   {Required: []string{"memory_id", "sync_key", "project_id", "task_id", "attempt", "reason"}, Optional: []string{"user_id", "error"}},
+	"prizm.memory.capture.sync_failed":  {Required: []string{"memory_id", "sync_key", "project_id", "task_id", "reason"}, Optional: []string{"user_id"}},
 	"prizm.memory.capture.fallback":     {Required: []string{"memory_id", "reason", "project_id", "task_id"}, Optional: []string{"user_id"}},
 	"prizm.memory.superseded":           {Required: []string{"memory_id", "supersedes_id", "project_id", "task_id"}, Optional: []string{"user_id"}},
 	"prizm.memory.search.requested":     {Required: []string{"query", "limit", "project_id", "task_id"}, Optional: []string{"user_id"}},

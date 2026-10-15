@@ -712,6 +712,91 @@ composition.
 the standalone listener compatibility-only unless a production caller adopts
 it with a durable intake.
 
+## 2026-10-08 — R6 Durable Reconciliation Contract
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r6-memory-reconciliation`, based on merged staging `dca2156`
+
+- Added an `internal/memory` reconciliation consumer that startup-scans durable
+  `sync_pending` facts and receives notifications when new pending captures are
+  persisted. It reconstructs and revalidates the trusted scope against the
+  local record, uses bounded retry/backoff, and records retry or terminal facts
+  in the existing SQLite event store.
+- Terminal sync and failure facts use stable IDs derived from the sync key, so
+  duplicate consumers cannot duplicate the local terminal evidence. A remote
+  success followed by a process failure before local confirmation is safely
+  replayed only through the explicit idempotent-primary contract.
+- Serve now starts the consumer, exposes pending/error state through health,
+  and cancels it before closing its event store. Deterministic coverage proves
+  restart recovery, outage/recovery, concurrent workers, crash recovery,
+  scope mismatch rejection, two-project isolation, unsupported primary failure,
+  and retry exhaustion.
+- Inspected the current Remembrance capture API: `source_ref` is persisted but
+  has no idempotency key, lookup, uniqueness constraint, or atomic dedupe.
+  The Remembrance adapter therefore does not opt into replay; Prizm fails
+  closed instead of risking duplicate remote writes. `localhost:18790` was not
+  available for a bounded live trace.
+
+**Open risks:** R6 cannot complete a live local-to-Recall reconciliation until
+Recall exposes an atomic idempotency-key contract returning the original remote
+identifier. R1's durable event outbox and delegation gates remain open.
+
+**Next action:** add and verify Recall's idempotent ingest contract, implement
+the adapter capability, then run a live outage/recovery trace.
+
+## 2026-10-08 — R6 Durable Pending-Intent Hardening
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r6-memory-reconciliation` at `b80d96a`
+
+- Moved `sync_pending` persistence ahead of every primary-memory delivery. Initial delivery now uses the same `IdempotentPrimaryBackend` contract and stable sync key as replay, so a crash or synced-event failure after remote success replays without creating another remote record.
+- Changed reconciliation health to count only unresolved pending facts. A terminal synced or failed fact no longer leaves health reporting stale pending work, while a later pending event correctly opens a new delivery attempt.
+- Kept valid local captures pending when the primary is absent or cannot prove idempotency at serve startup. The reconciler records the availability issue but does not dead-letter memory that a later eligible backend can deliver.
+- Added deterministic coverage for pending-event failure before remote delivery, crash after remote success before synced evidence, absent-primary startup retention, non-idempotent primary retention, and terminal-aware health accounting. `go test ./internal/memory -count=1` passed.
+
+**Open risks:** The existing Recall integration still lacks an atomic idempotency-key operation. Live Recall outage/recovery and process-level startup verification remain unproven until Recall exposes that capability.
+
+**Next action:** run the full validation suite, then add the committed R6 hardening to the review branch; implement the Recall idempotency-key contract when the external API is available.
+
+## 2026-10-08 — R6 Causal Replay and Retry-Generation Repair
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r6-memory-reconciliation`, following `b80d96a`
+
+- Reconciliation now requests SQLite facts in durable insertion order. The public event query keeps its ID-cursor ordering; stores that cannot prove causal ordering fail closed for reconciliation rather than replay potentially stale intent.
+- Terminal sync and failure facts remain deterministic and idempotent, now per pending generation. A later `sync_pending` opens a new generation, clears earlier retry/backoff history, and can write its own terminal evidence.
+- Propagated terminal event-store errors through `RunOnce`, so a failed synced/failed write remains visible in reconciler health instead of being cleared by the final status update.
+- Added SQLite-backed regression coverage for pending → terminal → re-pending causal order, retry-generation reset, terminal-write health reporting, and unsupported causal-order stores. Focused memory/event tests and the full Go suite, build, vet, staticcheck, and diff checks passed.
+
+**Open risks:** The current Recall adapter still lacks an atomic idempotency-key operation, so it remains ineligible for mutation replay. A live primary outage/recovery trace is still unproven.
+
+**Next action:** implement or adopt Recall's atomic idempotency-key contract, then run and retain a live outage/recovery trace with scoped replay evidence.
+
+## 2026-10-08 — R6 Reconciliation Scale and Concurrent Retry Repair
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/r6-memory-reconciliation`, following `b40fae0`
+
+- Made retry evidence deterministic per `(sync_key, pending generation, attempt)`.
+  Concurrent workers that observe the same failed delivery now write one durable
+  retry fact, and replay counts distinct attempt values rather than raw retry
+  rows before applying the bounded retry budget.
+- Added bounded SQLite insertion-order pagination using a durable rowid cursor.
+  The public `EventStore.Query` API continues to use its documented event-ID
+  cursor. Reconciliation and health reconstruction consume all causal pages,
+  while stores unable to prove causal pagination fail closed.
+- Added regression coverage for two simultaneous failed workers and for a
+  terminal fact beyond one reconciliation page. `go build ./...`, `go vet
+  ./...`, `staticcheck ./...`, focused memory/event tests, and the full Go
+  suite pass.
+
+**Open risks:** Recall still lacks an atomic idempotency-key capture operation,
+so its current adapter cannot safely participate in remote replay. A live
+outage/recovery trace remains required.
+
+**Next action:** implement or adopt Recall's atomic idempotency contract, then
+run and retain a live outage/recovery trace with scoped replay evidence.
+
 ## 2026-10-09 — R1 Canonical Graph Delegation Safety Gate
 
 **Roadmap IDs:** R1; R4 remains dependent; R2/R6 Recall work remains parked
@@ -1049,6 +1134,74 @@ full multi-roadmap 9/10 program.
 **Next action:** run the corrected reviewer contract and restart-through-
 approval recovery as one bounded acceptance trace, then execute the same task
 in a second independent repository.
+
+## 2026-10-09 — R6 Recall Atomic Capture Contract
+
+**Roadmap IDs:** R2, R6
+
+- Paired the local reconciliation contract with Recall migration 14. The Recall
+  durable capture outbox now stores an idempotency key and payload fingerprint,
+  with a `COALESCE`-normalized unique index over owner, workspace, project,
+  repository, task, session, agent, and key. Replays with an identical payload
+  reuse the original capture and remote memory ID; a changed payload returns a
+  conflict.
+- `ScopedMemoryBackend` now implements `IdempotentPrimaryBackend` and carries
+  the stable local memory ID to Recall's `/v1/memory/ingest` API. Focused Go
+  adapter and reconciler tests pass. Direct Recall service acceptance covered
+  duplicate, restart, and concurrent duplicate delivery with one raw capture.
+
+**Open risks:** the paired Recall worktree requires its own review and its
+broken virtual environment prevented running its full pytest suite. A
+process-level Prizm-to-Recall outage/recovery trace remains required.
+
+**Next action:** review the paired API migration, then run the configured
+Prizm process against Recall through outage and restart recovery.
+
+## 2026-10-09 — R6 Process-Level Recall Outage and Restart Acceptance
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/pr86-recall-idempotency`, paired with Recall `codex/prizm-r6-capture-idempotency`
+
+- Started Recall from the installed `.venv` against a fresh SQLite database under the Recall worktree's `.tmp` directory, with embeddings, chunking, CAG, and NATS disabled for deterministic acceptance. Health returned HTTP 200 and migration 14 (`capture_idempotency`) applied.
+- A separate Go harness used Prizm's real `memory.Facade`, SQLite event store, and `remembrance.ScopedMemoryBackend`. With Recall unavailable, a formally scoped capture returned local fallback and persisted its pending intent. A fresh process reconciled it after Recall startup to one synced terminal fact.
+- Re-running reconciliation after a Recall process restart produced no duplicate remote record. A second owner/project/task scope reused the producer key but produced a distinct local and remote capture, proving scope namespacing.
+- An injected event-store failure after remote success left the local sync pending; a later process replayed the stable key and recorded one synced terminal fact. The final Recall database contained four raw captures and four distinct idempotency keys, including the duplicate and crash-replay checks.
+- Recall's `/health` endpoint remained available after restart. The test database health probe reported `fts_ok: false` after the intentionally embedding-disabled run; this is an environment/test-mode limitation and did not affect capture idempotency or reconciliation.
+
+**Verification:** process-level Go harness phases `offline`, `reconcile`, duplicate `reconcile`, `isolation`, `crash`, service restart, and post-restart replays all completed with zero unresolved pending facts and zero terminal failures. Recall reports 489 pytest tests passed and 3 skipped on the paired worktree.
+
+**Open risks:** no production data or credentials were used. The temporary harness and SQLite artifacts remain under `.tmp` and are not tracked. The FTS health warning in embedding-disabled mode should not be interpreted as a production Recall health result.
+
+**Next action:** review the paired Recall API commit and attach this trace to the PR86 handoff; do not claim the broader R6 score gate beyond the evidence recorded here.
+
+## 2026-10-09 — R6 Production Serve Composition Preflight
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/pr86-recall-idempotency`, paired with Recall `codex/prizm-r6-capture-idempotency`
+
+- Built and started the actual PR86 `prizm serve` binary in a disposable run directory with embedded NATS, a loopback health port, and a loopback API port. With Recall intentionally unavailable, startup returned healthy and logs confirmed the reconciliation consumer, local Markdown fallback, memory extraction subscription, and API all initialized.
+- The serve API exposes `GET /api/v1/memories` for retrieval, but no scoped capture endpoint or HTTP tool dispatcher. `POST /api/v1/memories` and `POST /api/v1/memories/capture` return 405, while `/api/v1/memory/capture` returns 404. The registered `MemoryWriteTool` is an internal composition object and is not reachable through the serve API.
+- The NATS extraction subscription routes to local `AutoExtractor` behavior and requires a model provider; it does not invoke the scoped `memory.Facade` reconciliation path. The retrieval endpoint also does not accept owner/project/task scope fields and its Remembrance branch uses the fixed project name `prizm`, so a serve-driven scoped search proof cannot be made from the current public route.
+
+**Verification:** serve startup and health/API status checks completed on disposable loopback ports; all route probes were sanitized and emitted status codes and schema keys only. The process was stopped after the checks. No provider task, production data, credentials, Recall code, or PR87 files were used.
+
+**Open risks:** the existing process-level harness proves outage, restart, duplicate replay, scope isolation, and crash-after-remote-success recovery through real Prizm memory/reconciliation components, but it does not prove an HTTP or tool invocation through the running serve process. FTS remained intentionally disabled in the deterministic Recall acceptance environment.
+
+**Next action:** add or expose a scoped capture/tool route in a follow-up change, then rerun the same disposable serve composition with Recall down/up and scoped search assertions before treating the API-level acceptance as complete.
+
+## 2026-10-09 — R6 Serve Tool Seam and Recall Terminal Decision Repair
+
+**Roadmap IDs:** R2, R6
+**Branch/baseline:** `codex/pr86-recall-idempotency`, paired with Recall `codex/prizm-r6-capture-idempotency`
+
+- Extracted the existing serve registration of `MemoryWriteTool` into a narrow helper used by the live serve path and an integration test. The test executes that registered tool against the real scoped facade with Recall unreachable, confirms local fallback and durable pending/fallback lifecycle facts, then searches through the same facade with exact project/task/session/agent scope and confirms one scoped result.
+- Hardened `ScopedMemoryBackend.CaptureIdempotent` to accept only recognized successful Recall terminal decisions (`PASS`, `PERSIST`, `ACTIVE`, `COLD`, and compatibility aliases). A response carrying `decision=FAILED`, even with a raw capture ID, now returns an error and cannot produce a false synced terminal fact.
+
+**Verification:** targeted serve composition test passed; all `internal/remembrance` tests passed. The broader `cmd/prizm-cli` package run reached unrelated pre-existing Windows temp-path/access failures in approval/reference-workspace and subagent tests; those failures were outside this change.
+
+**Open risks:** the seam proves the actual registered serve tool and scoped fallback/search behavior while Recall is down. The previously recorded process harness remains the evidence for Recall restart, replay, and crash-after-success behavior; a public serve capture route remains intentionally absent.
+
+**Next action:** rerun the process-level trace against a Recall build that reports accepted idempotent terminal decisions, then retain the scoped search and terminal-event evidence with the paired API review.
 
 ## 2026-10-10 — R1 Bounded Role Finalization and Provider Blocker
 
@@ -1697,6 +1850,62 @@ recovery/fan-in failures. R6 follow-up should compose Prizm's existing durable
 reconciler with the verified Recall key/replay contract, then prove outage and
 recovery without duplicate primary memories.
 
+## 2026-10-12 — PR #86 Documentation Conflict Resolution
+
+**Roadmap IDs:** R1, R2, R6
+**Branches/bases:** `codex/r6-memory-reconciliation` at `809e9adc52c1428386563162031a2ffbe4d76de8`; `origin/staging` at `b85f46aca4be910dfd3477e0efb6bee4eac2aa0e`.
+
+- The PR-head merge with current staging auto-merged source and test files; the only content conflicts were this plan and work log. The resolution preserves the staging R1 handoff and all distinct R1/R6 history in date order. Historical entries remain unchanged.
+- Recall PR #9 is merged. Deployed-service and public scoped-route acceptance remains open.
+- No Recall repository files or primary Prizm checkout edits are part of this resolution.
+
+**Verification:** `go build ./...`, `go vet ./...`, and `go test ./...` passed in the isolated worktree using `.tmp/pr86-merge-gates` for `TMP`, `TEMP`, `GOTMPDIR`, `GOCACHE`, and `GOMODCACHE` (completion marker records exit 0 for all three). `git diff --cached --check` passes and no unmerged paths or conflict markers remain. No merge commit or push has been made.
+
+**Next action:** complete validation of the auto-merged PR diff and request review before committing or pushing.
+
+## 2026-10-13 — FW-001 intention contract groundwork
+
+**Roadmap IDs:** R1, FW-001. **Branch/base:** `codex/fw001-intention-contracts`,
+created in an isolated clean staging worktree at
+`e2a4421018acca7940f4d6806d5a3c2cf59a92b9`.
+
+- Added `internal/freewill` as a pure contract domain with a bounded-package
+  justification in ADR 0003. `IntentionRequest` requires proposal identity,
+  agent origin, candidate source, title/goal/reason summary, requested
+  capabilities, project/workspace scope, idempotency/correlation IDs, and an
+  optional resource budget. Strict JSON decoding rejects unknown fields,
+  including authority-bearing keys; errors do not echo request content.
+- Added `CandidateIntention` structural validation and a descriptive transition
+  validator for disabled, sleeping, waking, selecting, proposed,
+  approval_pending, denied, paused, running, and halted. The validator checks
+  edges only and does not grant approval or execution authority.
+- Added independent `freewill.enabled` and
+  `freewill.scheduling.enabled` config flags. Both default false, round-trip
+  independently, and have no runtime consumer in this change. No provider,
+  policy, approval, persistence, transport, scheduler, tool, or execution path
+  was added. ADR 0003 records the Freedom/Freewill distinction, threat model,
+  package justification, authority boundary, and future control ownership.
+- Focused `go test ./internal/freewill ./internal/orchestrator` passed.
+  Repository-wide default-parallel `go test ./...` passed with captured exit
+  marker `.tmp/fw001-gates/go-test-all.exit` equal to `0`; `go build ./...`,
+  `go vet ./...`, and `staticcheck ./...` also exited `0` using worktree-local
+  Go caches. `git diff --check` passed after documentation updates.
+- R1 remains open. PR #91 is a separate open draft checkpoint; its latest
+  real-provider parallel Factory attempt failed at fan-in before implementation
+  proposal, apply, configured validation, or final review. Do not count this
+  FW-001 slice as R1 acceptance or a 9/10 result. The dirty primary checkout
+  and separate Recall worktree were not changed.
+
+**Publication:** commit `8ca67fbc9e9b3f2a896b53a81c96244951830a21` contains the
+12-file FW-001 contract slice. PR [#92](https://github.com/emaharmony/prizm/pull/92)
+targets `staging`, is open/non-draft/mergeable, and was opened with
+`lint-linux`, `test-linux`, and `test-python` in progress and `test-windows`
+queued. These are an opening snapshot, not a final CI result.
+
+**Next action:** monitor PR #92 checks and address any failures. After that
+review checkpoint, FW-002 (deduplicated bounded wake producer) is the next
+eligible Freewill task; FW-P2 stays blocked on R1 and FW-G2.
+
 ### R1 parallel-acceptance local checkpoint audit (2026-10-15)
 
 **Roadmap ID:** R1.
@@ -1706,3 +1915,28 @@ The read-only audit verified branch `codex/r1-parallel-acceptance` at `b85f46aca
 This local checkpoint preserves work for review. It is not a merge-ready substitute for PR #91: the local child retry implementation omits PR #91's `sameOptionalTaskReference` binding between child and task identity. The newer `215d490` tree also contains trusted proposal tree-basis and exact approval/apply safeguards absent from this older branch. Reconcile those safeguards before integration. Plan/Work Log records prior test runs, including a full suite and build/vet/staticcheck pass before the current investigation and later focused checks; this audit ran no tests and does not establish that the final dirty tree passed validation. No ignored proof, cache, local config, run data, or credentials were included in the checkpoint.
 
 **Next action:** review the checkpoint against PR #91, restore task-reference and proposal/tree-basis guarantees, then run affected tests and full validation. Do not push or merge this snapshot.
+## 2026-10-15 — Staging merge history reconciliation and gates
+
+**Roadmap IDs:** R1, R2, R6, FW-001. **Branch/base:**
+`codex/r1-parallel-acceptance` merging staging commit
+`b9353560fd57b58db462bdaca7a3c0d954a2b658`.
+
+- Resolved the only unmerged path, this work log, retaining the local R1
+  entries through the Oct 15 checkpoint and all distinct staging history:
+  eight R6 entries from Oct 8–9, the PR #86 resolution entry from Oct 12, and
+  the FW-001 contract entry from Oct 13. The records remain in date order.
+- The merged tree passed `go test ./... -count=1`, `go build ./...`,
+  `go vet ./...`, and `git diff --cached --check`, each with exit code 0. The
+  first sandboxed suite was blocked by denied localhost test servers and
+  nested temporary Git cleanup; the full suite was rerun outside the sandbox
+  with a scoped workspace temp directory and passed. Hard line breaks in two
+  new Freewill documents were converted to equivalent Markdown backslash
+  breaks so the staged whitespace check passes.
+- The work is a staging merge checkpoint, not proof of R1 acceptance. Existing
+  local child task-reference and proposal/tree-basis gaps versus PR #91 and
+  `215d490` remain material integration risks. No ignored proof, cache,
+  local config, or run data was included in the merge resolution.
+
+**Next action:** create the local staging merge commit after final staged-path
+review; do not push. Then reconcile the noted R1 integration safeguards and
+run targeted validation before any publication.
