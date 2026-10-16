@@ -649,6 +649,81 @@ func TestPersistedPauseStopsDueRetryUntilExplicitResume(t *testing.T) {
 	}
 }
 
+func TestPersistedCancellationStopsDueRetryBeforeProviderCall(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	runner := &scriptedRunner{scripts: map[Role][]scriptedStep{
+		RolePlanner:   {{err: retry.NewRetryableError(errors.New("temporary provider failure"))}, {result: scriptedResult(OutcomePlanReady)}},
+		RoleDeveloper: {{result: scriptedResult(OutcomeImplementationReady)}},
+		RoleTester:    {{result: scriptedResult(OutcomeTestsPassed)}},
+		RoleReviewer:  {{result: scriptedResult(OutcomeReviewApproved)}},
+	}}
+	runtime := newMutableClockRuntime(t, validDefinition(), runner, env, &now)
+	request := testRunRequest()
+	request.RunID = "run-cancel-at-due-retry"
+	state, err := runtime.Run(context.Background(), request)
+	var waiting *RunWaitingError
+	if !errors.As(err, &waiting) || waiting.Kind != "role_retry" || state.Status != RunStatusPaused {
+		t.Fatalf("initial retry state=%s err=%v", state.Status, err)
+	}
+	before, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil || before.Retry == nil || before.Waiting == nil {
+		t.Fatalf("waiting retry record=%#v err=%v", before, err)
+	}
+
+	// Hold the claim to model a scheduler owner while the API persists cancel.
+	claim, err := env.claimer.Acquire(context.Background(), request.RunID)
+	if err != nil {
+		t.Fatalf("hold scheduler claim: %v", err)
+	}
+	cancelState, err := runtime.Cancel(context.Background(), request.RunID, "operator stopped retry")
+	if err != nil || cancelState.Status != RunStatusPaused {
+		t.Fatalf("cancel while claimed state=%s err=%v", cancelState.Status, err)
+	}
+	claim.Release()
+	now = before.Retry.NextAt.Add(time.Second)
+
+	state, err = runtime.Resume(context.Background(), request.RunID)
+	if err != nil || state.Status != RunStatusCancelled || state.CancellationReason != "operator stopped retry" {
+		t.Fatalf("resume after cancellation state=%#v err=%v", state, err)
+	}
+	if calls := runnerCalls(runner); len(calls) != 1 || calls[0] != RolePlanner {
+		t.Fatalf("provider calls after persisted cancellation = %v, want only initial planner attempt", calls)
+	}
+	record, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil || record.Phase != CheckpointTerminal || record.State.Status != RunStatusCancelled || record.Waiting != nil || record.Retry != nil {
+		t.Fatalf("terminal cancellation record=%#v err=%v", record, err)
+	}
+	if record.State.RoleStates[RolePlanner].Status != RoleStatusCancelled {
+		t.Fatalf("planner terminal status=%q, want cancelled", record.State.RoleStates[RolePlanner].Status)
+	}
+	cancelEvents := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRunCancelled)
+	if len(cancelEvents) != 1 {
+		t.Fatalf("cancel events=%d, want one", len(cancelEvents))
+	}
+	if started := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryAttemptStarted); len(started) != 0 {
+		t.Fatalf("retry-start events=%d, want none after cancellation", len(started))
+	}
+	allEvents, err := env.events.Query(context.Background(), event.EventFilter{RunID: request.RunID, Limit: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := BuildDashboardSnapshot(validDefinition(), record, allEvents)
+	if snapshot.CancellationReason != "operator stopped retry" || snapshot.Waiting != nil {
+		t.Fatalf("dashboard cancellation snapshot reason=%q waiting=%#v", snapshot.CancellationReason, snapshot.Waiting)
+	}
+	state, err = runtime.Resume(context.Background(), request.RunID)
+	if err != nil || state.Status != RunStatusCancelled {
+		t.Fatalf("repeat terminal resume state=%s err=%v", state.Status, err)
+	}
+	if events := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRunCancelled); len(events) != 1 {
+		t.Fatalf("cancel events after repeat resume=%d, want one", len(events))
+	}
+	if calls := runnerCalls(runner); len(calls) != 1 {
+		t.Fatalf("provider calls after repeat resume=%v, want initial planner attempt only", calls)
+	}
+}
+
 type ambiguousMutationThenSuccessRunner struct{ calls []Role }
 
 func (r *ambiguousMutationThenSuccessRunner) RunRole(_ context.Context, request RoleRunRequest) (RoleRunResult, error) {

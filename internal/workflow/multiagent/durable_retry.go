@@ -309,6 +309,11 @@ func removeMutationID(ids []string, mutationID string) []string {
 	return kept
 }
 
+func retryStateReplaySafe(state *RetryState) bool {
+	return state != nil && state.ReplaySafe && !state.MutationPossible &&
+		!state.UnresolvedMutationFailure && !state.UnattributedMutation
+}
+
 func refreshMutationSafety(state *RetryState) {
 	state.MutationPossible = state.UnattributedMutation || len(state.UnsafeMutationIDs) > 0
 	state.ReplaySafe = !state.MutationPossible
@@ -556,7 +561,7 @@ func describeRecoveryCandidate(record DurableRun, now time.Time) RecoveryCandida
 		candidate.Ambiguous = true
 		if record.Retry != nil {
 			candidate.DueAt = record.Retry.NextAt
-			if record.Retry.ReplaySafe && !record.Retry.MutationPossible && !record.Retry.NextAt.After(now) {
+			if retryStateReplaySafe(record.Retry) && !record.Retry.NextAt.After(now) {
 				candidate.Kind, candidate.Ready, candidate.Ambiguous = "retry", true, false
 			}
 		}
@@ -567,7 +572,8 @@ func describeRecoveryCandidate(record DurableRun, now time.Time) RecoveryCandida
 		}
 		if candidate.WaitingKind == "role_retry" && record.Retry != nil {
 			candidate.DueAt = record.Retry.NextAt
-			candidate.Ready = !record.Retry.MutationPossible && !record.Retry.NextAt.After(now)
+			candidate.Ambiguous = !retryStateReplaySafe(record.Retry)
+			candidate.Ready = !candidate.Ambiguous && !record.Retry.NextAt.After(now)
 		} else if candidate.WaitingKind == "delegation_outcome" && record.Waiting.DispatchPending {
 			if record.Retry == nil {
 				candidate.Ready = true
@@ -737,6 +743,9 @@ func appendRetryHistory(record *DurableRun, state *RetryState) {
 	copy := *state
 	copy.Progress = append([]RetryProgress(nil), state.Progress...)
 	copy.Corrections = append([]RetryCorrection(nil), state.Corrections...)
+	for index := range copy.Corrections {
+		copy.Corrections[index].AllowedValues = append([]string(nil), state.Corrections[index].AllowedValues...)
+	}
 	copy.UnsafeMutationIDs = append([]string(nil), state.UnsafeMutationIDs...)
 	copy.ProvenNoEffectIDs = append([]string(nil), state.ProvenNoEffectIDs...)
 	record.RetryHistory = append(record.RetryHistory, copy)

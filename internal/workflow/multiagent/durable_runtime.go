@@ -262,6 +262,15 @@ func (r *DurableRuntime) resumeClaimed(
 		r.publishRecoveryFailure(ctx, runID, err)
 		return record.State, &RecoveryFailedError{RunID: runID, Cause: err}
 	}
+	if record.Phase != CheckpointTerminal {
+		record, cancelled, cancelErr := r.persistRequestedCancellation(ctx, record)
+		if cancelErr != nil {
+			return record.State, cancelErr
+		}
+		if cancelled {
+			return record.State, nil
+		}
+	}
 	// A scheduled retry is a safe role boundary. Honor a persisted operator
 	// pause before consuming that retry, including when the service recovery
 	// scanner calls Resume rather than an operator.
@@ -417,7 +426,7 @@ func (r *DurableRuntime) resumeClaimed(
 		}
 		r.supervisor.emitRun(event.EventMultiAgentRunResumed, record.State, "operator pause cleared")
 	}
-	if record.Phase == CheckpointRoleRunning && record.Retry != nil && record.Retry.ReplaySafe && !record.Retry.MutationPossible {
+	if record.Phase == CheckpointRoleRunning && retryStateReplaySafe(record.Retry) {
 		if record.Retry.RecoveryNumber >= record.Retry.MaxRecoveries {
 			returnState, terminalErr := r.persistRoleFailure(ctx, record, record.State.CurrentRole, ErrRetryBudgetExhausted)
 			return returnState.State, terminalErr
@@ -505,6 +514,79 @@ func (r *DurableRuntime) FailAcceptedRun(ctx context.Context, runID, code string
 	return saved.State, failureErr
 }
 
+// persistRequestedCancellation observes a durable operator request at a
+// recovery boundary. A retry may be resumed without passing through
+// prepareRole, so both resume ingress and the retry transition use this guard.
+func (r *DurableRuntime) persistRequestedCancellation(
+	ctx context.Context,
+	record DurableRun,
+) (DurableRun, bool, error) {
+	reason, requested, err := r.store.CancellationRequest(ctx, record.State.RunID)
+	if err != nil || !requested {
+		return record, false, err
+	}
+	if cancellationRequiresExecutionReconciliation(record) {
+		return record, false, nil
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "cancelled by user"
+	}
+	now := r.now().UTC()
+	role := record.State.CurrentRole
+	roleState := record.State.RoleStates[role]
+	if record.State.RoleStates == nil {
+		record.State.RoleStates = make(map[Role]RoleState)
+	}
+	if record.Retry != nil {
+		retryState := *record.Retry
+		retryState.FailureClass = "cancellation"
+		retryState.FailureCode = "cancelled"
+		roleState.LocalIterations += retryState.AccumulatedIterations
+		roleState.Retries += retryState.RecoveryNumber
+		roleState.TokenUsage = addTokenUsage(roleState.TokenUsage, retryState.AccumulatedUsage)
+		roleState.UpdatedAt = now
+		roleState.CompletedAt = timePointer(now)
+		record.State.BudgetUsage.TotalLocalIterations += retryState.AccumulatedIterations
+		record.State.BudgetUsage.Retries += retryState.RecoveryNumber
+		record.State.BudgetUsage.Tokens = addTokenUsage(record.State.BudgetUsage.Tokens, retryState.AccumulatedUsage)
+		record.Retry = &retryState
+	}
+	switch roleState.Status {
+	case RoleStatusCompleted, RoleStatusFailed, RoleStatusBlocked, RoleStatusCancelled:
+	default:
+		roleState.Status = RoleStatusCancelled
+		roleState.LastError = boundedDiagnostic(errors.New(reason))
+		roleState.UpdatedAt = now
+		roleState.CompletedAt = timePointer(now)
+	}
+	record.State.RoleStates[role] = roleState
+	record.State, _ = r.supervisor.cancelRun(record.State, errors.New(reason))
+	record.Phase = CheckpointTerminal
+	record.PendingTransition = nil
+	record.ActiveExecutionKey = ""
+	record.Waiting = nil
+	record.Failure = nil
+	saved, err := r.checkpoint(ctx, record)
+	if err != nil {
+		return saved, true, err
+	}
+	return saved, true, nil
+}
+
+// cancellationRequiresExecutionReconciliation keeps a persisted cancellation
+// request from erasing the evidence needed to reconcile an interrupted role.
+// Once recovery converts a safe interrupted attempt into role_retry, the normal
+// retry boundary can terminalize the cancellation before invoking the runner.
+func cancellationRequiresExecutionReconciliation(record DurableRun) bool {
+	if record.Phase == CheckpointRoleRunning {
+		return true
+	}
+	if record.Phase == CheckpointWaiting && record.Waiting != nil && record.Waiting.Kind == "execution_reconciliation" {
+		return true
+	}
+	return record.Retry != nil && !retryStateReplaySafe(record.Retry)
+}
+
 // Inspect loads and validates the durable source of truth without advancing it.
 func (r *DurableRuntime) Inspect(ctx context.Context, runID string) (DurableRun, error) {
 	record, err := r.store.Load(ctx, runID)
@@ -555,23 +637,14 @@ func (r *DurableRuntime) Cancel(
 	if record.Phase == CheckpointTerminal {
 		return record.State, nil
 	}
-	now := r.now().UTC()
-	roleState := record.State.RoleStates[record.State.CurrentRole]
-	if roleState.Status == RoleStatusRunning {
-		roleState.Status = RoleStatusCancelled
-		roleState.UpdatedAt = now
-		roleState.CompletedAt = timePointer(now)
-		record.State.RoleStates[record.State.CurrentRole] = roleState
-	}
-	record.State, _ = r.supervisor.cancelRun(record.State, errors.New(reason))
-	record.Phase = CheckpointTerminal
-	record.PendingTransition = nil
-	record.ActiveExecutionKey = ""
-	record.Waiting = nil
-	record.Failure = nil
-	record, err = r.checkpoint(ctx, record)
+	record, cancelled, err := r.persistRequestedCancellation(ctx, record)
 	if err != nil {
 		return record.State, err
+	}
+	if !cancelled {
+		// The request remains durable; recovery must first reconcile any
+		// interrupted execution before it can safely become terminal.
+		return record.State, nil
 	}
 	return record.State, nil
 }
@@ -677,7 +750,16 @@ func (r *DurableRuntime) drive(
 
 		case CheckpointWaiting:
 			if record.Waiting != nil && record.Waiting.Kind == "role_retry" {
-				if record.Retry == nil || !record.Retry.ReplaySafe || record.Retry.MutationPossible {
+				var cancelled bool
+				var cancelCheckErr error
+				record, cancelled, cancelCheckErr = r.persistRequestedCancellation(ctx, record)
+				if cancelCheckErr != nil {
+					return record.State, cancelCheckErr
+				}
+				if cancelled {
+					return record.State, nil
+				}
+				if !retryStateReplaySafe(record.Retry) {
 					return record.State, waitingError(record)
 				}
 				if r.now().UTC().Before(record.Retry.NextAt) {
@@ -692,10 +774,10 @@ func (r *DurableRuntime) drive(
 				record.Waiting = nil
 				record.Phase = CheckpointRoleRunning
 				r.emitRetry(event.EventMultiAgentRetryAttemptStarted, record, *record.Retry)
-				var err error
-				record, err = r.checkpoint(ctx, record)
-				if err != nil {
-					return record.State, err
+				var checkpointErr error
+				record, checkpointErr = r.checkpoint(ctx, record)
+				if checkpointErr != nil {
+					return record.State, checkpointErr
 				}
 				canExecutePrepared = true
 				continue

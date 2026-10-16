@@ -462,6 +462,9 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 		if len(r.Retry.Observations) > 64 || r.Retry.ConsecutiveNoProgress < 0 || r.Retry.ConsecutiveNoProgress > 64 {
 			problems = append(problems, "retry no-progress ledger exceeds its bound")
 		}
+		if len(r.Retry.Corrections) > 16 {
+			problems = append(problems, "retry correction history exceeds its bound")
+		}
 		for _, observation := range r.Retry.Observations {
 			if observation.Hash == "" || observation.Count < 1 || observation.Count > 64 {
 				problems = append(problems, "retry observation count is invalid")

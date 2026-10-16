@@ -555,8 +555,8 @@ func (r *DurableRuntime) resumeDelegationJoin(ctx context.Context, record Durabl
 					child.Retry.AttemptID = retryAttemptID(child.Retry.VisitID, child.Retry.Number)
 					child.Retry.FailureClass = safeRetryCode(decoded.Failure.Class)
 					child.Retry.FailureCode = safeRetryCode(decoded.Failure.Code)
-					child.Retry.RecoveryFeedback = roleFailureFeedback(child.Role, child.Retry.FailureCode,
-						decoded.Failure.CorrectionField, decoded.Failure.ExpectedType, decoded.Failure.AllowedValues)
+					correction := appendScheduledRetryCorrection(child.Retry, child.Role, *decoded.Failure)
+					child.Retry.RecoveryFeedback = correction.Feedback
 					child.Retry.NextAt = r.now().UTC().Add(roleRetryDelay(child.ExecutionKey, child.Retry.RecoveryNumber, decoded.Failure.RetryAfter))
 					child.DeliveryNumber++
 					child.DeliveryAttemptID = fmt.Sprintf("%s:delivery:%d", child.ExecutionKey, child.DeliveryNumber)
@@ -571,7 +571,9 @@ func (r *DurableRuntime) resumeDelegationJoin(ctx context.Context, record Durabl
 						"attempt_id": child.Retry.AttemptID, "attempt": child.Retry.Number,
 						"delivery_attempt_id": child.DeliveryAttemptID, "recovery_number": child.Retry.RecoveryNumber,
 						"max_recoveries": child.Retry.MaxRecoveries, "failure_class": child.Retry.FailureClass,
-						"failure_code": child.Retry.FailureCode, "retryable": true,
+						"failure_code": child.Retry.FailureCode, "failure_reason": correction.Reason,
+						"correction_field": correction.CorrectionField, "expected_type": correction.ExpectedType,
+						"allowed_values": correction.AllowedValues, "retryable": true,
 						"next_at": child.Retry.NextAt.UTC().Format(time.RFC3339Nano)})
 					scheduled = true
 				} else {

@@ -293,9 +293,31 @@ type RetryProgress struct {
 
 // RetryCorrection stores only the classified schema/tool correction code.
 type RetryCorrection struct {
-	ErrorClass string `json:"error_class"`
-	Code       string `json:"code"`
-	Feedback   string `json:"feedback,omitempty"`
+	ErrorClass      string   `json:"error_class"`
+	Code            string   `json:"code"`
+	CorrectionField string   `json:"correction_field,omitempty"`
+	ExpectedType    string   `json:"expected_type,omitempty"`
+	AllowedValues   []string `json:"allowed_values,omitempty"`
+	Reason          string   `json:"reason,omitempty"`
+	Feedback        string   `json:"feedback,omitempty"`
+}
+
+func appendScheduledRetryCorrection(state *RetryState, role Role, failure RoleExecutionFailure) RetryCorrection {
+	if state == nil {
+		return RetryCorrection{}
+	}
+	safe := sanitizeTerminalRoleFailure(role, failure)
+	feedback := roleFailureFeedback(role, safe.Code, safe.CorrectionField, safe.ExpectedType, safe.AllowedValues)
+	correction := RetryCorrection{
+		ErrorClass: safe.Class, Code: safe.Code, CorrectionField: safe.CorrectionField,
+		ExpectedType: safe.ExpectedType, AllowedValues: append([]string(nil), safe.AllowedValues...),
+		Reason: "retry_scheduled", Feedback: feedback,
+	}
+	state.Corrections = append(state.Corrections, correction)
+	if len(state.Corrections) > 16 {
+		state.Corrections = append([]RetryCorrection(nil), state.Corrections[len(state.Corrections)-16:]...)
+	}
+	return correction
 }
 
 // RecoveryCandidate tells a supervised scanner whether automatic Resume is

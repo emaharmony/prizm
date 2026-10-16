@@ -114,7 +114,7 @@ type PatchSourceRange struct {
 	LineCount int
 }
 
-var unifiedHunkHeader = regexp.MustCompile(`^@@ -([0-9]+)(?:,([0-9]+))? \+[0-9]+(?:,[0-9]+)? @@`)
+var unifiedHunkHeader = regexp.MustCompile(`^@@ -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? @@(?: .*)?$`)
 
 // PatchSourceRanges parses the old-side line ranges that must be grounded
 // before a governed patch proposal may be persisted. It intentionally accepts
@@ -124,36 +124,70 @@ func PatchSourceRanges(patch string) ([]PatchSourceRange, error) {
 	var current string
 	var ranges []PatchSourceRange
 	var inHunk bool
-	var hunkStart, hunkOldLines int
+	var afterHunk bool
+	var hunkStart, hunkOldLines, hunkNewLines, hunkDeclaredOld, hunkDeclaredNew int
 	lines := strings.Split(patch, "\n")
-	flushHunk := func() {
-		if inHunk && current != "" && current != "/dev/null" && hunkOldLines > 0 {
+	flushHunk := func() error {
+		if !inHunk {
+			return nil
+		}
+		if hunkOldLines != hunkDeclaredOld || hunkNewLines != hunkDeclaredNew {
+			return fmt.Errorf("patch hunk line counts do not match its header")
+		}
+		if current != "" && current != "/dev/null" && hunkOldLines > 0 {
 			ranges = append(ranges, PatchSourceRange{Path: current, StartLine: hunkStart, LineCount: hunkOldLines})
 		}
 		inHunk = false
-		hunkOldLines = 0
+		afterHunk = true
+		return nil
 	}
 	for index, line := range lines {
+		// Split handles LF, and dropping a final CR for parsing also permits
+		// standard CRLF patches. The original patch string remains untouched for
+		// hashing and Git prechecks.
+		line = strings.TrimSuffix(line, "\r")
 		if inHunk {
 			if line == "" && index == len(lines)-1 {
-				flushHunk()
+				if err := flushHunk(); err != nil {
+					return nil, err
+				}
 				break
 			}
 			// Git file markers and the next hunk header delimit a hunk. In
 			// particular, a removed source line such as "-- README.md" is
 			// represented by "--- README.md" and must remain hunk content.
 			if strings.HasPrefix(line, "diff --git ") || strings.HasPrefix(line, "@@ ") {
-				flushHunk()
+				if err := flushHunk(); err != nil {
+					return nil, err
+				}
 			} else if line == "\\ No newline at end of file" {
 				continue
 			} else if len(line) > 0 && (line[0] == ' ' || line[0] == '+' || line[0] == '-') {
+				if hunkOldLines == hunkDeclaredOld && hunkNewLines == hunkDeclaredNew {
+					return nil, fmt.Errorf("patch hunk contains lines beyond its declared counts")
+				}
 				if line[0] == ' ' || line[0] == '-' {
 					hunkOldLines++
+				}
+				if line[0] == ' ' || line[0] == '+' {
+					hunkNewLines++
+				}
+				if hunkOldLines > hunkDeclaredOld || hunkNewLines > hunkDeclaredNew {
+					return nil, fmt.Errorf("patch hunk exceeds its declared line counts")
 				}
 				continue
 			} else {
 				return nil, fmt.Errorf("patch contains malformed hunk body")
 			}
+		}
+		if afterHunk {
+			if line == "" && index == len(lines)-1 {
+				continue
+			}
+			if !strings.HasPrefix(line, "diff --git ") && !strings.HasPrefix(line, "@@ ") {
+				return nil, fmt.Errorf("patch contains unconsumed lines after a hunk")
+			}
+			afterHunk = false
 		}
 		switch {
 		case strings.HasPrefix(line, "--- "):
@@ -167,14 +201,32 @@ func PatchSourceRanges(patch string) ([]PatchSourceRange, error) {
 			if match == nil {
 				return nil, fmt.Errorf("patch contains malformed hunk header")
 			}
-			start, _ := strconv.Atoi(match[1])
+			start, startErr := strconv.Atoi(match[1])
+			if startErr != nil {
+				return nil, fmt.Errorf("patch contains malformed hunk header")
+			}
+			oldCount, oldErr := parseHunkCount(match[2])
+			newCount, newErr := parseHunkCount(match[4])
+			if oldErr != nil || newErr != nil {
+				return nil, fmt.Errorf("patch contains malformed hunk header")
+			}
 			inHunk = true
 			hunkStart = start
-			hunkOldLines = 0
+			hunkOldLines, hunkNewLines = 0, 0
+			hunkDeclaredOld, hunkDeclaredNew = oldCount, newCount
 		}
 	}
-	flushHunk()
+	if err := flushHunk(); err != nil {
+		return nil, err
+	}
 	return ranges, nil
+}
+
+func parseHunkCount(value string) (int, error) {
+	if value == "" {
+		return 1, nil
+	}
+	return strconv.Atoi(value)
 }
 
 func patchHeaderPath(value string) (string, error) {
@@ -294,6 +346,9 @@ func planPatch(ctx context.Context, root, patch, expectedBase string, basis *Tru
 	}
 	if len(patch) > MaxPatchBytes {
 		return PatchPlan{}, fmt.Errorf("patch size %d exceeds maximum %d bytes", len(patch), MaxPatchBytes)
+	}
+	if _, err := PatchSourceRanges(patch); err != nil {
+		return PatchPlan{}, fmt.Errorf("patch hunk validation failed: %w", err)
 	}
 	base, err := CurrentSHA(ctx, root)
 	if err != nil {

@@ -119,7 +119,8 @@ func TestApplyPatchProposalRejectsIncorrectHunkCountsBeforeApproval(t *testing.T
 			requested = true
 		}
 	})
-	patch := "diff --git a/base.txt b/base.txt\n--- a/base.txt\n+++ b/base.txt\n@@ -1,99 +1,99 @@\n-base\n+changed\n"
+	patch := "diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n" +
+		"@@ -0,0 +1,19 @@\n" + strings.Repeat("+added\n", 21)
 	result, err := exec.ExecuteWithPolicy(ctx, "apply_patch_proposal", "astraea", "prizm", "exec-bad-hunk-count", map[string]any{
 		"_run_id": "run-bad-hunk-count", "patch": patch, "base_sha": base,
 	})

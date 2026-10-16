@@ -1,5 +1,32 @@
 # Prizm Plan of Action
 
+## Current Handoff: R1 fan-out retry diagnostics (2026-10-16)
+
+**Roadmap:** R1 remains incomplete. The PR #91 local candidate branch
+`codex/pr91-prizm-end-to-end` is based on checkpoint
+`d83c686bb0ea18ff1d13dd929de84313f274cd7c` and
+contains the exact child/task identity guard and trusted approved-tree receipt
+checks. This session adds bounded schema-owned correction metadata to each
+scheduled fan-out retry and its retry event: correction field, expected type,
+allowed values, and the fixed reason `retry_scheduled`. The retry history keeps
+at most 16 entries and never stores raw model output or prompts. Commit
+`dede161257e6430f79085f6b59e4d3b4c3f37998` contains this update. No package
+boundary changed.
+
+**Evidence:** the focused command identity, trusted-tree basis, and new
+fan-out diagnostic tests pass; `go test ./internal/event -count=1`,
+`go build ./...`, `go vet ./...`, and `git diff --check` pass. The full
+multi-agent suite and focused CLI proposal/reconciliation tests only failed in
+`testing.TempDir` cleanup when Windows denied unlinking test-created Git object
+files, even with `TEMP`, `TMP`, and `GOTMPDIR` under the workspace. The build
+exited 0 with a module download stat-cache write warning. The Ollama scout could
+not connect to localhost; targeted inspection followed the documented fallback.
+GitHub API access was unavailable, so remote PR state was not refreshed. No
+provider task, live run, service, or remote PR was accessed.
+
+**Next action:** coordinator review, then a separately authorized fresh served
+R1 acceptance. The full R1 acceptance and roadmap 9/10 gate remain open.
+
 ## Current Handoff: R1 validation and terminal-state hardening (2026-10-15)
 
 **Roadmap:** R1 remains incomplete. The source-equivalent scratch branch is
@@ -394,3 +421,75 @@ acceptance gate is outstanding.
 served run to verify malformed proposals receive correction before approval and
 that the corrected proposal is approved, applied exactly once, validated, and
 resumed. Do not reuse the immutable failed run or its proposal.
+
+## Current Handoff: R1 strict patch hunk preflight (2026-10-15)
+
+**Roadmap:** R1 remains incomplete. Starting from the published PR #91 tree,
+`internal/gitx` validates each unified-diff hunk's declared old/new counts and
+requires the body to consume those counts exactly. It rejects surplus or
+missing lines and text left after completed hunks before Git prechecks. Shared
+patch planning applies the rule to clean and trusted-tree plans, so malformed
+proposals fail without persisting or emitting approval. No package boundary
+changed.
+
+**Evidence:** parser and planning coverage exercises the 19-header/21-addition
+case, excess removals, incomplete counts, trailing text, context, and the
+no-newline marker. A tool-boundary regression confirms malformed input creates
+no approval request or stored approval and leaves the workspace unchanged.
+
+**Next action:** complete focused and repository-wide validation on this PR
+branch, then coordinator review. A fresh, separately authorized served R1
+acceptance remains necessary; do not resume a terminal run.
+
+### R1 CRLF compatibility in strict patch preflight (2026-10-15)
+
+The strict parser removes a terminal carriage return only from its local line
+view before matching hunk headers. Patch bytes passed to Git and used for the
+approval-bound hash remain unchanged. Count checks and trailing-line rejection
+apply equally to CRLF hunks.
+
+**Evidence:** CRLF regressions cover valid counts, the no-newline marker,
+surplus-line rejection, and a new-file planning path that retains the original
+patch hash. Repository-wide validation on this branch is pending.
+
+**Next action:** finish focused and full validation, then coordinator review.
+R1 served acceptance remains incomplete and requires a separately authorized
+fresh run.
+
+## Current Handoff: R1 cancellation precedence at durable retry boundary (2026-10-15)
+
+**Roadmap:** R1 remains incomplete. `DurableRuntime.Resume` now checks the
+persisted cancellation request before recovery/drive can resume a due
+`role_retry`, and `Cancel` plus the retry boundary share one terminal
+checkpoint path. That path accounts accumulated retry iterations, recovery
+count, token usage, and retry history before clearing waiting state. It emits
+the cancellation event through the durable outbox exactly once; terminal
+Resume remains idempotent. No package boundary changed.
+
+**Evidence:** the regression persists cancellation while a run claim is held,
+advances beyond retry due time, releases the claim, and resumes. It confirms no
+provider retry starts, the run/report/dashboard are cancelled with the supplied
+reason, retry waiting is cleared, and a repeated Resume does not duplicate the
+cancellation event. Focused tests, `go build ./...`, `go vet ./...`, uncached
+`go test -count=1 ./...`, `staticcheck ./...`, and `git diff --check` passed.
+
+**Next action:** coordinator review, followed by a separately authorized fresh
+served R1 acceptance. No live provider or service was used for this change.
+
+### Cancellation safety during ambiguous execution recovery
+
+Cancellation finalization now defers while a role execution is still
+`CheckpointRoleRunning`, while the run is waiting for `execution_reconciliation`,
+or while retry state is non-replayable or carries possible/unresolved/unattributed
+mutation evidence. The request remains durable. Recovery preserves the
+reconciliation checkpoint before cancellation can become terminal; safe retry
+boundaries still cancel before invoking the provider.
+
+**Evidence:** a regression starts a mutating tool, simulates a process crash,
+persists cancellation while the run claim is held, and resumes. The run remains
+paused for reconciliation with mutation evidence and the request intact; it
+does not invoke the runner or emit a terminal cancellation event. Focused and
+full repository validation passed.
+
+**Next action:** coordinator review and separately authorized served R1
+acceptance; no live provider behavior is claimed.

@@ -2031,3 +2031,119 @@ roots or package boundaries changed.
 rewritten, but read models suppress it and backend terminal guards remain in
 place. Coordinator review is needed; R1 acceptance still requires a fresh,
 separately authorized served run.
+
+### R1 strict patch hunk consumption before approval (2026-10-15)
+
+**Roadmap ID:** R1. Starting from the published PR #91 tree, `internal/gitx`
+now parses old/new counts for each patch hunk, requires exact body consumption,
+and rejects surplus or missing lines and unconsumed trailing text before Git
+prechecks. The rule covers clean and trusted-tree patch planning. Malformed
+proposals fail before approval persistence. No package boundary changed.
+
+**Evidence:** regressions cover the reported 19-header/21-addition patch,
+excess removals, incomplete counts, trailing text, context lines, and the
+no-newline marker. A tool-level test verifies there is no approval request,
+no stored approval, and no worktree change. Validation on this PR branch is
+pending.
+
+**Risk/next action:** strict checks may reject malformed patches Git previously
+recounted; bounded correction remains the recovery path. Run the focused and
+full validation gates on this branch and obtain coordinator review. A fresh,
+separately authorized served R1 acceptance remains pending.
+
+### R1 CRLF compatibility in strict patch preflight (2026-10-15)
+
+**Roadmap ID:** R1. The parser strips one terminal CR only from its local line
+view, allowing correctly formed CRLF hunk headers while preserving original
+patch bytes for Git and the approval-bound hash. Strict line counts and
+trailing-line rejection remain enforced.
+
+**Evidence:** regressions cover valid CRLF counts, the no-newline marker,
+surplus CRLF additions, and a CRLF new-file plan retaining its exact input
+hash. Full validation on this PR branch is pending.
+
+**Next action:** complete focused and repository-wide checks, then obtain
+coordinator review. R1 served acceptance remains pending a separately
+authorized fresh run.
+
+### R1 cancellation precedence before durable retry recovery (2026-10-15)
+
+**Roadmap ID:** R1. A cancellation persisted while another owner held the run
+claim could be missed when recovery resumed a due `role_retry`; that path
+entered the runner without passing through `prepareRole`. `resumeClaimed` now
+checks persisted cancellation before recovery dispatch, with an additional
+guard at the retry transition. `Cancel` and recovery use one finalizer that
+clears waiting/active transition state, persists cancellation through the
+terminal checkpoint/outbox, and preserves retry iteration, recovery, usage,
+and history accounting. Repeated terminal Resume remains idempotent.
+
+**Evidence:** `TestPersistedCancellationStopsDueRetryBeforeProviderCall` holds
+the run claim, persists a cancel request, advances past retry due time, then
+resumes. It verifies the second provider attempt does not run, the terminal
+record and dashboard show the requested cancellation, retry waiting is gone,
+and a second Resume does not add a second cancellation event. Focused
+cancellation/pause tests passed. `go build ./...`, `go vet ./...`, uncached
+`go test -count=1 ./...`, `staticcheck ./...`, and `git diff --check` passed
+using the task-local D-drive cache/temp setup. The sandboxed full-suite attempt
+was stopped after unrelated localhost and temporary-file permission failures;
+the elevated uncached rerun passed. No provider, live run, service, or remote
+PR was accessed.
+
+**Risk/next action:** coordinator review, then a separately authorized fresh
+served R1 acceptance is still required; no live-provider acceptance is claimed.
+
+### R1 preserve ambiguous mutation reconciliation before cancellation (2026-10-15)
+
+**Roadmap ID:** R1. Review found the new cancellation check could run before
+`CheckpointRoleRunning` recovery classified an interrupted mutating tool. The
+shared cancellation finalizer now defers for running checkpoints,
+`execution_reconciliation` waits, and retry records that are not replay-safe or
+carry possible, unresolved, or unattributed mutation evidence. The persisted
+request remains available; recovery first records the existing reconciliation
+wait. Safe `role_retry` cancellation still terminalizes before a retry provider
+call.
+
+**Evidence:** `TestPersistedCancellationDoesNotBypassAmbiguousMutationReconciliation`
+crashes after a mutating tool reports `started`, persists cancellation with a
+run claim held, and resumes. It confirms the paused reconciliation checkpoint,
+mutation evidence, and cancellation request remain durable, with no runner call
+or cancelled event. The due-retry cancellation and existing crash-reconciliation
+regressions also pass. `go build ./...`, `go vet ./...`, uncached
+`go test -count=1 ./...`, `staticcheck ./...`, and `git diff --check` passed.
+No provider, live run, service, or remote PR was accessed.
+
+**Risk/next action:** unresolved mutations intentionally remain paused until
+reconciliation; cancellation is not terminal while their outcome is unknown.
+Coordinator review and a separately authorized fresh served R1 acceptance are
+still pending.
+
+### R1 fan-out retry correction diagnostics (2026-10-16)
+
+**Roadmap ID:** R1. The PR #91 candidate already contained the exact optional
+parent task identity guard and trusted applied-tree receipt checks. Review of
+fan-out recovery found that scheduled retries retained only class/code and
+prompt feedback, while their events omitted schema-owned correction details.
+Fan-out retry scheduling now appends bounded sanitized correction metadata to
+the durable retry history and emits field, expected type, allowed values, and
+the fixed `retry_scheduled` reason. The history remains capped at 16 entries;
+schema-owned field/type/value validation excludes raw model output and prompt
+text. Commit `dede161257e6430f79085f6b59e4d3b4c3f37998` records the local
+change. No package boundary changed.
+
+**Evidence:** `git diff --check` passed. The new
+`TestFanOutRetryScheduledEventPersistsSafeCorrectionMetadata` and
+`go test ./internal/event -count=1` passed with workspace-local Go cache/temp
+paths. The focused child/task identity and trusted-tree basis selector passed.
+The full multi-agent suite exited 1 only after two `testing.TempDir` cleanup
+denials on test-created Git object files. The focused CLI proposal/reconcile
+selector likewise exited 1 on one cleanup denial. Both were rerun with
+`TEMP`, `TMP`, and `GOTMPDIR` under the workspace; the same Windows ACL denial
+remained. `go build ./...` and `go vet ./...` exited 0; build printed a module
+download stat-cache write access warning. The regression covers persisted
+enum correction metadata, the retry event payload, and removal of an untrusted
+type canary. Ollama was unavailable and GitHub API access failed, so neither
+scout nor remote PR status was refreshed. No provider task, live run, or
+service was accessed.
+
+**Risk/next action:** coordinator review, then a separately authorized fresh
+served R1 acceptance. The R1 end-to-end gate remains incomplete.

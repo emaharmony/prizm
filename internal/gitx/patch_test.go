@@ -82,6 +82,110 @@ func TestPatchSourceRangesHandlesAddedAndDeletedFiles(t *testing.T) {
 	}
 }
 
+func TestPatchSourceRangesRejectsUnconsumedOrIncompleteHunks(t *testing.T) {
+	addedLines := strings.Repeat("+added\n", 21)
+	removedLines := strings.Repeat("-removed\n", 21)
+	tests := []struct {
+		name  string
+		patch string
+	}{
+		{
+			name: "trailing additions beyond declared count",
+			patch: "diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n" +
+				"@@ -0,0 +1,19 @@\n" + addedLines,
+		},
+		{
+			name: "trailing removals beyond declared count",
+			patch: "diff --git a/old.txt b/old.txt\n--- a/old.txt\n+++ /dev/null\n" +
+				"@@ -1,19 +0,0 @@\n" + removedLines,
+		},
+		{
+			name: "incomplete old side",
+			patch: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n" +
+				"@@ -1,2 +1 @@\n-old\n+new\n",
+		},
+		{
+			name: "incomplete new side",
+			patch: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n" +
+				"@@ -1 +1,2 @@\n-old\n+new\n",
+		},
+		{
+			name: "unconsumed line after completed hunk",
+			patch: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n" +
+				"@@ -1 +1 @@\n-old\n+new\nnot-a-diff-line\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := PatchSourceRanges(test.patch); err == nil {
+				t.Fatal("parser accepted a hunk with unconsumed or incomplete lines")
+			}
+		})
+	}
+}
+
+func TestPatchSourceRangesCountsContextAndAllowsNoNewlineMarker(t *testing.T) {
+	patch := "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n" +
+		"@@ -4,3 +4,3 @@ function context\n context\n context2\n-old\n+new\n\\ No newline at end of file\n"
+	ranges, err := PatchSourceRanges(patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []PatchSourceRange{{Path: "file.txt", StartLine: 4, LineCount: 3}}
+	if len(ranges) != len(want) || ranges[0] != want[0] {
+		t.Fatalf("ranges=%+v, want %+v", ranges, want)
+	}
+}
+
+func TestPatchSourceRangesValidatesCRLFHunks(t *testing.T) {
+	valid := strings.Join([]string{
+		"diff --git a/file.txt b/file.txt",
+		"--- a/file.txt",
+		"+++ b/file.txt",
+		"@@ -4,2 +4,2 @@",
+		" context",
+		"-old",
+		"+new",
+		"\\ No newline at end of file",
+		"",
+	}, "\r\n")
+	ranges, err := PatchSourceRanges(valid)
+	if err != nil {
+		t.Fatalf("valid CRLF patch rejected: %v", err)
+	}
+	want := []PatchSourceRange{{Path: "file.txt", StartLine: 4, LineCount: 2}}
+	if len(ranges) != len(want) || ranges[0] != want[0] {
+		t.Fatalf("ranges=%+v, want %+v", ranges, want)
+	}
+
+	invalid := strings.Join([]string{
+		"diff --git a/new.txt b/new.txt",
+		"new file mode 100644",
+		"--- /dev/null",
+		"+++ b/new.txt",
+		"@@ -0,0 +1,1 @@",
+		"+first",
+		"+unconsumed",
+		"",
+	}, "\r\n")
+	if _, err := PatchSourceRanges(invalid); err == nil {
+		t.Fatal("parser accepted unconsumed additions in a CRLF hunk")
+	}
+
+	incomplete := strings.Join([]string{
+		"diff --git a/file.txt b/file.txt",
+		"--- a/file.txt",
+		"+++ b/file.txt",
+		"@@ -1,2 +1,2 @@",
+		"-old",
+		"+new",
+		"",
+	}, "\r\n")
+	if _, err := PatchSourceRanges(incomplete); err == nil {
+		t.Fatal("parser accepted incomplete counts in a CRLF hunk")
+	}
+}
+
 func TestPlanAndApplyPatchAtomicallyChangesMultipleFiles(t *testing.T) {
 	root := initRepo(t)
 	ctx := context.Background()
@@ -161,6 +265,53 @@ func TestPlanPatchRejectsIncorrectHunkCounts(t *testing.T) {
 	}
 	if err := EnsureClean(ctx, root); err != nil {
 		t.Fatalf("rejected proposal mutated repository: %v", err)
+	}
+}
+
+func TestPlanPatchRejectsNineteenLineHeaderWithTwentyOneAdditions(t *testing.T) {
+	root := initRepo(t)
+	ctx := context.Background()
+	base, err := CurrentSHA(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch := "diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n" +
+		"@@ -0,0 +1,19 @@\n" + strings.Repeat("+added\n", 21)
+	if _, err := PlanPatch(ctx, root, patch, base); err == nil {
+		t.Fatal("planning accepted 21 additions under a 19-line hunk header")
+	}
+	if err := EnsureClean(ctx, root); err != nil {
+		t.Fatalf("rejected proposal mutated repository: %v", err)
+	}
+}
+
+func TestPlanPatchPreservesCRLFBytesForGitValidation(t *testing.T) {
+	root := initRepo(t)
+	ctx := context.Background()
+	base, err := CurrentSHA(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch := strings.Join([]string{
+		"diff --git a/new.txt b/new.txt",
+		"new file mode 100644",
+		"--- /dev/null",
+		"+++ b/new.txt",
+		"@@ -0,0 +1,2 @@",
+		"+first",
+		"+second",
+		"",
+	}, "\r\n")
+	plan, err := PlanPatch(ctx, root, patch, base)
+	if err != nil {
+		t.Fatalf("plan valid CRLF patch: %v", err)
+	}
+	sum := sha256.Sum256([]byte(patch))
+	if plan.PatchSHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatal("planning normalized the original CRLF patch bytes")
+	}
+	if err := EnsureClean(ctx, root); err != nil {
+		t.Fatalf("proposal mutated repository: %v", err)
 	}
 }
 
