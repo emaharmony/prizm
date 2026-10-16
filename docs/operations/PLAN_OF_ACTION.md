@@ -1,5 +1,33 @@
 # Prizm Plan of Action
 
+## Current Handoff: R1 actionable recovery and reviewer handoff (2026-10-16)
+
+**Roadmap:** R1 remains incomplete. Starting from PR-local commit
+`110dd3d2e7c3b744f342953209b352d907291f4e`, branch
+`codex/r1-actionable-corrections` adds fixed allowlisted recovery feedback for
+typed `invalid_proposal_diff` failures and clarifies the reviewer handoff shape
+based on its decision. The preceding feedback truncation fix remains an
+independent improvement; served run `run_92f076e7f909e9c686c15d785d` does not
+prove it caused that run's failures. No package boundary changed.
+
+**Evidence:** durable recovery now persists only the fixed safe correction for
+`invalid_proposal_diff`; focused Resume coverage checks delivery and confirms
+raw patch/error canaries do not enter durable state. Reviewer guidance and
+tests cover required non-null object/string handoff for `changes_requested`
+and omitted/null handoff for `approved`. A CLI backend regression covers a
+text `tool_request` envelope parsed and executed through Prizm's injected
+executor. This proves a provider/tool path, not a successful served task.
+Ollama was unavailable, so targeted source inspection used the documented
+narrow fallback. The earlier served run dispatched three lanes and completed
+research, then reviewer `invalid_field_type` and developer
+`invalid_proposal_diff` exhausted their retry caps; fan-in failed, no proposal,
+apply, or validation occurred, the dashboard emitted a failure event, and the
+isolated clone remained unchanged.
+
+**Next action:** complete targeted and full source gates, then rerun the same
+isolated R1 gates and verify fresh review, proposal/apply/validation, and a
+terminal success report. Keep PR #91 unpushed until reviewed.
+
 ## Current Handoff: R1 fan-out retry diagnostics (2026-10-16)
 
 **Roadmap:** R1 remains incomplete. The PR #91 local candidate branch

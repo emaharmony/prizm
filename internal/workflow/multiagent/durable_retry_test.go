@@ -449,6 +449,75 @@ func TestSchemaCorrectionRetryAndStaleCallbackUseSharedBudget(t *testing.T) {
 	}
 }
 
+func TestInvalidProposalDiffRetryPersistsOnlySafeFeedbackAndResumes(t *testing.T) {
+	const (
+		rawPatchCanary = "RAW_PATCH_CANARY"
+		rawErrorCanary = "RAW_ERROR_CANARY"
+	)
+	env := newDurableTestEnvironment(t)
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	runner := &proposalDiffRecoveryRunner{
+		scriptedRunner: happyDurableRunner(),
+		failFirst:      true,
+		failure: fmt.Errorf("proposal rejected %s: private parser detail %s: %w",
+			rawPatchCanary, rawErrorCanary, &subagent.SafeFailureError{Code: "invalid_proposal_diff"}),
+	}
+	runtime := newMutableClockRuntime(t, validDefinition(), runner, env, &now)
+	request := testRunRequest()
+	request.RunID = "run-invalid-proposal-diff-feedback"
+	state, err := runtime.Run(context.Background(), request)
+	var waiting *RunWaitingError
+	if !errors.As(err, &waiting) || state.Status != RunStatusPaused {
+		t.Fatalf("retry schedule state=%s err=%v", state.Status, err)
+	}
+
+	record, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFeedback := correctionFeedback("invalid_proposal_diff")
+	if record.Retry == nil || record.Retry.RecoveryFeedback != wantFeedback {
+		t.Fatalf("safe proposal-diff feedback was not persisted: %#v", record.Retry)
+	}
+	if len(record.Retry.Corrections) == 0 || record.Retry.Corrections[len(record.Retry.Corrections)-1].Feedback != wantFeedback {
+		t.Fatalf("safe proposal-diff correction history=%#v", record.Retry.Corrections)
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), rawPatchCanary) || strings.Contains(string(encoded), rawErrorCanary) {
+		t.Fatalf("retry record retained untrusted proposal/error detail: %s", encoded)
+	}
+
+	now = record.Retry.NextAt.Add(time.Millisecond)
+	state, err = runtime.Resume(context.Background(), request.RunID)
+	if err != nil || state.Status != RunStatusCompleted {
+		t.Fatalf("retry resume state=%s err=%v", state.Status, err)
+	}
+	if runner.recoveryFeedback != wantFeedback {
+		t.Fatalf("resumed role feedback=%q, want fixed correction %q", runner.recoveryFeedback, wantFeedback)
+	}
+}
+
+type proposalDiffRecoveryRunner struct {
+	*scriptedRunner
+	failFirst        bool
+	failure          error
+	recoveryFeedback string
+}
+
+func (r *proposalDiffRecoveryRunner) RunRole(ctx context.Context, request RoleRunRequest) (RoleRunResult, error) {
+	if request.Run.CurrentRole == RolePlanner && r.failFirst {
+		r.failFirst = false
+		return RoleRunResult{LocalIterations: 1}, r.failure
+	}
+	if request.Run.CurrentRole == RolePlanner {
+		r.recoveryFeedback = request.RecoveryFeedback
+	}
+	return r.scriptedRunner.RunRole(ctx, request)
+}
+
 func TestNoProgressObservationLedgerSurvivesRestartAndResetsOnChange(t *testing.T) {
 	env := newDurableTestEnvironment(t)
 	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)

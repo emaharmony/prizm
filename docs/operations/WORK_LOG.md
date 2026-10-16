@@ -2147,3 +2147,67 @@ service was accessed.
 
 **Risk/next action:** coordinator review, then a separately authorized fresh
 served R1 acceptance. The R1 end-to-end gate remains incomplete.
+
+### R1 bounded recovery feedback (2026-10-16)
+
+**Roadmap ID:** R1. Recovery feedback supplied to `BuildRolePrompt` is no
+longer dropped when it exceeds 512 bytes. It is normalized to valid UTF-8,
+truncated on a rune boundary to the existing byte budget, and marked with an
+explicit `[truncated]` suffix. Schema correction handling continues to accept
+only the schema-owned canonical feedback matching the reported correction,
+then bounds and persists that feedback for retry and prompt delivery. No raw
+prompt, provider output, or user data was read; no provider task was run. No
+package boundary changed.
+
+**Evidence:** focused tests cover exact-limit retention, over-limit actionable
+field/allowed-value prefix, UTF-8-safe truncation, prompt delivery, and existing
+durable canonical feedback persistence through Resume. `go build ./...`,
+`go vet ./...`, `go test -count=1 ./...`, and `staticcheck ./...` passed on the
+isolated PR-only branch using the known workspace-local Go cache/temp paths.
+`git diff --check` passed. The Ollama scout produced no output and no Ollama
+process remained; the documented narrow fallback was used. Windows test-temp
+ACL issues were not observed in this run.
+
+**Risk/next action:** the built-in canonical schema messages are currently
+shorter than 512 bytes, so the over-limit case is tested at the prompt boundary
+with synthetic sanitized feedback; persistence uses the same bounder for any
+future longer canonical message. Coordinator review and a fresh served R1
+acceptance remain required; no remote PR state was changed.
+
+### R1 served acceptance follow-up (2026-10-16)
+
+**Roadmap ID:** R1. Served run `run_92f076e7f909e9c686c15d785d` dispatched
+three lanes and research succeeded. The reviewer failed with
+`invalid_field_type` on handoff at the retry cap, and the developer failed with
+`invalid_proposal_diff` at the retry cap. Fan-in ended in terminal failure and
+the dashboard emitted a failure event. No proposal, apply, or validation took
+place; the isolated clone remained unchanged. No raw model text is recorded.
+
+The bounded recovery-feedback change is a justified independent improvement,
+but this run does not prove it caused or would have prevented either failure.
+R1 remains incomplete. Next, improve actionable schema correction for these
+two error classes and rerun under the same isolated gates. No package boundary
+changed and no remote PR state was changed by this documentation update.
+
+### R1 actionable retry and reviewer handoff guidance (2026-10-16)
+
+**Roadmap ID:** R1. Durable role retry now persists the fixed schema-owned
+correction for a typed `invalid_proposal_diff` failure and supplies it on
+Resume. Raw proposal/error details are not copied to recovery state. Reviewer
+guidance now requires a non-null handoff object or concise string for
+`changes_requested`, while allowing omission or null for `approved`; schema
+type feedback includes the same decision-dependent rule and small examples.
+Configuration docs distinguish Prizm-parsed text tool envelopes from native
+provider tools. No provider-specific harness or package was added.
+
+**Evidence:** focused tests cover durable feedback persistence/delivery and
+absence of raw patch/error canaries, reviewer handoff object/string/null
+behavior, prompt examples and type feedback, and a text tool envelope reaching
+the injected Prizm executor. The local Ollama scout produced only a spinner
+and was canceled; the fallback context pack was saved and read. No live
+provider or service was used.
+
+**Risk/next action:** the earlier served run remains a terminal failure and
+does not establish a successful R1 task. Complete build, vet, uncached tests,
+Staticcheck, and diff checks, then coordinator review and a fresh isolated R1
+acceptance. No remote PR state was changed.

@@ -478,10 +478,24 @@ func (r *DurableRuntime) scheduleRoleRetry(ctx context.Context, record DurableRu
 		if feedback == "" || feedback != strings.TrimSpace(schemaCorrection.Feedback) {
 			feedback = ""
 		}
-		if feedback != "" && len(feedback) <= 512 {
+		if feedback != "" {
+			feedback = boundedRecoveryFeedback(feedback)
 			state.RecoveryFeedback = feedback
 			state.Corrections = append(state.Corrections, RetryCorrection{
 				ErrorClass: "schema", Code: safeRetryCode(schemaCorrection.Code), Feedback: feedback,
+			})
+			if len(state.Corrections) > 16 {
+				state.Corrections = append([]RetryCorrection(nil), state.Corrections[len(state.Corrections)-16:]...)
+			}
+		}
+	}
+	var safeFailure *subagent.SafeFailureError
+	if errors.As(failure, &safeFailure) && safeFailure != nil && safeFailure.Code == "invalid_proposal_diff" {
+		feedback := boundedRecoveryFeedback(correctionFeedback(safeFailure.Code))
+		if feedback != "" {
+			state.RecoveryFeedback = feedback
+			state.Corrections = append(state.Corrections, RetryCorrection{
+				ErrorClass: "schema", Code: safeRetryCode(safeFailure.Code), Feedback: feedback,
 			})
 			if len(state.Corrections) > 16 {
 				state.Corrections = append([]RetryCorrection(nil), state.Corrections[len(state.Corrections)-16:]...)
