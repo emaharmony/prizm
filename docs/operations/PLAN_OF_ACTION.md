@@ -607,3 +607,15 @@ full repository validation passed.
 
 **Next action:** coordinator review and separately authorized served R1
 acceptance; no live provider behavior is claimed.
+
+## Current Handoff: R1 served retry failure origin (2026-10-16)
+
+**Roadmap:** R1 remains incomplete. Served run `run_8b0136a552a09b58a015757442` used the approved `ollama/glm-5.3:cloud` provider through Prizm's served API. It consumed one initial attempt and ten retries, then ended with `retry_exhausted` for `provider_transient/provider_turn_failed`. No proposal, apply, or validation occurred; the isolated clone stayed untouched. PR #91 remains draft.
+
+The runtime now derives the retry origin through the existing failure classifier, stores only the allowlisted origin with durable retry state, and includes the safe origin (including `unknown`) in scheduled and exhausted retry events. Unknown errors remain unknown; raw error text is excluded. The regression exercises the real durable scheduling and exhaustion path for both known provider origin and unknown origin.
+
+**Evidence:** the focused durable retry-origin regressions passed. `go build ./...`, `go vet ./...`, uncached `go test ./... -count=1` (with loopback and workspace-local temporary/cache paths), and `git diff --check` passed. The local Ollama context scout was unavailable because port 11434 access was denied; targeted source discovery followed the documented fallback. No package boundary changed.
+
+**Risk:** this run demonstrates bounded retry exhaustion and terminal reporting, not successful code delivery. R1 acceptance remains open.
+
+**Next action:** coordinator review of this exact candidate, then a fresh isolated served task after the provider availability issue is addressed. Require a reviewed proposal, explicit approval, exactly-once apply, configured validation, resume, and one final report before claiming R1 completion or removing draft status.

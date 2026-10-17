@@ -397,9 +397,7 @@ func (r *DurableRuntime) emitRetry(kind string, record DurableRun, state RetrySt
 	if kind != event.EventMultiAgentRetryAttemptStarted {
 		payload["failure_class"] = safeRetryCode(state.FailureClass)
 		payload["failure_code"] = safeRetryCode(state.FailureCode)
-		if origin := safeFailureOrigin(state.FailureClass, state.FailureCode, state.FailureOrigin); origin != FailureOriginUnknown {
-			payload["failure_origin"] = origin
-		}
+		payload["failure_origin"] = safeFailureOrigin(state.FailureClass, state.FailureCode, state.FailureOrigin)
 	}
 	if kind == event.EventMultiAgentRetryScheduled {
 		payload["next_at"] = state.NextAt.UTC().Format(time.RFC3339Nano)
@@ -485,6 +483,8 @@ func (r *DurableRuntime) scheduleRoleRetry(ctx context.Context, record DurableRu
 	}
 	state.AccumulatedIterations += iterations
 	state.FailureClass, state.FailureCode = safeRetryCode(class), safeRetryCode(code)
+	classification := ClassifyRoleExecutionFailureWithResult(failure, result)
+	state.FailureOrigin = safeFailureOrigin(state.FailureClass, state.FailureCode, classification.Origin)
 	var schemaCorrection *SchemaCorrectionError
 	if errors.As(failure, &schemaCorrection) && schemaCorrection != nil {
 		feedback := canonicalSchemaFeedback(schemaCorrection.Role, safeRetryCode(schemaCorrection.Code), schemaCorrection.Fields)

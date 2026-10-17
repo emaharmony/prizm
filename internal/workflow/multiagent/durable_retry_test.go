@@ -270,7 +270,7 @@ func TestDurableRetryExhaustionIsInitialPlusTenAndTerminalIsStable(t *testing.T)
 	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 	steps := make([]scriptedStep, 11)
 	for i := range steps {
-		steps[i] = scriptedStep{result: RoleRunResult{LocalIterations: 1, TokenUsage: cost.TokenUsage{PromptTokens: 1, TotalTokens: 1}}, err: &subagent.SafeFailureError{Code: "invalid_final_schema"}}
+		steps[i] = scriptedStep{result: RoleRunResult{LocalIterations: 1, TokenUsage: cost.TokenUsage{PromptTokens: 1, TotalTokens: 1}}, err: &subagent.SafeFailureError{Code: "provider_turn_failed"}}
 	}
 	runner := &scriptedRunner{scripts: map[Role][]scriptedStep{RolePlanner: steps}}
 	runtime := newMutableClockRuntime(t, validDefinition(), runner, env, &now)
@@ -280,6 +280,18 @@ func TestDurableRetryExhaustionIsInitialPlusTenAndTerminalIsStable(t *testing.T)
 	var waiting *RunWaitingError
 	if !errors.As(err, &waiting) {
 		t.Fatalf("initial retry schedule err=%v", err)
+	}
+	initial, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initial.Retry == nil || initial.Retry.FailureClass != "provider_transient" || initial.Retry.FailureCode != "provider_turn_failed" || initial.Retry.FailureOrigin != FailureOriginProviderCall {
+		t.Fatalf("initial durable retry provenance=%#v", initial.Retry)
+	}
+	for _, scheduled := range queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryScheduled) {
+		if scheduled.Payload["failure_origin"] != string(FailureOriginProviderCall) {
+			t.Fatalf("scheduled event lost provider origin: %#v", scheduled.Payload)
+		}
 	}
 	for recovery := 1; recovery <= 10; recovery++ {
 		record, loadErr := env.store.Load(context.Background(), request.RunID)
@@ -302,6 +314,25 @@ func TestDurableRetryExhaustionIsInitialPlusTenAndTerminalIsStable(t *testing.T)
 	}
 	if len(record.RetryHistory) != 1 || record.RetryHistory[0].RecoveryNumber != 10 || record.RetryHistory[0].Number != 11 {
 		t.Fatalf("persisted retry history=%#v", record.RetryHistory)
+	}
+	if record.RetryHistory[0].FailureOrigin != FailureOriginProviderCall {
+		t.Fatalf("retry history origin=%q, want %q", record.RetryHistory[0].FailureOrigin, FailureOriginProviderCall)
+	}
+	if record.Failure == nil || record.Failure.FailureOrigin != FailureOriginProviderCall {
+		t.Fatalf("terminal failure origin=%#v, want %q", record.Failure, FailureOriginProviderCall)
+	}
+	scheduledEvents := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryScheduled)
+	if len(scheduledEvents) != 10 {
+		t.Fatalf("scheduled retry event count=%d, want 10", len(scheduledEvents))
+	}
+	for _, scheduled := range scheduledEvents {
+		if scheduled.Payload["failure_origin"] != string(FailureOriginProviderCall) {
+			t.Fatalf("scheduled event lost provider origin: %#v", scheduled.Payload)
+		}
+	}
+	exhaustedEvents := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryExhausted)
+	if len(exhaustedEvents) != 1 || exhaustedEvents[0].Payload["failure_origin"] != string(FailureOriginProviderCall) {
+		t.Fatalf("exhausted event provenance=%#v", exhaustedEvents)
 	}
 	if record.Failure == nil || record.Failure.Message != "retry_exhausted" || record.State.RoleStates[RolePlanner].LastError != "retry_exhausted" {
 		t.Fatalf("terminal retry reason=%#v role=%#v", record.Failure, record.State.RoleStates[RolePlanner])
@@ -327,6 +358,78 @@ func TestDurableRetryExhaustionIsInitialPlusTenAndTerminalIsStable(t *testing.T)
 	}
 	if failed["attempt_id"] == "" || fmt.Sprint(failed["attempt"]) != "11" || fmt.Sprint(failed["recovery_number"]) != "10" {
 		t.Fatalf("terminal attempt identity=%#v", failed)
+	}
+}
+
+func TestDurableRetrySchedulerPersistsUnknownOriginWithoutRawError(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	steps := make([]scriptedStep, 11)
+	for i := range steps {
+		steps[i] = scriptedStep{err: retry.NewRetryableError(errors.New("PRIVATE_RAW_FAILURE_CANARY"))}
+	}
+	runner := &scriptedRunner{scripts: map[Role][]scriptedStep{RolePlanner: steps}}
+	runtime := newMutableClockRuntime(t, validDefinition(), runner, env, &now)
+	request := testRunRequest()
+	request.RunID = "run-retry-unknown-origin"
+	_, err := runtime.Run(context.Background(), request)
+	var waiting *RunWaitingError
+	if !errors.As(err, &waiting) {
+		t.Fatalf("initial retry schedule err=%v", err)
+	}
+	for recovery := 1; recovery <= 10; recovery++ {
+		record, loadErr := env.store.Load(context.Background(), request.RunID)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		now = record.Retry.NextAt.Add(time.Millisecond)
+		state, resumeErr := runtime.Resume(context.Background(), request.RunID)
+		if recovery < 10 {
+			if !errors.As(resumeErr, &waiting) || state.Status != RunStatusPaused {
+				t.Fatalf("recovery %d state=%s err=%v", recovery, state.Status, resumeErr)
+			}
+		} else if state.Status != RunStatusFailed || resumeErr == nil {
+			t.Fatalf("exhaustion state=%s err=%v", state.Status, resumeErr)
+		}
+	}
+	record, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Retry != nil || len(record.RetryHistory) != 1 || record.RetryHistory[0].FailureOrigin != FailureOriginUnknown || record.Failure == nil || record.Failure.FailureOrigin != FailureOriginUnknown {
+		t.Fatalf("unknown failure origin was not preserved: retry=%#v history=%#v failure=%#v", record.Retry, record.RetryHistory, record.Failure)
+	}
+	scheduledEvents := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryScheduled)
+	exhaustedEvents := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryExhausted)
+	if len(scheduledEvents) != 10 || len(exhaustedEvents) != 1 {
+		t.Fatalf("unknown-origin retry events: scheduled=%d exhausted=%d", len(scheduledEvents), len(exhaustedEvents))
+	}
+	for _, group := range []struct {
+		kind   string
+		events []event.Event
+	}{
+		{kind: event.EventMultiAgentRetryScheduled, events: scheduledEvents},
+		{kind: event.EventMultiAgentRetryExhausted, events: exhaustedEvents},
+	} {
+		for _, emitted := range group.events {
+			if emitted.Payload["failure_origin"] != string(FailureOriginUnknown) {
+				t.Fatalf("%s origin=%#v, want unknown", group.kind, emitted.Payload["failure_origin"])
+			}
+			encoded, marshalErr := json.Marshal(emitted.Payload)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			if strings.Contains(string(encoded), "PRIVATE_RAW_FAILURE_CANARY") {
+				t.Fatalf("%s leaked raw error: %s", group.kind, encoded)
+			}
+		}
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "PRIVATE_RAW_FAILURE_CANARY") {
+		t.Fatalf("durable run leaked raw error: %s", encoded)
 	}
 }
 
