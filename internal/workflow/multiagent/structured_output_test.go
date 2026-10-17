@@ -177,6 +177,55 @@ func TestHandoffSummaryCompatibilityKeepsStrictRoutingAndReviewSemantics(t *test
 	})
 }
 
+func TestReviewerHandoffIsDecisionDependent(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want TransitionOutcome
+		bad  bool
+	}{
+		{
+			name: "approved may omit handoff",
+			raw:  `{"schema_version":1,"decision":"approved"}`,
+			want: OutcomeReviewApproved,
+		},
+		{
+			name: "approved may null handoff",
+			raw:  `{"schema_version":1,"decision":"approved","handoff":null}`,
+			want: OutcomeReviewApproved,
+		},
+		{
+			name: "changes requested object handoff",
+			raw:  `{"schema_version":1,"decision":"changes_requested","required_corrections":["fix"],"handoff":{"objective":"fix","reason":"finding"}}`,
+			want: OutcomeChangesRequested,
+		},
+		{
+			name: "changes requested string handoff",
+			raw:  `{"schema_version":1,"decision":"changes_requested","required_corrections":["fix"],"handoff":"Fix the finding"}`,
+			want: OutcomeChangesRequested,
+		},
+		{
+			name: "changes requested rejects null handoff",
+			raw:  `{"schema_version":1,"decision":"changes_requested","required_corrections":["fix"],"handoff":null}`,
+			bad:  true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := decodeRoleOutput(RoleReviewer, test.raw)
+			if test.bad {
+				if err == nil {
+					t.Fatal("invalid decision/handoff combination was accepted")
+				}
+				return
+			}
+			if err != nil || got.Outcome != test.want {
+				t.Fatalf("outcome=%q err=%v, want %q", got.Outcome, err, test.want)
+			}
+		})
+	}
+}
+
 func TestStructuredOutputCorrectionFeedbackIsSpecificAndSafe(t *testing.T) {
 	t.Run("syntax", func(t *testing.T) {
 		_, err := decodeRoleOutput(RolePlanner, `{"provider_private_canary":`)
@@ -227,6 +276,19 @@ func TestRoleExecutionFailureCarriesOnlyAllowlistedFieldTypeFeedback(t *testing.
 	}
 }
 
+func TestReviewerHandoffTypeFeedbackExplainsDecisionConditionalShape(t *testing.T) {
+	expected := schemaFieldExpectedType(RoleReviewer, "handoff")
+	feedback := roleFailureFeedback(RoleReviewer, "invalid_field_type", "handoff", expected)
+	for _, part := range []string{"changes_requested", "non-null", `{"objective":"fix","reason":"finding"}`, `"Fix the finding"`, "approved", "null"} {
+		if !strings.Contains(expected, part) || !strings.Contains(feedback, part) {
+			t.Fatalf("handoff type guidance omitted %q: expected=%q feedback=%q", part, expected, feedback)
+		}
+	}
+	if untrusted := roleFailureFeedback(RoleReviewer, "invalid_field_type", "handoff", "PRIVATE_TYPE_CANARY"); strings.Contains(untrusted, "PRIVATE_TYPE_CANARY") {
+		t.Fatalf("untrusted handoff type escaped schema allowlist: %q", untrusted)
+	}
+}
+
 func TestEnumCorrectionFeedbackIsAllowlistedAndSpecific(t *testing.T) {
 	const privateValue = "PRIVATE_BAD_DECISION_CANARY"
 	raw := `{"schema_version":1,"decision":"` + privateValue + `","findings":[],"evidence":[]}`
@@ -250,8 +312,8 @@ func TestEnumCorrectionFeedbackIsAllowlistedAndSpecific(t *testing.T) {
 	if strings.Contains(string(wire), privateValue) || strings.Contains(feedback, privateValue) {
 		t.Fatalf("private model value leaked: wire=%s feedback=%q", wire, feedback)
 	}
-	if got := roleFailureFeedback(RoleReviewer, "invalid_field_value", "private_field", "", []string{privateValue}); strings.Contains(got, privateValue) || strings.Contains(got, "private_field") {
-		t.Fatalf("untrusted enum detail escaped allowlist: %q", got)
+	if got := roleFailureFeedback(RoleReviewer, "invalid_field_value", "private_field", "", []string{privateValue}); got != canonicalSchemaFeedback(RoleReviewer, "invalid_field_value", nil) {
+		t.Fatalf("unknown enum detail did not stay generic: %q", got)
 	}
 }
 

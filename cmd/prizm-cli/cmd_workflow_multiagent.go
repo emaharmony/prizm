@@ -433,7 +433,7 @@ func buildLiveReferenceComponents(runDir, configPath string, manifest referenceW
 			return nil, fmt.Errorf("configure interaction adapter %q: %w", adapterName, err)
 		}
 	}
-	lifecycle := newApprovalProposalLifecycle(approvalStore, manifest.WorkspacePath, runDir)
+	lifecycle := newApprovalProposalLifecycle(approvalStore, manifest.WorkspacePath, runDir, manifest.SourceWorkspacePath)
 	return &liveReferenceComponents{runner: roleRunner, interaction: interaction, lifecycle: lifecycle}, nil
 }
 

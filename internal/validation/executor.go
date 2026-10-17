@@ -216,14 +216,15 @@ func (e *Executor) Run(ctx context.Context, profileName, correlationID string) (
 		})
 
 		result := &Result{
-			Profile:    profile.Name,
-			Status:     "timeout",
-			ExitCode:   exitCode,
-			DurationMs: durationMs,
-			StdoutPath: stdoutPath,
-			StderrPath: stderrPath,
-			Error:      fmt.Sprintf("validation timed out after %s", timeout),
-			Command:    profile.Command, Args: append([]string(nil), profile.Args...), WorkingDir: workingDir,
+			Profile:        profile.Name,
+			Status:         "timeout",
+			ExitCode:       exitCode,
+			DurationMs:     durationMs,
+			FailureSummary: "Validation command timed out.",
+			StdoutPath:     stdoutPath,
+			StderrPath:     stderrPath,
+			Error:          fmt.Sprintf("validation timed out after %s", timeout),
+			Command:        profile.Command, Args: append([]string(nil), profile.Args...), WorkingDir: workingDir,
 		}
 		e.writeResult(resultPath, result)
 		return result, nil
@@ -276,6 +277,9 @@ func (e *Executor) Run(ctx context.Context, profileName, correlationID string) (
 		StdoutPath: stdoutPath,
 		StderrPath: stderrPath,
 		Command:    profile.Command, Args: append([]string(nil), profile.Args...), WorkingDir: workingDir,
+	}
+	if exitCode != 0 {
+		result.FailureSummary = readFailureSummary(stdoutPath, stderrPath, exitCode)
 	}
 
 	e.writeResult(resultPath, result)

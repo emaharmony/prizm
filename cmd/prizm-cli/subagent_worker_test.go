@@ -179,6 +179,39 @@ func TestSubAgentBackendUsesChatProviderForStructuredRoleOutput(t *testing.T) {
 	}
 }
 
+func TestSubAgentBackendRoutesTextToolEnvelopeThroughPrizmExecutor(t *testing.T) {
+	probe := &chatProbeProvider{response: provider.ChatGenerateResponse{
+		Content: `{"type":"tool_request","tool":"echo","input":{"text":"text-provider-probe"}}`,
+	}}
+	registry := provider.NewProviderRegistry()
+	registry.Register("text-model", probe, provider.ModelInfo{ProviderName: "text-provider"})
+	tools := tool.NewRegistry()
+	if err := tools.Register(&tool.EchoTool{}); err != nil {
+		t.Fatal(err)
+	}
+	policy := tool.DefaultPolicyConfig()
+	backend := &subAgentBackend{
+		providers: registry,
+		exec:      tool.NewExecutor(tools, &policy),
+	}
+	llm, parse, execute, err := backend.Bind(subagent.AgentRuntime{AgentID: "planner", Provider: "text-provider", Model: "text-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := llm(context.Background(), []v2.Message{{Role: "user", Content: "Use the test tool"}}, subagent.ReplyAllowance{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := parse(turn.Text)
+	if action.Tool != "echo" || action.Input["text"] != "text-provider-probe" {
+		t.Fatalf("provider text was not parsed as a Prizm tool request: %#v", action)
+	}
+	result, err := execute(context.Background(), action.Tool, action.Input)
+	if err != nil || !strings.Contains(result, "text-provider-probe") {
+		t.Fatalf("Prizm executor result=%q err=%v", result, err)
+	}
+}
+
 func TestSubAgentBackendRejectsReplyCapConsumedWithoutContent(t *testing.T) {
 	probe := &chatProbeProvider{response: provider.ChatGenerateResponse{OutputTokens: 8192}}
 	registry := provider.NewProviderRegistry()

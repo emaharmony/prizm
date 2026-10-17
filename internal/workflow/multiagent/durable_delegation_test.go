@@ -326,6 +326,47 @@ func TestDelegatedParentTypedFailureSchedulesDurableRetryThenSuccess(t *testing.
 	}
 }
 
+func TestDelegatedParentCapabilityFailureIsTerminalAndPubliclyClassified(t *testing.T) {
+	const runID = "run-parent-capability-terminal"
+	const privateReason = "PRIVATE_CAPABILITY_REASON_CANARY"
+	runtime, env, dispatch, source := newWaitingDelegationRuntime(t, runID)
+	source.runID = runID
+	record, err := env.store.Load(t.Context(), runID)
+	if err != nil || record.Waiting == nil || record.Retry == nil {
+		t.Fatalf("load waiting parent delegation: waiting=%#v retry=%#v err=%v", record.Waiting, record.Retry, err)
+	}
+	failure := ClassifyRoleExecutionFailure(&GovernanceError{Kind: "capability", Reason: privateReason})
+	failure.DeliveryAttemptID, failure.AttemptID = record.Waiting.DeliveryAttemptID, record.Waiting.AttemptID
+	payload, err := json.Marshal(GraphRoleOutcome{Failure: &failure})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.outcomes = []event.Outcome{matchingOutcome(dispatch.command, "parent-capability-failure", event.OutcomeFailed, 1, payload)}
+	state, resumeErr := runtime.Resume(t.Context(), runID)
+	if resumeErr == nil || state.Status != RunStatusFailed {
+		t.Fatalf("capability failure status=%s err=%v", state.Status, resumeErr)
+	}
+	terminal, err := env.store.Load(t.Context(), runID)
+	if err != nil || terminal.Phase != CheckpointTerminal || terminal.Waiting != nil || terminal.Failure == nil {
+		t.Fatalf("terminal record=%#v err=%v", terminal, err)
+	}
+	if record.Retry.RecoveryNumber != 0 || (terminal.Retry != nil && (terminal.Retry.RecoveryNumber != 0 || !terminal.Retry.NextAt.IsZero())) || len(dispatch.commands) != 1 ||
+		!strings.Contains(terminal.Failure.Message, "governance/capability") {
+		t.Fatalf("failure was not classified terminally: retry=%#v commands=%d failure=%#v", terminal.Retry, len(dispatch.commands), terminal.Failure)
+	}
+	retries, err := env.events.Query(t.Context(), event.EventFilter{RunID: runID, Type: event.EventMultiAgentRetryScheduled})
+	if err != nil || len(retries) != 0 {
+		t.Fatalf("unexpected retry events=%d err=%v", len(retries), err)
+	}
+	serialized, err := json.Marshal(terminal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(serialized), privateReason) {
+		t.Fatal("private governance reason leaked into parent terminal report")
+	}
+}
+
 func TestDurableGraphDelegationRejectsMismatchedOutcomeWithoutAck(t *testing.T) {
 	runtime, env, dispatch, source := newWaitingDelegationRuntime(t, "run-graph-delegation")
 	outcome := matchingOutcome(dispatch.command, "forged", event.OutcomeAccepted, 1, nil)

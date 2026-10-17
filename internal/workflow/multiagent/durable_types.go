@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/gitx"
 )
 
 // DurableRunSchemaVersion is the serialized recovery-envelope version.
@@ -93,23 +94,47 @@ const (
 // ProposalOperation is the stable request passed to approval/application
 // authorities. ApplyKey is deterministic for the run and proposal.
 type ProposalOperation struct {
-	RunID        string `json:"run_id"`
-	ProposalID   string `json:"proposal_id"`
-	ApprovalID   string `json:"approval_id"`
-	ApplyKey     string `json:"apply_key"`
-	WorkspaceID  string `json:"workspace_id"`
-	ExecutionKey string `json:"execution_key"`
+	RunID        string          `json:"run_id"`
+	ProposalID   string          `json:"proposal_id"`
+	ApprovalID   string          `json:"approval_id"`
+	ApplyKey     string          `json:"apply_key"`
+	WorkspaceID  string          `json:"workspace_id"`
+	ExecutionKey string          `json:"execution_key"`
+	Role         Role            `json:"role,omitempty"`
+	PatchPlan    *gitx.PatchPlan `json:"patch_plan,omitempty"`
 }
 
 // ProposalApplyResult is bounded application evidence retained in the run.
 type ProposalApplyResult struct {
-	Success       bool                  `json:"success"`
-	TargetPath    string                `json:"target_path,omitempty"`
-	Message       string                `json:"message,omitempty"`
-	DiffPath      string                `json:"diff_path,omitempty"`
-	DiffStat      string                `json:"diff_stat,omitempty"`
-	ReconcileCode ProposalReconcileCode `json:"reconcile_code,omitempty"`
-	ObservedTree  string                `json:"observed_tree,omitempty"`
+	Success            bool                  `json:"success"`
+	TargetPath         string                `json:"target_path,omitempty"`
+	Message            string                `json:"message,omitempty"`
+	DiffPath           string                `json:"diff_path,omitempty"`
+	DiffStat           string                `json:"diff_stat,omitempty"`
+	ReconcileCode      ProposalReconcileCode `json:"reconcile_code,omitempty"`
+	ObservedTree       string                `json:"observed_tree,omitempty"`
+	PatchPlan          *gitx.PatchPlan       `json:"patch_plan,omitempty"`
+	InspectionStage    string                `json:"inspection_stage,omitempty"`
+	InspectionCategory string                `json:"inspection_category,omitempty"`
+	InspectionExitCode int                   `json:"inspection_exit_code,omitempty"`
+}
+
+func validInspectionStage(stage string) bool {
+	switch stage {
+	case "gitdir_discovery", "temp_index_create", "temp_index_close", "temp_index_remove", "read_tree", "stage_worktree", "write_tree":
+		return true
+	default:
+		return false
+	}
+}
+
+func validInspectionCategory(category string) bool {
+	switch category {
+	case "cancelled", "permission", "unavailable", "command_failed", "io_failed":
+		return true
+	default:
+		return false
+	}
 }
 
 // ProposalReconcileCode is a bounded diagnostic from the trusted tree checker.
@@ -213,16 +238,17 @@ type DelegationJoinChild struct {
 // TerminalRoleFailure is an allowlisted diagnosis for a completed delegated
 // attempt. It contains schema-owned identifiers only, never provider output.
 type TerminalRoleFailure struct {
-	AttemptID       string   `json:"attempt_id,omitempty"`
-	Class           string   `json:"class"`
-	Code            string   `json:"code"`
-	CorrectionField string   `json:"correction_field,omitempty"`
-	ExpectedType    string   `json:"expected_type,omitempty"`
-	AllowedValues   []string `json:"allowed_values,omitempty"`
-	RecoveryNumber  int      `json:"recovery_number"`
-	MaxRecoveries   int      `json:"max_recoveries"`
-	Retryable       bool     `json:"retryable"`
-	Reason          string   `json:"reason"`
+	AttemptID       string        `json:"attempt_id,omitempty"`
+	Class           string        `json:"class"`
+	Code            string        `json:"code"`
+	Origin          FailureOrigin `json:"failure_origin,omitempty"`
+	CorrectionField string        `json:"correction_field,omitempty"`
+	ExpectedType    string        `json:"expected_type,omitempty"`
+	AllowedValues   []string      `json:"allowed_values,omitempty"`
+	RecoveryNumber  int           `json:"recovery_number"`
+	MaxRecoveries   int           `json:"max_recoveries"`
+	Retryable       bool          `json:"retryable"`
+	Reason          string        `json:"reason"`
 }
 
 // TerminalFanOutFailure preserves failed child identity after the active join
@@ -239,6 +265,7 @@ type TerminalFanOutFailure struct {
 // delegations execute in parallel and converge deterministically.
 type DelegationJoinState struct {
 	JoinID             string                `json:"join_id"`
+	ParentTask         *TaskReference        `json:"parent_task,omitempty"`
 	ParentExecutionKey string                `json:"parent_execution_key"`
 	ParentRole         Role                  `json:"parent_role"`
 	ParentResult       RoleRunResult         `json:"parent_result"`
@@ -262,6 +289,7 @@ type PersistedFailure struct {
 	MaxRecoveries  int                     `json:"max_recoveries,omitempty"`
 	FailureClass   string                  `json:"failure_class,omitempty"`
 	FailureCode    string                  `json:"failure_code,omitempty"`
+	FailureOrigin  FailureOrigin           `json:"failure_origin,omitempty"`
 	FailureReason  string                  `json:"failure_reason,omitempty"`
 	Retryable      bool                    `json:"retryable,omitempty"`
 	RetryExhausted bool                    `json:"retry_exhausted,omitempty"`
@@ -374,6 +402,8 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 				problems = append(problems, "delegation join wait requires delegation_join state")
 			} else if err := r.DelegationJoin.Validate(r.State.RunID, r.State.CurrentRole); err != nil {
 				problems = append(problems, err.Error())
+			} else if r.DelegationJoin.ParentTask != nil && *r.DelegationJoin.ParentTask != r.State.CurrentTask {
+				problems = append(problems, "delegation join parent task does not match the trusted current task")
 			}
 		}
 		if r.ApprovedTask != nil {
@@ -433,6 +463,9 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 		}
 		if len(r.Retry.Observations) > 64 || r.Retry.ConsecutiveNoProgress < 0 || r.Retry.ConsecutiveNoProgress > 64 {
 			problems = append(problems, "retry no-progress ledger exceeds its bound")
+		}
+		if len(r.Retry.Corrections) > 16 {
+			problems = append(problems, "retry correction history exceeds its bound")
 		}
 		for _, observation := range r.Retry.Observations {
 			if observation.Hash == "" || observation.Count < 1 || observation.Count > 64 {

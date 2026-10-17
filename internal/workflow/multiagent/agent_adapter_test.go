@@ -2,12 +2,14 @@ package multiagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/emaharmony/prizm/internal/agent"
 	"github.com/emaharmony/prizm/internal/cost"
@@ -102,7 +104,7 @@ func TestAgentRoleRunnerBuildsGovernedExecutionRequest(t *testing.T) {
 }
 
 func TestAgentRoleRunnerIncludesSafeSchemaCorrectionInProviderPrompt(t *testing.T) {
-	const feedback = "Field handoff must be a JSON object, a concise JSON string summary, or null. Match its type and structure to the required role schema, then return exactly one JSON object."
+	const feedback = `Field handoff must be for changes_requested, a non-null JSON object with non-empty "objective" and "reason" strings or a non-empty JSON string summary (for example {"objective":"fix","reason":"finding"} or "Fix the finding"); for approved, omit "handoff" or set it to null. Match its type and structure to the required role schema, then return exactly one JSON object.`
 	var captured AgentExecutionRequest
 	runner := newAdapterForTest(t, agentExecutorFunc(func(_ context.Context, request AgentExecutionRequest) (AgentExecutionResult, error) {
 		captured = request
@@ -116,9 +118,15 @@ func TestAgentRoleRunnerIncludesSafeSchemaCorrectionInProviderPrompt(t *testing.
 	if !strings.Contains(captured.Prompt, "RECOVERY CORRECTION: "+feedback) {
 		t.Fatalf("provider prompt omitted safe correction feedback")
 	}
-	if !strings.Contains(captured.FinalResponseContract, `"handoff":{"objective":"...","reason":"..."`) ||
-		!strings.Contains(captured.FinalResponseContract, "Omit handoff when approved") {
-		t.Fatalf("reviewer contract has no matching handoff object example/omit rule")
+	for _, part := range []string{
+		`"handoff":{"objective":"...","reason":"..."`,
+		`{"handoff":{"objective":"fix","reason":"finding"}}`,
+		`{"handoff":"Fix the finding"}`,
+		"For approved, omit handoff or set it to null",
+	} {
+		if !strings.Contains(captured.FinalResponseContract, part) {
+			t.Fatalf("reviewer contract has no matching handoff object example/omit rule")
+		}
 	}
 }
 
@@ -225,6 +233,110 @@ func TestPlannerContractRequiresStringListElements(t *testing.T) {
 	}
 	if strings.Contains(correction.Feedback, "owner") || strings.Contains(correction.Feedback, "developer") {
 		t.Fatalf("feedback contains raw response details: %q", correction.Feedback)
+	}
+}
+
+func TestBuildRolePromptPreservesAndBoundsRecoveryFeedback(t *testing.T) {
+	fieldAndValues := "Field decision must be one of: approved, changes_requested. "
+	t.Run("exact byte limit is preserved", func(t *testing.T) {
+		feedback := fieldAndValues + strings.Repeat("x", maxRecoveryFeedbackBytes-len(fieldAndValues))
+		request := adapterRoleRequest(RoleReviewer)
+		request.RecoveryFeedback = feedback
+		prompt, err := BuildRolePrompt(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(prompt, "RECOVERY CORRECTION: "+feedback) {
+			t.Fatal("feedback at the byte limit was not preserved")
+		}
+	})
+
+	t.Run("over limit keeps actionable prefix and marks truncation", func(t *testing.T) {
+		feedback := fieldAndValues + strings.Repeat("x", maxRecoveryFeedbackBytes-len(fieldAndValues)+1)
+		request := adapterRoleRequest(RoleReviewer)
+		request.RecoveryFeedback = feedback
+		prompt, err := BuildRolePrompt(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bounded := boundedRecoveryFeedback(feedback)
+		if len(bounded) > maxRecoveryFeedbackBytes || !strings.HasSuffix(bounded, recoveryFeedbackTruncationTag) || !strings.HasPrefix(bounded, fieldAndValues) {
+			t.Fatalf("bounded feedback lost its actionable prefix or marker: %q", bounded)
+		}
+		if !strings.Contains(prompt, "RECOVERY CORRECTION: "+bounded) || strings.Contains(prompt, feedback) {
+			t.Fatal("over-limit feedback was omitted or passed unbounded")
+		}
+	})
+
+	t.Run("truncation does not split UTF-8", func(t *testing.T) {
+		feedback := "Field résumé must match " + strings.Repeat("✓", 200)
+		request := adapterRoleRequest(RoleReviewer)
+		request.RecoveryFeedback = feedback
+		prompt, err := BuildRolePrompt(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bounded := boundedRecoveryFeedback(feedback)
+		if len(bounded) > maxRecoveryFeedbackBytes || !utf8.ValidString(bounded) || !strings.HasSuffix(bounded, recoveryFeedbackTruncationTag) {
+			t.Fatalf("truncated feedback is not bounded UTF-8 with a marker: bytes=%d feedback=%q", len(bounded), bounded)
+		}
+		if !strings.Contains(prompt, "RECOVERY CORRECTION: "+bounded) || !strings.HasPrefix(bounded, "Field résumé") {
+			t.Fatal("UTF-8 recovery feedback was omitted or lost its actionable prefix")
+		}
+	})
+}
+
+func TestBuildRolePromptIncludesParentRequirementsForDelegatedTask(t *testing.T) {
+	request := adapterRoleRequest(RoleDeveloper)
+	request.Run.Task = TaskReference{ID: "lane-id", Description: "implement the lane"}
+	request.ParentTask = &TaskReference{ID: "parent-id", Description: "Preserve the same worktree and baseline; verify every required gate."}
+	prompt, err := BuildRolePrompt(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentIndex := strings.Index(prompt, request.ParentTask.Description)
+	laneIndex := strings.Index(prompt, "LANE TASK: "+request.Run.Task.Description)
+	if parentIndex < 0 || laneIndex <= parentIndex {
+		t.Fatalf("prompt did not retain parent requirements before lane task: %q", prompt)
+	}
+}
+
+func TestBuildDeveloperPromptReceivesValidationFailureSummary(t *testing.T) {
+	request := adapterRoleRequest(RoleDeveloper)
+	request.Run.IncomingHandoff = &Handoff{
+		SourceRole:      RoleTester,
+		DestinationRole: RoleDeveloper,
+		ValidationResults: []validation.Result{{
+			Profile: "pytest_selected", Status: "failed", ExitCode: 1,
+			FailureSummary: "KeyError: 'status' password=[REDACTED]",
+		}},
+	}
+	prompt, err := BuildRolePrompt(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, `"failure_summary":"KeyError: 'status' password=[REDACTED]"`) ||
+		!strings.Contains(prompt, `"status":"failed"`) || !strings.Contains(prompt, `"exit_code":1`) {
+		t.Fatalf("developer prompt omitted structured validation failure: %s", prompt)
+	}
+}
+
+func TestLegacyRoleRequestKeepsTaskPromptAndWireShape(t *testing.T) {
+	request := adapterRoleRequest(RolePlanner)
+	request.Run.Task = TaskReference{ID: "legacy-lane", Description: "legacy lane task"}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"parent_task"`) {
+		t.Fatalf("nil legacy parent task changed request wire shape: %s", encoded)
+	}
+	prompt, err := BuildRolePrompt(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "TASK ID: legacy-lane\nTASK: legacy lane task\nVISIT:") || strings.Contains(prompt, "ORIGINAL TASK REQUIREMENTS") {
+		t.Fatalf("legacy request prompt changed: %q", prompt)
 	}
 }
 

@@ -56,23 +56,28 @@ func TestApprovalProposalResolverRejectsTraversalTarget(t *testing.T) {
 }
 
 func TestPatchProposalResolvesManyArtifactsAndReconcilesTrees(t *testing.T) {
-	workspace := filepath.Join(t.TempDir(), "repo")
-	if err := os.MkdirAll(workspace, 0o755); err != nil {
+	source := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(source, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
 	for _, args := range [][]string{{"init", "-b", "main"}, {"config", "user.email", "test@prizm.local"}, {"config", "user.name", "Prizm Test"}} {
-		if _, err := gitx.RunCommand(ctx, workspace, "", "git", args...); err != nil {
+		if _, err := gitx.RunCommand(ctx, source, "", "git", args...); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(workspace, "base.txt"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(source, "base.txt"), []byte("base\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := gitx.RunCommand(ctx, workspace, "", "git", "add", "."); err != nil {
+	if _, err := gitx.RunCommand(ctx, source, "", "git", "add", "."); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := gitx.RunCommand(ctx, workspace, "", "git", "commit", "-m", "base"); err != nil {
+	if _, err := gitx.RunCommand(ctx, source, "", "git", "commit", "-m", "base"); err != nil {
+		t.Fatal(err)
+	}
+	runID := "run-patch"
+	workspace, _, sourceWorkspace, err := isolatedReferenceWorkspace(ctx, source, runID)
+	if err != nil {
 		t.Fatal(err)
 	}
 	base, _ := gitx.CurrentSHA(ctx, workspace)
@@ -83,7 +88,7 @@ func TestPatchProposalResolvesManyArtifactsAndReconcilesTrees(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := approval.NewStore(t.TempDir())
-	item := approval.NewApproval("run-patch", "execution-patch", "developer", "prizm", approval.MutationApplyPatch, "2 files", patch, approval.PolicyDecision{Decision: approval.DecisionRequiresApproval})
+	item := approval.NewApproval(runID, "execution-patch", "developer", "prizm", approval.MutationApplyPatch, "2 files", patch, approval.PolicyDecision{Decision: approval.DecisionRequiresApproval})
 	item.PatchPlan = &approval.PatchPlan{BaseSHA: plan.BaseSHA, BaseTree: plan.BaseTree, ExpectedTree: plan.ExpectedTree, PatchSHA256: plan.PatchSHA256, Paths: plan.Paths}
 	if err := store.Save(item); err != nil {
 		t.Fatal(err)
@@ -92,7 +97,7 @@ func TestPatchProposalResolvesManyArtifactsAndReconcilesTrees(t *testing.T) {
 	if err != nil || len(refs) != 1 || len(refs[0].Artifacts) != 2 {
 		t.Fatalf("refs=%#v err=%v", refs, err)
 	}
-	lifecycle := newApprovalProposalLifecycle(store, workspace, t.TempDir())
+	lifecycle := newApprovalProposalLifecycle(store, workspace, t.TempDir(), sourceWorkspace)
 	op := multiagent.ProposalOperation{RunID: item.RunID, ProposalID: item.ProposalID, ApprovalID: item.ApprovalID, ApplyKey: "apply-patch", ExecutionKey: item.CorrelationID}
 	status, baseResult, err := lifecycle.Reconcile(ctx, op)
 	if err != nil || status != multiagent.ProposalNotApplied || baseResult.ReconcileCode != multiagent.ProposalReconcileBaseTree || baseResult.ObservedTree != plan.BaseTree {

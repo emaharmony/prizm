@@ -72,8 +72,11 @@ func (h *durableRoleRetryHandle) ConsumeRecovery(expectedAttemptID, failureCode 
 	state.RecoveryNumber++
 	state.Number++
 	state.AttemptID = retryAttemptID(state.VisitID, state.Number)
-	state.FailureClass = "correction"
-	state.FailureCode = safeRetryCode(failureCode)
+	if state.FailureClass == "" || state.FailureCode != safeRetryCode(failureCode) {
+		state.FailureClass = "correction"
+		state.FailureCode = safeRetryCode(failureCode)
+		state.FailureOrigin = FailureOriginUnknown
+	}
 	state.NextAt = h.runtime.now().UTC().Add(roleRetryDelay(state.VisitID, state.RecoveryNumber, 0))
 	state.ReplaySafe = !state.MutationPossible
 	next.Retry = &state
@@ -113,10 +116,14 @@ func (h *durableRoleRetryHandle) RecordProgress(expectedAttemptID, kind, safeRef
 }
 
 func (h *durableRoleRetryHandle) RecordCorrection(expectedAttemptID, errorClass, code string) error {
-	return h.RecordCorrectionFeedback(expectedAttemptID, errorClass, code, "")
+	return h.RecordCorrectionWithOrigin(expectedAttemptID, errorClass, code, "", "")
 }
 
 func (h *durableRoleRetryHandle) RecordCorrectionFeedback(expectedAttemptID, errorClass, code, _ string) error {
+	return h.RecordCorrectionWithOrigin(expectedAttemptID, errorClass, code, "", "")
+}
+
+func (h *durableRoleRetryHandle) RecordCorrectionWithOrigin(expectedAttemptID, errorClass, code, origin, _ string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if err := h.validateAttempt(expectedAttemptID); err != nil {
@@ -125,8 +132,11 @@ func (h *durableRoleRetryHandle) RecordCorrectionFeedback(expectedAttemptID, err
 	next := h.record
 	state := *next.Retry
 	feedback := roleFailureFeedback(state.Role, safeRetryCode(code), "", "")
+	class := correctionFailureClass(errorClass, code)
+	safeOrigin := safeFailureOrigin(class, safeRetryCode(code), FailureOrigin(origin))
+	state.FailureClass, state.FailureCode, state.FailureOrigin = class, safeRetryCode(code), safeOrigin
 	state.Corrections = append(state.Corrections, RetryCorrection{
-		ErrorClass: safeRetryCode(errorClass), Code: safeRetryCode(code), Feedback: feedback,
+		ErrorClass: safeRetryCode(errorClass), Code: safeRetryCode(code), FailureOrigin: safeOrigin, Feedback: feedback,
 	})
 	if len(state.Corrections) > 16 {
 		state.Corrections = append([]RetryCorrection(nil), state.Corrections[len(state.Corrections)-16:]...)
@@ -309,6 +319,11 @@ func removeMutationID(ids []string, mutationID string) []string {
 	return kept
 }
 
+func retryStateReplaySafe(state *RetryState) bool {
+	return state != nil && state.ReplaySafe && !state.MutationPossible &&
+		!state.UnresolvedMutationFailure && !state.UnattributedMutation
+}
+
 func refreshMutationSafety(state *RetryState) {
 	state.MutationPossible = state.UnattributedMutation || len(state.UnsafeMutationIDs) > 0
 	state.ReplaySafe = !state.MutationPossible
@@ -382,6 +397,7 @@ func (r *DurableRuntime) emitRetry(kind string, record DurableRun, state RetrySt
 	if kind != event.EventMultiAgentRetryAttemptStarted {
 		payload["failure_class"] = safeRetryCode(state.FailureClass)
 		payload["failure_code"] = safeRetryCode(state.FailureCode)
+		payload["failure_origin"] = safeFailureOrigin(state.FailureClass, state.FailureCode, state.FailureOrigin)
 	}
 	if kind == event.EventMultiAgentRetryScheduled {
 		payload["next_at"] = state.NextAt.UTC().Format(time.RFC3339Nano)
@@ -412,7 +428,7 @@ func classifyRetryableRoleFailure(err error) (class, code string, retryAfter tim
 	var safeFailure *subagent.SafeFailureError
 	if errors.As(err, &safeFailure) {
 		switch safeFailure.Code {
-		case "invalid_proposal_diff":
+		case "invalid_proposal_diff", "invalid_final_schema", "malformed_tool_input":
 			return "schema_correction", safeFailure.Code, 0, true
 		case "provider_turn_failed":
 			return "provider_transient", safeRetryCode(safeFailure.Code), safeFailure.RetryAfter(), true
@@ -467,16 +483,32 @@ func (r *DurableRuntime) scheduleRoleRetry(ctx context.Context, record DurableRu
 	}
 	state.AccumulatedIterations += iterations
 	state.FailureClass, state.FailureCode = safeRetryCode(class), safeRetryCode(code)
+	classification := ClassifyRoleExecutionFailureWithResult(failure, result)
+	state.FailureOrigin = safeFailureOrigin(state.FailureClass, state.FailureCode, classification.Origin)
 	var schemaCorrection *SchemaCorrectionError
 	if errors.As(failure, &schemaCorrection) && schemaCorrection != nil {
 		feedback := canonicalSchemaFeedback(schemaCorrection.Role, safeRetryCode(schemaCorrection.Code), schemaCorrection.Fields)
 		if feedback == "" || feedback != strings.TrimSpace(schemaCorrection.Feedback) {
 			feedback = ""
 		}
-		if feedback != "" && len(feedback) <= 512 {
+		if feedback != "" {
+			feedback = boundedRecoveryFeedback(feedback)
 			state.RecoveryFeedback = feedback
 			state.Corrections = append(state.Corrections, RetryCorrection{
 				ErrorClass: "schema", Code: safeRetryCode(schemaCorrection.Code), Feedback: feedback,
+			})
+			if len(state.Corrections) > 16 {
+				state.Corrections = append([]RetryCorrection(nil), state.Corrections[len(state.Corrections)-16:]...)
+			}
+		}
+	}
+	var safeFailure *subagent.SafeFailureError
+	if errors.As(failure, &safeFailure) && safeFailure != nil && safeFailure.Code == "invalid_proposal_diff" {
+		feedback := boundedRecoveryFeedback(correctionFeedback(safeFailure.Code))
+		if feedback != "" {
+			state.RecoveryFeedback = feedback
+			state.Corrections = append(state.Corrections, RetryCorrection{
+				ErrorClass: "schema", Code: safeRetryCode(safeFailure.Code), Feedback: feedback,
 			})
 			if len(state.Corrections) > 16 {
 				state.Corrections = append([]RetryCorrection(nil), state.Corrections[len(state.Corrections)-16:]...)
@@ -556,7 +588,7 @@ func describeRecoveryCandidate(record DurableRun, now time.Time) RecoveryCandida
 		candidate.Ambiguous = true
 		if record.Retry != nil {
 			candidate.DueAt = record.Retry.NextAt
-			if record.Retry.ReplaySafe && !record.Retry.MutationPossible && !record.Retry.NextAt.After(now) {
+			if retryStateReplaySafe(record.Retry) && !record.Retry.NextAt.After(now) {
 				candidate.Kind, candidate.Ready, candidate.Ambiguous = "retry", true, false
 			}
 		}
@@ -567,7 +599,8 @@ func describeRecoveryCandidate(record DurableRun, now time.Time) RecoveryCandida
 		}
 		if candidate.WaitingKind == "role_retry" && record.Retry != nil {
 			candidate.DueAt = record.Retry.NextAt
-			candidate.Ready = !record.Retry.MutationPossible && !record.Retry.NextAt.After(now)
+			candidate.Ambiguous = !retryStateReplaySafe(record.Retry)
+			candidate.Ready = !candidate.Ambiguous && !record.Retry.NextAt.After(now)
 		} else if candidate.WaitingKind == "delegation_outcome" && record.Waiting.DispatchPending {
 			if record.Retry == nil {
 				candidate.Ready = true
@@ -689,6 +722,7 @@ func durableFailureDiagnostic(err error, retry *RetryState) *PersistedFailure {
 		if retry != nil {
 			diagnostic.FailureClass = safeRetryCode(retry.FailureClass)
 			diagnostic.FailureCode = safeRetryCode(retry.FailureCode)
+			diagnostic.FailureOrigin = safeFailureOrigin(diagnostic.FailureClass, diagnostic.FailureCode, retry.FailureOrigin)
 			diagnostic.Retryable = diagnostic.FailureClass != ""
 		}
 		return diagnostic
@@ -737,6 +771,9 @@ func appendRetryHistory(record *DurableRun, state *RetryState) {
 	copy := *state
 	copy.Progress = append([]RetryProgress(nil), state.Progress...)
 	copy.Corrections = append([]RetryCorrection(nil), state.Corrections...)
+	for index := range copy.Corrections {
+		copy.Corrections[index].AllowedValues = append([]string(nil), state.Corrections[index].AllowedValues...)
+	}
 	copy.UnsafeMutationIDs = append([]string(nil), state.UnsafeMutationIDs...)
 	copy.ProvenNoEffectIDs = append([]string(nil), state.ProvenNoEffectIDs...)
 	record.RetryHistory = append(record.RetryHistory, copy)

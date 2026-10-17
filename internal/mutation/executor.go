@@ -184,8 +184,12 @@ func (e *Executor) ApplyWithRun(ctx context.Context, runID, approvalID, approved
 	switch a.MutationType {
 	case approval.MutationApplyPatch:
 		plan := gitx.PatchPlan{
-			BaseSHA: a.PatchPlan.BaseSHA, BaseTree: a.PatchPlan.BaseTree, ExpectedTree: a.PatchPlan.ExpectedTree,
-			PatchSHA256: a.PatchPlan.PatchSHA256, Paths: append([]string(nil), a.PatchPlan.Paths...),
+			BaseSHA: a.PatchPlan.BaseSHA, BaseTree: a.PatchPlan.BaseTree, PlanningTree: a.PatchPlan.PlanningTree,
+			ExpectedTree: a.PatchPlan.ExpectedTree, PatchSHA256: a.PatchPlan.PatchSHA256,
+			Paths: append([]string(nil), a.PatchPlan.Paths...), Basis: a.PatchPlan.Basis,
+		}
+		if plan.PlanningTree == "" {
+			plan.PlanningTree = plan.BaseTree // schema-v1 clean-base approval compatibility
 		}
 		if err := gitx.ApplyPlannedPatch(ctx, e.workspaceRoot, a.Content, plan); err != nil {
 			e.emitEvent("prizm.mutation.failed", map[string]any{"approval_id": approvalID, "mutation_type": a.MutationType, "correlation_id": a.CorrelationID, "error": err.Error()})
@@ -328,6 +332,12 @@ func (e *Executor) validateSafety(a *approval.Approval) error {
 		}
 		if len(a.PatchPlan.Paths) == 0 || len(a.PatchPlan.Paths) > gitx.MaxPatchPaths {
 			return fmt.Errorf("patch path count is invalid")
+		}
+		if a.PatchPlan.BaseSHA == "" || a.PatchPlan.BaseTree == "" || a.PatchPlan.ExpectedTree == "" || a.PatchPlan.PatchSHA256 == "" {
+			return fmt.Errorf("patch plan identity is incomplete")
+		}
+		if a.PatchPlan.Basis != nil && (a.PatchPlan.Basis.RunID != a.RunID || a.PatchPlan.Basis.BaseSHA != a.PatchPlan.BaseSHA || a.PatchPlan.Basis.BaseTree != a.PatchPlan.BaseTree || a.PatchPlan.Basis.ExpectedTree != a.PatchPlan.PlanningTree) {
+			return fmt.Errorf("patch plan trusted basis is inconsistent")
 		}
 		roots := append([]string(nil), e.allowedPaths...)
 		if len(roots) == 0 {

@@ -3,6 +3,7 @@ package multiagent
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"time"
 
@@ -84,8 +85,11 @@ func (h *delegationChildRetryHandle) ConsumeRecovery(expected, failureCode strin
 		state.RecoveryNumber++
 		state.Number++
 		state.AttemptID = retryAttemptID(state.VisitID, state.Number)
-		state.FailureClass = "correction"
-		state.FailureCode = safeRetryCode(failureCode)
+		if state.FailureClass == "" || state.FailureCode != safeRetryCode(failureCode) {
+			state.FailureClass = "correction"
+			state.FailureCode = safeRetryCode(failureCode)
+			state.FailureOrigin = FailureOriginUnknown
+		}
 		state.RecoveryFeedback = correctionFeedback(state.FailureCode)
 		state.NextAt = time.Now().UTC().Add(roleRetryDelay(state.VisitID, state.RecoveryNumber, 0))
 		state.ReplaySafe = true
@@ -116,10 +120,14 @@ func (h *delegationChildRetryHandle) RecordProgress(expected, kind, safeRef, obs
 }
 
 func (h *delegationChildRetryHandle) RecordCorrection(expected, class, code string) error {
-	return h.RecordCorrectionFeedback(expected, class, code, "")
+	return h.RecordCorrectionWithOrigin(expected, class, code, "", "")
 }
 
 func (h *delegationChildRetryHandle) RecordCorrectionFeedback(expected, class, code, _ string) error {
+	return h.RecordCorrectionWithOrigin(expected, class, code, "", "")
+}
+
+func (h *delegationChildRetryHandle) RecordCorrectionWithOrigin(expected, errorClass, code, origin, _ string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if err := h.validate(expected); err != nil {
@@ -128,7 +136,10 @@ func (h *delegationChildRetryHandle) RecordCorrectionFeedback(expected, class, c
 	_, err := h.update(expected, func(child *DelegationJoinChild) error {
 		state := child.Retry
 		feedback := roleFailureFeedback(child.Role, safeRetryCode(code), "", "")
-		state.Corrections = append(state.Corrections, RetryCorrection{ErrorClass: safeRetryCode(class), Code: safeRetryCode(code), Feedback: feedback})
+		class := correctionFailureClass(errorClass, code)
+		safeOrigin := safeFailureOrigin(class, safeRetryCode(code), FailureOrigin(origin))
+		state.FailureClass, state.FailureCode, state.FailureOrigin = class, safeRetryCode(code), safeOrigin
+		state.Corrections = append(state.Corrections, RetryCorrection{ErrorClass: safeRetryCode(errorClass), Code: safeRetryCode(code), FailureOrigin: safeOrigin, Feedback: feedback})
 		if len(state.Corrections) > 16 {
 			state.Corrections = append([]RetryCorrection(nil), state.Corrections[len(state.Corrections)-16:]...)
 		}
@@ -329,20 +340,27 @@ func ValidateDelegatedRoleCommand(ctx context.Context, store DurableRunStore, co
 		record.State.Status != RunStatusPaused || record.Phase != CheckpointWaiting {
 		return errors.New("multiagent: delegated command does not match active run scope")
 	}
-	request := command.Request.Run
-	if request.RunID != command.RunID || request.Task != command.Task || request.CurrentRole != command.Role ||
-		request.ExecutionKey != command.ExecutionKey || request.WorkspaceID != command.WorkspaceID {
+	request := command.Request
+	if request.Run.RunID != command.RunID || request.Run.Task != command.Task || request.Run.CurrentRole != command.Role ||
+		request.Run.ExecutionKey != command.ExecutionKey || request.Run.WorkspaceID != command.WorkspaceID {
 		return errors.New("multiagent: delegated role request does not match command identity")
+	}
+	if expected := trustedTreeBasisForRole(record, command.Role); !reflect.DeepEqual(request.TrustedTreeBasis, expected) {
+		return errors.New("multiagent: delegated role trusted patch basis does not match durable applied receipt")
 	}
 	if command.JoinID != "" {
 		child := findDelegationChild(record, command.JoinID, command.ChildID)
 		if child == nil || child.Role != command.Role || child.Task != command.Task || child.ExecutionKey != command.ExecutionKey ||
+			!sameOptionalTaskReference(request.ParentTask, record.DelegationJoin.ParentTask) ||
 			child.DelegationID != command.DelegationID || child.Lane != command.Lane || child.DeliveryKey != command.DeliveryKey ||
 			child.CorrelationID != command.CorrelationID || child.CommandEventID != command.CommandEventID || !child.Deadline.Equal(command.Deadline) ||
 			child.DeliveryAttemptID != command.DeliveryAttemptID || child.Retry == nil || child.Retry.AttemptID != command.AttemptID {
 			return ErrStaleRetryAttempt
 		}
 		return nil
+	}
+	if request.ParentTask != nil {
+		return ErrStaleRetryAttempt
 	}
 	w := record.Waiting
 	if record.ActiveExecutionKey != command.ExecutionKey || w == nil || w.Kind != "delegation_outcome" || record.State.CurrentRole != command.Role || record.State.CurrentTask != command.Task ||
@@ -352,6 +370,13 @@ func ValidateDelegatedRoleCommand(ctx context.Context, store DurableRunStore, co
 		return ErrStaleRetryAttempt
 	}
 	return nil
+}
+
+func sameOptionalTaskReference(left, right *TaskReference) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func childRetryEvent(record DurableRun, child DelegationJoinChild, kind string) event.Event {

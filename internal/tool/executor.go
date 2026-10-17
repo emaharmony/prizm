@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/emaharmony/prizm/internal/approval"
+	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/emaharmony/prizm/internal/policy"
 	"github.com/emaharmony/prizm/internal/safety"
 )
@@ -172,7 +173,7 @@ func (e *Executor) ExecuteWithPolicy(ctx context.Context, toolName, agent, proje
 		// Mark as pending_approval status
 		result.Output["policy_decision"] = string(PolicyRequiresApproval)
 		result.Output["policy_reason"] = policyResult.Reason
-		if err := e.persistApproval(toolName, agent, project, correlationID, runID, channelID, execInput, policyResult, &result); err != nil {
+		if err := e.persistApproval(ctx, toolName, agent, project, correlationID, runID, channelID, execInput, policyResult, &result); err != nil {
 			e.emitEvent("prizm.approval.persist_failed", map[string]any{
 				"tool_name":      toolName,
 				"agent":          agent,
@@ -335,7 +336,7 @@ func (e *Executor) emitEvent(eventType string, payload map[string]any) {
 	}
 }
 
-func (e *Executor) persistApproval(toolName, agent, project, correlationID, runID, channelID string, input map[string]any, policyResult PolicyResult, result *ToolResult) error {
+func (e *Executor) persistApproval(ctx context.Context, toolName, agent, project, correlationID, runID, channelID string, input map[string]any, policyResult PolicyResult, result *ToolResult) error {
 	if e.ApprovalStore == nil {
 		return nil
 	}
@@ -418,7 +419,14 @@ func (e *Executor) persistApproval(toolName, agent, project, correlationID, runI
 		a.Content, _ = input["patch"].(string)
 		a.PatchPlan = &approval.PatchPlan{
 			BaseSHA: outputString(result.Output, "base_sha"), BaseTree: outputString(result.Output, "base_tree"),
-			ExpectedTree: outputString(result.Output, "expected_tree"), PatchSHA256: outputString(result.Output, "patch_sha256"), Paths: paths,
+			PlanningTree: outputString(result.Output, "planning_tree"), ExpectedTree: outputString(result.Output, "expected_tree"),
+			PatchSHA256: outputString(result.Output, "patch_sha256"), Paths: paths,
+		}
+		if basis, ok := gitx.TrustedTreeBasisFromContext(ctx); ok {
+			if basis.RunID != runID || a.PatchPlan.BaseSHA != basis.BaseSHA || a.PatchPlan.BaseTree != basis.BaseTree || a.PatchPlan.PlanningTree != basis.ExpectedTree {
+				return fmt.Errorf("persist patch approval: trusted basis does not match proposal plan")
+			}
+			a.PatchPlan.Basis = &basis
 		}
 		if a.PatchPlan.BaseSHA == "" || a.PatchPlan.BaseTree == "" || a.PatchPlan.ExpectedTree == "" || a.PatchPlan.PatchSHA256 == "" || len(paths) == 0 {
 			return fmt.Errorf("persist patch approval: incomplete patch plan")

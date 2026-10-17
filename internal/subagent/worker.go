@@ -59,14 +59,16 @@ type RunResult struct {
 	// PromptTokens/CompletionTokens are the sub-agent's LLM usage for this task.
 	// They are carried on both success and failure returns so the orchestrator can
 	// roll delegated spend into the parent run's token budget.
-	PromptTokens     int
-	CompletionTokens int
-	Iterations       int
-	ToolCalls        int
-	DeniedToolCalls  int
-	RecoveryAttempts int
-	Corrections      int
-	LastRecoveryCode string
+	PromptTokens       int
+	CompletionTokens   int
+	Iterations         int
+	ToolCalls          int
+	DeniedToolCalls    int
+	RecoveryAttempts   int
+	Corrections        int
+	LastRecoveryClass  string
+	LastRecoveryCode   string
+	LastRecoveryOrigin string
 }
 
 // TaskRunner executes one delegated task for a resolved agent. Implementations

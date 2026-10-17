@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,17 +14,96 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 )
+
+// WorktreeInspectionStage and Category are fixed diagnostics for a failed
+// read-only tree inspection. They intentionally omit paths and command output.
+type WorktreeInspectionStage string
+type WorktreeInspectionCategory string
+
+const (
+	InspectResolveGitDir WorktreeInspectionStage = "gitdir_discovery"
+	InspectCreateIndex   WorktreeInspectionStage = "temp_index_create"
+	InspectCloseIndex    WorktreeInspectionStage = "temp_index_close"
+	InspectRemoveIndex   WorktreeInspectionStage = "temp_index_remove"
+	InspectReadTree      WorktreeInspectionStage = "read_tree"
+	InspectAddWorktree   WorktreeInspectionStage = "stage_worktree"
+	InspectWriteTree     WorktreeInspectionStage = "write_tree"
+
+	InspectCancelled     WorktreeInspectionCategory = "cancelled"
+	InspectPermission    WorktreeInspectionCategory = "permission"
+	InspectUnavailable   WorktreeInspectionCategory = "unavailable"
+	InspectCommandFailed WorktreeInspectionCategory = "command_failed"
+	InspectIOFailed      WorktreeInspectionCategory = "io_failed"
+)
+
+type WorktreeInspectionError struct {
+	Stage    WorktreeInspectionStage
+	Category WorktreeInspectionCategory
+	ExitCode int
+	cause    error
+}
+
+func (e *WorktreeInspectionError) Error() string { return "git worktree inspection failed" }
+func (e *WorktreeInspectionError) Unwrap() error { return e.cause }
+
+func worktreeInspectionError(ctx context.Context, stage WorktreeInspectionStage, err error) error {
+	if err == nil {
+		return nil
+	}
+	category := InspectIOFailed
+	exitCode := 0
+	switch {
+	case errors.Is(ctx.Err(), context.Canceled), errors.Is(ctx.Err(), context.DeadlineExceeded):
+		category = InspectCancelled
+	case errors.Is(err, fs.ErrPermission), errors.Is(err, syscall.EACCES), errors.Is(err, syscall.EPERM):
+		category = InspectPermission
+	case errors.Is(err, exec.ErrNotFound), errors.Is(err, fs.ErrNotExist):
+		category = InspectUnavailable
+	default:
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			category = InspectCommandFailed
+			exitCode = exitErr.ExitCode()
+		} else {
+			var pathErr *os.PathError
+			if errors.As(err, &pathErr) && errors.Is(pathErr.Err, fs.ErrNotExist) {
+				category = InspectUnavailable
+			}
+		}
+	}
+	return &WorktreeInspectionError{Stage: stage, Category: category, ExitCode: exitCode, cause: err}
+}
 
 // PatchPlan is the immutable result of validating a unified diff against an
 // exact repository state. ExpectedTree identifies the complete tree produced
 // by applying Patch at BaseSHA, without mutating the real index or worktree.
 type PatchPlan struct {
-	BaseSHA      string
-	BaseTree     string
-	ExpectedTree string
-	PatchSHA256  string
-	Paths        []string
+	BaseSHA      string            `json:"base_sha"`
+	BaseTree     string            `json:"base_tree"`
+	PlanningTree string            `json:"planning_tree"`
+	ExpectedTree string            `json:"expected_tree"`
+	PatchSHA256  string            `json:"patch_sha256"`
+	Paths        []string          `json:"paths"`
+	Basis        *TrustedTreeBasis `json:"basis,omitempty"`
+}
+
+// TrustedTreeBasis identifies a prior, host-verified applied proposal in the
+// same run. It is supplied by workflow state, never by patch input.
+type TrustedTreeBasis struct {
+	RunID        string   `json:"run_id"`
+	WorkspaceID  string   `json:"workspace_id"`
+	ProposalID   string   `json:"proposal_id"`
+	ApprovalID   string   `json:"approval_id"`
+	ApplyKey     string   `json:"apply_key"`
+	ExecutionKey string   `json:"execution_key"`
+	Role         string   `json:"role"`
+	BaseSHA      string   `json:"base_sha"`
+	BaseTree     string   `json:"base_tree"`
+	ExpectedTree string   `json:"expected_tree"`
+	PatchSHA256  string   `json:"patch_sha256"`
+	Paths        []string `json:"paths"`
 }
 
 // PatchSourceRange is an old-side source range a unified-diff hunk relies on.
@@ -33,7 +114,7 @@ type PatchSourceRange struct {
 	LineCount int
 }
 
-var unifiedHunkHeader = regexp.MustCompile(`^@@ -([0-9]+)(?:,([0-9]+))? \+[0-9]+(?:,[0-9]+)? @@`)
+var unifiedHunkHeader = regexp.MustCompile(`^@@ -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? @@(?: .*)?$`)
 
 // PatchSourceRanges parses the old-side line ranges that must be grounded
 // before a governed patch proposal may be persisted. It intentionally accepts
@@ -43,36 +124,70 @@ func PatchSourceRanges(patch string) ([]PatchSourceRange, error) {
 	var current string
 	var ranges []PatchSourceRange
 	var inHunk bool
-	var hunkStart, hunkOldLines int
+	var afterHunk bool
+	var hunkStart, hunkOldLines, hunkNewLines, hunkDeclaredOld, hunkDeclaredNew int
 	lines := strings.Split(patch, "\n")
-	flushHunk := func() {
-		if inHunk && current != "" && current != "/dev/null" && hunkOldLines > 0 {
+	flushHunk := func() error {
+		if !inHunk {
+			return nil
+		}
+		if hunkOldLines != hunkDeclaredOld || hunkNewLines != hunkDeclaredNew {
+			return fmt.Errorf("patch hunk line counts do not match its header")
+		}
+		if current != "" && current != "/dev/null" && hunkOldLines > 0 {
 			ranges = append(ranges, PatchSourceRange{Path: current, StartLine: hunkStart, LineCount: hunkOldLines})
 		}
 		inHunk = false
-		hunkOldLines = 0
+		afterHunk = true
+		return nil
 	}
 	for index, line := range lines {
+		// Split handles LF, and dropping a final CR for parsing also permits
+		// standard CRLF patches. The original patch string remains untouched for
+		// hashing and Git prechecks.
+		line = strings.TrimSuffix(line, "\r")
 		if inHunk {
 			if line == "" && index == len(lines)-1 {
-				flushHunk()
+				if err := flushHunk(); err != nil {
+					return nil, err
+				}
 				break
 			}
 			// Git file markers and the next hunk header delimit a hunk. In
 			// particular, a removed source line such as "-- README.md" is
 			// represented by "--- README.md" and must remain hunk content.
 			if strings.HasPrefix(line, "diff --git ") || strings.HasPrefix(line, "@@ ") {
-				flushHunk()
+				if err := flushHunk(); err != nil {
+					return nil, err
+				}
 			} else if line == "\\ No newline at end of file" {
 				continue
 			} else if len(line) > 0 && (line[0] == ' ' || line[0] == '+' || line[0] == '-') {
+				if hunkOldLines == hunkDeclaredOld && hunkNewLines == hunkDeclaredNew {
+					return nil, fmt.Errorf("patch hunk contains lines beyond its declared counts")
+				}
 				if line[0] == ' ' || line[0] == '-' {
 					hunkOldLines++
+				}
+				if line[0] == ' ' || line[0] == '+' {
+					hunkNewLines++
+				}
+				if hunkOldLines > hunkDeclaredOld || hunkNewLines > hunkDeclaredNew {
+					return nil, fmt.Errorf("patch hunk exceeds its declared line counts")
 				}
 				continue
 			} else {
 				return nil, fmt.Errorf("patch contains malformed hunk body")
 			}
+		}
+		if afterHunk {
+			if line == "" && index == len(lines)-1 {
+				continue
+			}
+			if !strings.HasPrefix(line, "diff --git ") && !strings.HasPrefix(line, "@@ ") {
+				return nil, fmt.Errorf("patch contains unconsumed lines after a hunk")
+			}
+			afterHunk = false
 		}
 		switch {
 		case strings.HasPrefix(line, "--- "):
@@ -86,14 +201,32 @@ func PatchSourceRanges(patch string) ([]PatchSourceRange, error) {
 			if match == nil {
 				return nil, fmt.Errorf("patch contains malformed hunk header")
 			}
-			start, _ := strconv.Atoi(match[1])
+			start, startErr := strconv.Atoi(match[1])
+			if startErr != nil {
+				return nil, fmt.Errorf("patch contains malformed hunk header")
+			}
+			oldCount, oldErr := parseHunkCount(match[2])
+			newCount, newErr := parseHunkCount(match[4])
+			if oldErr != nil || newErr != nil {
+				return nil, fmt.Errorf("patch contains malformed hunk header")
+			}
 			inHunk = true
 			hunkStart = start
-			hunkOldLines = 0
+			hunkOldLines, hunkNewLines = 0, 0
+			hunkDeclaredOld, hunkDeclaredNew = oldCount, newCount
 		}
 	}
-	flushHunk()
+	if err := flushHunk(); err != nil {
+		return nil, err
+	}
 	return ranges, nil
+}
+
+func parseHunkCount(value string) (int, error) {
+	if value == "" {
+		return 1, nil
+	}
+	return strconv.Atoi(value)
 }
 
 func patchHeaderPath(value string) (string, error) {
@@ -120,11 +253,102 @@ const (
 
 // PlanPatch validates a unified diff without changing the repository.
 func PlanPatch(ctx context.Context, root, patch, expectedBase string) (PatchPlan, error) {
+	return planPatch(ctx, root, patch, expectedBase, nil)
+}
+
+// PlanPatchOnTrustedTree validates a correction against a host-verified dirty
+// worktree produced by an earlier approved patch. Legacy callers retain the
+// strict clean-worktree behavior of PlanPatch.
+func PlanPatchOnTrustedTree(ctx context.Context, root, patch string, basis TrustedTreeBasis) (PatchPlan, error) {
+	return planPatch(ctx, root, patch, basis.BaseSHA, &basis)
+}
+
+type trustedTreeBasisContextKey struct{}
+
+// ContextWithTrustedTreeBasis carries host-derived patch provenance to the
+// apply-patch proposal tool. The basis is not a tool argument or model claim.
+func ContextWithTrustedTreeBasis(ctx context.Context, basis TrustedTreeBasis) context.Context {
+	return context.WithValue(ctx, trustedTreeBasisContextKey{}, cloneTrustedTreeBasis(&basis))
+}
+
+// TrustedTreeBasisFromContext returns a defensive copy of host-injected patch
+// provenance, if the current role visit has an approved applied predecessor.
+func TrustedTreeBasisFromContext(ctx context.Context) (TrustedTreeBasis, bool) {
+	basis, ok := ctx.Value(trustedTreeBasisContextKey{}).(*TrustedTreeBasis)
+	if !ok || basis == nil {
+		return TrustedTreeBasis{}, false
+	}
+	return *cloneTrustedTreeBasis(basis), true
+}
+
+func validTrustedTreeBasis(basis TrustedTreeBasis) bool {
+	if strings.TrimSpace(basis.RunID) == "" || strings.TrimSpace(basis.WorkspaceID) == "" ||
+		strings.TrimSpace(basis.ProposalID) == "" || strings.TrimSpace(basis.ApprovalID) == "" ||
+		strings.TrimSpace(basis.ApplyKey) == "" || strings.TrimSpace(basis.ExecutionKey) == "" ||
+		strings.TrimSpace(basis.Role) == "" || basis.BaseSHA == "" || basis.BaseTree == "" ||
+		basis.ExpectedTree == "" || len(basis.PatchSHA256) != 64 || len(basis.Paths) == 0 {
+		return false
+	}
+	for i, path := range basis.Paths {
+		if strings.TrimSpace(path) == "" || filepath.IsAbs(filepath.FromSlash(path)) ||
+			filepath.ToSlash(filepath.Clean(filepath.FromSlash(path))) != path ||
+			(i > 0 && basis.Paths[i-1] >= path) {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneTrustedTreeBasis(basis *TrustedTreeBasis) *TrustedTreeBasis {
+	if basis == nil {
+		return nil
+	}
+	cloned := *basis
+	cloned.Paths = append([]string(nil), basis.Paths...)
+	return &cloned
+}
+
+func equalTrustedTreeBasis(left, right *TrustedTreeBasis) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.RunID == right.RunID && left.WorkspaceID == right.WorkspaceID &&
+		left.ProposalID == right.ProposalID && left.ApprovalID == right.ApprovalID &&
+		left.ApplyKey == right.ApplyKey && left.ExecutionKey == right.ExecutionKey && left.Role == right.Role &&
+		left.BaseSHA == right.BaseSHA && left.BaseTree == right.BaseTree && left.ExpectedTree == right.ExpectedTree &&
+		left.PatchSHA256 == right.PatchSHA256 && equalStrings(left.Paths, right.Paths)
+}
+
+// EqualTrustedTreeBasis compares the complete receipt bound into a patch plan.
+func EqualTrustedTreeBasis(left, right *TrustedTreeBasis) bool {
+	return equalTrustedTreeBasis(left, right)
+}
+
+// ClonePatchPlan returns a defensive copy suitable for persistence or request
+// transport.
+func ClonePatchPlan(plan PatchPlan) PatchPlan {
+	plan.Paths = append([]string(nil), plan.Paths...)
+	plan.Basis = cloneTrustedTreeBasis(plan.Basis)
+	return plan
+}
+
+// EqualPatchPlan compares every approval-bound field in two patch plans.
+func EqualPatchPlan(left, right PatchPlan) bool {
+	return left.BaseSHA == right.BaseSHA && left.BaseTree == right.BaseTree &&
+		left.PlanningTree == right.PlanningTree && left.ExpectedTree == right.ExpectedTree &&
+		left.PatchSHA256 == right.PatchSHA256 && equalStrings(left.Paths, right.Paths) &&
+		equalTrustedTreeBasis(left.Basis, right.Basis)
+}
+
+func planPatch(ctx context.Context, root, patch, expectedBase string, basis *TrustedTreeBasis) (PatchPlan, error) {
 	if strings.TrimSpace(patch) == "" {
 		return PatchPlan{}, fmt.Errorf("patch is empty")
 	}
 	if len(patch) > MaxPatchBytes {
 		return PatchPlan{}, fmt.Errorf("patch size %d exceeds maximum %d bytes", len(patch), MaxPatchBytes)
+	}
+	if _, err := PatchSourceRanges(patch); err != nil {
+		return PatchPlan{}, fmt.Errorf("patch hunk validation failed: %w", err)
 	}
 	base, err := CurrentSHA(ctx, root)
 	if err != nil {
@@ -133,8 +357,27 @@ func PlanPatch(ctx context.Context, root, patch, expectedBase string) (PatchPlan
 	if expectedBase = strings.TrimSpace(expectedBase); expectedBase == "" || base != expectedBase {
 		return PatchPlan{}, fmt.Errorf("patch base mismatch: workspace is %s, proposal requires %s", base, expectedBase)
 	}
-	if err := EnsureClean(ctx, root); err != nil {
-		return PatchPlan{}, fmt.Errorf("validate patch workspace: %w", err)
+	baseTree, err := revisionTree(ctx, root, base)
+	if err != nil {
+		return PatchPlan{}, err
+	}
+	planningTree := baseTree
+	if basis == nil {
+		if err := EnsureClean(ctx, root); err != nil {
+			return PatchPlan{}, fmt.Errorf("validate patch workspace: %w", err)
+		}
+	} else {
+		if !validTrustedTreeBasis(*basis) || basis.BaseSHA != base || basis.BaseTree != baseTree {
+			return PatchPlan{}, fmt.Errorf("trusted patch basis does not match the approved repository base")
+		}
+		observedTree, treeErr := WorktreeTree(ctx, root)
+		if treeErr != nil {
+			return PatchPlan{}, fmt.Errorf("inspect trusted patch basis: %w", treeErr)
+		}
+		if observedTree != basis.ExpectedTree {
+			return PatchPlan{}, fmt.Errorf("worktree does not match trusted patch basis")
+		}
+		planningTree = basis.ExpectedTree
 	}
 	paths, err := patchPaths(ctx, root, patch)
 	if err != nil {
@@ -151,22 +394,22 @@ func PlanPatch(ctx context.Context, root, patch, expectedBase string) (PatchPlan
 			return PatchPlan{}, err
 		}
 	}
-	if _, err := RunCommand(ctx, root, patch, "git", "apply", "--check", "--index", "--binary", "--recount", "--whitespace=nowarn", "-"); err != nil {
+	checkArgs := []string{"apply", "--check", "--binary", "--whitespace=nowarn", "-"}
+	if basis == nil {
+		checkArgs = []string{"apply", "--check", "--index", "--binary", "--whitespace=nowarn", "-"}
+	}
+	if _, err := RunCommand(ctx, root, patch, "git", checkArgs...); err != nil {
 		return PatchPlan{}, fmt.Errorf("patch precheck failed: %w", err)
 	}
-	expectedTree, err := treeWithPatch(ctx, root, base, patch)
+	expectedTree, err := treeWithPatch(ctx, root, planningTree, patch)
 	if err != nil {
 		return PatchPlan{}, fmt.Errorf("compute expected patch tree: %w", err)
 	}
-	baseTree, err := revisionTree(ctx, root, base)
-	if err != nil {
-		return PatchPlan{}, err
-	}
-	if expectedTree == baseTree {
+	if expectedTree == planningTree {
 		return PatchPlan{}, fmt.Errorf("patch produces no tree change")
 	}
 	for _, path := range paths {
-		for _, tree := range []string{baseTree, expectedTree} {
+		for _, tree := range []string{planningTree, expectedTree} {
 			mode, modeErr := treePathMode(ctx, root, tree, path)
 			if modeErr != nil {
 				return PatchPlan{}, modeErr
@@ -177,21 +420,27 @@ func PlanPatch(ctx context.Context, root, patch, expectedBase string) (PatchPlan
 		}
 	}
 	sum := sha256.Sum256([]byte(patch))
-	return PatchPlan{BaseSHA: base, BaseTree: baseTree, ExpectedTree: expectedTree, PatchSHA256: hex.EncodeToString(sum[:]), Paths: paths}, nil
+	return PatchPlan{BaseSHA: base, BaseTree: baseTree, PlanningTree: planningTree, ExpectedTree: expectedTree, PatchSHA256: hex.EncodeToString(sum[:]), Paths: paths, Basis: cloneTrustedTreeBasis(basis)}, nil
 }
 
 // ApplyPlannedPatch revalidates and atomically applies a previously planned
 // patch. git apply is invoked without --reject so a failing hunk cannot leave a
 // partial result. The resulting full tree must match the persisted plan.
 func ApplyPlannedPatch(ctx context.Context, root, patch string, plan PatchPlan) error {
-	replanned, err := PlanPatch(ctx, root, patch, plan.BaseSHA)
+	var replanned PatchPlan
+	var err error
+	if plan.Basis == nil {
+		replanned, err = PlanPatch(ctx, root, patch, plan.BaseSHA)
+	} else {
+		replanned, err = PlanPatchOnTrustedTree(ctx, root, patch, *plan.Basis)
+	}
 	if err != nil {
 		return err
 	}
-	if replanned.BaseTree != plan.BaseTree || replanned.ExpectedTree != plan.ExpectedTree || replanned.PatchSHA256 != plan.PatchSHA256 || !equalStrings(replanned.Paths, plan.Paths) {
+	if replanned.BaseTree != plan.BaseTree || replanned.PlanningTree != plan.PlanningTree || replanned.ExpectedTree != plan.ExpectedTree || replanned.PatchSHA256 != plan.PatchSHA256 || !equalStrings(replanned.Paths, plan.Paths) || !equalTrustedTreeBasis(replanned.Basis, plan.Basis) {
 		return fmt.Errorf("patch plan does not match persisted proposal")
 	}
-	if _, err := RunCommand(ctx, root, patch, "git", "apply", "--binary", "--recount", "--whitespace=nowarn", "-"); err != nil {
+	if _, err := RunCommand(ctx, root, patch, "git", "apply", "--binary", "--whitespace=nowarn", "-"); err != nil {
 		return fmt.Errorf("apply patch: %w", err)
 	}
 	actual, treeErr := WorktreeTree(ctx, root)
@@ -200,15 +449,12 @@ func ApplyPlannedPatch(ctx context.Context, root, patch string, plan PatchPlan) 
 	}
 	// A post-apply mismatch is fail-closed. Reverse the exact patch and verify
 	// the baseline so the caller never observes a partially accepted mutation.
-	_, reverseErr := RunCommand(ctx, root, patch, "git", "apply", "--reverse", "--binary", "--recount", "--whitespace=nowarn", "-")
+	_, reverseErr := RunCommand(ctx, root, patch, "git", "apply", "--reverse", "--binary", "--whitespace=nowarn", "-")
 	rolledBack, rollbackTreeErr := WorktreeTree(ctx, root)
-	baseTree, baseTreeErr := revisionTree(ctx, root, plan.BaseSHA)
-	if reverseErr != nil || rollbackTreeErr != nil || baseTreeErr != nil || rolledBack != baseTree {
+	if reverseErr != nil || rollbackTreeErr != nil || rolledBack != plan.PlanningTree {
 		return fmt.Errorf("applied patch tree mismatch and rollback could not be verified")
 	}
-	if treeErr != nil {
-		return fmt.Errorf("verify applied patch tree: %w", treeErr)
-	}
+	_ = treeErr
 	return fmt.Errorf("applied patch tree mismatch")
 }
 
@@ -221,19 +467,22 @@ func WorktreeTree(ctx context.Context, root string) (string, error) {
 	}
 	defer cleanup()
 	if _, err := runGitWithIndex(ctx, root, index, "read-tree", "HEAD"); err != nil {
-		return "", err
+		return "", worktreeInspectionError(ctx, InspectReadTree, err)
 	}
 	if _, err := runGitWithIndex(ctx, root, index, "add", "--all", "--", "."); err != nil {
-		return "", err
+		return "", worktreeInspectionError(ctx, InspectAddWorktree, err)
 	}
 	out, err := runGitWithIndex(ctx, root, index, "write-tree")
-	return strings.TrimSpace(out), err
+	if err != nil {
+		return "", worktreeInspectionError(ctx, InspectWriteTree, err)
+	}
+	return strings.TrimSpace(out), nil
 }
 
 // CheckPatchDirection checks whether the exact patch applies in the requested
 // direction without mutating the worktree.
 func CheckPatchDirection(ctx context.Context, root, patch string, reverse bool) bool {
-	args := []string{"apply", "--check", "--binary", "--recount", "--whitespace=nowarn"}
+	args := []string{"apply", "--check", "--binary", "--whitespace=nowarn"}
 	if reverse {
 		args = append(args, "--reverse")
 	}
@@ -251,7 +500,7 @@ func treeWithPatch(ctx context.Context, root, base, patch string) (string, error
 	if _, err := runGitWithIndex(ctx, root, index, "read-tree", base); err != nil {
 		return "", err
 	}
-	if _, err := runGitWithIndexInput(ctx, root, index, patch, "apply", "--cached", "--binary", "--recount", "--whitespace=nowarn", "-"); err != nil {
+	if _, err := runGitWithIndexInput(ctx, root, index, patch, "apply", "--cached", "--binary", "--whitespace=nowarn", "-"); err != nil {
 		return "", err
 	}
 	out, err := runGitWithIndex(ctx, root, index, "write-tree")
@@ -280,7 +529,7 @@ func treePathMode(ctx context.Context, root, tree, path string) (string, error) 
 }
 
 func patchPaths(ctx context.Context, root, patch string) ([]string, error) {
-	out, err := RunCommand(ctx, root, patch, "git", "apply", "--numstat", "-z", "--binary", "--recount", "-")
+	out, err := RunCommand(ctx, root, patch, "git", "apply", "--numstat", "-z", "--binary", "-")
 	if err != nil {
 		return nil, fmt.Errorf("inspect patch paths: %w", err)
 	}
@@ -348,23 +597,23 @@ func validatePatchPathParents(root, path string) error {
 func temporaryIndex(ctx context.Context, root string) (string, func(), error) {
 	gitDir, err := RunCommand(ctx, root, "", "git", "rev-parse", "--absolute-git-dir")
 	if err != nil {
-		return "", nil, fmt.Errorf("resolve repository git directory for temporary index: %w", err)
+		return "", nil, worktreeInspectionError(ctx, InspectResolveGitDir, err)
 	}
 	gitDir = strings.TrimSpace(gitDir)
 	if gitDir == "" {
-		return "", nil, fmt.Errorf("resolve repository git directory for temporary index: empty path")
+		return "", nil, worktreeInspectionError(ctx, InspectResolveGitDir, errors.New("empty git directory"))
 	}
 	f, err := os.CreateTemp(gitDir, "prizm-patch-index-*")
 	if err != nil {
-		return "", nil, err
+		return "", nil, worktreeInspectionError(ctx, InspectCreateIndex, err)
 	}
 	path := f.Name()
 	if err := f.Close(); err != nil {
 		_ = os.Remove(path)
-		return "", nil, err
+		return "", nil, worktreeInspectionError(ctx, InspectCloseIndex, err)
 	}
 	if err := os.Remove(path); err != nil {
-		return "", nil, err
+		return "", nil, worktreeInspectionError(ctx, InspectRemoveIndex, err)
 	}
 	return path, func() { _ = os.Remove(path) }, nil
 }
@@ -374,10 +623,25 @@ func runGitWithIndex(ctx context.Context, root, index string, args ...string) (s
 }
 
 func runGitWithIndexInput(ctx context.Context, root, index, stdin string, args ...string) (string, error) {
-	args = append([]string{"-c", "core.excludesFile="}, args...)
+	owned, err := ownedScopeForCommand(ctx, root)
+	if err != nil {
+		return "", err
+	}
+	if owned != nil && hasRepositoryOverride(args) {
+		return "", fmt.Errorf("git repository override is not allowed for an owned worktree")
+	}
+	prefix := []string{"-c", "core.excludesFile="}
+	if owned != nil {
+		prefix = append([]string{"-c", "safe.directory=" + owned.workspace}, prefix...)
+	}
+	args = append(prefix, args...)
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+index)
+	env := os.Environ()
+	if owned != nil {
+		env = filteredGitEnvironment(env)
+	}
+	cmd.Env = append(env, "GIT_INDEX_FILE="+index)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}

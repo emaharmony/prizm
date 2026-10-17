@@ -321,6 +321,65 @@ func TestDurableRuntimeInterruptedExecutionRequiresReconciliation(t *testing.T) 
 	}
 }
 
+func TestPersistedCancellationDoesNotBypassAmbiguousMutationReconciliation(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	runtime := newDurableRuntimeForTest(
+		t, validDefinition(), &panickingRoleRunner{}, env.store, env.claimer, env.events)
+	request := testRunRequest()
+	request.RunID = "run-cancelled-uncertain-mutation"
+	func() {
+		defer func() {
+			if recovered := recover(); recovered == nil {
+				t.Error("expected simulated process crash")
+			}
+		}()
+		_, _ = runtime.Run(context.Background(), request)
+	}()
+
+	before, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil || before.Phase != CheckpointRoleRunning || before.Retry == nil || !before.Retry.MutationPossible {
+		t.Fatalf("ambiguous crash checkpoint=%#v err=%v", before, err)
+	}
+	claim, err := env.claimer.Acquire(context.Background(), request.RunID)
+	if err != nil {
+		t.Fatalf("hold run claim: %v", err)
+	}
+	cancelState, err := runtime.Cancel(context.Background(), request.RunID, "operator stopped uncertain execution")
+	if err != nil || cancelState.Status == RunStatusCancelled {
+		_ = claim.Release()
+		t.Fatalf("cancel request bypassed active claim or terminalized early: state=%s err=%v", cancelState.Status, err)
+	}
+	if err := claim.Release(); err != nil {
+		t.Fatalf("release run claim: %v", err)
+	}
+
+	safeRunner := &countingRoleRunner{}
+	resumer := newDurableRuntimeForTest(
+		t, validDefinition(), safeRunner, env.store, env.claimer, env.events)
+	state, err := resumer.Resume(context.Background(), request.RunID)
+	var waiting *RunWaitingError
+	if !errors.As(err, &waiting) || waiting.Kind != "execution_reconciliation" || state.Status != RunStatusPaused {
+		t.Fatalf("resume skipped reconciliation for cancellation: state=%#v err=%v", state, err)
+	}
+	record, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Phase != CheckpointWaiting || record.Waiting == nil || record.Waiting.Kind != "execution_reconciliation" || record.Retry == nil || !record.Retry.MutationPossible || record.State.Status == RunStatusCancelled {
+		t.Fatalf("cancellation erased unresolved mutation evidence: phase=%s waiting=%#v retry=%#v state=%s", record.Phase, record.Waiting, record.Retry, record.State.Status)
+	}
+	reason, requested, err := env.store.CancellationRequest(context.Background(), request.RunID)
+	if err != nil || !requested || reason != "operator stopped uncertain execution" {
+		t.Fatalf("persisted cancellation was lost: reason=%q requested=%v err=%v", reason, requested, err)
+	}
+	if safeRunner.calls != 0 {
+		t.Fatalf("runner invoked before mutation reconciliation: calls=%d", safeRunner.calls)
+	}
+	if events := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRunCancelled); len(events) != 0 {
+		t.Fatalf("cancel events before mutation reconciliation=%d, want none", len(events))
+	}
+}
+
 func TestDurableRuntimeDuplicateResumeCannotAcquireClaim(t *testing.T) {
 	env := newDurableTestEnvironment(t)
 	runner := happyDurableRunner()

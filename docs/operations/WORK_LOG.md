@@ -1655,201 +1655,6 @@ The original local run `run_01M4PWEE6MX1FCE76G3WYANSKF` remains unchanged and ha
 
 **Next action:** push the reviewed CI correction commit to PR #89 and check CI for that exact head; continue to leave R1's other multi-task scenarios open.
 
-### R1 parallel child acceptance and retry gap (2026-10-12)
-
-- Current branch: `codex/r1-parallel-acceptance`; work is uncommitted. PR #89 is
-  the prior merged durable-task-retry milestone, not completion of this R1
-  slice. Default-parallel `go test ./...`, `go build ./...`, `go vet ./...`,
-  and `staticcheck ./...` passed after the stale-attempt refresh fix in
-  `internal/subagent/runner.go`; the regression verifies the failed action’s
-  diagnostic identity stays stable while later progress uses the newly active
-  attempt.
-- Preserved prior terminal records: `run_d1df5d4543fd5a66d358902bdb` failed
-  after duplicate implementation; `run_0697b0e667e3423b2793a4660e` failed at
-  Planner with no proposal; `run_5d3cfb74d13a7ddcf670883351` failed because
-  stale attempt identity reached the no-progress checkpoint. No old record was
-  rewritten. An isolated run `run_fe4abeef67a31032461f2b778a` was cancelled
-  through the run-scoped API after confirming the service had omitted
-  `PRIZM_GRAPH_ROLE_DELEGATION=1`; it produced one failure notification and no
-  proposal/apply.
-- Fresh delegation-enabled run `run_cbd0dd33262acf1d7a46f4f84a` verified the
-  parent command’s trusted `fan_out_available=true`. Its durable join
-  `join:run_cbd0dd33262acf1d7a46f4f84a:planner:1` accepted research,
-  implementation, and review workers at 17:53:45.654, .682, and .706 UTC.
-  Research succeeded at 17:54:42.215; implementation failed with safe code
-  `invalid_proposal_context`; review failed with structured-output correction.
-  The parent run terminalized as failed with one dashboard failure event and
-  no proposal, approval, or apply. Out-of-band database inspection showed one
-  acceptance and one terminal outcome per child; child failures do not yet
-  carry retry attempts/provider metadata. The independent 19-pass result is not
-  a workflow Tester success; the allowlisted Factory source snapshot is not
-  full game or live Studio evidence.
-- The proposal guard failure is not a root/child task-ID comparison: it is the
-  source coverage parse/path/hash guard in `internal/subagent/runner.go`, which
-  currently collapses its underlying cause into `invalid_proposal_context`.
-  Normal durable `RoleRunRequest` gets a per-visit `RetryHandle` from
-  `DurableRun.Retry`; fan-out children do not serialize that hook, and the CLI
-  graph worker terminalizes a `RunRole` error after one call. The `event`
-  package owns the event contract, while multi-agent workflow owns transition
-  and recovery policy; no new package or coordinator is warranted.
-- A prior workspace-local Factory pytest temp directory had uncertain ownership
-  and was preserved without reconstruction or deletion; the later acceptance
-  used a separately verified owned temp path. No main Factory files were
-  changed. All unrelated cache/worktree/temp artifacts remain untouched.
-
-**Next action:** add a real-SQLite concurrent child-only checkpoint/CAS test
-first, then implement per-`DelegationJoinChild` retry state in the existing
-multi-agent RunStore and route worker retryable outcomes through the existing
-service scheduler/outbox. Preserve stable logical child task/workspace/proposal
-identity, use attempt-specific delivery identity, and fail closed for stale
-outcomes, governance/auth/cancel, unknown errors, and ambiguous mutations. Add
-shared ten-recovery, restart, duplicate-result, no-double-effect, and
-nonretryable tests before registering a fresh acceptance run. R1 remains open.
-
-### R1 safe correction feedback and parallel acceptance (2026-10-12)
-
-- In `internal/workflow/multiagent`, typed structured-output field and enum
-  details now cross the trusted role-failure boundary only as allowlisted
-  schema field IDs, expected JSON types, and static allowed-value lists.
-  Parent and child retry feedback is reconstructed from their local role
-  schema; unknown pairs fall back to generic feedback. Provider values, raw
-  errors, and model output are excluded. Added a reviewer prompt-path test to
-  confirm the reconstructed `handoff` type correction reaches the actual
-  `AgentRoleRunner` provider request and matches the documented object shape.
-- Focused correction, parent/child durable retry, worker restoration, and
-  provider-prompt tests passed. `go build ./...`, `go vet ./...`,
-  `staticcheck ./...`, and `go test ./...` passed; the newly added prompt-path
-  test passed in a targeted run after the full suite.
-- Prior immutable run `run_245ca10fd5ce59921c3b418853` remains terminal failed at
-  the retry limit with one delivered notice. Fresh run
-  `run_40fe53464a76d1f7ddb65a6900` proved three real overlapping delegated
-  lanes and transported reviewer `handoff` type feedback, but failed at the
-  join: research succeeded, implementation failed as `unknown/unknown` after
-  two safe `read_file/execution_error` diagnostics, and review exhausted
-  structured-output retries. The final report says `test_outcome=not_recorded`;
-  there were no proposal/apply events and exactly one delivered terminal
-  notification. This is not successful Factory acceptance. The user Factory
-  checkout was unchanged; only the allowlisted production-package snapshot was
-  used.
-- No old run was altered; no push or merge occurred. Unrelated user edits,
-  worktrees, and workspace caches remain preserved.
-
-**Next action:** coordinator reviews the code and truthful run evidence. If
-continuing, diagnose the implementation child's unknown terminal result from
-safe evidence, preserve the previous run, and require a new reviewed proposal
-before any grant or apply. R1 remains open.
-
-### R1 descriptive handoff compatibility and typed failure retention (2026-10-12)
-
-- Added optional handoff summary-string normalization in
-  `internal/workflow/multiagent/structured_output.go`. String summaries become
-  descriptive Objective/Notes with a fixed descriptive Reason; strict object
-  decoding still rejects unknown fields and trailing JSON. Reviewer decisions,
-  required corrections, approved-with-handoff rejection, and graph-derived
-  routing remain unchanged.
-- `ClassifyRoleExecutionFailure` now preserves only enumerated nonretryable
-  SafeFailureError and governance codes. Unknown codes and raw errors remain
-  `unknown/unknown`; tests assert private sentinel values do not enter durable
-  failure payloads.
-- `go test ./internal/workflow/multiagent ./internal/subagent ./cmd/prizm-cli`
-  passed using the existing workspace-local Go cache. Go emitted a telemetry
-  upload-token Access Denied warning for its default user telemetry directory;
-  test execution completed successfully. Initial no-cache invocation also hit
-  access denied in the default Go cache and was not treated as a code failure.
-- Immutable live runs `run_245ca10fd5ce59921c3b418853` and
-  `run_40fe53464a76d1f7ddb65a6900` were not changed or retried. Neither has a
-  proposal or apply; the latter's three-lane execution is not successful task
-  acceptance. Proposal fallback remains out of scope until an
-  action-attributed receipt can be proven; hashed mutation IDs alone are not
-  sufficient authority.
-
-**Next action:** coordinator reviews the exact diff and test evidence. Continue
-the read-only proposal/action attribution investigation only if existing
-approval, execution, and retry state can jointly prove one pending proposal
-for the current action/attempt and no workspace mutation. R1 remains open.
-
-### R1 stage 1+3 frozen validation update (2026-10-12)
-
-`go build ./...` and `go vet ./...` exited 0. `staticcheck ./...` exited 0
-with `STATICCHECK_CACHE` redirected to the existing workspace-local cache.
-The full default-parallel `go test ./...` run emitted passing results for all
-listed packages and no `FAIL`; its detached shell session did not retain the
-final process exit code, so this entry records observed package results rather
-than an exit code. Focused owning-package tests exited 0. `git diff --check`
-passed. No source changes followed these checks. An initial cache attempt was
-blocked by access denied in the default user cache/telemetry paths; no cache
-contents were deleted or overwritten.
-
-**Next action:** coordinator reviews the literal implementation and gate
-evidence before any fresh live acceptance. The currently observed service PID
-and listener state differed from an older recorded PID, so do not restart a
-process until exact current path, start time, config, and ownership are
-confirmed. R1 remains open; no commit, push, or merge occurred.
-
-### R1 handoff-prompt and parallel acceptance follow-up (2026-10-12)
-
-- The actual `AgentRoleRunner` response contract now documents that a handoff
-  may be a concise descriptive JSON string; Reviewer guidance still requires
-  it only for `changes_requested` and omits it for `approved`. The safe
-  expected-type feedback describes the accepted object/string/null forms.
-  A fake executor traverses `AgentRoleRunner` and verifies the resulting
-  reviewer outcome resolves to the compiled Developer edge; a second test
-  verifies approved-with-handoff remains rejected. Existing focused
-  compatibility and package tests pass. Latest `go build ./...`,
-  `go vet ./...`, and `staticcheck ./...` exited 0. The default-parallel full
-  suite had passed before this narrow change; no full rerun was made. One
-  initial Staticcheck invocation hit denied default-cache writes; rerunning
-  with the existing workspace-local cache exited 0. `git diff --check` passed.
-- Read-only source tracing confirmed strict final role JSON goes through
-  `decodeStrictJSON` into `OutputHandoff.UnmarshalJSON`; the live
-  `invalid_field_type` record cannot distinguish a string from another
-  malformed nested handoff shape. No raw provider output was inspected or
-  retained.
-- Fresh run `run_9544229c6a3b2158bf82ddf6e6` used the unchanged Factory package
-  snapshot, provider, task-specific immutable workflow, and selected pytest
-  profile fingerprint. Trusted worker records showed research, implementation,
-  and review accepted with overlapping execution intervals. Research
-  succeeded; implementation ended `unknown/unknown`, nonretryable, with its
-  usage retained; review exhausted repeated structured-output corrections,
-  ending `invalid_field_value`. The run failed at fan-in with
-  `test_outcome=not_recorded`, no proposal or apply, and one dashboard failure
-  notification. The run is preserved as terminal failed. The user Factory
-  checkout remains untouched; no proposal was approved and no commit, push,
-  or merge occurred.
-
-**Next action:** coordinator reviews the actual source diff and latest failed
-run evidence. Diagnose the implementation child’s safe unknown terminal class
-and reviewer schema failures before considering another live run. Do not infer
-from out-of-band Factory tests, weaken mutation guards, rewrite immutable run
-records, or claim R1 completion.
-
-### R6 separate-repository API idempotency proof (2026-10-12)
-
-**Roadmap ID:** R6 (dependency verification only; no Prizm implementation).
-
-In the authorized Recall worktree
-`D:\_projects_\remembrance-mcp\.worktrees\r6-api-recovery-proof`, branch
-`codex/r6-api-recovery-proof` at base
-`d68784e57dd5fa5aa2fb1271ed0106c2edd13cca`, `tests/test_rest_api.py` adds
-concurrent same-key requests through independent HTTP clients and restart
-replay through a fresh server/pipeline using the same SQLite database. The
-real local outbox worker is allowed to complete the capture; assertions verify
-one raw row, one outbox job, one canonical memory, and the same returned
-primary memory ID after replay. Focused tests: 6 passed, 32 deselected. Full
-REST module: 37 passed, 1 skipped. No production source was changed, and no
-commit, push, PR, or merge was made.
-
-Limits: this verifies the Recall API idempotency behavior only. It does not
-run the Prizm reconciler, simulate a live Recall outage, or complete R6. The
-Recall main checkout's pre-existing `.gitignore` and `.claude/` changes were
-preserved. The separate test branch is uncommitted/unpublished. Prizm PR #86
-remains an open draft and was not changed.
-
-**Next action:** R1 remains active: resolve the recorded parallel child
-recovery/fan-in failures. R6 follow-up should compose Prizm's existing durable
-reconciler with the verified Recall key/replay contract, then prove outage and
-recovery without duplicate primary memories.
-
 ## 2026-10-12 — PR #86 Documentation Conflict Resolution
 
 **Roadmap IDs:** R1, R2, R6
@@ -1863,6 +1668,78 @@ recovery without duplicate primary memories.
 
 **Next action:** complete validation of the auto-merged PR diff and request review before committing or pushing.
 
+### R1 fan-out recovery candidate and worker lifecycle correction (2026-10-13)
+
+**Roadmap:** R1 remains active; R6 Recall is separate and not completed by this
+candidate. Candidate branch `codex/r1-parallel-acceptance-staging` is based on
+`origin/staging` `e2a4421018acca7940f4d6806d5a3c2cf59a92b9`. The dirty primary
+Prizm branch and Recall repository/worktree were preserved; generated caches,
+temporary evidence, and worktrees are excluded from the candidate source scope.
+
+The candidate carries trusted fan-out capability propagation; parent-owned
+durable child retry state with attempt-scoped compare-and-swap and safe failure
+classification; exact-scope fan-out adoption only after grant/apply/tree
+reconciliation; selected validation-profile fingerprints checked on resume;
+safe typed schema feedback; and worker close/drain ownership for callbacks,
+commands, and deferred retries. The Linux TempDir CI failure was a shutdown race:
+terminal database state could be visible before final worker publication and
+SQLite work completed. `Close` now stops admission, cancels/unsubscribes, and
+waits for admitted work. Regression tests block post-terminal publication and
+verify Close waits, repeated Close is safe, post-close commands do not create
+work, and deferred retry timers do not fire after shutdown.
+
+Validation on this candidate: `go build ./...` passed; `go vet ./...` passed;
+default-parallel `go test ./...` passed (all packages); `staticcheck ./...`
+passed; `git diff --check` passed. The worker concurrency regression passed 20
+runs, and the close/drain regression passed with the race detector. Windows
+workspace temp/cache variables were directed to the approved D: project temp
+area. No source Factory checkout was edited.
+
+Authoritative durable DB audit of real-provider Factory run
+`run_9544229c6a3b2158bf82ddf6e6` shows planner failure after three visits with
+`tool/tool_execution_error`; developer, reviewer, and tester have zero visits
+in durable role state. A separate event summary contained lane failure IDs and
+statuses, but the DB did not persist child failure classification or origin.
+The run records no proposal/apply/configured validation/final review and one
+delivered terminal failure notice. Earlier terminal runs remain unchanged.
+The isolated Factory source is a selected production-package snapshot, not a
+full game or live Studio result. The 19-test out-of-band result remains
+out-of-band. Therefore R1 acceptance is incomplete and no 9/10 score is claimed.
+
+PR #86 is merged into staging; prior historical entries describing its draft
+state are preserved. The separate Recall API proof did not modify Recall
+production code and does not prove Prizm reconciler outage/replay behavior.
+No commit, push, PR creation, or merge has occurred for this candidate yet.
+
+**Next action:** review the candidate code, tests, and this handoff, then run a
+fresh isolated R1 acceptance with Codex disabled and the configured Ollama
+text provider. No immutable run is resumed and governance is unchanged.
+
+### R1 durable fan-out failure provenance (2026-10-16)
+
+**Roadmap ID:** R1. Added bounded failure-origin propagation from the concrete
+tool-executor correction callsite through subagent results, role outcomes,
+terminal child state, child events, durable join failure state, and the
+reference run report. Origins are allowlisted enums. The join uses the fixed
+`orchestration/delegation_join_failed/fanout_join` diagnosis. Unknown failures
+remain unknown and nonretryable. No raw errors, model output, prompts, or tool
+arguments are persisted.
+
+**Evidence:** regressions cover the known
+`tool/tool_execution_error/tool_executor` path and an unknown raw-error canary,
+including child/join state, correlated events, report projection, and recovery
+facts. They assert the raw canary is absent. The focused regressions passed;
+`go test ./... -count=1` passed with `TEMP`, `TMP`, and `TMPDIR` scoped to this
+worktree's `.tmp/test-temp` and local loopback enabled. `go build ./...`,
+`go vet ./...`, Staticcheck, and `git diff --check` passed on this candidate.
+The first sandboxed full-suite attempt failed on host temp ACL and loopback
+restrictions; the workspace-local rerun passed. No acceptance task or remote
+PR update was started.
+
+**Risk/next action:** this is observability and diagnosis, not a successful R1
+task run. Review the local diff and complete all validation, then use a fresh
+isolated served acceptance with Codex disabled and Ollama as text provider. R1
+remains incomplete until the proposal/apply/validation/report path succeeds.
 ## 2026-10-13 — FW-001 intention contract groundwork
 
 **Roadmap IDs:** R1, FW-001. **Branch/base:** `codex/fw001-intention-contracts`,
@@ -1906,6 +1783,65 @@ queued. These are an opening snapshot, not a final CI result.
 review checkpoint, FW-002 (deduplicated bounded wake producer) is the next
 eligible Freewill task; FW-P2 stays blocked on R1 and FW-G2.
 
+
+## 2026-10-13 � R1 terminal fan-out diagnostics port
+
+**Roadmap:** R1 remains incomplete; FW-001 is separately published and FW-002/003/004 remain follow-on scope. **Branch:** `codex/r1-parallel-acceptance-staging`, PR #91 review worktree. The worktree was synchronized by merging `origin/staging` at `31a6ee783691c7a59005d6afc2b064ad73859258`; both staging FW-001 and prior R1/R6 log histories were retained.
+
+Ported seven reviewed paths for safe terminal fan-out failure diagnostics: durable child and run failure summaries; trusted retry attempt/recovery/reason derivation; allowlisted child completion event fields; report revalidation; fixed nonretryable tool-code classification; event payload schema; and regressions for persistence, report projection, and unknown/raw-value exclusion. No provider output, raw error text, prompts, or user content is added.
+
+**Validation:** `go test ./internal/workflow/multiagent ./internal/event` passed on the merged candidate. Full build, vet, and default-parallel test suite remain pending. Prior real-provider run `run_9544229c6a3b2158bf82ddf6e6` remains a failed immutable record: three overlapping child intervals were observed, but no implementation proposal, apply, configured validation, or final review occurred; one terminal failure notice was delivered. The diagnostics do not alter that record or establish acceptance success.
+
+**Next action:** complete current-tree checks and review the exact diff before updating PR #91. Do not merge the PR or claim R1 completion.
+
+### R1 approved-apply reconciliation diagnostics (2026-10-13)
+
+Added bounded `ProposalApplyResult` reconciliation metadata to the PR #91 review worktree. The trusted tree checker now distinguishes missing patch plan, worktree inspection failure, canceled inspection, expected tree, base tree, and tree mismatch. An ambiguous result is projected through an allowlist before it is saved; only a recognized code and a valid Git tree ID survive. The failure event carries the same bounded values with the existing proposal/run identities and fixed reason. It does not include raw errors, paths, command output, patch content, or file content. Durable validation accepts only the six known codes and valid tree hashes.
+
+The focused reconciler, durable pause, event-schema, and sanitization tests pass. On the exact PR review worktree, `go build ./...`, `go vet ./...`, default-parallel `go test ./...`, `staticcheck ./...`, and `git diff --check` all completed successfully (exit 0). The accepted live run `run_eaa180f0f12345e1d3adb2ceb7` remains unchanged; its approved proposal is paused after an ambiguous apply result. A read-only check of its owned worktree found the base tree, and recomputation from the stored approval produced the recorded expected tree, but the service has not yet retried or applied anything. The next step is a rebuilt owned service and one operator-reviewed same-run reconcile; no automatic retry is allowed while the result remains ambiguous.
+
+### R1 trusted-worktree recovery and live acceptance result (2026-10-13)
+
+**Roadmap:** R1. **PR:** #91 remains an open draft. **Worktree:** isolated reconstruction based on PR head `f1e664cbe48e728d6f748cad463d8dd9785e49e8`; prepared for publication on draft PR #91. No merge occurred; R1 acceptance remains incomplete.
+
+- Added the reviewed Git trust boundary for the exact run-owned worktree: trusted manifest/run identity, canonical path and repository linkage, approved base commit existence, per-command safe-directory configuration, and filtered inherited Git repository overrides. Source repository HEAD advancement no longer invalidates an approved detached run worktree. Global Git configuration is unchanged. Seven Go source/test paths are in scope.
+- `go build ./...`, `go vet ./...`, full `go test ./...`, `staticcheck ./...`, focused Git/CLI tests, and `git diff --check` passed. The built owned service restored the same run and profile. Read-only preflight verified the trusted binding and approved base tree before the single authorized resume; the expected tree was confirmed after apply.
+- Run `run_eaa180f0f12345e1d3adb2ceb7` applied its exact previously approved proposal once. The Factory validation profile then exited 1: 4 passed and 15 setup errors. The errors were `PermissionError` / Windows error 5 during `unlink`/`rmdir`; all 31 parsed affected paths were inside the configured run validation basetemp. The approved Factory worktree tree matches the expected tree and only `tests/test_production_e2e_fake.py` is modified. The run record remains terminal failed and unchanged; the applied patch remains in its isolated worktree. No final reviewer ran. The durable terminal notification outbox contains exactly one delivered row, with one attempt. The basetemp and prior run records were not altered.
+- This is not successful R1 acceptance. No fresh task was submitted and no new approval was requested. PR #91 remains draft; R1 acceptance is incomplete. The independent Factory package baseline remains distinct from this failed workflow acceptance.
+
+**Next action:** diagnose the owned-basetemp cleanup failure and prepare a separate corrective acceptance using a fresh per-run temp directory and fresh proposal/profile binding. Preserve the terminal run and grant. Rebuild, validate, and obtain a fresh review/report before claiming the R1 gate.
+### R1 capability preflight correction (2026-10-13)
+
+The immutable corrective run `run_1c2b` failed before provider execution because `planner-default` was missing the workflow-required `plan` capability. The classifier previously reduced the safe governance kind to `unknown/unknown`; the R1-only six-file patch now preserves `governance/capability` through the delegated terminal outcome without serializing the private error reason or retrying. The proof config adds only the documented capabilities `plan`, `code`, `test`, and `review` to their matching four role agents (config SHA-256 `C8B3C6B1B6BE9F756A6ADD70FFFD0438FCAF88AB359184D253E0EADF2180D183`). No task has been submitted against that config.
+
+On base `7ce5fa9c936300d09383c1948f61b9b9b8ac8828`, the six-file R1-only change passed focused delegated-failure tests, `go build ./...`, `go vet ./...`, full `go test ./...`, test-inclusive `staticcheck ./...`, and `git diff --check`. PR #91 remains draft and unmerged. The earlier applied proposal and failed validation are preserved; R1 acceptance is still incomplete. FW-P1 remains separate follow-on work, and Recall is a separate untouched repository.
+
+**Next action:** verify a fresh R1-only binary/config/profile and proof-service identity, then submit a new explicitly linked acceptance only after the exact proposal packet is reviewed. Use a fresh served basetemp and new approval; never reuse `run_1c2b` or its grant.
+
+### R1 parent-task propagation and proof-v4 build (2026-10-14)
+
+**Roadmap:** R1 remains incomplete. **Worktree:** `C:\Users\emaha\.codex\worktrees\r1-trust-reconstruction\prism`, branch `codex/r1-owned-worktree-recovery`, HEAD `7ce5fa9c936300d09383c1948f61b9b9b8ac8828`. The prior capability-diagnostic changes remain present; this update adds the reviewed parent-task propagation change across five production Go files and two test files. It persists the trusted original task only on new delegation joins, includes it in child role requests/prompts alongside the lane-specific task, checks it against the durable parent/current task, and preserves nil legacy serialization and prompt behavior. Tests cover SQLite close/reopen dispatch retry with stable payloads, forged parent rejection, prompt contents, nil legacy request shape, and exclusion of a unique original-task canary from event projection.
+
+Focused tests passed. Full build, vet, full test suite, Staticcheck, and diff-check all passed. The full test suite returned exit 0 with package results across the repository; `go list -test ./...` resolved 277 package-pattern entries. Staticcheck was rerun using the process-only `GOPACKAGESDRIVER=off` setting and full `./...` pattern, with exit 0 and no diagnostics. The full gate outer process returned exit 0. A separate proof-v4 build returned exit 0. The source manifest covers 12 changed Go paths with SHA-256 `4A4F32B020DA512533E4D3C34D0C922E438C917110C8DFFB6E9AC2B3A68AE891`; source HEAD and all 14 modified tracked paths are recorded with the binary at `.tmp/factory-r1-corrective-baseline/proof-v4/`. Binary SHA-256: `1B7533B6BBBF858CCFE90E5A24CD86FD2D9D46C9AA3DC1C01BACF08FF178894C`. No source edits followed these gates.
+
+The latest real-provider attempt, `run_8319183840de58c95c36763e94`, was denied for missing branch/worktree/baseline and per-attempt command PASS assertions. It reached terminal failure without applying a patch; one terminal notice is delivered. Its state remains immutable. Earlier failed acceptance records and the live v3 service remain untouched. PR #91 is still draft; there is no successful real coding acceptance yet. FW-P1 is preserved separately and Recall was not accessed.
+
+**Next action:** coordinator review the exact task-06 body and proof-v4 provenance. Do not restart the service or submit until that review; after authorization, use a newly reviewed proposal/approval and require configured validation, fresh review, final report, and one delivered terminal notice.
+### R1 proof-v4 validation failure and worker-progress evidence (2026-10-14)
+
+Run `run_54b6a3649a7ab3e9cadd1301d0` reached the reviewed three-lane join and the approved test patch applied once. The configured validator used `factory_pytest_selected_recovery_v1` from the run-owned worktree; it exited 1 after 6.564 seconds with 18 passed and 1 failed. The failing test, `test_fake_studio_blocked_first_attempt_resumes_deterministically`, references `BLOCKED` without importing it from `production.evidence`; the structured tester result identifies this NameError. The result is a test defect, not environment setup. The applied run remains preserved and must not be replayed or manually repaired.
+
+As of 2026-10-14 21:06Z, developer visit 2 has a delivered command and durable accepted acknowledgment, but no terminal outcome or later correlated run event. The service source persists acceptance before constructing runtime components and calling `RunRole`, so accepted status alone does not prove runner start. No source or applied-tree mutation was made during this diagnostic. The next step is to observe this same developer command and review its proposal; PR #91 remains draft and R1 acceptance is incomplete.
+
+### R1 proof-v4 terminal outcome (2026-10-14)
+
+Run `run_54b6a3649a7ab3e9cadd1301d0` reached the reviewed three-lane join, retained the sole approved proposal across restart, and applied it exactly once. The configured `factory_pytest_selected_recovery_v1` validation exited 1 after 18 passed and 1 failed because `test_fake_studio_blocked_first_attempt_resumes_deterministically` referenced `BLOCKED` without importing it from `production.evidence`. The corrective Developer visit exhausted ten `patch_validation_failed` recovery attempts. The run became terminally failed at 2026-10-14T21:09:12.7346034Z, revision 584. The failure report is persisted; the correlated terminal notification outbox has exactly one delivered row with one attempt, and the run-local `run.failed` event is published. The `prizm.dashboard.task.failed` event appears once. No fresh Reviewer ran, and no second proposal application is recorded. The terminal run, approval history, and isolated applied worktree remain preserved and must not be resumed or edited.
+
+PR #91 remains a draft at `dda3c3118c6b65be4ec023e63648155483f34c08`; the current-head CI checks are green, but live R1 acceptance is incomplete. No successful real coding acceptance is claimed. FW-P1 work remains separate, and Recall was not accessed.
+
+**Next action:** Fix serial approved corrections: current PlanPatch requires a clean worktree after ApplyPlannedPatch leaves approved changes uncommitted; use a durable trusted tree basis and retain approval/out-of-band change checks. This source defect is not attributed to individual hidden retry causes.
+
+
 ### R1 parallel-acceptance local checkpoint audit (2026-10-15)
 
 **Roadmap ID:** R1.
@@ -1940,3 +1876,462 @@ This local checkpoint preserves work for review. It is not a merge-ready substit
 **Next action:** create the local staging merge commit after final staged-path
 review; do not push. Then reconcile the noted R1 integration safeguards and
 run targeted validation before any publication.
+
+### R1 trusted-tree and FW-P1 preservation handoff (2026-10-15)
+
+**Roadmap:** R1, FW-001, and FW-P1 (FW-002/003/004). PR #91 remains draft at published head `3d79f02119bca91694870eb8fcd84c616f4ab282`. The R1 candidate has an uncommitted trusted post-apply tree-basis implementation/test change; Git status confirms dirty source files `internal/gitx/patch.go` and `internal/gitx/patch_test.go`, plus the handoff docs. No full-gate handle was available to poll. Prior passing R1 source gates do not establish gates for the dirty correction.
+
+R1 run `run_54b6a3649a7ab3e9cadd1301d0` remains terminal and immutable after one approved apply, configured test result 18 passed/1 failed due to a missing `BLOCKED` import, ten patch-validation recovery attempts, one delivered terminal failure report/notice, and no fresh Reviewer. It was not resumed, resubmitted, or edited.
+
+The separate combined FW candidate remains based on `7ce5fa9c936300d09383c1948f61b9b9b8ac8828`, with selector schema/diagnostic hardening uncommitted. The focused hardening test passed per owner report; full gates were reported running, but this handoff did not have a pollable handle. Served FW-P1 proof remains open; no service was restarted and no manual run was resubmitted. Recall was not accessed. No code source was changed by this handoff.
+
+**Next action:** obtain exact worktree diff and existing gate handle from the owner, complete/review gates for the R1 trusted-tree change and combined FW candidate, preserve active proof services and terminal runs, then proceed only with separately authorized served proof.
+
+### R1 trusted post-apply tree basis implementation and verification (2026-10-15)
+
+Implemented an approval-bound trusted tree basis for serial corrections on the same run-owned worktree. Legacy `gitx.PlanPatch` retains its clean-worktree requirement. The durable runtime derives a follow-on basis only from an applied Developer proposal receipt with matching run/workspace/role, execution/apply identity, success, exact expected-tree reconciliation, and matching operation/result plans. The basis is revalidated against the canonical approval and actual HEAD/full worktree tree, carried through the delegated role JSON request, and injected into the patch tool only by host execution context. Each correction keeps its own proposal/approval/apply identity; out-of-band tree changes fail closed.
+
+The real linked-worktree acceptance test applies A, forces post-apply validation failure, verifies the applied receipt remains in the durable approved task, creates a distinct B approval bound to A's receipt, then applies and reconciles B. Additional tests verify clean-only legacy behavior, serial A→B planning, external mutation rejection, and wrong run/workspace/role/execution/apply key, non-applied phase, observed tree, and plan tampering rejection. Final validation on this source state passed: `go build ./...`, `go vet ./...`, `go test -count=1 ./...`, and `staticcheck ./...`. No commit, push, or service restart occurred.
+
+R1 local source gates do not complete the separate live served acceptance or fresh review. Preserve terminal run `run_54b6a3649a7ab3e9cadd1301d0`; do not resume it. PR #91 remains draft. FW-P1 and Recall remain separate.
+
+## 2026-10-15 — R1 trusted-tree and parallel child-recovery reconciliation
+
+**Roadmap ID:** R1. **Branch:** `codex/r1-owned-worktree-recovery`. **Parents:** `215d4904a8ca731216251eb01b00b353f7f9991f` and staging checkpoint `07bfa94aa9a4ed45f12c94f921106853296a319f`.
+
+- Reconciled the trusted post-apply tree-basis correction with the staging parallel child-recovery candidate. The merged request continues to carry the original `ParentTask` and host-injected trusted tree basis; durable command validation compares both against the persisted run/join state. Fanout retry/adoption behavior, attempt-scoped child CAS, safe result projection, validation-profile fingerprints, structured-output correction, and worker close/drain behavior remain present.
+- Resolved the 15 content conflicts by retaining the newer identity/tree-basis invariants and preserving both R1 and staging history in the plan/work log. The work log also retains the staging branch's checkpoint audit and merge evidence. No new package was introduced; workflow retry semantics remain in `internal/workflow/multiagent`, Git patch evidence in `internal/gitx`.
+- Focused Windows Go tests passed: `go test ./internal/workflow/multiagent ./internal/gitx ./internal/approval ./internal/tool ./internal/mutation ./cmd/prizm-cli`. On the exact R1 worktree, `go build ./...`, `go vet ./...`, `go test -count=1 ./...`, `staticcheck ./...`, and `git diff --cached --check` all passed with exit code 0. The uncached multiagent package passed in 42.801s; temp and cache paths were scoped under `D:\_projects_\prism\.tmp\r1g` after the managed C worktree denied local cache writes. The resolved tree is now committed locally with the requested two parents. No service, immutable run, remote PR, or other worktree was changed; nothing was pushed.
+
+**Next action:** hand the verified local merge head and parent-delta review to the coordinator for guarded PR #91 publication/review, then plan a separately authorized fresh R1 served acceptance. R1 served acceptance remains incomplete.
+
+### R1 reserved-final schema recovery regression (2026-10-15)
+
+**Roadmap ID:** R1. **Source-equivalent branch/head:**
+`codex/r1-owned-worktree-recovery` at `3eb34564c94a34dd0ecc3d6563a3efd12651980d`.
+
+The isolated run `run_01M5043S4MGMHSWZ6DEV3TCR12` was durably accepted. Planner
+completed; Developer failed at attempt 4 with recovery 3/10 after one completed
+`search_files` call. The preceding recovery codes were `invalid_final_schema`
+and `malformed_tool_input`; the final reserved response was also classified as
+`invalid_final_schema`. No proposal, approval, validation, or mutation occurred.
+The run is terminal and was not resumed. No raw model output or private
+reasoning is recorded here.
+
+**Cause and change:** the reserved-final guard in `internal/subagent/runner.go`
+returned a plain error before the normal correction path, and
+`classifyRetryableRoleFailure` consequently classified the schema failure as
+nonretryable `role_execution_failed`. A parser-classified correction in that
+single reserved response now becomes a `SafeFailureError`; durable retry accepts
+only the explicit codes `invalid_final_schema` and `malformed_tool_input` from
+this path, and otherwise preserves fail-closed behavior. The recovery continues
+as a new durable role visit rather than an extra in-loop model call.
+
+**Evidence:** focused tests passed for the malformed reserved-final cases,
+existing finalization constraints, durable scheduling/resume, retry
+classification, ten-recovery exhaustion, and cancellation. The uncached
+`go test -count=1 ./...` suite passed in the elevated exact C worktree after the
+sandbox denied local loopback and Git-backed temp cleanup. `go build ./...`,
+`go vet ./...`, `staticcheck ./...`, and `git diff --check` each exited 0 with
+`GOCACHE`, `GOTMPDIR`, `TEMP`, and `TMP` scoped beneath `D:\_projects_\prism\.tmp\r1g`.
+The diff changes four source/test paths and adds no package. No provider
+configuration, approval policy, process, or Git remote was changed; no commit or
+push was made.
+
+**Risk/next action:** unclassified or empty reserved-final outputs remain
+nonretryable, and all recoveries still consume the shared role limit. Review the
+four-file diff, then use a fresh separately authorized served R1 run; do not
+resume the terminal run. R1 acceptance remains incomplete.
+
+### R1 Tester outcome and reserved-final tool recovery follow-up (2026-10-15)
+
+**Roadmap ID:** R1. The immutable run `run_01M505NB4QXFHZFVEMJVSVGF8F` is
+terminal and was not resumed. Allowlisted run metadata shows Tester completed
+with `validation_status=passed`, `LastOutcome=tests_failed`, and transition
+`Tester/tests_failed -> Developer`; this matches the default graph. The strict
+Tester contract allows a failed result when at least one reported check is
+nonpassing and failure evidence or a reproduction is present. A passing
+configured validation profile does not independently force the overall Tester
+outcome to passed.
+
+Source inspection found that reserved-final tool requests were safely rejected
+before tool execution but returned a plain error. This branch now returns the
+allowlisted `invalid_final_schema` safe failure so the durable runtime may
+schedule recovery within its shared limit. Empty or unclassified final output
+remains nonretryable. The run's generic terminal metadata does not identify its
+response shape, so this code-path fix is not attributed as the proven cause of
+that specific terminal outcome. No raw model output or private reasoning was
+read or recorded.
+
+**Evidence:** deterministic coverage asserts the safe failure and that the
+reserved tool is not executed. Focused subagent and multiagent tests passed for
+reserved-final tool rejection, empty finals, parser-classified final errors,
+shared recovery scheduling, ten-recovery exhaustion, allowlist classification,
+and cancellation. On exact C worktree HEAD
+`4097d5a5f43b7f7086650391f41e494bd29bef05`, `go build ./...`, `go vet ./...`,
+uncached `go test -count=1 ./...`, and `staticcheck ./...` exited 0; final
+`git diff --check` also exited 0. Go cache and temp paths were scoped under
+`D:\_projects_\prism\.tmp\r1g`. No provider task, approval, service, or remote
+PR was changed. No commit or push occurred.
+
+**Next action:** coordinator reviews the minimal source/test and documentation
+change. Keep the immutable run preserved and plan a fresh served acceptance;
+R1 acceptance remains incomplete.
+
+### R1 bounded validation failure feedback (2026-10-15)
+
+**Roadmap ID:** R1. On an isolated source-equivalent scratch checkout of
+`d936950f355b384c1b094746bb9b45eae78f5bae`, validation now extracts a bounded
+diagnostic for nonzero exits into `validation.Result.FailureSummary`. Extraction
+reads at most the final 32 KiB from stdout and stderr, selects up to three
+diagnostic lines, redacts common credential formats, skips prompt/private
+reasoning markers and structured data lines, and caps the result at 512
+characters. The existing handoff JSON delivers the field to Developer visits;
+safe validation evidence also carries the bounded summary. No package was
+introduced and no allowed read root was widened.
+
+**Evidence:** deterministic tests cover the `KeyError: 'status'` diagnostic,
+credential redaction, prompt omission, fallback, truncation, bounded tail
+reading, persisted result, and Developer prompt delivery. `go test
+./internal/validation ./internal/workflow/multiagent -count=1`, `go build ./...`,
+`go vet ./...`, uncached `go test -count=1 ./...`, and `staticcheck ./...` passed.
+Go caches and temp paths were kept under `D:\_projects_\prism\.tmp`; the
+existing `r1g\gomodcache` avoided denied writes to the default cache. The local
+Ollama scout endpoint was blocked by socket permissions, so minimal filename
+search and targeted inspection were used. No live run, pending proposal,
+service, or remote PR was accessed; nothing was pushed.
+
+**Risk/next action:** unusual secret formats may require a later sanitizer rule,
+and sparse or non-diagnostic output receives only a generic exit-code summary.
+Review the local diff and use a fresh separately authorized R1 served run;
+R1 acceptance remains incomplete.
+
+### R1 strict unified-diff proposal preflight (2026-10-15)
+
+**Roadmap ID:** R1. In the source-equivalent checkout at base
+`0232ca600ba2ab7e1675c9583061b77353a6fd33`, removed `--recount` from Git patch
+preflight and corresponding expected-tree, apply/rollback, direction, and
+path-extraction operations. Proposal plans now represent only syntactically
+valid unified diffs. Replaced the test that accepted inaccurate hunk counts with
+a rejection/no-worktree-change regression, and added a tool-boundary test
+confirming malformed hunk counts save no approval and emit no approval request.
+Existing valid-patch and subagent correction tests cover successful proposals,
+one typed `patch_validation_failed` repair, and one shared retry debit.
+
+**Verification:** focused `go test ./internal/gitx ./internal/tool
+./internal/subagent ./internal/workflow/multiagent -count=1`, `go build ./...`,
+`go vet ./...`, uncached `go test ./... -count=1`, `staticcheck ./...`, and
+`git diff --check` passed. Go caches and build temp stayed under
+`D:\_projects_\prism\.tmp\r1g`; tests used the elevated Windows temp setup
+because sandboxed cleanup could not delete Git's read-only temporary object
+files. No provider prompts, live runs, approvals, service, or remote PR were
+accessed.
+
+**Risk/next action:** strict hunk-count validation may reject model-generated
+patches that were formerly auto-recounted; the bounded typed correction path is
+the recovery mechanism. Coordinator should review the local commit and run a
+fresh separately authorized served acceptance covering correction, approval,
+single apply, validation, and resume. R1 remains incomplete.
+
+### R1 terminal waiting-state cleanup (2026-10-15)
+
+**Roadmap ID:** R1. Confirmed `persistRoleFailure` persisted terminal failures
+while retaining `record.Waiting`, allowing a denied proposal's terminal record
+to carry a stale `proposal_approval` pointer. Terminal failure persistence now
+clears `Waiting`; dashboard snapshots also omit waiting metadata for terminal
+records so older persisted records cannot expose stale approval controls. Kept
+`DurableRun.Validate` backward-compatible rather than rejecting old terminal
+records with waiting metadata.
+
+**Verification:** deterministic tests confirm a denied proposal is checkpointed
+terminal without waiting metadata and a legacy terminal record's dashboard
+snapshot hides the stale approval wait. The focused tests passed. Initial full
+package testing hit two Windows temp cleanup denials for Git object files;
+rerunning with elevated access and Go/test temp paths under
+`D:\_projects_\prism\.tmp` passed `go test ./internal/workflow/multiagent
+-count=1`. The same setup passed uncached `go test -count=1 ./...`; `go build
+./...`, `go vet ./...`, `staticcheck ./...`, and `git diff --check` also passed.
+No live run, pending proposal, service, or remote PR was accessed; no allowed
+roots or package boundaries changed.
+
+**Risk/next action:** older stored records retain their raw stale pointer until
+rewritten, but read models suppress it and backend terminal guards remain in
+place. Coordinator review is needed; R1 acceptance still requires a fresh,
+separately authorized served run.
+
+### R1 strict patch hunk consumption before approval (2026-10-15)
+
+**Roadmap ID:** R1. Starting from the published PR #91 tree, `internal/gitx`
+now parses old/new counts for each patch hunk, requires exact body consumption,
+and rejects surplus or missing lines and unconsumed trailing text before Git
+prechecks. The rule covers clean and trusted-tree patch planning. Malformed
+proposals fail before approval persistence. No package boundary changed.
+
+**Evidence:** regressions cover the reported 19-header/21-addition patch,
+excess removals, incomplete counts, trailing text, context lines, and the
+no-newline marker. A tool-level test verifies there is no approval request,
+no stored approval, and no worktree change. Validation on this PR branch is
+pending.
+
+**Risk/next action:** strict checks may reject malformed patches Git previously
+recounted; bounded correction remains the recovery path. Run the focused and
+full validation gates on this branch and obtain coordinator review. A fresh,
+separately authorized served R1 acceptance remains pending.
+
+### R1 CRLF compatibility in strict patch preflight (2026-10-15)
+
+**Roadmap ID:** R1. The parser strips one terminal CR only from its local line
+view, allowing correctly formed CRLF hunk headers while preserving original
+patch bytes for Git and the approval-bound hash. Strict line counts and
+trailing-line rejection remain enforced.
+
+**Evidence:** regressions cover valid CRLF counts, the no-newline marker,
+surplus CRLF additions, and a CRLF new-file plan retaining its exact input
+hash. Full validation on this PR branch is pending.
+
+**Next action:** complete focused and repository-wide checks, then obtain
+coordinator review. R1 served acceptance remains pending a separately
+authorized fresh run.
+
+### R1 cancellation precedence before durable retry recovery (2026-10-15)
+
+**Roadmap ID:** R1. A cancellation persisted while another owner held the run
+claim could be missed when recovery resumed a due `role_retry`; that path
+entered the runner without passing through `prepareRole`. `resumeClaimed` now
+checks persisted cancellation before recovery dispatch, with an additional
+guard at the retry transition. `Cancel` and recovery use one finalizer that
+clears waiting/active transition state, persists cancellation through the
+terminal checkpoint/outbox, and preserves retry iteration, recovery, usage,
+and history accounting. Repeated terminal Resume remains idempotent.
+
+**Evidence:** `TestPersistedCancellationStopsDueRetryBeforeProviderCall` holds
+the run claim, persists a cancel request, advances past retry due time, then
+resumes. It verifies the second provider attempt does not run, the terminal
+record and dashboard show the requested cancellation, retry waiting is gone,
+and a second Resume does not add a second cancellation event. Focused
+cancellation/pause tests passed. `go build ./...`, `go vet ./...`, uncached
+`go test -count=1 ./...`, `staticcheck ./...`, and `git diff --check` passed
+using the task-local D-drive cache/temp setup. The sandboxed full-suite attempt
+was stopped after unrelated localhost and temporary-file permission failures;
+the elevated uncached rerun passed. No provider, live run, service, or remote
+PR was accessed.
+
+**Risk/next action:** coordinator review, then a separately authorized fresh
+served R1 acceptance is still required; no live-provider acceptance is claimed.
+
+### R1 preserve ambiguous mutation reconciliation before cancellation (2026-10-15)
+
+**Roadmap ID:** R1. Review found the new cancellation check could run before
+`CheckpointRoleRunning` recovery classified an interrupted mutating tool. The
+shared cancellation finalizer now defers for running checkpoints,
+`execution_reconciliation` waits, and retry records that are not replay-safe or
+carry possible, unresolved, or unattributed mutation evidence. The persisted
+request remains available; recovery first records the existing reconciliation
+wait. Safe `role_retry` cancellation still terminalizes before a retry provider
+call.
+
+**Evidence:** `TestPersistedCancellationDoesNotBypassAmbiguousMutationReconciliation`
+crashes after a mutating tool reports `started`, persists cancellation with a
+run claim held, and resumes. It confirms the paused reconciliation checkpoint,
+mutation evidence, and cancellation request remain durable, with no runner call
+or cancelled event. The due-retry cancellation and existing crash-reconciliation
+regressions also pass. `go build ./...`, `go vet ./...`, uncached
+`go test -count=1 ./...`, `staticcheck ./...`, and `git diff --check` passed.
+No provider, live run, service, or remote PR was accessed.
+
+**Risk/next action:** unresolved mutations intentionally remain paused until
+reconciliation; cancellation is not terminal while their outcome is unknown.
+Coordinator review and a separately authorized fresh served R1 acceptance are
+still pending.
+
+### R1 fan-out retry correction diagnostics (2026-10-16)
+
+**Roadmap ID:** R1. The PR #91 candidate already contained the exact optional
+parent task identity guard and trusted applied-tree receipt checks. Review of
+fan-out recovery found that scheduled retries retained only class/code and
+prompt feedback, while their events omitted schema-owned correction details.
+Fan-out retry scheduling now appends bounded sanitized correction metadata to
+the durable retry history and emits field, expected type, allowed values, and
+the fixed `retry_scheduled` reason. The history remains capped at 16 entries;
+schema-owned field/type/value validation excludes raw model output and prompt
+text. Commit `dede161257e6430f79085f6b59e4d3b4c3f37998` records the local
+change. No package boundary changed.
+
+**Evidence:** `git diff --check` passed. The new
+`TestFanOutRetryScheduledEventPersistsSafeCorrectionMetadata` and
+`go test ./internal/event -count=1` passed with workspace-local Go cache/temp
+paths. The focused child/task identity and trusted-tree basis selector passed.
+The full multi-agent suite exited 1 only after two `testing.TempDir` cleanup
+denials on test-created Git object files. The focused CLI proposal/reconcile
+selector likewise exited 1 on one cleanup denial. Both were rerun with
+`TEMP`, `TMP`, and `GOTMPDIR` under the workspace; the same Windows ACL denial
+remained. `go build ./...` and `go vet ./...` exited 0; build printed a module
+download stat-cache write access warning. The regression covers persisted
+enum correction metadata, the retry event payload, and removal of an untrusted
+type canary. Ollama was unavailable and GitHub API access failed, so neither
+scout nor remote PR status was refreshed. No provider task, live run, or
+service was accessed.
+
+**Risk/next action:** coordinator review, then a separately authorized fresh
+served R1 acceptance. The R1 end-to-end gate remains incomplete.
+
+### R1 bounded recovery feedback (2026-10-16)
+
+**Roadmap ID:** R1. Recovery feedback supplied to `BuildRolePrompt` is no
+longer dropped when it exceeds 512 bytes. It is normalized to valid UTF-8,
+truncated on a rune boundary to the existing byte budget, and marked with an
+explicit `[truncated]` suffix. Schema correction handling continues to accept
+only the schema-owned canonical feedback matching the reported correction,
+then bounds and persists that feedback for retry and prompt delivery. No raw
+prompt, provider output, or user data was read; no provider task was run. No
+package boundary changed.
+
+**Evidence:** focused tests cover exact-limit retention, over-limit actionable
+field/allowed-value prefix, UTF-8-safe truncation, prompt delivery, and existing
+durable canonical feedback persistence through Resume. `go build ./...`,
+`go vet ./...`, `go test -count=1 ./...`, and `staticcheck ./...` passed on the
+isolated PR-only branch using the known workspace-local Go cache/temp paths.
+`git diff --check` passed. The Ollama scout produced no output and no Ollama
+process remained; the documented narrow fallback was used. Windows test-temp
+ACL issues were not observed in this run.
+
+**Risk/next action:** the built-in canonical schema messages are currently
+shorter than 512 bytes, so the over-limit case is tested at the prompt boundary
+with synthetic sanitized feedback; persistence uses the same bounder for any
+future longer canonical message. Coordinator review and a fresh served R1
+acceptance remain required; no remote PR state was changed.
+
+### R1 served acceptance follow-up (2026-10-16)
+
+**Roadmap ID:** R1. Served run `run_92f076e7f909e9c686c15d785d` dispatched
+three lanes and research succeeded. The reviewer failed with
+`invalid_field_type` on handoff at the retry cap, and the developer failed with
+`invalid_proposal_diff` at the retry cap. Fan-in ended in terminal failure and
+the dashboard emitted a failure event. No proposal, apply, or validation took
+place; the isolated clone remained unchanged. No raw model text is recorded.
+
+The bounded recovery-feedback change is a justified independent improvement,
+but this run does not prove it caused or would have prevented either failure.
+R1 remains incomplete. Next, improve actionable schema correction for these
+two error classes and rerun under the same isolated gates. No package boundary
+changed and no remote PR state was changed by this documentation update.
+
+### R1 actionable retry and reviewer handoff guidance (2026-10-16)
+
+**Roadmap ID:** R1. Durable role retry now persists the fixed schema-owned
+correction for a typed `invalid_proposal_diff` failure and supplies it on
+Resume. Raw proposal/error details are not copied to recovery state. Reviewer
+guidance now requires a non-null handoff object or concise string for
+`changes_requested`, while allowing omission or null for `approved`; schema
+type feedback includes the same decision-dependent rule and small examples.
+Configuration docs distinguish Prizm-parsed text tool envelopes from native
+provider tools. No provider-specific harness or package was added.
+
+**Evidence:** focused tests cover durable feedback persistence/delivery and
+absence of raw patch/error canaries, reviewer handoff object/string/null
+behavior, prompt examples and type feedback, and a text tool envelope reaching
+the injected Prizm executor. The local Ollama scout produced only a spinner
+and was canceled; the fallback context pack was saved and read. No live
+provider or service was used.
+
+**Risk/next action:** the earlier served run remains a terminal failure and
+does not establish a successful R1 task. Complete build, vet, uncached tests,
+Staticcheck, and diff checks, then coordinator review and a fresh isolated R1
+acceptance. No remote PR state was changed.
+
+### R1 Linux CI fan-out synchronization fix (2026-10-16)
+
+**Roadmap ID:** R1. Read the current PR #91 `test-linux` failure at head
+`58e8c5d245b9eaec0a944251346ef1ef6c2f5aa1`. The failing package test was
+`cmd/prizm-cli/TestGraphRoleWorkerEmbeddedNATSRecoversPersistedFanoutJoin`
+(`graph_role_worker_test.go:498` in that check). It expects one immediate child
+success and two deadline outcomes, but the persisted trace contained three
+deadline outcomes because the test advanced its fake clock before observing the
+success child's terminal delivery.
+
+Added a buffered NATS outcome observer for successful child deliveries. The
+test now waits for that terminal event, confirms the same delivery key already
+has a persisted successful outbox result, then advances the fake clock and
+retains the existing assertion for one success and two timeouts. Runtime
+behavior is unchanged. The Factory clone was not edited and no live task was
+submitted.
+
+**Validation:** the focused test passed 30 consecutive runs; the full
+`cmd/prizm-cli` package suite passed; `go test ./... -count=1`, `go build ./...`,
+`go vet ./...`, and `git diff --check` passed. Embedded NATS tests required
+loopback access; the sandboxed test attempt was denied before executing the
+assertion, and the approved loopback-enabled rerun passed. On the observed PR
+head, `test-windows`, `lint-linux`, and `test-python` passed, while `test-linux`
+failed only at the timing-sensitive expectation described above. CI has not
+run against this local fix yet.
+
+**Risk/next action:** authoritative durable DB audit of
+`run_9544229c6a3b2158bf82ddf6e6` shows planner failure after three visits with
+`tool/tool_execution_error`; developer, reviewer, and tester have zero durable
+visits. Event summaries contained lane failure IDs/statuses, while the DB did
+not persist child classification or origin. The run ended before proposal,
+apply, configured validation, or final review. This change records enum
+provenance from trusted callsites and a fixed orchestration join diagnosis;
+unknown errors remain unknown and nonretryable. Review this local change, then
+run a fresh isolated acceptance with Codex disabled and Ollama as text provider.
+R1 remains incomplete.
+
+## 2026-10-16 — R1 terminal retry cause and failure-origin events
+
+**Roadmap ID:** R1. Corrected role failure classification so the terminal error, not an earlier `LastRecovery*` fact, controls retryability. A real loop regression records a correctable nonmutating tool failure, then a provider `provider_turn_failed` with `Retry-After`; the provider failure remains retryable while the earlier safe correction remains visible on the runner result. An unknown terminal error now stays unknown and nonretryable even when the result contains an earlier allowlisted tool correction. Scheduled and exhausted role-retry events include `failure_origin` only after the existing class/code/origin allowlist check, and the exhausted-event schema accepts that optional field. No package boundary changed.
+
+**Evidence:** focused `internal/subagent` and `internal/workflow/multiagent` regressions passed. `go test ./... -count=1`, `go build ./...`, and `go vet ./...` passed. The default sandbox test run hit blocked loopback mock-server connections and Windows temp Git-object cleanup denials; the full suite passed when rerun with loopback access and workspace-local temp paths. `git diff --check` passed. The Ollama context scout could not connect because local port 11434 access was denied; narrow source discovery and reads followed the documented fallback. No served acceptance task was submitted, no service was started, and no PR was changed.
+
+**Risk/next action:** R1 acceptance remains open. Independently review this local patch, rebuild the Prizm service binary before the next served acceptance, and run a fresh isolated task through proposal, approval, apply, configured validation, review, and final reporting. Keep PR #91 draft until that evidence is complete.
+### R1 served retry failure-origin persistence (2026-10-16)
+
+**Roadmap ID:** R1. The served run `run_8b0136a552a09b58a015757442` used the approved `ollama/glm-5.3:cloud` provider through Prizm's API. It made one initial attempt plus ten retries and ended `retry_exhausted` with `provider_transient/provider_turn_failed`. There was no proposal, apply, or validation, and the isolated clone was unchanged. The run confirms retry exhaustion and reporting only; it does not complete R1. PR #91 remains draft.
+
+The durable scheduler had persisted the safe failure class/code but omitted origin, so terminal diagnostics could not attribute this provider failure. Retry scheduling now derives origin through `ClassifyRoleExecutionFailureWithResult`, bounds it against the class/code allowlist, persists it before emission, and emits `failure_origin` on scheduled/exhausted events. Unknown origins are explicitly recorded as `unknown`; raw errors stay out of durable state and events. Tests exercise real scheduler paths through both known provider origin and unknown origin, including terminal exhaustion and privacy checks. No package boundary changed.
+
+**Risks:** no successful proposal-to-apply-to-validation lifecycle is established; the accepted task exhausted its bounded recovery allowance before proposal generation.
+
+**Validation:** focused durable retry-origin regressions passed. `go build ./...`, `go vet ./...`, uncached `go test ./... -count=1` (with loopback and workspace-local temporary/cache paths), and `git diff --check` passed. The Ollama scout was unavailable because local port 11434 access was denied; the documented narrow fallback was used.
+
+**Next action:** independently review this staging-based PR #91 candidate. After provider availability is resolved, submit a fresh isolated served acceptance and stop for explicit approval on any proposal. Keep PR #91 draft until proposal approval, exactly-once apply, configured validation, resume, and final reporting succeed.
+
+## 2026-10-17 — R1 served acceptance retry exhaustion and origin evidence
+
+**Roadmap ID:** R1. Served run `run_772f310af2f018ca180769e28d` submitted the
+exact previously approved one-file test task through Prizm's multi-agent API
+using the isolated Factory clone and `ollama/glm-5.3:cloud`. Prizm's isolated
+service was built from local commit `7f925b7f8b3633a59122eeebf0fbab8c593ba69c`,
+whose tree `a9a66b6a6ec64f130c319ab125980b50003b0c1d` matches the published
+staging-based PR #91 candidate. Codex/Claude execution was disabled; no Codex
+executor was used.
+
+The run ended in `retry_exhausted` after one initial planner attempt and ten
+retries with safe classification
+`provider_transient/provider_turn_failed`. The durable retry record and the
+persisted `prism.workflow.multi_agent.role.retry.scheduled` event both carried
+`failure_origin=provider_call`; terminal retry-exhausted and run-failed events
+also preserved that origin. This confirms the failure-origin change through
+the actual served persistence path. The deterministic final report records 11
+local iterations and 10 retries. No proposal was produced, so no approval,
+apply, configured validation, or test result exists; no workflow transition
+occurred. The terminal record and events were verified after the service was
+stopped, and the Factory clone remained clean. No raw provider output or
+prompts were recorded.
+
+**Risk:** this is evidence for durable retries, origin attribution, and
+terminal reporting only. The run does not establish end-to-end coding
+capability or explain the underlying provider failure. R1 remains incomplete
+and PR #91 remains draft.
+
+**Validation:** the candidate-built CLI accepted the isolated service config;
+the workflow graph validated and registered through Prizm; the served API
+accepted the unchanged request body. Prizm recorded the scheduled, recovery,
+retry-started, retry-exhausted, run-failed, dashboard-task-failed, and recovery
+completed events. No task-specific tests or validation ran because no proposal
+was reached.
+
+**Next action:** diagnose provider availability from sanitized status/error
+codes, then repeat the isolated served acceptance after the provider can
+complete a turn. Stop for explicit approval on any proposal; do not claim R1
+complete until the approved patch is applied once, validated, reviewed, and
+reported through Prizm.

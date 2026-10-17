@@ -328,24 +328,28 @@ type ReferenceRunReport struct {
 	FinalStatus           RunStatus             `json:"final_status"`
 	TerminalOutcome       *TerminalOutcome      `json:"terminal_outcome,omitempty"`
 	FanOut                []ReferenceFanOutLane `json:"fan_out,omitempty"`
+	FailureClass          string                `json:"failure_class,omitempty"`
+	FailureCode           string                `json:"failure_code,omitempty"`
+	FailureOrigin         FailureOrigin         `json:"failure_origin,omitempty"`
 }
 
 // ReferenceFanOutLane is a sanitized, event-derived lane summary.
 type ReferenceFanOutLane struct {
-	JoinID          string   `json:"join_id"`
-	Lane            string   `json:"lane"`
-	Role            string   `json:"role,omitempty"`
-	Status          string   `json:"status"`
-	AttemptID       string   `json:"attempt_id,omitempty"`
-	FailureClass    string   `json:"failure_class,omitempty"`
-	FailureCode     string   `json:"failure_code,omitempty"`
-	FailureReason   string   `json:"failure_reason,omitempty"`
-	Retryable       bool     `json:"retryable"`
-	RecoveryNumber  int      `json:"recovery_number"`
-	MaxRecoveries   int      `json:"max_recoveries"`
-	CorrectionField string   `json:"correction_field,omitempty"`
-	ExpectedType    string   `json:"expected_type,omitempty"`
-	AllowedValues   []string `json:"allowed_values,omitempty"`
+	JoinID          string        `json:"join_id"`
+	Lane            string        `json:"lane"`
+	Role            string        `json:"role,omitempty"`
+	Status          string        `json:"status"`
+	AttemptID       string        `json:"attempt_id,omitempty"`
+	FailureClass    string        `json:"failure_class,omitempty"`
+	FailureCode     string        `json:"failure_code,omitempty"`
+	FailureOrigin   FailureOrigin `json:"failure_origin,omitempty"`
+	FailureReason   string        `json:"failure_reason,omitempty"`
+	Retryable       bool          `json:"retryable"`
+	RecoveryNumber  int           `json:"recovery_number"`
+	MaxRecoveries   int           `json:"max_recoveries"`
+	CorrectionField string        `json:"correction_field,omitempty"`
+	ExpectedType    string        `json:"expected_type,omitempty"`
+	AllowedValues   []string      `json:"allowed_values,omitempty"`
 }
 
 // ReferenceLoopEntry is one canonical correction traversal.
@@ -439,6 +443,13 @@ func BuildReferenceRunReport(
 		}
 	}
 	for _, evt := range events {
+		if evt.Type == event.EventMultiAgentFanoutJoined && payloadString(evt.Payload, "status") == string(event.OutcomeFailed) {
+			if failureOrigin := safeFailureOrigin(payloadString(evt.Payload, "failure_class"), payloadString(evt.Payload, "failure_code"), FailureOrigin(payloadString(evt.Payload, "failure_origin"))); failureOrigin == FailureOriginFanOutJoin {
+				report.FailureClass = "orchestration"
+				report.FailureCode = "delegation_join_failed"
+				report.FailureOrigin = failureOrigin
+			}
+		}
 		if evt.Type == event.EventMultiAgentFanoutChildCompleted {
 			report.FanOut = append(report.FanOut, referenceFanOutLane(evt.Payload))
 		}
@@ -477,12 +488,10 @@ func referenceFanOutLane(payload map[string]any) ReferenceFanOutLane {
 	values := payloadStringSlice(payload["allowed_values"])
 	failure := sanitizeTerminalRoleFailure(role, RoleExecutionFailure{
 		Class: payloadString(payload, "failure_class"), Code: payloadString(payload, "failure_code"),
+		Origin:          FailureOrigin(payloadString(payload, "failure_origin")),
 		CorrectionField: payloadString(payload, "correction_field"), ExpectedType: payloadString(payload, "expected_type"),
 		AllowedValues: values, Retryable: payloadBool(payload, "retryable"),
 	})
-	if failure.Class == "unknown" && failure.Code == "unknown" {
-		return lane
-	}
 	failure.AttemptID = payloadString(payload, "attempt_id")
 	if !validAttemptIdentity(failure.AttemptID) {
 		failure.AttemptID = ""
@@ -491,6 +500,7 @@ func referenceFanOutLane(payload map[string]any) ReferenceFanOutLane {
 	failure.MaxRecoveries = max(0, payloadInt(payload, "max_recoveries"))
 	failure.Reason = safeTerminalFailureReason(payloadString(payload, "failure_reason"))
 	lane.AttemptID, lane.FailureClass, lane.FailureCode = failure.AttemptID, failure.Class, failure.Code
+	lane.FailureOrigin = failure.Origin
 	lane.FailureReason, lane.Retryable = failure.Reason, failure.Retryable
 	lane.RecoveryNumber, lane.MaxRecoveries = failure.RecoveryNumber, failure.MaxRecoveries
 	lane.CorrectionField, lane.ExpectedType, lane.AllowedValues = failure.CorrectionField, failure.ExpectedType, failure.AllowedValues

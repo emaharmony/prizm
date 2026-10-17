@@ -767,7 +767,7 @@ func schemaFieldExpectedType(role Role, field string) string {
 		case "required_corrections":
 			return "a JSON array of strings"
 		case "handoff":
-			return "a JSON object, a concise JSON string summary, or null"
+			return `for changes_requested, a non-null JSON object with non-empty "objective" and "reason" strings or a non-empty JSON string summary (for example {"objective":"fix","reason":"finding"} or "Fix the finding"); for approved, omit "handoff" or set it to null`
 		}
 	case RoleReflector:
 		switch field {
