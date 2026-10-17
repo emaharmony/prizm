@@ -5,7 +5,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/emaharmony/prizm/internal/retry"
 	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 )
 
@@ -518,6 +520,30 @@ func TestLoopRunnerRetriesSafePrerequisiteFailureBeforeFinal(t *testing.T) {
 	}
 	if strings.Contains(backend.messages[3][len(backend.messages[3])-1].Content, "required tool") {
 		t.Fatalf("final response was not offered after successful proposal: %#v", backend.messages[3])
+	}
+}
+
+func TestLoopRunnerRetainsCorrectionDiagnosticsWhenLaterProviderTurnFails(t *testing.T) {
+	retryAfter := 47 * time.Second
+	backend := &scriptBackend{
+		parse: lineParser,
+		turns: []Turn{
+			{Text: "TOOL read_file"},
+			{Text: "FINAL: should not be reached"},
+		},
+		turnErrors: []error{nil, retry.NewRetryableErrorAfter(errors.New("temporary provider failure"), retryAfter)},
+		toolErrOnce: map[string]error{
+			"read_file": &CorrectableToolError{Code: "patch_validation_failed"},
+		},
+	}
+	runner := NewLoopRunner(LoopRunnerConfig{Backend: backend})
+	result, err := runner.Run(context.Background(), v2.TaskPacket{TaskID: "T-correction-then-provider-failure"}, AgentRuntime{AgentID: "developer"})
+	var safeFailure *SafeFailureError
+	if !errors.As(err, &safeFailure) || safeFailure.Code != "provider_turn_failed" || safeFailure.RetryAfter() != retryAfter {
+		t.Fatalf("terminal provider error=%v, want retryable provider_turn_failed with Retry-After", err)
+	}
+	if result.LastRecoveryClass != "tool" || result.LastRecoveryCode != "tool_execution_error" || result.LastRecoveryOrigin != RecoveryOriginToolExecutor {
+		t.Fatalf("safe correction diagnostics were lost: class=%q code=%q origin=%q", result.LastRecoveryClass, result.LastRecoveryCode, result.LastRecoveryOrigin)
 	}
 }
 

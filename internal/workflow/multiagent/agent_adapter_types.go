@@ -215,6 +215,9 @@ type AgentExecutionResult struct {
 	LocalIterations int
 	ToolCalls       int
 	DeniedToolCalls int
+	FailureClass    string
+	FailureCode     string
+	FailureOrigin   FailureOrigin
 }
 
 // AgentExecutor runs one configured Prism agent. Production uses the existing

@@ -72,8 +72,11 @@ func (h *durableRoleRetryHandle) ConsumeRecovery(expectedAttemptID, failureCode 
 	state.RecoveryNumber++
 	state.Number++
 	state.AttemptID = retryAttemptID(state.VisitID, state.Number)
-	state.FailureClass = "correction"
-	state.FailureCode = safeRetryCode(failureCode)
+	if state.FailureClass == "" || state.FailureCode != safeRetryCode(failureCode) {
+		state.FailureClass = "correction"
+		state.FailureCode = safeRetryCode(failureCode)
+		state.FailureOrigin = FailureOriginUnknown
+	}
 	state.NextAt = h.runtime.now().UTC().Add(roleRetryDelay(state.VisitID, state.RecoveryNumber, 0))
 	state.ReplaySafe = !state.MutationPossible
 	next.Retry = &state
@@ -113,10 +116,14 @@ func (h *durableRoleRetryHandle) RecordProgress(expectedAttemptID, kind, safeRef
 }
 
 func (h *durableRoleRetryHandle) RecordCorrection(expectedAttemptID, errorClass, code string) error {
-	return h.RecordCorrectionFeedback(expectedAttemptID, errorClass, code, "")
+	return h.RecordCorrectionWithOrigin(expectedAttemptID, errorClass, code, "", "")
 }
 
 func (h *durableRoleRetryHandle) RecordCorrectionFeedback(expectedAttemptID, errorClass, code, _ string) error {
+	return h.RecordCorrectionWithOrigin(expectedAttemptID, errorClass, code, "", "")
+}
+
+func (h *durableRoleRetryHandle) RecordCorrectionWithOrigin(expectedAttemptID, errorClass, code, origin, _ string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if err := h.validateAttempt(expectedAttemptID); err != nil {
@@ -125,8 +132,11 @@ func (h *durableRoleRetryHandle) RecordCorrectionFeedback(expectedAttemptID, err
 	next := h.record
 	state := *next.Retry
 	feedback := roleFailureFeedback(state.Role, safeRetryCode(code), "", "")
+	class := correctionFailureClass(errorClass, code)
+	safeOrigin := safeFailureOrigin(class, safeRetryCode(code), FailureOrigin(origin))
+	state.FailureClass, state.FailureCode, state.FailureOrigin = class, safeRetryCode(code), safeOrigin
 	state.Corrections = append(state.Corrections, RetryCorrection{
-		ErrorClass: safeRetryCode(errorClass), Code: safeRetryCode(code), Feedback: feedback,
+		ErrorClass: safeRetryCode(errorClass), Code: safeRetryCode(code), FailureOrigin: safeOrigin, Feedback: feedback,
 	})
 	if len(state.Corrections) > 16 {
 		state.Corrections = append([]RetryCorrection(nil), state.Corrections[len(state.Corrections)-16:]...)
@@ -387,6 +397,9 @@ func (r *DurableRuntime) emitRetry(kind string, record DurableRun, state RetrySt
 	if kind != event.EventMultiAgentRetryAttemptStarted {
 		payload["failure_class"] = safeRetryCode(state.FailureClass)
 		payload["failure_code"] = safeRetryCode(state.FailureCode)
+		if origin := safeFailureOrigin(state.FailureClass, state.FailureCode, state.FailureOrigin); origin != FailureOriginUnknown {
+			payload["failure_origin"] = origin
+		}
 	}
 	if kind == event.EventMultiAgentRetryScheduled {
 		payload["next_at"] = state.NextAt.UTC().Format(time.RFC3339Nano)
@@ -709,6 +722,7 @@ func durableFailureDiagnostic(err error, retry *RetryState) *PersistedFailure {
 		if retry != nil {
 			diagnostic.FailureClass = safeRetryCode(retry.FailureClass)
 			diagnostic.FailureCode = safeRetryCode(retry.FailureCode)
+			diagnostic.FailureOrigin = safeFailureOrigin(diagnostic.FailureClass, diagnostic.FailureCode, retry.FailureOrigin)
 			diagnostic.Retryable = diagnostic.FailureClass != ""
 		}
 		return diagnostic

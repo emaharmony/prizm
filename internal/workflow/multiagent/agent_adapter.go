@@ -178,7 +178,9 @@ func (r *AgentRoleRunner) RunRole(
 		if iterations <= 0 {
 			iterations = 1
 		}
-		return RoleRunResult{TokenUsage: execution.Usage, LocalIterations: iterations, Metadata: ExecutionMetadata{ToolCalls: execution.ToolCalls, DeniedToolCalls: execution.DeniedToolCalls, Attempt: request.Run.Visit, StartedAt: startedAt, FinishedAt: r.now().UTC()}}, err
+		return RoleRunResult{TokenUsage: execution.Usage, LocalIterations: iterations,
+			FailureClass: execution.FailureClass, FailureCode: execution.FailureCode, FailureOrigin: execution.FailureOrigin,
+			Metadata: ExecutionMetadata{ToolCalls: execution.ToolCalls, DeniedToolCalls: execution.DeniedToolCalls, Attempt: request.Run.Visit, StartedAt: startedAt, FinishedAt: r.now().UTC()}}, err
 	}
 	var proposals []ProposalReference
 	correctiveRetries := 0

@@ -1695,12 +1695,13 @@ runs, and the close/drain regression passed with the race detector. Windows
 workspace temp/cache variables were directed to the approved D: project temp
 area. No source Factory checkout was edited.
 
-The latest real-provider Factory run `run_9544229c6a3b2158bf82ddf6e6` showed
-three overlapping worker intervals, but failed at fan-in: the research lane
-succeeded, implementation ended with safe `unknown/unknown` nonretryable
-classification, and review exhausted structured-output recovery after typed
-field feedback. The durable report records no proposal/apply/test result and
-one delivered terminal failure notice. Earlier terminal runs remain unchanged.
+Authoritative durable DB audit of real-provider Factory run
+`run_9544229c6a3b2158bf82ddf6e6` shows planner failure after three visits with
+`tool/tool_execution_error`; developer, reviewer, and tester have zero visits
+in durable role state. A separate event summary contained lane failure IDs and
+statuses, but the DB did not persist child failure classification or origin.
+The run records no proposal/apply/configured validation/final review and one
+delivered terminal failure notice. Earlier terminal runs remain unchanged.
 The isolated Factory source is a selected production-package snapshot, not a
 full game or live Studio result. The 19-test out-of-band result remains
 out-of-band. Therefore R1 acceptance is incomplete and no 9/10 score is claimed.
@@ -1710,9 +1711,35 @@ state are preserved. The separate Recall API proof did not modify Recall
 production code and does not prove Prizm reconciler outage/replay behavior.
 No commit, push, PR creation, or merge has occurred for this candidate yet.
 
-**Next action:** coordinator reviews the candidate code, tests, and this
-handoff. If approved, create a draft PR against current staging and continue the
-R1 failure diagnosis without changing immutable runs or weakening governance.
+**Next action:** review the candidate code, tests, and this handoff, then run a
+fresh isolated R1 acceptance with Codex disabled and the configured Ollama
+text provider. No immutable run is resumed and governance is unchanged.
+
+### R1 durable fan-out failure provenance (2026-10-16)
+
+**Roadmap ID:** R1. Added bounded failure-origin propagation from the concrete
+tool-executor correction callsite through subagent results, role outcomes,
+terminal child state, child events, durable join failure state, and the
+reference run report. Origins are allowlisted enums. The join uses the fixed
+`orchestration/delegation_join_failed/fanout_join` diagnosis. Unknown failures
+remain unknown and nonretryable. No raw errors, model output, prompts, or tool
+arguments are persisted.
+
+**Evidence:** regressions cover the known
+`tool/tool_execution_error/tool_executor` path and an unknown raw-error canary,
+including child/join state, correlated events, report projection, and recovery
+facts. They assert the raw canary is absent. The focused regressions passed;
+`go test ./... -count=1` passed with `TEMP`, `TMP`, and `TMPDIR` scoped to this
+worktree's `.tmp/test-temp` and local loopback enabled. `go build ./...`,
+`go vet ./...`, Staticcheck, and `git diff --check` passed on this candidate.
+The first sandboxed full-suite attempt failed on host temp ACL and loopback
+restrictions; the workspace-local rerun passed. No acceptance task or remote
+PR update was started.
+
+**Risk/next action:** this is observability and diagnosis, not a successful R1
+task run. Review the local diff and complete all validation, then use a fresh
+isolated served acceptance with Codex disabled and Ollama as text provider. R1
+remains incomplete until the proposal/apply/validation/report path succeeds.
 ## 2026-10-13 — FW-001 intention contract groundwork
 
 **Roadmap IDs:** R1, FW-001. **Branch/base:** `codex/fw001-intention-contracts`,
@@ -2211,3 +2238,48 @@ provider or service was used.
 does not establish a successful R1 task. Complete build, vet, uncached tests,
 Staticcheck, and diff checks, then coordinator review and a fresh isolated R1
 acceptance. No remote PR state was changed.
+
+### R1 Linux CI fan-out synchronization fix (2026-10-16)
+
+**Roadmap ID:** R1. Read the current PR #91 `test-linux` failure at head
+`58e8c5d245b9eaec0a944251346ef1ef6c2f5aa1`. The failing package test was
+`cmd/prizm-cli/TestGraphRoleWorkerEmbeddedNATSRecoversPersistedFanoutJoin`
+(`graph_role_worker_test.go:498` in that check). It expects one immediate child
+success and two deadline outcomes, but the persisted trace contained three
+deadline outcomes because the test advanced its fake clock before observing the
+success child's terminal delivery.
+
+Added a buffered NATS outcome observer for successful child deliveries. The
+test now waits for that terminal event, confirms the same delivery key already
+has a persisted successful outbox result, then advances the fake clock and
+retains the existing assertion for one success and two timeouts. Runtime
+behavior is unchanged. The Factory clone was not edited and no live task was
+submitted.
+
+**Validation:** the focused test passed 30 consecutive runs; the full
+`cmd/prizm-cli` package suite passed; `go test ./... -count=1`, `go build ./...`,
+`go vet ./...`, and `git diff --check` passed. Embedded NATS tests required
+loopback access; the sandboxed test attempt was denied before executing the
+assertion, and the approved loopback-enabled rerun passed. On the observed PR
+head, `test-windows`, `lint-linux`, and `test-python` passed, while `test-linux`
+failed only at the timing-sensitive expectation described above. CI has not
+run against this local fix yet.
+
+**Risk/next action:** authoritative durable DB audit of
+`run_9544229c6a3b2158bf82ddf6e6` shows planner failure after three visits with
+`tool/tool_execution_error`; developer, reviewer, and tester have zero durable
+visits. Event summaries contained lane failure IDs/statuses, while the DB did
+not persist child classification or origin. The run ended before proposal,
+apply, configured validation, or final review. This change records enum
+provenance from trusted callsites and a fixed orchestration join diagnosis;
+unknown errors remain unknown and nonretryable. Review this local change, then
+run a fresh isolated acceptance with Codex disabled and Ollama as text provider.
+R1 remains incomplete.
+
+## 2026-10-16 — R1 terminal retry cause and failure-origin events
+
+**Roadmap ID:** R1. Corrected role failure classification so the terminal error, not an earlier `LastRecovery*` fact, controls retryability. A real loop regression records a correctable nonmutating tool failure, then a provider `provider_turn_failed` with `Retry-After`; the provider failure remains retryable while the earlier safe correction remains visible on the runner result. An unknown terminal error now stays unknown and nonretryable even when the result contains an earlier allowlisted tool correction. Scheduled and exhausted role-retry events include `failure_origin` only after the existing class/code/origin allowlist check, and the exhausted-event schema accepts that optional field. No package boundary changed.
+
+**Evidence:** focused `internal/subagent` and `internal/workflow/multiagent` regressions passed. `go test ./... -count=1`, `go build ./...`, and `go vet ./...` passed. The default sandbox test run hit blocked loopback mock-server connections and Windows temp Git-object cleanup denials; the full suite passed when rerun with loopback access and workspace-local temp paths. `git diff --check` passed. The Ollama context scout could not connect because local port 11434 access was denied; narrow source discovery and reads followed the documented fallback. No served acceptance task was submitted, no service was started, and no PR was changed.
+
+**Risk/next action:** R1 acceptance remains open. Independently review this local patch, rebuild the Prizm service binary before the next served acceptance, and run a fresh isolated task through proposal, approval, apply, configured validation, review, and final reporting. Keep PR #91 draft until that evidence is complete.

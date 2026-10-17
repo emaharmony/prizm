@@ -238,16 +238,17 @@ type DelegationJoinChild struct {
 // TerminalRoleFailure is an allowlisted diagnosis for a completed delegated
 // attempt. It contains schema-owned identifiers only, never provider output.
 type TerminalRoleFailure struct {
-	AttemptID       string   `json:"attempt_id,omitempty"`
-	Class           string   `json:"class"`
-	Code            string   `json:"code"`
-	CorrectionField string   `json:"correction_field,omitempty"`
-	ExpectedType    string   `json:"expected_type,omitempty"`
-	AllowedValues   []string `json:"allowed_values,omitempty"`
-	RecoveryNumber  int      `json:"recovery_number"`
-	MaxRecoveries   int      `json:"max_recoveries"`
-	Retryable       bool     `json:"retryable"`
-	Reason          string   `json:"reason"`
+	AttemptID       string        `json:"attempt_id,omitempty"`
+	Class           string        `json:"class"`
+	Code            string        `json:"code"`
+	Origin          FailureOrigin `json:"failure_origin,omitempty"`
+	CorrectionField string        `json:"correction_field,omitempty"`
+	ExpectedType    string        `json:"expected_type,omitempty"`
+	AllowedValues   []string      `json:"allowed_values,omitempty"`
+	RecoveryNumber  int           `json:"recovery_number"`
+	MaxRecoveries   int           `json:"max_recoveries"`
+	Retryable       bool          `json:"retryable"`
+	Reason          string        `json:"reason"`
 }
 
 // TerminalFanOutFailure preserves failed child identity after the active join
@@ -288,6 +289,7 @@ type PersistedFailure struct {
 	MaxRecoveries  int                     `json:"max_recoveries,omitempty"`
 	FailureClass   string                  `json:"failure_class,omitempty"`
 	FailureCode    string                  `json:"failure_code,omitempty"`
+	FailureOrigin  FailureOrigin           `json:"failure_origin,omitempty"`
 	FailureReason  string                  `json:"failure_reason,omitempty"`
 	Retryable      bool                    `json:"retryable,omitempty"`
 	RetryExhausted bool                    `json:"retry_exhausted,omitempty"`

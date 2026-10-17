@@ -15,7 +15,6 @@ import (
 
 	"github.com/emaharmony/prizm/internal/cost"
 	"github.com/emaharmony/prizm/internal/event"
-	"github.com/emaharmony/prizm/internal/subagent"
 )
 
 type failOnceFanoutDispatcher struct {
@@ -695,6 +694,100 @@ func TestFanOutRetryScheduledEventPersistsSafeCorrectionMetadata(t *testing.T) {
 	}
 }
 
+func TestReviewerEnumCorrectionFeedbackReachesNextFanOutAttempt(t *testing.T) {
+	const runID = "run-reviewer-enum-retry-feedback"
+	runtime, env, dispatch, source := newWaitingPlannerDelegationRuntime(t, runID)
+	now := time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
+	runtime.now = func() time.Time { return now }
+	parentPayload, err := json.Marshal(GraphRoleOutcome{Result: RoleRunResult{Outcome: OutcomePlanReady, LocalIterations: 1, FanOut: validFanOutPlan()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.outcomes = []event.Outcome{matchingOutcome(dispatch.commands[0], "reviewer-enum-parent", event.OutcomeSucceeded, 1, parentPayload)}
+	if _, err := runtime.Resume(t.Context(), runID); err == nil {
+		t.Fatal("expected fan-out to remain waiting")
+	}
+	source.outcomes = nil
+	record, err := env.store.Load(t.Context(), runID)
+	if err != nil || record.DelegationJoin == nil {
+		t.Fatalf("load join: join=%#v err=%v", record.DelegationJoin, err)
+	}
+	var child *DelegationJoinChild
+	for index := range record.DelegationJoin.Children {
+		if record.DelegationJoin.Children[index].Role == RoleReviewer {
+			child = &record.DelegationJoin.Children[index]
+			break
+		}
+	}
+	if child == nil || child.Retry == nil {
+		t.Fatal("reviewer child retry state is missing")
+	}
+
+	// This mirrors the typed schema correction produced by the reviewer parser.
+	// The deliberately unsafe cause/type values must never cross the worker boundary.
+	correctionErr := &SchemaCorrectionError{
+		Role: RoleReviewer, Code: "invalid_field_value", Fields: []string{"decision"},
+		AllowedValues: []string{"approved", "changes_requested"}, Feedback: "PRIVATE_FEEDBACK_CANARY",
+		Cause: errors.New("PRIVATE_BAD_DECISION_CANARY"),
+	}
+	failure := ClassifyRoleExecutionFailure(correctionErr)
+	failure.DeliveryAttemptID, failure.AttemptID = child.DeliveryAttemptID, child.Retry.AttemptID
+	failure.ExpectedType = "PRIVATE_TYPE_CANARY"
+	payload, err := json.Marshal(GraphRoleOutcome{Failure: &failure})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedCommand := event.Command{EventID: child.CommandEventID, RunID: runID, TaskID: child.ChildID,
+		DelegationID: child.DelegationID, JoinID: child.JoinID, Lane: string(child.Lane),
+		CorrelationID: child.CorrelationID, IdempotencyKey: child.DeliveryKey}
+	source.outcomes = []event.Outcome{matchingOutcome(failedCommand, "reviewer-enum-failed", event.OutcomeFailed, 1, payload)}
+	if _, err := runtime.Resume(t.Context(), runID); err == nil {
+		t.Fatal("expected reviewer correction retry to remain scheduled")
+	}
+	record, err = env.store.Load(t.Context(), runID)
+	if err != nil || record.DelegationJoin == nil {
+		t.Fatalf("load scheduled join: join=%#v err=%v", record.DelegationJoin, err)
+	}
+	for index := range record.DelegationJoin.Children {
+		if record.DelegationJoin.Children[index].ChildID == child.ChildID {
+			child = &record.DelegationJoin.Children[index]
+			break
+		}
+	}
+	wantFeedback := canonicalEnumFeedback(RoleReviewer, "decision", []string{"approved", "changes_requested"})
+	if child.Retry.RecoveryFeedback != wantFeedback || child.Retry.RecoveryNumber != 1 || !child.DispatchPending {
+		t.Fatalf("reviewer correction not durably scheduled: retry=%#v", child.Retry)
+	}
+
+	now = child.Retry.NextAt.Add(time.Second)
+	source.outcomes = nil
+	if _, err := runtime.Resume(t.Context(), runID); err == nil {
+		t.Fatal("expected replacement reviewer delivery to remain waiting")
+	}
+	if len(dispatch.commands) != 5 {
+		t.Fatalf("replacement reviewer command count=%d, want 5 total commands", len(dispatch.commands))
+	}
+	var retryCommand GraphRoleCommand
+	if err := json.Unmarshal(dispatch.commands[4].Payload, &retryCommand); err != nil {
+		t.Fatalf("decode replacement reviewer command: %v", err)
+	}
+	if retryCommand.Role != RoleReviewer || retryCommand.AttemptID != child.Retry.AttemptID || retryCommand.RecoveryFeedback != wantFeedback {
+		t.Fatalf("replacement reviewer command lost schema correction: role=%s attempt=%s feedback=%q", retryCommand.Role, retryCommand.AttemptID, retryCommand.RecoveryFeedback)
+	}
+	serialized, err := json.Marshal(struct {
+		Retry   *RetryState      `json:"retry"`
+		Command GraphRoleCommand `json:"command"`
+	}{child.Retry, retryCommand})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, canary := range []string{"PRIVATE_FEEDBACK_CANARY", "PRIVATE_BAD_DECISION_CANARY", "PRIVATE_TYPE_CANARY"} {
+		if strings.Contains(string(serialized), canary) {
+			t.Fatalf("unsafe correction detail %q persisted or reached retry: %s", canary, serialized)
+		}
+	}
+}
+
 func TestLegacyDelegationJoinChildFailureDoesNotReplay(t *testing.T) {
 	runtime, env, dispatch, source := newWaitingPlannerDelegationRuntime(t, "run-legacy-child-no-replay")
 	parentPayload, _ := json.Marshal(GraphRoleOutcome{Result: RoleRunResult{Outcome: OutcomePlanReady, LocalIterations: 1, FanOut: validFanOutPlan()}})
@@ -1039,7 +1132,7 @@ func TestTerminalFanOutFailuresPersistSafeClassificationThroughReport(t *testing
 	}
 	for i := range record.DelegationJoin.Children {
 		child := &record.DelegationJoin.Children[i]
-		if i < 2 {
+		if i < 3 {
 			child.Retry.MaxRecoveries = 0 // exercise terminal reporting at the configured recovery limit.
 		}
 	}
@@ -1052,13 +1145,18 @@ func TestTerminalFanOutFailuresPersistSafeClassificationThroughReport(t *testing
 			DelegationID: child.DelegationID, JoinID: child.JoinID, Lane: string(child.Lane),
 			CorrelationID: child.CorrelationID, IdempotencyKey: child.DeliveryKey}
 		var payload []byte
-		if i < 2 {
+		if i < 3 {
 			field, expected := "task_breakdown", "a JSON array of strings"
 			if i == 1 {
-				failure := ClassifyRoleExecutionFailure(&subagent.SafeFailureError{Code: "invalid_input"})
+				failure := RoleExecutionFailure{DeliveryAttemptID: child.DeliveryAttemptID, AttemptID: child.Retry.AttemptID,
+					Class: "tool", Code: "tool_execution_error", Origin: FailureOriginToolExecutor}
+				payload, _ = json.Marshal(GraphRoleOutcome{Failure: &failure})
+				outcomes = append(outcomes, matchingOutcome(command, "child-diagnostic-"+string(child.Lane), event.OutcomeFailed, 1, payload))
+				continue
+			}
+			if i == 2 {
+				failure := ClassifyRoleExecutionFailure(errors.New("PRIVATE_RAW_ERROR_CANARY"))
 				failure.DeliveryAttemptID, failure.AttemptID = child.DeliveryAttemptID, child.Retry.AttemptID
-				failure.CorrectionField, failure.ExpectedType = "SECRET_CANARY_APIKEY", "TOKEN_SENTINEL"
-				failure.AllowedValues = []string{"VALUE_SENTINEL"}
 				payload, _ = json.Marshal(GraphRoleOutcome{Failure: &failure})
 				outcomes = append(outcomes, matchingOutcome(command, "child-diagnostic-"+string(child.Lane), event.OutcomeFailed, 1, payload))
 				continue
@@ -1067,11 +1165,9 @@ func TestTerminalFanOutFailuresPersistSafeClassificationThroughReport(t *testing
 				Class: "schema_correction", Code: "invalid_field_type", CorrectionField: field,
 				ExpectedType: expected, AllowedValues: []string{"VALUE_SENTINEL"}, Retryable: true}
 			payload, _ = json.Marshal(GraphRoleOutcome{Failure: &failure})
-		} else {
-			payload, _ = json.Marshal(GraphRoleOutcome{Result: RoleRunResult{Outcome: TransitionOutcome("ok"), LocalIterations: 1}})
 		}
 		outcomes = append(outcomes, matchingOutcome(command, "child-diagnostic-"+string(child.Lane), func() event.OutcomeStatus {
-			if i < 2 {
+			if i < 3 {
 				return event.OutcomeFailed
 			}
 			return event.OutcomeSucceeded
@@ -1085,16 +1181,22 @@ func TestTerminalFanOutFailuresPersistSafeClassificationThroughReport(t *testing
 		}
 	}
 	record, err = env.store.Load(t.Context(), "run-terminal-fanout-diagnostics")
-	if err != nil || record.Failure == nil || record.DelegationJoin != nil || len(record.Failure.FanOutFailures) != 2 {
+	if err != nil || record.Failure == nil || record.DelegationJoin != nil || len(record.Failure.FanOutFailures) != 3 {
 		t.Fatalf("terminal diagnostics were not retained: failure=%#v join=%#v err=%v", record.Failure, record.DelegationJoin, err)
 	}
 	if got := record.Failure.FanOutFailures[0].Failure; got.Class != "schema_correction" || got.Code != "invalid_field_type" || got.AttemptID == "" ||
 		got.CorrectionField != "task_breakdown" || got.ExpectedType != "a JSON array of strings" || got.RecoveryNumber != 0 || got.MaxRecoveries != 0 || !got.Retryable || got.Reason != "recovery_limit_reached" {
 		t.Fatalf("safe field/type or retry facts missing: %#v", got)
 	}
-	if got := record.Failure.FanOutFailures[1].Failure; got.Class != "tool" || got.Code != "invalid_input" || got.Retryable || got.Reason != "not_retryable" ||
+	if got := record.Failure.FanOutFailures[1].Failure; got.Class != "tool" || got.Code != "tool_execution_error" || got.Origin != FailureOriginToolExecutor || got.Retryable || got.Reason != "not_retryable" ||
 		got.CorrectionField != "" || got.ExpectedType != "" || len(got.AllowedValues) != 0 {
-		t.Fatalf("untrusted schema identifiers were retained: %#v", got)
+		t.Fatalf("known tool failure was not preserved safely: %#v", got)
+	}
+	if got := record.Failure.FanOutFailures[2].Failure; got.Class != "unknown" || got.Code != "unknown" || got.Origin != FailureOriginUnknown || got.Retryable {
+		t.Fatalf("unknown failure was classified or retryable: %#v", got)
+	}
+	if record.Failure.FailureClass != "orchestration" || record.Failure.FailureCode != "delegation_join_failed" || record.Failure.FailureOrigin != FailureOriginFanOutJoin {
+		t.Fatalf("join diagnosis missing: %#v", record.Failure)
 	}
 	childEvents, err := env.events.Query(t.Context(), event.EventFilter{RunID: record.State.RunID, Type: event.EventMultiAgentFanoutChildCompleted})
 	if err != nil || len(childEvents) != 3 {
@@ -1102,32 +1204,43 @@ func TestTerminalFanOutFailuresPersistSafeClassificationThroughReport(t *testing
 	}
 	// The public report is assembled from the same canonical event projection
 	// used by the run-report endpoint.
-	report := BuildReferenceRunReport(ReferenceWorkflowInput{Objective: "diagnostic test"}, record.State, childEvents)
+	joinEvents, err := env.events.Query(t.Context(), event.EventFilter{RunID: record.State.RunID, Type: event.EventMultiAgentFanoutJoined})
+	if err != nil || len(joinEvents) != 1 {
+		t.Fatalf("join events=%d err=%v", len(joinEvents), err)
+	}
+	reportEvents := append(append([]event.Event(nil), childEvents...), joinEvents...)
+	report := BuildReferenceRunReport(ReferenceWorkflowInput{Objective: "diagnostic test"}, record.State, reportEvents)
+	if report.FailureClass != "orchestration" || report.FailureCode != "delegation_join_failed" || report.FailureOrigin != FailureOriginFanOutJoin {
+		t.Fatalf("report omitted top-level join diagnosis: %#v", report)
+	}
 	if len(report.FanOut) != 3 {
 		t.Fatalf("report fanout=%#v", report.FanOut)
 	}
-	foundSpecific, foundUnknown := false, false
+	foundSpecific, foundTool, foundUnknown := false, false, false
 	for _, lane := range report.FanOut {
 		if lane.CorrectionField == "task_breakdown" && lane.ExpectedType == "a JSON array of strings" {
 			foundSpecific = lane.FailureClass == "schema_correction" && lane.FailureCode == "invalid_field_type" &&
 				lane.AttemptID != "" && lane.Retryable && lane.FailureReason == "recovery_limit_reached" && lane.RecoveryNumber == 0
 		}
-		if lane.CorrectionField == "" && lane.ExpectedType == "" && lane.Status == string(event.OutcomeFailed) {
+		if lane.FailureCode == "tool_execution_error" {
+			foundTool = lane.FailureClass == "tool" && lane.FailureOrigin == FailureOriginToolExecutor && !lane.Retryable
+		}
+		if lane.FailureClass == "unknown" && lane.FailureCode == "unknown" && lane.FailureOrigin == FailureOriginUnknown && lane.Status == string(event.OutcomeFailed) {
 			foundUnknown = true
 		}
 	}
-	if !foundSpecific || !foundUnknown {
+	if !foundSpecific || !foundTool || !foundUnknown {
 		t.Fatalf("report omitted safe diagnostics: %#v", report.FanOut)
 	}
 	serialized, err := json.Marshal(struct {
 		Failure *PersistedFailure
 		Events  []event.Event
 		Report  ReferenceRunReport
-	}{record.Failure, childEvents, report})
+	}{record.Failure, reportEvents, report})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, sentinel := range []string{"SECRET_CANARY_APIKEY", "TOKEN_SENTINEL", "VALUE_SENTINEL"} {
+	for _, sentinel := range []string{"SECRET_CANARY_APIKEY", "TOKEN_SENTINEL", "VALUE_SENTINEL", "PRIVATE_RAW_ERROR_CANARY"} {
 		if strings.Contains(string(serialized), sentinel) {
 			t.Fatalf("unsafe value leaked into durable diagnostics: %s", sentinel)
 		}

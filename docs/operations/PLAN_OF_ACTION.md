@@ -1,5 +1,91 @@
 # Prizm Plan of Action
 
+## Current Handoff: R1 retry terminal-cause authority and event provenance (2026-10-16)
+
+**Roadmap:** R1 remains incomplete. On staging-derived branch
+`codex/pr91-r1-failure-origin` (base commit
+`bff5a7c38cf216df7167c3680e8af88ce57cf34f`), durable role classification now
+uses the terminal error as the retry authority. Earlier safe correction facts
+remain in runner recovery state, but cannot replace a later typed provider
+failure or turn an unknown terminal error into a retryable known failure.
+Scheduled and exhausted retry events now include `failure_origin` only when
+the class/code/origin tuple passes the existing allowlist; the exhausted event
+schema accepts that optional field. No package boundary changed.
+
+**Evidence:** regressions cover a correctable nonmutating tool error followed
+by `provider_turn_failed` with `Retry-After`, preservation of the safe earlier
+correction diagnostic, unknown terminal errors staying unknown/nonretryable,
+and validated failure origin on scheduled/exhausted events. Focused tests,
+`go test ./... -count=1`, `go build ./...`, `go vet ./...`, and
+`git diff --check` passed. The full suite required loopback-enabled execution
+and workspace-local temp paths; the default sandbox run showed socket and
+Windows temp-object cleanup denials.
+
+**Risk/next action:** this is retry correctness and observability evidence,
+not a successful R1 acceptance. Independently review the local patch, rebuild
+Prizm before the next served acceptance, and keep PR #91 draft until the fresh
+isolated task completes proposal, approval, apply, configured validation,
+review, and final report.
+
+## Current Handoff: R1 durable fan-out failure provenance (2026-10-16)
+
+**Roadmap:** R1 remains incomplete. Branch `codex/pr91-r1-failure-origin` is
+based on staging candidate `6aebb33c356851843d745445e8dbf50235864a00`. The
+change carries allowlisted failure class/code/origin from the actual tool
+executor correction callsite into durable child state, child and join events,
+the top-level persisted join failure, and the reference report. The fixed join
+diagnosis is `orchestration/delegation_join_failed/fanout_join`; unknown
+failures remain unknown and nonretryable. The authoritative DB audit for
+`run_9544229c6a3b2158bf82ddf6e6` shows planner failure after three visits with
+`tool/tool_execution_error`, zero developer/reviewer/tester durable visits,
+and no persisted child classification/origin despite event-summary lane
+failure IDs/statuses.
+
+**Evidence:** focused provenance regressions pass; `go test ./... -count=1`,
+`go build ./...`, `go vet ./...`, Staticcheck, and `git diff --check` pass. The
+full suite required workspace-local temp paths and loopback access. No live
+acceptance task or remote PR update was started.
+
+**Risk/next action:** this is diagnostic coverage, not a successful R1 task.
+Review the local diff/commit, then run a fresh isolated Prizm-served acceptance
+with Codex disabled and the configured Ollama text provider. Keep PR #91 draft
+and R1 incomplete until proposal, approval, apply, configured validation,
+fresh review, and final report all succeed.
+
+## Current Handoff: R1 Linux CI fan-out synchronization (2026-10-16)
+
+**Roadmap:** R1 remains incomplete. The current PR #91 head is
+`58e8c5d245b9eaec0a944251346ef1ef6c2f5aa1` on `staging`. Its Linux check
+failed in `cmd/prizm-cli` at
+`TestGraphRoleWorkerEmbeddedNATSRecoversPersistedFanoutJoin`: the test expected
+one child success and two deadline outcomes, but observed three deadline
+outcomes. The immediate-success child was not synchronized before the test
+advanced its fake clock. The test now waits for the child terminal notification
+and verifies its durable outbox outcome before advancing time. No runtime
+behavior or package boundary changed.
+
+**Evidence:** the focused regression passed 30 consecutive runs with local
+loopback sockets enabled; `go test ./cmd/prizm-cli -count=1`,
+`go test ./... -count=1`, `go build ./...`, and `go vet ./...` passed. The PR's
+other checks at the observed head passed (`test-windows`, `lint-linux`, and
+`test-python`); `test-linux` failed on the race described above. This source
+fix has not been pushed, so those checks are not evidence about the fixed
+commit. The Factory clone stayed unchanged and no new acceptance task was
+submitted.
+
+**Risk/next action:** the prior served R1 run
+`run_9544229c6a3b2158bf82ddf6e6` failed before proposal, apply, configured
+validation, or final review. The authoritative durable DB record shows planner
+failure after three visits with `tool/tool_execution_error`; developer,
+reviewer, and tester have zero durable visits. The separate event summary
+contained lane failure IDs/statuses, but the DB did not classify or persist
+child failure origin. Do not describe this run as an implementation
+`unknown/unknown` plus reviewer `invalid_field_value` failure. Keep raw errors
+unknown/nonretryable and persist only allowlisted diagnoses from trusted
+boundaries. After review, run a fresh isolated acceptance through Prizm's
+served API with Codex disabled and the configured Ollama text provider. Do not
+claim R1 complete based on local checks.
+
 ## Current Handoff: R1 actionable recovery and reviewer handoff (2026-10-16)
 
 **Roadmap:** R1 remains incomplete. Starting from PR-local commit
@@ -362,7 +448,7 @@ Feature commit `b798578f5b7ac175b94fed6d5f8036811625e3d8` is pushed on `codex/du
 
 ### R1 terminal fan-out diagnostics handoff (2026-10-13)
 
-PR #91 remains a draft checkpoint; the real Factory acceptance run `run_9544229c6a3b2158bf82ddf6e6` failed before proposal, apply, configured validation, or final review. Its immutable report remains unchanged. The R1 review worktree was merged with current staging `31a6ee783691c7a59005d6afc2b064ad73859258`; only seven reviewed diagnostic/classifier paths were ported. Terminal child failures now preserve trusted retry counters and allowlisted failure/schema details through durable join failure, child event, and revalidated report projection. Four known safe nonretryable tool codes remain distinct; unknown errors stay unknown. Focused multiagent/event tests pass; full build, vet, and default-parallel suite are pending on the merged candidate.
+PR #91 remains a draft checkpoint; the real Factory acceptance run `run_9544229c6a3b2158bf82ddf6e6` failed before proposal, apply, configured validation, or final review. Its authoritative durable DB record shows planner failure after three visits with `tool/tool_execution_error`; developer, reviewer, and tester have zero durable visits. The separate event summary contained lane failure IDs/statuses, but the DB did not classify or persist child origin. The R1 review worktree was merged with current staging `31a6ee783691c7a59005d6afc2b064ad73859258`; terminal child failures preserve trusted retry counters and allowlisted failure/schema details through durable join failure, child event, and revalidated report projection. Unknown errors stay unknown and nonretryable.
 
 Next: preserve the immutable failed run and use the bounded reconciliation result to distinguish base-tree, expected-tree, and ambiguous outcomes before any operator-approved recovery. R1 remains incomplete until the same approved task completes configured validation, fresh review, and final report/notification checks. FW-P1 (FW-002/003/004) remains separate follow-on work.
 

@@ -614,7 +614,6 @@ func (r *DurableRuntime) resumeDelegationJoin(ctx context.Context, record Durabl
 	if allTerminal {
 		if failed {
 			terminalFailures := terminalFanOutFailures(record.DelegationJoin.Children)
-			record.DelegationJoin = nil
 			return r.failDelegationWithFanOut(ctx, record, "delegation_join_failed", errors.New("one or more fan-out lanes failed"), terminalFailures)
 		}
 		return r.completeDelegationJoin(ctx, record)
@@ -766,6 +765,7 @@ func fanOutChildCompletionPayload(runID string, child DelegationJoinChild) map[s
 		payload["attempt_id"] = failure.AttemptID
 		payload["failure_class"] = failure.Class
 		payload["failure_code"] = failure.Code
+		payload["failure_origin"] = safeFailureOrigin(failure.Class, failure.Code, failure.Origin)
 		payload["failure_reason"] = failure.Reason
 		payload["retryable"] = failure.Retryable
 		payload["recovery_number"] = failure.RecoveryNumber
@@ -811,6 +811,15 @@ func fanOutChildSummaries(children []DelegationJoinChild) []event.MultiAgentFano
 			usage := child.Retry.AccumulatedUsage
 			summary.TokenUsage = event.TokenUsage{PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens,
 				TotalTokens: usage.TotalTokens, EstimatedCostUsd: usage.EstimatedCostUsd}
+		}
+		if failure := child.TerminalFailure; failure != nil {
+			summary.FailureClass = failure.Class
+			summary.FailureCode = failure.Code
+			summary.FailureOrigin = string(safeFailureOrigin(failure.Class, failure.Code, failure.Origin))
+			summary.FailureReason = safeTerminalFailureReason(failure.Reason)
+			summary.Retryable = failure.Retryable
+			summary.RecoveryNumber = failure.RecoveryNumber
+			summary.MaxRecoveries = failure.MaxRecoveries
 		}
 		summaries = append(summaries, summary)
 	}
@@ -1037,11 +1046,34 @@ func (r *DurableRuntime) failDelegation(ctx context.Context, record DurableRun, 
 
 func (r *DurableRuntime) failDelegationWithFanOut(ctx context.Context, record DurableRun, kind string, cause error, failures []TerminalFanOutFailure) (DurableRun, error) {
 	role := record.State.CurrentRole
-	state, terminalErr := r.supervisor.failRole(record.State, role, cause)
+	joinID := ""
+	var summaries []event.MultiAgentFanoutChildSummary
+	if record.DelegationJoin != nil {
+		joinID = record.DelegationJoin.JoinID
+		summaries = fanOutChildSummaries(record.DelegationJoin.Children)
+	}
+	diagnostic := fanOutJoinFailure(failures)
+	if joinID != "" {
+		r.supervisor.emit(event.EventMultiAgentFanoutJoined, record.State, map[string]any{
+			"run_id": record.State.RunID, "join_id": joinID, "status": string(event.OutcomeFailed),
+			"reason": "child_failure", "child_summaries": summaries,
+			"failure_class": diagnostic.FailureClass, "failure_code": diagnostic.FailureCode,
+			"failure_origin": diagnostic.FailureOrigin,
+		})
+	}
+	state, terminalErr := r.supervisor.failRoleWithRetryDiagnostic(record.State, role, cause, diagnostic)
 	record.State = state
 	record.Phase = CheckpointTerminal
 	record.Failure = persistedFailure(kind, terminalErr, r.now())
+	if diagnostic != nil {
+		record.Failure.FailureClass = diagnostic.FailureClass
+		record.Failure.FailureCode = diagnostic.FailureCode
+		record.Failure.FailureOrigin = diagnostic.FailureOrigin
+		record.Failure.FailureReason = diagnostic.FailureReason
+		record.Failure.Retryable = diagnostic.Retryable
+	}
 	record.Failure.FanOutFailures = append([]TerminalFanOutFailure(nil), failures...)
+	record.DelegationJoin = nil
 	record.PendingTransition = nil
 	record.Waiting = nil
 	record, checkpointErr := r.checkpoint(ctx, record)
@@ -1049,6 +1081,18 @@ func (r *DurableRuntime) failDelegationWithFanOut(ctx context.Context, record Du
 		return record, checkpointErr
 	}
 	return record, terminalErr
+}
+
+func fanOutJoinFailure(failures []TerminalFanOutFailure) *PersistedFailure {
+	if len(failures) == 0 {
+		return nil
+	}
+	// The join diagnosis is fixed orchestration metadata. Child-specific safe
+	// diagnoses remain available in FanOutFailures and child summaries.
+	return &PersistedFailure{
+		FailureClass: "orchestration", FailureCode: "delegation_join_failed",
+		FailureOrigin: FailureOriginFanOutJoin, FailureReason: "child_failure", Retryable: false,
+	}
 }
 
 func (r *DurableRuntime) ackDelegationOutcome(ctx context.Context, record DurableRun, eventID string) (DurableRun, error) {

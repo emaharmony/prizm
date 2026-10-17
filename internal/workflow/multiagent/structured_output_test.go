@@ -312,8 +312,8 @@ func TestEnumCorrectionFeedbackIsAllowlistedAndSpecific(t *testing.T) {
 	if strings.Contains(string(wire), privateValue) || strings.Contains(feedback, privateValue) {
 		t.Fatalf("private model value leaked: wire=%s feedback=%q", wire, feedback)
 	}
-	if got := roleFailureFeedback(RoleReviewer, "invalid_field_value", "private_field", "", []string{privateValue}); strings.Contains(got, privateValue) || strings.Contains(got, "private_field") {
-		t.Fatalf("untrusted enum detail escaped allowlist: %q", got)
+	if got := roleFailureFeedback(RoleReviewer, "invalid_field_value", "private_field", "", []string{privateValue}); got != canonicalSchemaFeedback(RoleReviewer, "invalid_field_value", nil) {
+		t.Fatalf("unknown enum detail did not stay generic: %q", got)
 	}
 }
 

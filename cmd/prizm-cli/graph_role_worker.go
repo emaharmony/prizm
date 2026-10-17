@@ -572,7 +572,7 @@ func (w *graphRoleWorker) execute(command multiagent.GraphRoleCommand) {
 }
 
 func graphRoleFailureOutcome(err error, command multiagent.GraphRoleCommand, result multiagent.RoleRunResult, attemptID string) multiagent.GraphRoleOutcome {
-	failure := multiagent.ClassifyRoleExecutionFailure(err)
+	failure := multiagent.ClassifyRoleExecutionFailureWithResult(err, result)
 	failure.DeliveryAttemptID = command.DeliveryAttemptID
 	failure.AttemptID = attemptID
 	failure.Usage = result.TokenUsage

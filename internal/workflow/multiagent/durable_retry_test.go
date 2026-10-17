@@ -190,6 +190,64 @@ func TestNonRetryableRoleFailureRetainsOnlyAllowlistedTypedCodes(t *testing.T) {
 	}
 }
 
+func TestTerminalProviderFailureOverridesEarlierToolCorrectionMetadata(t *testing.T) {
+	// The loop can safely correct a nonmutating tool failure, then terminate on
+	// a provider error. The result's LastRecovery fields belong to the earlier
+	// correction and must not hide the terminal provider retry classification.
+	result := RoleRunResult{
+		FailureClass:  "tool",
+		FailureCode:   "tool_execution_error",
+		FailureOrigin: FailureOriginToolExecutor,
+	}
+	retryAfter := 47 * time.Second
+	failure := ClassifyRoleExecutionFailureWithResult(
+		&subagent.SafeFailureError{Code: "provider_turn_failed", RetryAfterDelay: retryAfter}, result,
+	)
+	if failure.Class != "provider_transient" || failure.Code != "provider_turn_failed" ||
+		failure.Origin != FailureOriginProviderCall || !failure.Retryable || failure.RetryAfter != retryAfter {
+		t.Fatalf("terminal provider failure was overridden by prior correction: %#v", failure)
+	}
+}
+
+func TestUnknownTerminalFailureIsNotReplacedByEarlierRecoveryMetadata(t *testing.T) {
+	result := RoleRunResult{
+		FailureClass:  "tool",
+		FailureCode:   "tool_execution_error",
+		FailureOrigin: FailureOriginToolExecutor,
+	}
+	failure := ClassifyRoleExecutionFailureWithResult(errors.New("unclassified terminal error"), result)
+	if failure.Class != "unknown" || failure.Code != "unknown" || failure.Origin != FailureOriginUnknown || failure.Retryable {
+		t.Fatalf("unknown terminal failure was replaced by stale recovery data: %#v", failure)
+	}
+}
+
+func TestRetryScheduledAndExhaustedEventsIncludeSafeFailureOrigin(t *testing.T) {
+	runtime := &DurableRuntime{buffer: &durableEventBuffer{}}
+	record := DurableRun{State: RunState{RunID: "run-retry-origin", WorkflowID: "workflow-retry-origin"}}
+	state := RetryState{
+		Role: RolePlanner, ExecutionKey: "execution-1", VisitID: "visit-1", AttemptID: "attempt-1",
+		Number: 2, RecoveryNumber: 1, FailureClass: "provider_transient",
+		FailureCode: "provider_turn_failed", FailureOrigin: FailureOriginProviderCall,
+		NextAt: time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC),
+	}
+	for _, kind := range []string{event.EventMultiAgentRetryScheduled, event.EventMultiAgentRetryExhausted} {
+		t.Run(kind, func(t *testing.T) {
+			runtime.buffer.reset()
+			runtime.emitRetry(kind, record, state)
+			events := runtime.buffer.snapshot()
+			if len(events) != 1 {
+				t.Fatalf("emitted %d events, want one", len(events))
+			}
+			if got := events[0].Payload["failure_origin"]; got != FailureOriginProviderCall {
+				t.Fatalf("failure_origin=%#v, want %q", got, FailureOriginProviderCall)
+			}
+			if err := event.Validate(events[0]); err != nil {
+				t.Fatalf("retry event contract: %v", err)
+			}
+		})
+	}
+}
+
 func TestDurableRetryBackoffIsBoundedDeterministicAndHonorsRetryAfter(t *testing.T) {
 	first := roleRetryDelay("visit", 1, 0)
 	if first < 5*time.Second || first > 5*time.Second+500*time.Millisecond {

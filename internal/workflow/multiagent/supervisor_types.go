@@ -246,6 +246,9 @@ type RoleRunResult struct {
 	TokenUsage      cost.TokenUsage
 	LocalIterations int
 	Retries         int
+	FailureClass    string
+	FailureCode     string
+	FailureOrigin   FailureOrigin
 	Metadata        ExecutionMetadata
 	Proposals       []ProposalReference
 	FanOut          *FanOutPlan

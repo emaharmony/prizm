@@ -188,6 +188,7 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 	lastPromptTokens, lastCompletionTokens := 0, 0
 	finalPromptGrowthTokens := 0
 	recoveryAttempts, corrections := 0, 0
+	lastRecoveryClass, lastRecoveryOrigin := "", ""
 	lastRecoveryCode := ""
 	progressObservations := map[string]struct{}{}
 	lastNoProgressHash := ""
@@ -198,18 +199,27 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 	usage := func(r RunResult) RunResult {
 		r.PromptTokens, r.CompletionTokens = totalPrompt, totalCompletion
 		r.Iterations, r.ToolCalls, r.DeniedToolCalls = iterations, toolCalls, deniedToolCalls
-		r.RecoveryAttempts, r.Corrections, r.LastRecoveryCode = recoveryAttempts, corrections, lastRecoveryCode
+		r.RecoveryAttempts, r.Corrections = recoveryAttempts, corrections
+		r.LastRecoveryClass, r.LastRecoveryCode, r.LastRecoveryOrigin = lastRecoveryClass, lastRecoveryCode, lastRecoveryOrigin
 		return r
 	}
-	recordCorrection := func(expectedAttemptID, errorClass, code string, feedback ...string) error {
+	recordCorrection := func(expectedAttemptID, errorClass, code, origin string, feedback ...string) error {
 		corrections++
+		lastRecoveryClass = errorClass
 		lastRecoveryCode = code
+		lastRecoveryOrigin = origin
 		if runtime.RetryHooks == nil {
 			return nil
 		}
 		var err error
-		if len(feedback) > 0 && feedback[0] != "" {
-			err = runtime.RetryHooks.RecordCorrectionFeedback(expectedAttemptID, errorClass, code, feedback[0])
+		feedbackText := ""
+		if len(feedback) > 0 {
+			feedbackText = feedback[0]
+		}
+		if originHooks, ok := runtime.RetryHooks.(RetryOriginHooks); ok {
+			err = originHooks.RecordCorrectionWithOrigin(expectedAttemptID, errorClass, code, origin, feedbackText)
+		} else if feedbackText != "" {
+			err = runtime.RetryHooks.RecordCorrectionFeedback(expectedAttemptID, errorClass, code, feedbackText)
 		} else {
 			err = runtime.RetryHooks.RecordCorrection(expectedAttemptID, errorClass, code)
 		}
@@ -363,7 +373,7 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 			// the durable role-visit allowance with failures from other layers.
 			feedback := "Respond with a tool call or a final answer."
 			if action.CorrectionCode != "" {
-				if err := recordCorrection(modelAttemptID, "schema", action.CorrectionCode); err != nil {
+				if err := recordCorrection(modelAttemptID, "schema", action.CorrectionCode, ""); err != nil {
 					if ctx.Err() != nil {
 						return usage(RunResult{Artifacts: artifacts.result()}), ctx.Err()
 					}
@@ -488,7 +498,7 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 						return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "no_effects_checkpoint_failed"}
 					}
 				}
-				if err := recordCorrection(toolAttemptID, "tool", correctable.Code, patchCorrectionFeedback()); err != nil {
+				if err := recordCorrection(toolAttemptID, "tool", correctable.Code, "", patchCorrectionFeedback()); err != nil {
 					if ctx.Err() != nil {
 						return usage(RunResult{Artifacts: artifacts.result()}), ctx.Err()
 					}
@@ -512,7 +522,7 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 				return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: safeToolErrorCode(terr), Tool: action.Tool}
 			}
 			// A tool failure is fed back so the agent can adapt, not fatal.
-			if err := recordCorrection(toolAttemptID, "tool", "tool_execution_error"); err != nil {
+			if err := recordCorrection(toolAttemptID, "tool", "tool_execution_error", RecoveryOriginToolExecutor); err != nil {
 				if ctx.Err() != nil {
 					return usage(RunResult{Artifacts: artifacts.result()}), ctx.Err()
 				}
@@ -559,7 +569,7 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 				return usage(RunResult{Artifacts: artifacts.result()}), &NoProgressError{RepeatedObservations: repeatCount}
 			}
 			if repeatCount >= 3 {
-				if err := recordCorrection(toolAttemptID, "no_progress", "repeated_tool_observation"); err != nil {
+				if err := recordCorrection(toolAttemptID, "no_progress", "repeated_tool_observation", ""); err != nil {
 					if ctx.Err() != nil {
 						return usage(RunResult{Artifacts: artifacts.result()}), ctx.Err()
 					}

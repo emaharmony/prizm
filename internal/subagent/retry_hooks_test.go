@@ -50,6 +50,12 @@ func TestLoopRunnerFailedToolRefreshesAttemptBeforeProgressCount(t *testing.T) {
 	if err != nil || result.Summary != "corrected" {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
+	if result.LastRecoveryClass != "tool" || result.LastRecoveryCode != "tool_execution_error" || result.LastRecoveryOrigin != RecoveryOriginToolExecutor {
+		t.Fatalf("last recovery provenance = class:%q code:%q origin:%q", result.LastRecoveryClass, result.LastRecoveryCode, result.LastRecoveryOrigin)
+	}
+	if result.RecoveryAttempts != 1 || result.Corrections != 1 {
+		t.Fatalf("recovery accounting changed: attempts=%d corrections=%d", result.RecoveryAttempts, result.Corrections)
+	}
 	if got := backend.toolCalls; len(got) != 1 || got[0] != "read_file" {
 		t.Fatalf("tool executions=%v, want one failed read", got)
 	}

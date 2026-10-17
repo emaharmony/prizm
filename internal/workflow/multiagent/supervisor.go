@@ -603,6 +603,9 @@ func (s *Supervisor) failRunWithRetryDiagnostic(state RunState, err error, diagn
 		if diagnostic.FailureCode != "" {
 			fields["failure_code"] = diagnostic.FailureCode
 		}
+		if diagnostic.FailureOrigin != "" {
+			fields["failure_origin"] = safeFailureOrigin(diagnostic.FailureClass, diagnostic.FailureCode, diagnostic.FailureOrigin)
+		}
 		if diagnostic.FailureReason != "" {
 			fields["failure_reason"] = diagnostic.FailureReason
 		}

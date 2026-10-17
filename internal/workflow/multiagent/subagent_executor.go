@@ -98,6 +98,9 @@ func (e SubagentExecutor) ExecuteAgent(
 		LocalIterations: result.Iterations,
 		ToolCalls:       result.ToolCalls,
 		DeniedToolCalls: result.DeniedToolCalls,
+		FailureClass:    result.LastRecoveryClass,
+		FailureCode:     result.LastRecoveryCode,
+		FailureOrigin:   FailureOrigin(result.LastRecoveryOrigin),
 	}
 	if err != nil {
 		return executionResult, err
@@ -144,6 +147,20 @@ func (h subagentRetryHooks) RecordCorrectionFeedback(id, class, code, feedback s
 		return nil
 	}
 	return h.handle.RecordCorrectionFeedback(id, class, code, feedback)
+}
+func (h subagentRetryHooks) RecordCorrectionWithOrigin(id, class, code, origin, feedback string) error {
+	if h.handle == nil {
+		return nil
+	}
+	if recorder, ok := h.handle.(interface {
+		RecordCorrectionWithOrigin(string, string, string, string, string) error
+	}); ok {
+		return recorder.RecordCorrectionWithOrigin(id, class, code, origin, feedback)
+	}
+	if feedback != "" {
+		return h.handle.RecordCorrectionFeedback(id, class, code, feedback)
+	}
+	return h.handle.RecordCorrection(id, class, code)
 }
 func (h subagentRetryHooks) ConfirmNoEffects(id, mutationID string) error {
 	if h.handle == nil {

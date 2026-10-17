@@ -32,6 +32,15 @@ type RetryHooks interface {
 	RecordCorrectionFeedback(expectedAttemptID, errorClass, code, feedback string) error
 }
 
+// RetryOriginHooks is an optional extension implemented by durable runtimes
+// that need the trusted correction callsite retained with recovery evidence.
+// It remains separate from RetryHooks so existing integrations stay valid.
+type RetryOriginHooks interface {
+	RecordCorrectionWithOrigin(expectedAttemptID, errorClass, code, origin, feedback string) error
+}
+
+const RecoveryOriginToolExecutor = "tool_executor"
+
 // ToolDiagnostic contains only allowlisted metadata suitable for a durable
 // event. It deliberately has no input, output, prompt, or error-message field.
 type ToolDiagnostic struct {

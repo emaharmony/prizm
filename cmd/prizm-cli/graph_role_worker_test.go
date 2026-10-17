@@ -358,6 +358,25 @@ func TestGraphRoleWorkerEmbeddedNATSRecoversPersistedFanoutJoin(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer nc.Close()
+	succeededChild := make(chan event.Outcome, 1)
+	outcomeSub, err := nc.Subscribe(graphRoleOutcomeSubject, func(message *nats.Msg) {
+		var outcome event.Outcome
+		if json.Unmarshal(message.Data, &outcome) != nil || outcome.RunID != runID ||
+			outcome.JoinID == "" || outcome.Lane == "" || outcome.Status != event.OutcomeSucceeded {
+			return
+		}
+		select {
+		case succeededChild <- outcome:
+		default:
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outcomeSub.Unsubscribe()
+	if err := nc.Flush(); err != nil {
+		t.Fatal(err)
+	}
 
 	graph, err := multiagent.CompatAdaptDefinition(multiagent.DefaultReferenceDefinition())
 	if err != nil {
@@ -447,6 +466,28 @@ func TestGraphRoleWorkerEmbeddedNATSRecoversPersistedFanoutJoin(t *testing.T) {
 		t.Fatalf("persisted delegation join=%#v err=%v", waiting.DelegationJoin, err)
 	}
 
+	var success event.Outcome
+	select {
+	case success = <-succeededChild:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for the immediate-success child's persisted outcome")
+	}
+	traces, err := box.Report(t.Context(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var successPersisted bool
+	for _, trace := range traces {
+		if trace.Command.IdempotencyKey != success.DeliveryKey || len(trace.Outcomes) == 0 {
+			continue
+		}
+		successPersisted = trace.Outcomes[len(trace.Outcomes)-1].Status == event.OutcomeSucceeded
+		break
+	}
+	if !successPersisted {
+		t.Fatalf("success outcome notification was not persisted before expiry: delivery_key=%q", success.DeliveryKey)
+	}
+
 	clock.Store(start.Add(11 * time.Second))
 	worker.wakeExpired(t.Context(), start.Add(11*time.Second))
 	deadline = time.Now().Add(3 * time.Second)
@@ -462,7 +503,7 @@ func TestGraphRoleWorkerEmbeddedNATSRecoversPersistedFanoutJoin(t *testing.T) {
 		t.Fatalf("terminal run=%#v err=%v", terminal, err)
 	}
 
-	traces, err := box.Report(t.Context(), runID)
+	traces, err = box.Report(t.Context(), runID)
 	if err != nil {
 		t.Fatal(err)
 	}
