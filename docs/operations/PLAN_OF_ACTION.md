@@ -1,6 +1,41 @@
 # Prizm Plan of Action
 
-## Current Handoff: R1 retry terminal-cause authority and event provenance (2026-10-16)
+## Current Handoff: R1 served acceptance retry exhaustion (2026-10-17)
+
+**Roadmap:** R1 remains incomplete. The isolated served run
+`run_772f310af2f018ca180769e28d` used Prizm's API and the configured
+`ollama/glm-5.3:cloud` text provider. Prizm owned orchestration and durable
+retry scheduling; Codex/Claude executors were disabled. Its source was built
+from local commit `7f925b7f8b3633a59122eeebf0fbab8c593ba69c`, whose tree
+`a9a66b6a6ec64f130c319ab125980b50003b0c1d` matches the published PR #91
+candidate. The Factory workspace was the isolated clone.
+
+**Evidence:** the exact previously approved request body was submitted
+unchanged (SHA-256
+`6BD2CA13898A5EDCA61BA80D8681B606CB85C9FCBE09304E01863FF00B0AA845`). The
+planner consumed one initial attempt and ten retries, then ended with
+`retry_exhausted` after `provider_transient/provider_turn_failed`. The durable
+retry record and all three persisted events—
+`prism.workflow.multi_agent.role.retry.scheduled`,
+`prism.workflow.multi_agent.role.retry.exhausted`, and
+`prism.workflow.multi_agent.run.failed`—recorded the allowlisted
+`failure_origin=provider_call`, confirming the origin-population fix in the
+live path. The terminal report records 11 local iterations and 10 retries.
+There was no proposal, apply, configured validation, test outcome, or delivery,
+and the planner made no workflow transition. The terminal record and events
+remained durable after service shutdown. The service listened on loopback only and is stopped;
+the isolated Factory clone is clean.
+
+**Risk/next action:** this run verifies Prizm's retry exhaustion, attribution,
+and terminal reporting, but does not prove coding delivery. The safe failure
+classification does not explain the underlying provider failure, so do not
+infer a provider root cause from it. Diagnose provider availability using
+sanitized status only, then run a fresh isolated Prizm acceptance once the
+provider can complete a turn. Stop at any proposal for explicit approval.
+Keep PR #91 draft and R1 incomplete until proposal, approval, exactly-once
+apply, configured validation, review, and final reporting succeed.
+
+## Previous Handoff: R1 retry terminal-cause authority and event provenance (2026-10-16)
 
 **Roadmap:** R1 remains incomplete. On staging-derived branch
 `codex/pr91-r1-failure-origin` (base commit
