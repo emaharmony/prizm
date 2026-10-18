@@ -3,10 +3,12 @@ package subagent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/emaharmony/prizm/internal/provider"
 	"github.com/emaharmony/prizm/internal/retry"
 	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 )
@@ -544,6 +546,19 @@ func TestLoopRunnerRetainsCorrectionDiagnosticsWhenLaterProviderTurnFails(t *tes
 	}
 	if result.LastRecoveryClass != "tool" || result.LastRecoveryCode != "tool_execution_error" || result.LastRecoveryOrigin != RecoveryOriginToolExecutor {
 		t.Fatalf("safe correction diagnostics were lost: class=%q code=%q origin=%q", result.LastRecoveryClass, result.LastRecoveryCode, result.LastRecoveryOrigin)
+	}
+}
+
+func TestLoopRunnerPreservesOnlySafeProviderFailureMetadata(t *testing.T) {
+	backend := &scriptBackend{parse: lineParser, turns: []Turn{{}}, turnErrors: []error{fmt.Errorf("PRIVATE_CANARY: %w", &provider.HTTPFailure{StatusCode: 429, RetryAfterWait: 90 * time.Second})}}
+	runner := NewLoopRunner(LoopRunnerConfig{Backend: backend})
+	_, err := runner.Run(context.Background(), v2.TaskPacket{TaskID: "T-provider-http"}, AgentRuntime{AgentID: "developer"})
+	var failure *SafeFailureError
+	if !errors.As(err, &failure) || failure.Code != "provider_turn_failed" || failure.ProviderStatus != 429 || failure.RetryAfter() != 90*time.Second {
+		t.Fatalf("safe provider metadata=%#v err=%v", failure, err)
+	}
+	if strings.Contains(err.Error(), "PRIVATE_CANARY") {
+		t.Fatalf("provider error leaked across subagent boundary: %v", err)
 	}
 }
 

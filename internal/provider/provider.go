@@ -15,7 +15,31 @@ package provider
 import (
 	"context"
 	"errors"
+	"time"
 )
+
+// HTTPFailure is a safe provider transport diagnosis. It intentionally omits
+// response bodies and request data so it can cross durable execution boundaries.
+type HTTPFailure struct {
+	StatusCode     int
+	RetryAfterWait time.Duration
+}
+
+func (e *HTTPFailure) Error() string { return "provider: HTTP request failed" }
+
+func (e *HTTPFailure) HTTPStatusCode() int {
+	if e == nil || e.StatusCode < 100 || e.StatusCode > 599 {
+		return 0
+	}
+	return e.StatusCode
+}
+
+func (e *HTTPFailure) RetryAfter() time.Duration {
+	if e == nil || e.RetryAfterWait <= 0 {
+		return 0
+	}
+	return e.RetryAfterWait
+}
 
 // Provider is the interface for LLM generation backends.
 type Provider interface {

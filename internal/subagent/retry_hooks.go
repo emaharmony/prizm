@@ -97,6 +97,7 @@ type SafeFailureError struct {
 	Code            string
 	Tool            string
 	RetryAfterDelay time.Duration
+	ProviderStatus  int
 }
 
 func (e *SafeFailureError) Error() string {

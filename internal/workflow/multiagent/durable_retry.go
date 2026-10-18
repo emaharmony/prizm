@@ -398,6 +398,12 @@ func (r *DurableRuntime) emitRetry(kind string, record DurableRun, state RetrySt
 		payload["failure_class"] = safeRetryCode(state.FailureClass)
 		payload["failure_code"] = safeRetryCode(state.FailureCode)
 		payload["failure_origin"] = safeFailureOrigin(state.FailureClass, state.FailureCode, state.FailureOrigin)
+		if status := safeStatusValue(state.ProviderStatus); status > 0 {
+			payload["provider_status"] = status
+		}
+		if delay := safeRetryAfterMillis(state.RetryAfter); delay > 0 {
+			payload["retry_after_ms"] = delay
+		}
 	}
 	if kind == event.EventMultiAgentRetryScheduled {
 		payload["next_at"] = state.NextAt.UTC().Format(time.RFC3339Nano)
@@ -431,7 +437,11 @@ func classifyRetryableRoleFailure(err error) (class, code string, retryAfter tim
 		case "invalid_proposal_diff", "invalid_final_schema", "malformed_tool_input":
 			return "schema_correction", safeFailure.Code, 0, true
 		case "provider_turn_failed":
-			return "provider_transient", safeRetryCode(safeFailure.Code), safeFailure.RetryAfter(), true
+			status := safeProviderStatus(err)
+			if status == 0 || status == 408 || status == 425 || status == 429 || status >= 500 {
+				return "provider_transient", safeRetryCode(safeFailure.Code), safeProviderRetryAfter(err), true
+			}
+			return "", "", 0, false
 		case "deadline_exceeded", "execution_error":
 			return "execution_transient", safeRetryCode(safeFailure.Code), 0, true
 		default:
@@ -485,6 +495,7 @@ func (r *DurableRuntime) scheduleRoleRetry(ctx context.Context, record DurableRu
 	state.FailureClass, state.FailureCode = safeRetryCode(class), safeRetryCode(code)
 	classification := ClassifyRoleExecutionFailureWithResult(failure, result)
 	state.FailureOrigin = safeFailureOrigin(state.FailureClass, state.FailureCode, classification.Origin)
+	state.ProviderStatus, state.RetryAfter = safeStatusValue(classification.ProviderStatus), classification.RetryAfter
 	var schemaCorrection *SchemaCorrectionError
 	if errors.As(failure, &schemaCorrection) && schemaCorrection != nil {
 		feedback := canonicalSchemaFeedback(schemaCorrection.Role, safeRetryCode(schemaCorrection.Code), schemaCorrection.Fields)
@@ -723,6 +734,8 @@ func durableFailureDiagnostic(err error, retry *RetryState) *PersistedFailure {
 			diagnostic.FailureClass = safeRetryCode(retry.FailureClass)
 			diagnostic.FailureCode = safeRetryCode(retry.FailureCode)
 			diagnostic.FailureOrigin = safeFailureOrigin(diagnostic.FailureClass, diagnostic.FailureCode, retry.FailureOrigin)
+			diagnostic.ProviderStatus = safeStatusValue(retry.ProviderStatus)
+			diagnostic.RetryAfterMS = safeRetryAfterMillis(retry.RetryAfter)
 			diagnostic.Retryable = diagnostic.FailureClass != ""
 		}
 		return diagnostic
@@ -745,7 +758,18 @@ func durableFailureDiagnostic(err error, retry *RetryState) *PersistedFailure {
 		diagnostic.FailureClass = safeRetryCode(class)
 		diagnostic.FailureCode = safeRetryCode(code)
 		diagnostic.Retryable = true
+		diagnostic.ProviderStatus = safeProviderStatus(err)
+		diagnostic.RetryAfterMS = safeRetryAfterMillis(safeProviderRetryAfter(err))
 		diagnostic.FailureReason = "recovery_unavailable"
+		return diagnostic
+	}
+	var safeFailure *subagent.SafeFailureError
+	if errors.As(err, &safeFailure) && safeFailure != nil && strings.HasPrefix(safeFailure.Code, "provider_") {
+		diagnostic.FailureClass, diagnostic.FailureCode = "provider_rejected", safeRetryCode(safeFailure.Code)
+		diagnostic.FailureOrigin = FailureOriginProviderCall
+		diagnostic.ProviderStatus = safeProviderStatus(err)
+		diagnostic.RetryAfterMS = safeRetryAfterMillis(safeProviderRetryAfter(err))
+		diagnostic.FailureReason = "not_retryable"
 		return diagnostic
 	}
 	diagnostic.FailureClass = "nonretryable"

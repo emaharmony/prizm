@@ -657,3 +657,15 @@ The runtime now derives the retry origin through the existing failure classifier
 **Risk:** this run demonstrates bounded retry exhaustion and terminal reporting, not successful code delivery. R1 acceptance remains open.
 
 **Next action:** coordinator review of this exact candidate, then a fresh isolated served task after the provider availability issue is addressed. Require a reviewed proposal, explicit approval, exactly-once apply, configured validation, resume, and one final report before claiming R1 completion or removing draft status.
+
+## Current Handoff: R1 safe provider retry metadata (2026-10-18)
+
+**Roadmap:** R1 remains incomplete. The second served run `run_5196b66a70ec7f464b3f65d2cb` exhausted one initial provider attempt plus ten retries before any proposal, approval, apply, configured validation, test result, or workflow transition. Diagnosis found that Ollama's chat transport discarded HTTP status and `Retry-After`, while the subagent boundary reduced failures to a generic retryable code.
+
+The provider boundary now returns only an allowlisted numeric HTTP status and parsed Retry-After duration from both Ollama `/api/chat` and legacy `/api/generate`. Same-target retry loops in Ollama and provider failover are removed so the durable role scheduler owns recovery. Failover still makes one ordered pass over configured targets; this fallback fanout is bounded by the configured list and belongs to the current role attempt. Retryable HTTP/network failures retain bounded status/delay through role state and scheduled, exhausted, and run.failed events; 401/403 and other provider configuration responses terminate without automatic retry. Response bodies and arbitrary provider text remain excluded. No package boundary changed.
+
+**Risk:** in a multi-target chain, a transient earlier-target failure followed by terminal auth failure on the last target may be classified from that last error and suppress durable retry. This risk is limited to multi-target failover; the current deployment's target count has not been established. These source tests also do not prove the cloud provider will complete a task. R1 still needs a successful fresh served task through proposal, explicit approval, exactly-once apply, configured validation, review, resume, and final report. Keep PR #91 draft and R1 incomplete.
+
+**Validation:** focused provider, subagent, and multiagent retry tests passed, followed by uncached `go test -timeout 10m -count=1 ./...`, `go build ./...`, `go vet ./...`, and `git diff --check` after the failover and legacy generate-path fixes. The build exited 0 with a benign warning that Go could not write its stat cache under the global module cache; the configured Go build/test cache and temporary paths were inside the candidate worktree.
+
+**Next action:** independent review of this candidate, then rebuild Prizm and rerun the isolated served acceptance with `ollama/glm-5.3:cloud`; inspect the bounded HTTP status and Retry-After metadata if it fails again.

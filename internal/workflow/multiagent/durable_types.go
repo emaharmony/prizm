@@ -248,6 +248,8 @@ type TerminalRoleFailure struct {
 	RecoveryNumber  int           `json:"recovery_number"`
 	MaxRecoveries   int           `json:"max_recoveries"`
 	Retryable       bool          `json:"retryable"`
+	ProviderStatus  int           `json:"provider_status,omitempty"`
+	RetryAfterMS    int64         `json:"retry_after_ms,omitempty"`
 	Reason          string        `json:"reason"`
 }
 
@@ -293,6 +295,8 @@ type PersistedFailure struct {
 	FailureReason  string                  `json:"failure_reason,omitempty"`
 	Retryable      bool                    `json:"retryable,omitempty"`
 	RetryExhausted bool                    `json:"retry_exhausted,omitempty"`
+	ProviderStatus int                     `json:"provider_status,omitempty"`
+	RetryAfterMS   int64                   `json:"retry_after_ms,omitempty"`
 	FanOutFailures []TerminalFanOutFailure `json:"fanout_failures,omitempty"`
 }
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/emaharmony/prizm/internal/gitx"
+	"github.com/emaharmony/prizm/internal/provider"
 	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 )
 
@@ -320,6 +321,18 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 		lastPromptTokens, lastCompletionTokens = turn.PromptTokens, turn.CompletionTokens
 		if err != nil {
 			failure := &SafeFailureError{Code: "provider_turn_failed"}
+			if errors.Is(err, provider.ErrQuotaExhausted) {
+				failure.Code = "provider_quota_exhausted"
+			}
+			var statusFailure interface{ HTTPStatusCode() int }
+			if errors.As(err, &statusFailure) {
+				failure.ProviderStatus = statusFailure.HTTPStatusCode()
+				if failure.ProviderStatus == 401 || failure.ProviderStatus == 403 {
+					failure.Code = "provider_auth_rejected"
+				} else if failure.ProviderStatus >= 400 && failure.ProviderStatus < 500 && failure.ProviderStatus != 408 && failure.ProviderStatus != 425 && failure.ProviderStatus != 429 {
+					failure.Code = "provider_http_rejected"
+				}
+			}
 			var retryAfter interface{ RetryAfter() time.Duration }
 			if errors.As(err, &retryAfter) {
 				failure.RetryAfterDelay = retryAfter.RetryAfter()

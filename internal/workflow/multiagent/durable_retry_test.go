@@ -147,6 +147,12 @@ func TestRetryClassificationAndPolicyDefaults(t *testing.T) {
 	if _, _, _, ok := classifyRetryableRoleFailure(errors.New("provider said 503 in its output")); ok {
 		t.Fatal("arbitrary output text must not be classified transient")
 	}
+	if _, _, _, ok := classifyRetryableRoleFailure(&subagent.SafeFailureError{Code: "provider_turn_failed", ProviderStatus: 401}); ok {
+		t.Fatal("HTTP 401 must not be retried")
+	}
+	if class, _, _, ok := classifyRetryableRoleFailure(&subagent.SafeFailureError{Code: "provider_turn_failed", ProviderStatus: 503}); !ok || class != "provider_transient" {
+		t.Fatal("HTTP 503 must be retryable")
+	}
 	if err := event.Validate(event.NewEvent(event.EventMultiAgentRetryScheduled, durableEventSource, map[string]any{
 		"run_id": "r", "workflow_id": "w", "role": "planner", "execution_key": "e", "visit_id": "v", "attempt_id": "a", "attempt": 2, "recovery_number": 1, "failure_class": "provider_transient", "failure_code": "503", "next_at": time.Now().UTC().Format(time.RFC3339Nano),
 	})); err != nil {
@@ -270,7 +276,11 @@ func TestDurableRetryExhaustionIsInitialPlusTenAndTerminalIsStable(t *testing.T)
 	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 	steps := make([]scriptedStep, 11)
 	for i := range steps {
-		steps[i] = scriptedStep{result: RoleRunResult{LocalIterations: 1, TokenUsage: cost.TokenUsage{PromptTokens: 1, TotalTokens: 1}}, err: &subagent.SafeFailureError{Code: "provider_turn_failed"}}
+		status, retryAfter := 503, time.Duration(0)
+		if i == 0 {
+			status, retryAfter = 429, 120*time.Second
+		}
+		steps[i] = scriptedStep{result: RoleRunResult{LocalIterations: 1, TokenUsage: cost.TokenUsage{PromptTokens: 1, TotalTokens: 1}}, err: &subagent.SafeFailureError{Code: "provider_turn_failed", ProviderStatus: status, RetryAfterDelay: retryAfter}}
 	}
 	runner := &scriptedRunner{scripts: map[Role][]scriptedStep{RolePlanner: steps}}
 	runtime := newMutableClockRuntime(t, validDefinition(), runner, env, &now)
@@ -285,13 +295,17 @@ func TestDurableRetryExhaustionIsInitialPlusTenAndTerminalIsStable(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if initial.Retry == nil || initial.Retry.FailureClass != "provider_transient" || initial.Retry.FailureCode != "provider_turn_failed" || initial.Retry.FailureOrigin != FailureOriginProviderCall {
+	if initial.Retry == nil || initial.Retry.FailureClass != "provider_transient" || initial.Retry.FailureCode != "provider_turn_failed" || initial.Retry.FailureOrigin != FailureOriginProviderCall || initial.Retry.ProviderStatus != 429 || initial.Retry.RetryAfter != 120*time.Second || initial.Retry.NextAt.Before(now.Add(120*time.Second)) {
 		t.Fatalf("initial durable retry provenance=%#v", initial.Retry)
 	}
-	for _, scheduled := range queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryScheduled) {
+	initialScheduledEvents := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryScheduled)
+	for _, scheduled := range initialScheduledEvents {
 		if scheduled.Payload["failure_origin"] != string(FailureOriginProviderCall) {
 			t.Fatalf("scheduled event lost provider origin: %#v", scheduled.Payload)
 		}
+	}
+	if len(initialScheduledEvents) != 1 || fmt.Sprint(initialScheduledEvents[0].Payload["provider_status"]) != "429" || fmt.Sprint(initialScheduledEvents[0].Payload["retry_after_ms"]) != fmt.Sprint((120*time.Second).Milliseconds()) {
+		t.Fatalf("first scheduled event lost 429 Retry-After: %#v", initialScheduledEvents)
 	}
 	for recovery := 1; recovery <= 10; recovery++ {
 		record, loadErr := env.store.Load(context.Background(), request.RunID)
@@ -315,10 +329,10 @@ func TestDurableRetryExhaustionIsInitialPlusTenAndTerminalIsStable(t *testing.T)
 	if len(record.RetryHistory) != 1 || record.RetryHistory[0].RecoveryNumber != 10 || record.RetryHistory[0].Number != 11 {
 		t.Fatalf("persisted retry history=%#v", record.RetryHistory)
 	}
-	if record.RetryHistory[0].FailureOrigin != FailureOriginProviderCall {
+	if record.RetryHistory[0].FailureOrigin != FailureOriginProviderCall || record.RetryHistory[0].ProviderStatus != 503 {
 		t.Fatalf("retry history origin=%q, want %q", record.RetryHistory[0].FailureOrigin, FailureOriginProviderCall)
 	}
-	if record.Failure == nil || record.Failure.FailureOrigin != FailureOriginProviderCall {
+	if record.Failure == nil || record.Failure.FailureOrigin != FailureOriginProviderCall || record.Failure.ProviderStatus != 503 {
 		t.Fatalf("terminal failure origin=%#v, want %q", record.Failure, FailureOriginProviderCall)
 	}
 	scheduledEvents := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryScheduled)
@@ -331,7 +345,7 @@ func TestDurableRetryExhaustionIsInitialPlusTenAndTerminalIsStable(t *testing.T)
 		}
 	}
 	exhaustedEvents := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryExhausted)
-	if len(exhaustedEvents) != 1 || exhaustedEvents[0].Payload["failure_origin"] != string(FailureOriginProviderCall) {
+	if len(exhaustedEvents) != 1 || exhaustedEvents[0].Payload["failure_origin"] != string(FailureOriginProviderCall) || fmt.Sprint(exhaustedEvents[0].Payload["provider_status"]) != "503" {
 		t.Fatalf("exhausted event provenance=%#v", exhaustedEvents)
 	}
 	if record.Failure == nil || record.Failure.Message != "retry_exhausted" || record.State.RoleStates[RolePlanner].LastError != "retry_exhausted" {
@@ -358,6 +372,37 @@ func TestDurableRetryExhaustionIsInitialPlusTenAndTerminalIsStable(t *testing.T)
 	}
 	if failed["attempt_id"] == "" || fmt.Sprint(failed["attempt"]) != "11" || fmt.Sprint(failed["recovery_number"]) != "10" {
 		t.Fatalf("terminal attempt identity=%#v", failed)
+	}
+	if fmt.Sprint(failed["provider_status"]) != "503" {
+		t.Fatalf("terminal event lost safe provider metadata: %#v", failed)
+	}
+}
+
+func TestProviderAuthFailuresAreTerminalWithoutRetry(t *testing.T) {
+	for _, status := range []int{401, 403} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			env := newDurableTestEnvironment(t)
+			now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+			code := "provider_auth_rejected"
+			runner := &scriptedRunner{scripts: map[Role][]scriptedStep{RolePlanner: {{err: &subagent.SafeFailureError{Code: code, ProviderStatus: status}}}}}
+			runtime := newMutableClockRuntime(t, validDefinition(), runner, env, &now)
+			request := testRunRequest()
+			request.RunID = fmt.Sprintf("run-provider-auth-%d", status)
+			state, err := runtime.Run(context.Background(), request)
+			if err == nil || state.Status != RunStatusFailed {
+				t.Fatalf("auth failure state=%s err=%v", state.Status, err)
+			}
+			if got := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryScheduled); len(got) != 0 {
+				t.Fatalf("auth failure scheduled retries: %#v", got)
+			}
+			record, loadErr := env.store.Load(context.Background(), request.RunID)
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			if record.Failure == nil || record.Failure.ProviderStatus != status || record.Failure.FailureClass != "provider_rejected" || record.Failure.FailureOrigin != FailureOriginProviderCall {
+				t.Fatalf("safe auth failure metadata=%#v", record.Failure)
+			}
+		})
 	}
 }
 

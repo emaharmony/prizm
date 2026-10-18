@@ -72,6 +72,7 @@ type RoleExecutionFailure struct {
 	ExpectedType      string          `json:"expected_type,omitempty"`
 	AllowedValues     []string        `json:"allowed_values,omitempty"`
 	RetryAfter        time.Duration   `json:"retry_after,omitempty"`
+	ProviderStatus    int             `json:"provider_status,omitempty"`
 	Retryable         bool            `json:"retryable"`
 	Usage             cost.TokenUsage `json:"usage,omitempty"`
 }
@@ -80,11 +81,12 @@ type RoleExecutionFailure struct {
 // Unknown failures remain nonretryable and do not expose their error string.
 func ClassifyRoleExecutionFailure(err error) RoleExecutionFailure {
 	class, code, retryAfter, retryable := classifyRetryableRoleFailure(err)
+	providerStatus := safeProviderStatus(err)
 	if !retryable {
 		class, code = classifySafeNonRetryableRoleFailure(err)
-		return RoleExecutionFailure{Class: class, Code: code, Origin: failureOriginForError(err)}
+		return RoleExecutionFailure{Class: class, Code: code, Origin: failureOriginForError(err), RetryAfter: safeProviderRetryAfter(err), ProviderStatus: providerStatus}
 	}
-	failure := RoleExecutionFailure{Class: safeRetryCode(class), Code: safeRetryCode(code), Origin: failureOriginForError(err), RetryAfter: retryAfter, Retryable: true}
+	failure := RoleExecutionFailure{Class: safeRetryCode(class), Code: safeRetryCode(code), Origin: failureOriginForError(err), RetryAfter: retryAfter, ProviderStatus: providerStatus, Retryable: true}
 	var schema *SchemaCorrectionError
 	if errors.As(err, &schema) && schema != nil {
 		failure.CorrectionField, failure.ExpectedType, failure.AllowedValues = safeSchemaCorrectionDetails(schema.Role, schema.Code, schema.Fields, schema.AllowedValues)
@@ -117,11 +119,41 @@ func failureOriginForError(err error) FailureOrigin {
 		if safeFailure.Tool != "" {
 			return FailureOriginToolExecutor
 		}
-		if safeFailure.Code == "provider_turn_failed" {
+		if strings.HasPrefix(safeFailure.Code, "provider_") {
 			return FailureOriginProviderCall
 		}
 	}
 	return FailureOriginUnknown
+}
+
+func safeProviderStatus(err error) int {
+	var failure *subagent.SafeFailureError
+	if errors.As(err, &failure) && failure != nil && failure.ProviderStatus >= 100 && failure.ProviderStatus <= 599 {
+		return failure.ProviderStatus
+	}
+	return 0
+}
+
+func safeProviderRetryAfter(err error) time.Duration {
+	var failure *subagent.SafeFailureError
+	if errors.As(err, &failure) && failure != nil && failure.RetryAfter() > 0 && failure.RetryAfter() <= 365*24*time.Hour {
+		return failure.RetryAfter()
+	}
+	return 0
+}
+
+func safeStatusValue(status int) int {
+	if status < 100 || status > 599 {
+		return 0
+	}
+	return status
+}
+
+func safeRetryAfterMillis(delay time.Duration) int64 {
+	if delay <= 0 || delay > 365*24*time.Hour {
+		return 0
+	}
+	return delay.Milliseconds()
 }
 
 // sanitizeTerminalRoleFailure accepts only known failure pairs and schema
@@ -137,6 +169,7 @@ func sanitizeTerminalRoleFailure(role Role, failure RoleExecutionFailure) Termin
 	return TerminalRoleFailure{
 		Class: class, Code: code, Origin: safeFailureOrigin(class, code, failure.Origin), CorrectionField: field, ExpectedType: expected,
 		AllowedValues: values, Retryable: failure.Retryable && knownRoleFailurePair(failure.Class, failure.Code),
+		ProviderStatus: safeStatusValue(failure.ProviderStatus), RetryAfterMS: safeRetryAfterMillis(failure.RetryAfter),
 	}
 }
 
@@ -150,6 +183,8 @@ func knownRoleFailurePair(class, code string) bool {
 		}
 	case "provider_transient":
 		return code == "provider_transient" || code == "provider_turn_failed"
+	case "provider_rejected":
+		return code == "provider_auth_rejected" || code == "provider_http_rejected" || code == "provider_quota_exhausted"
 	case "execution_transient":
 		return code == "deadline_exceeded" || code == "execution_error"
 	case "execution":
@@ -185,6 +220,7 @@ func validTerminalRoleFailure(role Role, failure TerminalRoleFailure) bool {
 	clean := sanitizeTerminalRoleFailure(role, RoleExecutionFailure{
 		Class: failure.Class, Code: failure.Code, Origin: failure.Origin, CorrectionField: failure.CorrectionField,
 		ExpectedType: failure.ExpectedType, AllowedValues: failure.AllowedValues, Retryable: failure.Retryable,
+		ProviderStatus: failure.ProviderStatus, RetryAfter: time.Duration(failure.RetryAfterMS) * time.Millisecond,
 	})
 	return clean.Class == failure.Class && clean.Code == failure.Code &&
 		(failure.Origin == "" || clean.Origin == failure.Origin) && clean.Retryable == failure.Retryable &&
@@ -201,7 +237,7 @@ func safeFailureOrigin(class, code string, origin FailureOrigin) FailureOrigin {
 			return origin
 		}
 	case FailureOriginProviderCall:
-		if class == "provider_transient" && (code == "provider_transient" || code == "provider_turn_failed") {
+		if (class == "provider_transient" && (code == "provider_transient" || code == "provider_turn_failed")) || class == "provider_rejected" {
 			return origin
 		}
 	case FailureOriginRoleSchema:
@@ -285,6 +321,8 @@ func classifySafeNonRetryableRoleFailure(err error) (string, string) {
 		switch safeFailure.Code {
 		case "patch_validation_failed", "permission_denied", "not_found", "invalid_input":
 			return "tool", safeFailure.Code
+		case "provider_auth_rejected", "provider_http_rejected", "provider_quota_exhausted":
+			return "provider_rejected", safeFailure.Code
 		case "backend_bind_failed", "progress_checkpoint_failed", "schema_recovery_failed",
 			"tool_diagnostic_checkpoint_failed", "no_effects_checkpoint_failed",
 			"tool_recovery_failed", "invalid_read_coverage", "no_progress_checkpoint_failed",
@@ -351,6 +389,8 @@ type RetryState struct {
 	FailureClass              string             `json:"failure_class,omitempty"`
 	FailureCode               string             `json:"failure_code,omitempty"`
 	FailureOrigin             FailureOrigin      `json:"failure_origin,omitempty"`
+	ProviderStatus            int                `json:"provider_status,omitempty"`
+	RetryAfter                time.Duration      `json:"retry_after,omitempty"`
 	RecoveryFeedback          string             `json:"recovery_feedback,omitempty"`
 	MutationPossible          bool               `json:"mutation_possible,omitempty"`
 	UnresolvedMutationFailure bool               `json:"unresolved_mutation_failure,omitempty"`

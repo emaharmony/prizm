@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -175,10 +176,11 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 		return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: marshal request: %w", err)
 	}
 
-	// Send request with retry for transient errors (502, 503, 504, 429).
+	// Send one request. Durable role retries own recovery accounting and honor
+	// Retry-After; hidden transport retries would multiply that allowance.
 	var resp *http.Response
 	var respBody []byte
-	for attempt := 0; attempt < 4; attempt++ {
+	{
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, cp.BaseURL+"/api/chat", bytes.NewReader(bodyBytes))
 		if err != nil {
 			return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: create request: %w", err)
@@ -187,41 +189,33 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 
 		resp, err = cp.HTTPClient.Do(httpReq)
 		if err != nil {
-			if attempt < 3 {
-				time.Sleep(time.Duration(attempt+1) * time.Second)
-				continue
-			}
 			return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: %w", err)
 		}
 
 		respBody, err = io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
-			if attempt < 3 {
-				time.Sleep(time.Duration(attempt+1) * time.Second)
-				continue
-			}
 			return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: read response: %w", err)
 		}
 
 		if resp.StatusCode != http.StatusOK {
 			bodyStr := strings.TrimSpace(string(respBody))
+			retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
 			// A 429 caused by an account-level usage quota (as opposed to a
 			// transient per-request rate limit) won't clear up within a few
 			// seconds of backoff — retrying here just burns time. Fail fast
 			// and let FailoverProvider skip this target for the rest of the
 			// session instead of retrying it.
 			if resp.StatusCode == http.StatusTooManyRequests && isQuotaExhausted(bodyStr) {
-				return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: HTTP %d: %w", resp.StatusCode, provider.ErrQuotaExhausted)
+				return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: %w: %w", &provider.HTTPFailure{StatusCode: resp.StatusCode, RetryAfterWait: retryAfter}, provider.ErrQuotaExhausted)
 			}
-			// Retry on transient errors
-			if isRetryableStatus(resp.StatusCode) && attempt < 3 {
-				time.Sleep(time.Duration(attempt+1) * time.Second)
-				continue
+			// Preserve server-directed backoff for the durable scheduler rather
+			// than consuming it in this transport's short local retry loop.
+			if retryAfter > 0 {
+				return provider.ChatGenerateResponse{}, &provider.HTTPFailure{StatusCode: resp.StatusCode, RetryAfterWait: retryAfter}
 			}
-			return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: HTTP %d", resp.StatusCode)
+			return provider.ChatGenerateResponse{}, &provider.HTTPFailure{StatusCode: resp.StatusCode}
 		}
-		break // success
 	}
 
 	var oResp chatResponse
@@ -319,7 +313,26 @@ func estimateTokens(messages []provider.ChatMessage) int {
 // Compile-time interface check.
 var _ provider.ChatProvider = (*ChatProvider)(nil)
 
-// isRetryableStatus returns true for transient HTTP status codes worth retrying.
-func isRetryableStatus(code int) bool {
-	return code == 429 || code == 502 || code == 503 || code == 504
+// parseRetryAfter accepts only the standard delta-seconds or HTTP-date forms.
+// Invalid, negative, or unreasonable values are ignored and use durable backoff.
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
+		if seconds <= 0 || seconds > int64((365*24*time.Hour)/time.Second) {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	when, err := http.ParseTime(value)
+	if err != nil {
+		return 0
+	}
+	delay := when.Sub(now)
+	if delay <= 0 || delay > 365*24*time.Hour {
+		return 0
+	}
+	return delay
 }

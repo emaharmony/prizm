@@ -386,7 +386,7 @@ func TestChatProviderQuotaExhaustedFailsFastWithoutRetry(t *testing.T) {
 	}
 }
 
-func TestChatProviderGenericRateLimitStillRetries(t *testing.T) {
+func TestChatProviderGenericRateLimitReturnsSafeRetryMetadata(t *testing.T) {
 	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
@@ -408,8 +408,35 @@ func TestChatProviderGenericRateLimitStillRetries(t *testing.T) {
 	if errors.Is(err, provider.ErrQuotaExhausted) {
 		t.Error("a generic rate-limit message should not be classified as quota exhaustion")
 	}
-	if requestCount != 4 {
-		t.Errorf("generic 429 should still retry up to 4 attempts, got %d requests", requestCount)
+	var failure *provider.HTTPFailure
+	if !errors.As(err, &failure) || failure.HTTPStatusCode() != http.StatusTooManyRequests {
+		t.Fatalf("expected typed 429 failure, got %T: %v", err, err)
+	}
+	if requestCount != 1 {
+		t.Errorf("durable scheduler owns retries; provider issued %d requests", requestCount)
+	}
+}
+
+func TestChatProviderCarriesLongRetryAfterWithoutResponseText(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte("PRIVATE_PROVIDER_BODY"))
+	}))
+	defer server.Close()
+	cp := ollama.NewChatProvider(server.URL)
+	_, err := cp.ChatGenerate(context.Background(), provider.ChatGenerateRequest{Model: "test", Messages: []provider.ChatMessage{{Role: "user", Content: "test"}}})
+	var failure *provider.HTTPFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("expected typed provider failure, got %v", err)
+	}
+	if failure.HTTPStatusCode() != http.StatusTooManyRequests || failure.RetryAfter() != 120*time.Second {
+		t.Fatalf("failure metadata status=%d retry-after=%s", failure.HTTPStatusCode(), failure.RetryAfter())
+	}
+	if strings.Contains(err.Error(), "PRIVATE_PROVIDER_BODY") || requestCount != 1 {
+		t.Fatalf("unsafe error or hidden retry: err=%v requests=%d", err, requestCount)
 	}
 }
 
