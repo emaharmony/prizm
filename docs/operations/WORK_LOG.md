@@ -2295,43 +2295,40 @@ The durable scheduler had persisted the safe failure class/code but omitted orig
 
 **Next action:** independently review this staging-based PR #91 candidate. After provider availability is resolved, submit a fresh isolated served acceptance and stop for explicit approval on any proposal. Keep PR #91 draft until proposal approval, exactly-once apply, configured validation, resume, and final reporting succeed.
 
-## 2026-10-17 — R1 served acceptance retry exhaustion and origin evidence
+## 2026-10-18 — R1 served acceptance retry exhaustion, second run
 
-**Roadmap ID:** R1. Served run `run_772f310af2f018ca180769e28d` submitted the
-exact previously approved one-file test task through Prizm's multi-agent API
-using the isolated Factory clone and `ollama/glm-5.3:cloud`. Prizm's isolated
-service was built from local commit `7f925b7f8b3633a59122eeebf0fbab8c593ba69c`,
-whose tree `a9a66b6a6ec64f130c319ab125980b50003b0c1d` matches the published
-staging-based PR #91 candidate. Codex/Claude execution was disabled; no Codex
-executor was used.
+**Roadmap ID:** R1. Fresh run `run_5196b66a70ec7f464b3f65d2cb` submitted the
+same previously approved request body through Prizm's served multi-agent API
+(SHA-256 `6BD2CA13898A5EDCA61BA80D8681B606CB85C9FCBE09304E01863FF00B0AA845`),
+using the isolated Factory clone and `ollama/glm-5.3:cloud`. Codex and Claude
+executors were disabled. The service binary used code from local commit
+`7f925b7f8b3633a59122eeebf0fbab8c593ba69c` (tree
+`a9a66b6a6ec64f130c319ab125980b50003b0c1d`). The full staging-based PR #91
+candidate tree at task time was
+`e16559f2718e2a6833bb4746aa41676317ee2d3b`.
 
-The run ended in `retry_exhausted` after one initial planner attempt and ten
-retries with safe classification
-`provider_transient/provider_turn_failed`. The durable retry record and the
-persisted `prism.workflow.multi_agent.role.retry.scheduled` event both carried
-`failure_origin=provider_call`; terminal retry-exhausted and run-failed events
-also preserved that origin. This confirms the failure-origin change through
-the actual served persistence path. The deterministic final report records 11
-local iterations and 10 retries. No proposal was produced, so no approval,
-apply, configured validation, or test result exists; no workflow transition
-occurred. The terminal record and events were verified after the service was
-stopped, and the Factory clone remained clean. No raw provider output or
-prompts were recorded.
+The durable event stream records one initial planner attempt plus ten retries,
+then terminal `retry_exhausted`. Every scheduled and exhausted retry carries
+`provider_transient/provider_turn_failed` and allowlisted
+`failure_origin=provider_call`; scheduled events persist `next_at`, with the
+last retry due at `2026-10-18T20:45:44.1697116Z`. The safe event schema has no
+provider `Retry-After` duration for this run. Terminal events record attempt
+11 and recovery 10. The report records Planner one visit and Developer zero;
+no proposal, approval, apply, configured validation, test outcome, or workflow
+transition occurred. The run report and events were present after the service
+had exited. The Factory clone remains clean. The safe failure class/code do not
+identify the provider root cause.
 
-**Risk:** this is evidence for durable retries, origin attribution, and
-terminal reporting only. The run does not establish end-to-end coding
-capability or explain the underlying provider failure. R1 remains incomplete
-and PR #91 remains draft.
+**Validation:** the config and workflow had passed candidate CLI validation
+before start; the API accepted the exact request body. After terminal failure,
+`git status --short --branch` on the isolated Factory clone returned only
+`## HEAD (no branch)`. No task-specific test or validator ran because no
+proposal was reached. No raw provider output, prompts, credentials, or user
+data were recorded.
 
-**Validation:** the candidate-built CLI accepted the isolated service config;
-the workflow graph validated and registered through Prizm; the served API
-accepted the unchanged request body. Prizm recorded the scheduled, recovery,
-retry-started, retry-exhausted, run-failed, dashboard-task-failed, and recovery
-completed events. No task-specific tests or validation ran because no proposal
-was reached.
-
-**Next action:** diagnose provider availability from sanitized status/error
-codes, then repeat the isolated served acceptance after the provider can
-complete a turn. Stop for explicit approval on any proposal; do not claim R1
-complete until the approved patch is applied once, validated, reviewed, and
-reported through Prizm.
+**Risk/next action:** a second served run confirms retry persistence, provider
+origin attribution, and deterministic terminal reporting, but still does not
+prove coding delivery. Diagnose provider availability using sanitized status
+only, then repeat after it can complete a turn. Keep PR #91 draft and R1
+incomplete until a proposal is explicitly approved, applied once, validated,
+reviewed, resumed, and reported through Prizm.

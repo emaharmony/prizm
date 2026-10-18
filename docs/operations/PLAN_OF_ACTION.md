@@ -1,39 +1,42 @@
 # Prizm Plan of Action
 
-## Current Handoff: R1 served acceptance retry exhaustion (2026-10-17)
+## Current Handoff: R1 served acceptance retry exhaustion (2026-10-18)
 
-**Roadmap:** R1 remains incomplete. The isolated served run
-`run_772f310af2f018ca180769e28d` used Prizm's API and the configured
-`ollama/glm-5.3:cloud` text provider. Prizm owned orchestration and durable
-retry scheduling; Codex/Claude executors were disabled. Its source was built
-from local commit `7f925b7f8b3633a59122eeebf0fbab8c593ba69c`, whose tree
-`a9a66b6a6ec64f130c319ab125980b50003b0c1d` matches the published PR #91
-candidate. The Factory workspace was the isolated clone.
+**Roadmap:** R1 remains incomplete. Fresh served run
+`run_5196b66a70ec7f464b3f65d2cb` used Prizm's API and the isolated
+`ollama/glm-5.3:cloud` text-provider configuration. Codex and Claude executors
+were disabled. The service binary used code from local commit
+`7f925b7f8b3633a59122eeebf0fbab8c593ba69c` (tree
+`a9a66b6a6ec64f130c319ab125980b50003b0c1d`). At task time, the full
+staging-based PR #91 candidate tree, including documentation changes, was
+verified as `e16559f2718e2a6833bb4746aa41676317ee2d3b`. The task targeted only
+the isolated Factory clone.
 
-**Evidence:** the exact previously approved request body was submitted
+**Evidence:** the exact previously approved request body was submitted once
 unchanged (SHA-256
 `6BD2CA13898A5EDCA61BA80D8681B606CB85C9FCBE09304E01863FF00B0AA845`). The
-planner consumed one initial attempt and ten retries, then ended with
-`retry_exhausted` after `provider_transient/provider_turn_failed`. The durable
-retry record and all three persisted events—
-`prism.workflow.multi_agent.role.retry.scheduled`,
-`prism.workflow.multi_agent.role.retry.exhausted`, and
-`prism.workflow.multi_agent.run.failed`—recorded the allowlisted
-`failure_origin=provider_call`, confirming the origin-population fix in the
-live path. The terminal report records 11 local iterations and 10 retries.
-There was no proposal, apply, configured validation, test outcome, or delivery,
-and the planner made no workflow transition. The terminal record and events
-remained durable after service shutdown. The service listened on loopback only and is stopped;
-the isolated Factory clone is clean.
+durable event stream recorded ten scheduled recoveries and one exhaustion for
+Planner. Each retry carried `failure_class=provider_transient`,
+`failure_code=provider_turn_failed`, and the allowlisted
+`failure_origin=provider_call`; scheduled events also persisted `next_at`,
+with the final retry due at `2026-10-18T20:45:44.1697116Z`. No provider
+`Retry-After` duration was present in the safe event fields. The terminal
+`prism.workflow.multi_agent.role.retry.exhausted` and
+`prism.workflow.multi_agent.run.failed` events record attempt 11, recovery 10,
+and `reason=retry_exhausted`. The report records 11 local iterations and 10
+retries, Planner one visit, Developer zero visits. No proposal, apply,
+configured validation, test outcome, or workflow transition occurred. The
+terminal report and events are durable in the run directory. The service
+process is stopped, and the isolated Factory clone is clean.
 
-**Risk/next action:** this run verifies Prizm's retry exhaustion, attribution,
-and terminal reporting, but does not prove coding delivery. The safe failure
-classification does not explain the underlying provider failure, so do not
-infer a provider root cause from it. Diagnose provider availability using
-sanitized status only, then run a fresh isolated Prizm acceptance once the
-provider can complete a turn. Stop at any proposal for explicit approval.
-Keep PR #91 draft and R1 incomplete until proposal, approval, exactly-once
-apply, configured validation, review, and final reporting succeed.
+**Risk/next action:** this is a second bounded-retry and terminal-reporting
+result, not proof of coding delivery, and it does not identify the underlying
+provider failure. Preserve the sanitized classification without inferring a
+provider root cause. Diagnose provider availability using safe status only,
+then run a fresh isolated Prizm task when it can complete a turn. Stop at any
+proposal for explicit approval. Keep PR #91 draft and R1 incomplete until
+proposal, approval, exactly-once apply, configured validation, review, and
+final reporting succeed.
 
 ## Previous Handoff: R1 retry terminal-cause authority and event provenance (2026-10-16)
 
