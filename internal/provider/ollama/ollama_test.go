@@ -3,6 +3,7 @@ package ollama_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -184,6 +185,30 @@ func TestOllamaProviderHTTPError(t *testing.T) {
 		t.Fatal("expected error for 500")
 	}
 	if strings.Contains(err.Error(), "PRIVATE_CANARY") {
+		t.Fatalf("provider response body leaked through error: %v", err)
+	}
+	var failure *provider.HTTPFailure
+	if !errors.As(err, &failure) || failure.HTTPStatusCode() != http.StatusInternalServerError {
+		t.Fatalf("expected safe typed HTTP status, got %T: %v", err, err)
+	}
+}
+
+func TestOllamaGenerateCarriesSafeRetryAfter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "90")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte("PRIVATE_PROVIDER_BODY"))
+	}))
+	defer server.Close()
+	_, err := ollama.New(server.URL).Generate(context.Background(), provider.GenerateRequest{Model: "test", Prompt: "test"})
+	var failure *provider.HTTPFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("expected typed provider failure, got %v", err)
+	}
+	if failure.HTTPStatusCode() != http.StatusTooManyRequests || failure.RetryAfter() != 90*time.Second {
+		t.Fatalf("failure metadata status=%d retry-after=%s", failure.HTTPStatusCode(), failure.RetryAfter())
+	}
+	if strings.Contains(err.Error(), "PRIVATE_PROVIDER_BODY") {
 		t.Fatalf("provider response body leaked through error: %v", err)
 	}
 }

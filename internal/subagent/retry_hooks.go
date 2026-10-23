@@ -20,6 +20,10 @@ type RetryAttempt struct {
 	NextAt         time.Time
 }
 
+// ErrRecoveryBudgetExhausted marks a rejected response after all durable
+// correction attempts for the current role visit have been consumed.
+var ErrRecoveryBudgetExhausted = errors.New("subagent: schema recovery budget exhausted")
+
 // RetryHooks lets the loop checkpoint a recoverable correction without
 // importing the workflow runtime. All methods are optional for legacy runners.
 type RetryHooks interface {
@@ -31,6 +35,15 @@ type RetryHooks interface {
 	RecordCorrection(expectedAttemptID, errorClass, code string) error
 	RecordCorrectionFeedback(expectedAttemptID, errorClass, code, feedback string) error
 }
+
+// RetryOriginHooks is an optional extension implemented by durable runtimes
+// that need the trusted correction callsite retained with recovery evidence.
+// It remains separate from RetryHooks so existing integrations stay valid.
+type RetryOriginHooks interface {
+	RecordCorrectionWithOrigin(expectedAttemptID, errorClass, code, origin, feedback string) error
+}
+
+const RecoveryOriginToolExecutor = "tool_executor"
 
 // ToolDiagnostic contains only allowlisted metadata suitable for a durable
 // event. It deliberately has no input, output, prompt, or error-message field.
@@ -88,6 +101,7 @@ type SafeFailureError struct {
 	Code            string
 	Tool            string
 	RetryAfterDelay time.Duration
+	ProviderStatus  int
 }
 
 func (e *SafeFailureError) Error() string {

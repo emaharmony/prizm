@@ -549,14 +549,11 @@ func (w *graphRoleWorker) execute(command multiagent.GraphRoleCommand) {
 		}
 		var payload any = map[string]string{"message": err.Error()}
 		if command.DeliveryAttemptID != "" {
-			failure := multiagent.ClassifyRoleExecutionFailure(err)
-			failure.DeliveryAttemptID = command.DeliveryAttemptID
-			failure.AttemptID = command.AttemptID
-			failure.Usage = result.TokenUsage
+			attemptID := command.AttemptID
 			if retryHandle != nil {
-				failure.AttemptID = retryHandle.CurrentAttempt().AttemptID
+				attemptID = retryHandle.CurrentAttempt().AttemptID
 			}
-			payload = multiagent.GraphRoleOutcome{Failure: &failure}
+			payload = graphRoleFailureOutcome(err, command, result, attemptID)
 		}
 		if publishErr := w.persistAndPublishTerminal(ctx, ledgerPath, command, status, payload); publishErr != nil {
 			log.Printf("[GRAPH-WORKER] terminal %s: %v", command.DeliveryKey, publishErr)
@@ -572,6 +569,14 @@ func (w *graphRoleWorker) execute(command multiagent.GraphRoleCommand) {
 	if err := w.persistAndPublishTerminal(ctx, ledgerPath, command, event.OutcomeSucceeded, multiagent.GraphRoleOutcome{Result: result}); err != nil {
 		log.Printf("[GRAPH-WORKER] terminal %s: %v", command.DeliveryKey, err)
 	}
+}
+
+func graphRoleFailureOutcome(err error, command multiagent.GraphRoleCommand, result multiagent.RoleRunResult, attemptID string) multiagent.GraphRoleOutcome {
+	failure := multiagent.ClassifyRoleExecutionFailureWithResult(err, result)
+	failure.DeliveryAttemptID = command.DeliveryAttemptID
+	failure.AttemptID = attemptID
+	failure.Usage = result.TokenUsage
+	return multiagent.GraphRoleOutcome{Failure: &failure}
 }
 
 func (w *graphRoleWorker) persistAcceptedAndPublish(ctx context.Context, ledgerPath string, command multiagent.GraphRoleCommand) error {

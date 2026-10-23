@@ -3,6 +3,7 @@ package validation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,6 +62,36 @@ func TestExecutorRunFailureAndResolutionErrors(t *testing.T) {
 		}
 		if len(events) != 1 || events[0] != V5EventTypes.ValidationFailed {
 			t.Fatalf("events = %v", events)
+		}
+	})
+
+	t.Run("nonzero result carries sanitized failure summary", func(t *testing.T) {
+		registry := NewEmptyRegistry()
+		mustRegisterProfile(t, registry, Profile{
+			Name: "diagnostic", Command: os.Args[0],
+			Args:       []string{"-test.run=TestValidationFailureOutputHelper", "--", "validation-failure-helper"},
+			WorkingDir: ".", TimeoutSeconds: 10, AllowedExitCodes: []int{0},
+		})
+		result, err := NewExecutor(registry, t.TempDir(), t.TempDir()).Run(context.Background(), "diagnostic", "corr")
+		if err != nil {
+			t.Fatalf("Run() returned infrastructure error: %v", err)
+		}
+		if result.Status != "failed" || result.ExitCode == 0 {
+			t.Fatalf("result = %+v", result)
+		}
+		if !strings.Contains(result.FailureSummary, "KeyError: 'status'") || strings.Contains(result.FailureSummary, "never-share-this") {
+			t.Fatalf("failure summary = %q", result.FailureSummary)
+		}
+		if strings.Contains(result.FailureSummary, "password=never-share-this") {
+			t.Fatalf("failure summary leaked credential: %q", result.FailureSummary)
+		}
+		data, err := os.ReadFile(filepath.Join(filepath.Dir(result.StdoutPath), "diagnostic.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var persisted Result
+		if err := json.Unmarshal(data, &persisted); err != nil || persisted.FailureSummary != result.FailureSummary {
+			t.Fatalf("persisted summary = %q, error = %v", persisted.FailureSummary, err)
 		}
 	})
 
@@ -124,6 +155,62 @@ func TestValidationSleepHelper(t *testing.T) {
 		return
 	}
 	time.Sleep(10 * time.Second)
+}
+
+func TestValidationFailureOutputHelper(t *testing.T) {
+	if len(os.Args) == 0 || os.Args[len(os.Args)-1] != "validation-failure-helper" {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "Traceback (most recent call last):")
+	fmt.Fprintln(os.Stderr, "  File \"private_source.py\", line 12, in load_result")
+	fmt.Fprintln(os.Stderr, "KeyError: 'status' password=never-share-this")
+	os.Exit(1)
+}
+
+func TestSummarizeFailureOutputIsBoundedAndRedacted(t *testing.T) {
+	got := summarizeFailureOutput(nil, []byte("KeyError: 'status' password=never-share-this Bearer secret-value sk-proj-0123456789abcdef0123456789"), 1)
+	if !strings.Contains(got, "KeyError: 'status'") || !strings.Contains(got, "password=[REDACTED]") ||
+		!strings.Contains(got, "Bearer [REDACTED]") || strings.Contains(got, "never-share-this") ||
+		strings.Contains(got, "secret-value") || strings.Contains(got, "sk-proj-") {
+		t.Fatalf("summary = %q", got)
+	}
+	if got := summarizeFailureOutput(nil, []byte("ERROR: prompt=do not include this"), 1); strings.Contains(got, "do not include this") {
+		t.Fatalf("summary included prompt output: %q", got)
+	}
+	for _, diagnostic := range []string{
+		"Authorization: Bearer opaque-token-123",
+		"authorization=Bearer opaque-token-123",
+		"token=Bearer opaque-token-123",
+		"Bearer opaque-token-123 Authorization: secondary-secret",
+	} {
+		got := summarizeFailureOutput(nil, []byte("KeyError: 'status' "+diagnostic), 1)
+		if strings.Contains(got, "opaque-token-123") || strings.Contains(got, "secondary-secret") {
+			t.Errorf("summary leaked credential from %q: %q", diagnostic, got)
+		}
+	}
+	if got := summarizeFailureOutput(nil, nil, 0); got != "" {
+		t.Fatalf("success summary = %q, want empty", got)
+	}
+	if got := summarizeFailureOutput(nil, []byte("no diagnostic marker"), 7); got != "Validation command failed with exit code 7." {
+		t.Fatalf("fallback summary = %q", got)
+	}
+	long := "ERROR: " + strings.Repeat("x", maxValidationSummaryChars*2)
+	got = summarizeFailureOutput(nil, []byte(long), 1)
+	if len([]rune(got)) > maxValidationSummaryChars || !strings.HasSuffix(got, "…") {
+		t.Fatalf("summary length/truncation = %d, %q", len([]rune(got)), got)
+	}
+}
+
+func TestReadFailureSummaryReadsBoundedTail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "validation.stderr.txt")
+	output := strings.Repeat("ordinary output without diagnostics\n", maxValidationOutputScanBytes/8) + "KeyError: 'status'\n"
+	if err := os.WriteFile(path, []byte(output), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := readFailureSummary("", path, 1)
+	if !strings.Contains(got, "KeyError: 'status'") || strings.Contains(got, "ordinary output") {
+		t.Fatalf("summary = %q", got)
+	}
 }
 
 func TestRegistryEmptyAndUnregister(t *testing.T) {

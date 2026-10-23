@@ -9,8 +9,6 @@ import (
 	"log"
 	"strings"
 	"sync"
-
-	"github.com/emaharmony/prizm/internal/retry"
 )
 
 // exhaustedTargets tracks (provider, model) pairs that have hit an
@@ -52,7 +50,11 @@ type FailoverTarget struct {
 	Model        string
 }
 
-// FailoverProvider applies an ordered model chain to one agent. It supports
+// FailoverProvider applies one ordered pass through the configured target list
+// to one logical provider call. Each target is invoked at most once; durable
+// role recovery owns same-target retries. Target fanout is bounded by the
+// configured list length and remains part of the current role attempt.
+// It supports
 // both native chat providers and text-only providers such as Codex and Claude
 // Code, translating their JSON tool requests into ChatGenerate responses.
 type FailoverProvider struct {
@@ -69,27 +71,23 @@ func (p *FailoverProvider) Generate(ctx context.Context, req GenerateRequest) (G
 		if isTargetExhausted(target) {
 			continue
 		}
-		for attempt := 0; attempt < 2; attempt++ {
-			if err := ctx.Err(); err != nil {
-				return GenerateResponse{}, err
-			}
-			request := req
-			request.Model = target.Model
-			resp, err := target.Provider.Generate(ctx, request)
-			if err == nil {
-				return annotateGenerate(resp, target, index > 0), nil
-			}
-			lastErr = err
-			if errors.Is(err, ErrQuotaExhausted) {
-				markTargetExhausted(target)
-				break
-			}
-			if !retry.IsRetryable(err) {
-				log.Printf("provider/failover: %s/%s failed (%v) — not retryable, trying next target", target.ProviderName, target.Model, err)
-				break
-			}
-			log.Printf("provider/failover: %s/%s attempt %d failed (%v), retrying", target.ProviderName, target.Model, attempt+1, err)
+		if err := ctx.Err(); err != nil {
+			return GenerateResponse{}, err
 		}
+		request := req
+		request.Model = target.Model
+		resp, err := target.Provider.Generate(ctx, request)
+		if err == nil {
+			return annotateGenerate(resp, target, index > 0), nil
+		}
+		lastErr = err
+		if errors.Is(err, ErrQuotaExhausted) {
+			markTargetExhausted(target)
+		}
+		if ctx.Err() != nil {
+			return GenerateResponse{}, ctx.Err()
+		}
+		log.Printf("provider/failover: %s/%s failed (%v), trying next configured target", target.ProviderName, target.Model, err)
 	}
 	if lastErr == nil {
 		return GenerateResponse{}, fmt.Errorf("all model targets are exhausted (quota) or none configured")
@@ -104,33 +102,29 @@ func (p *FailoverProvider) ChatGenerate(ctx context.Context, req ChatGenerateReq
 		if isTargetExhausted(target) {
 			continue
 		}
-		for attempt := 0; attempt < 2; attempt++ {
-			if err := ctx.Err(); err != nil {
-				return ChatGenerateResponse{}, err
-			}
-			request := req
-			request.Model = target.Model
-			if compacted {
-				request = compactChatRequest(request)
-			}
-			resp, err := callChatTarget(ctx, target, request)
-			if err == nil {
-				return annotateChat(resp, target, index > 0, compacted), nil
-			}
-			lastErr = err
-			if errors.Is(err, ErrQuotaExhausted) {
-				markTargetExhausted(target)
-				break
-			}
-			if isContextLimit(err) {
-				compacted = true
-			}
-			if !retry.IsRetryable(err) {
-				log.Printf("provider/failover: %s/%s failed (%v) — not retryable, trying next target", target.ProviderName, target.Model, err)
-				break
-			}
-			log.Printf("provider/failover: %s/%s attempt %d failed (%v), retrying", target.ProviderName, target.Model, attempt+1, err)
+		if err := ctx.Err(); err != nil {
+			return ChatGenerateResponse{}, err
 		}
+		request := req
+		request.Model = target.Model
+		if compacted {
+			request = compactChatRequest(request)
+		}
+		resp, err := callChatTarget(ctx, target, request)
+		if err == nil {
+			return annotateChat(resp, target, index > 0, compacted), nil
+		}
+		lastErr = err
+		if errors.Is(err, ErrQuotaExhausted) {
+			markTargetExhausted(target)
+		}
+		if isContextLimit(err) {
+			compacted = true
+		}
+		if ctx.Err() != nil {
+			return ChatGenerateResponse{}, ctx.Err()
+		}
+		log.Printf("provider/failover: %s/%s failed (%v), trying next configured target", target.ProviderName, target.Model, err)
 	}
 	if lastErr == nil {
 		return ChatGenerateResponse{}, fmt.Errorf("all model targets are exhausted (quota) or none configured")

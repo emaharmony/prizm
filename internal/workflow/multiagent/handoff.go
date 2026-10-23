@@ -49,30 +49,32 @@ type Issue struct {
 // may be copied into canonical events and terminal reports. Raw error text is
 // intentionally excluded.
 type ValidationEvidence struct {
-	Profile    string   `json:"profile"`
-	Status     string   `json:"status"`
-	ExitCode   int      `json:"exit_code"`
-	DurationMs int64    `json:"duration_ms"`
-	Command    string   `json:"command,omitempty"`
-	Args       []string `json:"args,omitempty"`
-	WorkingDir string   `json:"working_dir,omitempty"`
-	StdoutPath string   `json:"stdout_path,omitempty"`
-	StderrPath string   `json:"stderr_path,omitempty"`
+	Profile        string   `json:"profile"`
+	Status         string   `json:"status"`
+	ExitCode       int      `json:"exit_code"`
+	DurationMs     int64    `json:"duration_ms"`
+	FailureSummary string   `json:"failure_summary,omitempty"`
+	Command        string   `json:"command,omitempty"`
+	Args           []string `json:"args,omitempty"`
+	WorkingDir     string   `json:"working_dir,omitempty"`
+	StdoutPath     string   `json:"stdout_path,omitempty"`
+	StderrPath     string   `json:"stderr_path,omitempty"`
 }
 
 // SafeValidationEvidence bounds persisted validation metadata and omits the
 // result's Error field, which may contain untrusted process output.
 func SafeValidationEvidence(result validation.Result) ValidationEvidence {
 	return ValidationEvidence{
-		Profile:    boundedEvidenceString(result.Profile, 128),
-		Status:     boundedEvidenceString(result.Status, 32),
-		ExitCode:   result.ExitCode,
-		DurationMs: result.DurationMs,
-		Command:    boundedEvidenceString(result.Command, 256),
-		Args:       safeValidationArgs(result.Args),
-		WorkingDir: boundedEvidenceString(result.WorkingDir, 1024),
-		StdoutPath: boundedEvidenceString(result.StdoutPath, 1024),
-		StderrPath: boundedEvidenceString(result.StderrPath, 1024),
+		Profile:        boundedEvidenceString(result.Profile, 128),
+		Status:         boundedEvidenceString(result.Status, 32),
+		ExitCode:       result.ExitCode,
+		DurationMs:     result.DurationMs,
+		FailureSummary: boundedEvidenceString(result.FailureSummary, 512),
+		Command:        boundedEvidenceString(result.Command, 256),
+		Args:           safeValidationArgs(result.Args),
+		WorkingDir:     boundedEvidenceString(result.WorkingDir, 1024),
+		StdoutPath:     boundedEvidenceString(result.StdoutPath, 1024),
+		StderrPath:     boundedEvidenceString(result.StderrPath, 1024),
 	}
 }
 

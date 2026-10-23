@@ -174,6 +174,7 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 				Agent: rt.AgentID, Model: rt.Model, Messages: messages,
 				Temperature: 0.7, MaxTokens: replyMaxTokens,
 				ReasoningEffort: subAgentReasoningEffort(rt.Model, rt.ReasoningEffort),
+				Format:          "json",
 			})
 			if chatErr != nil {
 				return subagent.Turn{}, chatErr

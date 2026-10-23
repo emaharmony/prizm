@@ -2,8 +2,12 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"testing"
+
+	"github.com/emaharmony/prizm/internal/retry"
 )
 
 func TestFailoverProviderSkipsQuotaExhaustedTargetWithoutRetry(t *testing.T) {
@@ -88,9 +92,9 @@ type textOnlyFake struct {
 func (f *textOnlyFake) Generate(_ context.Context, _ GenerateRequest) (GenerateResponse, error) {
 	return f.response, nil
 }
-func TestFailoverProviderRetriesThenUsesFallback(t *testing.T) {
+func TestFailoverProviderAttemptsRetryableTargetOnceThenUsesFallback(t *testing.T) {
 	primary := &failoverFake{generate: func(GenerateRequest) (GenerateResponse, error) {
-		return GenerateResponse{}, fmt.Errorf("503 unavailable")
+		return GenerateResponse{}, retry.NewRetryableError(&net.DNSError{Err: "temporary", IsTimeout: true})
 	}}
 	fallback := &failoverFake{generate: func(req GenerateRequest) (GenerateResponse, error) {
 		return GenerateResponse{Text: "recovered", Model: req.Model}, nil
@@ -104,11 +108,30 @@ func TestFailoverProviderRetriesThenUsesFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	if primary.generateCall != 2 || fallback.generateCall != 1 {
-		t.Fatalf("calls primary=%d fallback=%d, want 2 and 1", primary.generateCall, fallback.generateCall)
+	if primary.generateCall != 1 || fallback.generateCall != 1 {
+		t.Fatalf("calls primary=%d fallback=%d, want one call per configured target", primary.generateCall, fallback.generateCall)
 	}
 	if resp.Model != "qwen3.5:9b" || !resp.Raw["used_fallback"].(bool) || !resp.Raw["local_fallback"].(bool) {
 		t.Fatalf("unexpected fallback response: %+v", resp)
+	}
+}
+
+func TestFailoverProviderChatAttemptsRetryableTargetOnce(t *testing.T) {
+	primary := &failoverFake{chat: func(ChatGenerateRequest) (ChatGenerateResponse, error) {
+		return ChatGenerateResponse{}, retry.NewRetryableError(errors.New("temporary network failure"))
+	}}
+	fallback := &failoverFake{chat: func(ChatGenerateRequest) (ChatGenerateResponse, error) {
+		return ChatGenerateResponse{Content: "recovered"}, nil
+	}}
+	p := NewFailoverProvider([]FailoverTarget{
+		{Provider: primary, ProviderName: "primary", Model: "primary-model"},
+		{Provider: fallback, ProviderName: "fallback", Model: "fallback-model"},
+	})
+	if _, err := p.ChatGenerate(context.Background(), ChatGenerateRequest{Model: "primary-model"}); err != nil {
+		t.Fatalf("ChatGenerate: %v", err)
+	}
+	if primary.chatCall != 1 || fallback.chatCall != 1 {
+		t.Fatalf("chat calls primary=%d fallback=%d, want one call per configured target", primary.chatCall, fallback.chatCall)
 	}
 }
 

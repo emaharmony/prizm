@@ -116,6 +116,14 @@ func TestRetryClassificationAndPolicyDefaults(t *testing.T) {
 	if class, code, _, ok := classifyRetryableRoleFailure(&subagent.SafeFailureError{Code: "invalid_proposal_diff"}); !ok || class != "schema_correction" || code != "invalid_proposal_diff" {
 		t.Fatalf("typed malformed diff was not recoverable: class=%q code=%q ok=%t", class, code, ok)
 	}
+	for _, code := range []string{"invalid_final_schema", "malformed_tool_input"} {
+		if class, gotCode, _, ok := classifyRetryableRoleFailure(&subagent.SafeFailureError{Code: code}); !ok || class != "schema_correction" || gotCode != code {
+			t.Fatalf("reserved-final correction %q was not recoverable: class=%q code=%q ok=%t", code, class, gotCode, ok)
+		}
+	}
+	if _, _, _, ok := classifyRetryableRoleFailure(&subagent.SafeFailureError{Code: "untrusted-provider-text"}); ok {
+		t.Fatal("unrecognized safe-failure code must not become retryable")
+	}
 	if _, _, _, ok := classifyRetryableRoleFailure(&subagent.SafeFailureError{Code: "invalid_proposal_context"}); ok {
 		t.Fatal("workspace or source-context violation must remain nonretryable")
 	}
@@ -139,6 +147,12 @@ func TestRetryClassificationAndPolicyDefaults(t *testing.T) {
 	if _, _, _, ok := classifyRetryableRoleFailure(errors.New("provider said 503 in its output")); ok {
 		t.Fatal("arbitrary output text must not be classified transient")
 	}
+	if _, _, _, ok := classifyRetryableRoleFailure(&subagent.SafeFailureError{Code: "provider_turn_failed", ProviderStatus: 401}); ok {
+		t.Fatal("HTTP 401 must not be retried")
+	}
+	if class, _, _, ok := classifyRetryableRoleFailure(&subagent.SafeFailureError{Code: "provider_turn_failed", ProviderStatus: 503}); !ok || class != "provider_transient" {
+		t.Fatal("HTTP 503 must be retryable")
+	}
 	if err := event.Validate(event.NewEvent(event.EventMultiAgentRetryScheduled, durableEventSource, map[string]any{
 		"run_id": "r", "workflow_id": "w", "role": "planner", "execution_key": "e", "visit_id": "v", "attempt_id": "a", "attempt": 2, "recovery_number": 1, "failure_class": "provider_transient", "failure_code": "503", "next_at": time.Now().UTC().Format(time.RFC3339Nano),
 	})); err != nil {
@@ -158,12 +172,9 @@ func TestNonRetryableRoleFailureRetainsOnlyAllowlistedTypedCodes(t *testing.T) {
 		{name: "safe tool lookup code", err: &subagent.SafeFailureError{Code: "not_found"}, wantClass: "tool", wantCode: "not_found"},
 		{name: "safe tool permission code", err: &subagent.SafeFailureError{Code: "permission_denied"}, wantClass: "tool", wantCode: "permission_denied"},
 		{name: "safe patch validation code", err: &subagent.SafeFailureError{Code: "patch_validation_failed"}, wantClass: "tool", wantCode: "patch_validation_failed"},
-		{name: "safe tool input code", err: &subagent.SafeFailureError{Code: "invalid_input"}, wantClass: "tool", wantCode: "invalid_input"},
-		{name: "safe tool lookup code", err: &subagent.SafeFailureError{Code: "not_found"}, wantClass: "tool", wantCode: "not_found"},
-		{name: "safe tool permission code", err: &subagent.SafeFailureError{Code: "permission_denied"}, wantClass: "tool", wantCode: "permission_denied"},
-		{name: "safe patch validation code", err: &subagent.SafeFailureError{Code: "patch_validation_failed"}, wantClass: "tool", wantCode: "patch_validation_failed"},
 		{name: "safe governance code", err: &subagent.SafeFailureError{Code: "invalid_proposal_context"}, wantClass: "governance", wantCode: "invalid_proposal_context"},
 		{name: "governance kind", err: &GovernanceError{Kind: "workspace_scope", Reason: "PRIVATE_REASON_CANARY"}, wantClass: "governance", wantCode: "workspace_scope"},
+		{name: "missing capability", err: &GovernanceError{Kind: "capability", Reason: "PRIVATE_REASON_CANARY"}, wantClass: "governance", wantCode: "capability"},
 		{name: "cancellation", err: context.Canceled, wantClass: "cancellation", wantCode: "cancelled"},
 		{name: "unknown typed code", err: &subagent.SafeFailureError{Code: "PRIVATE_UNKNOWN_CANARY"}, wantClass: "unknown", wantCode: "unknown"},
 		{name: "raw error", err: errors.New("PRIVATE_RAW_ERROR_CANARY"), wantClass: "unknown", wantCode: "unknown"},
@@ -180,6 +191,64 @@ func TestNonRetryableRoleFailureRetainsOnlyAllowlistedTypedCodes(t *testing.T) {
 			}
 			if strings.Contains(string(encoded), "PRIVATE_") {
 				t.Fatalf("failure payload leaked private detail: %s", encoded)
+			}
+		})
+	}
+}
+
+func TestTerminalProviderFailureOverridesEarlierToolCorrectionMetadata(t *testing.T) {
+	// The loop can safely correct a nonmutating tool failure, then terminate on
+	// a provider error. The result's LastRecovery fields belong to the earlier
+	// correction and must not hide the terminal provider retry classification.
+	result := RoleRunResult{
+		FailureClass:  "tool",
+		FailureCode:   "tool_execution_error",
+		FailureOrigin: FailureOriginToolExecutor,
+	}
+	retryAfter := 47 * time.Second
+	failure := ClassifyRoleExecutionFailureWithResult(
+		&subagent.SafeFailureError{Code: "provider_turn_failed", RetryAfterDelay: retryAfter}, result,
+	)
+	if failure.Class != "provider_transient" || failure.Code != "provider_turn_failed" ||
+		failure.Origin != FailureOriginProviderCall || !failure.Retryable || failure.RetryAfter != retryAfter {
+		t.Fatalf("terminal provider failure was overridden by prior correction: %#v", failure)
+	}
+}
+
+func TestUnknownTerminalFailureIsNotReplacedByEarlierRecoveryMetadata(t *testing.T) {
+	result := RoleRunResult{
+		FailureClass:  "tool",
+		FailureCode:   "tool_execution_error",
+		FailureOrigin: FailureOriginToolExecutor,
+	}
+	failure := ClassifyRoleExecutionFailureWithResult(errors.New("unclassified terminal error"), result)
+	if failure.Class != "unknown" || failure.Code != "unknown" || failure.Origin != FailureOriginUnknown || failure.Retryable {
+		t.Fatalf("unknown terminal failure was replaced by stale recovery data: %#v", failure)
+	}
+}
+
+func TestRetryScheduledAndExhaustedEventsIncludeSafeFailureOrigin(t *testing.T) {
+	runtime := &DurableRuntime{buffer: &durableEventBuffer{}}
+	record := DurableRun{State: RunState{RunID: "run-retry-origin", WorkflowID: "workflow-retry-origin"}}
+	state := RetryState{
+		Role: RolePlanner, ExecutionKey: "execution-1", VisitID: "visit-1", AttemptID: "attempt-1",
+		Number: 2, RecoveryNumber: 1, FailureClass: "provider_transient",
+		FailureCode: "provider_turn_failed", FailureOrigin: FailureOriginProviderCall,
+		NextAt: time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC),
+	}
+	for _, kind := range []string{event.EventMultiAgentRetryScheduled, event.EventMultiAgentRetryExhausted} {
+		t.Run(kind, func(t *testing.T) {
+			runtime.buffer.reset()
+			runtime.emitRetry(kind, record, state)
+			events := runtime.buffer.snapshot()
+			if len(events) != 1 {
+				t.Fatalf("emitted %d events, want one", len(events))
+			}
+			if got := events[0].Payload["failure_origin"]; got != FailureOriginProviderCall {
+				t.Fatalf("failure_origin=%#v, want %q", got, FailureOriginProviderCall)
+			}
+			if err := event.Validate(events[0]); err != nil {
+				t.Fatalf("retry event contract: %v", err)
 			}
 		})
 	}
@@ -207,7 +276,11 @@ func TestDurableRetryExhaustionIsInitialPlusTenAndTerminalIsStable(t *testing.T)
 	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 	steps := make([]scriptedStep, 11)
 	for i := range steps {
-		steps[i] = scriptedStep{result: RoleRunResult{LocalIterations: 1, TokenUsage: cost.TokenUsage{PromptTokens: 1, TotalTokens: 1}}, err: retry.NewRetryableError(errors.New("503 unavailable"))}
+		status, retryAfter := 503, time.Duration(0)
+		if i == 0 {
+			status, retryAfter = 429, 120*time.Second
+		}
+		steps[i] = scriptedStep{result: RoleRunResult{LocalIterations: 1, TokenUsage: cost.TokenUsage{PromptTokens: 1, TotalTokens: 1}}, err: &subagent.SafeFailureError{Code: "provider_turn_failed", ProviderStatus: status, RetryAfterDelay: retryAfter}}
 	}
 	runner := &scriptedRunner{scripts: map[Role][]scriptedStep{RolePlanner: steps}}
 	runtime := newMutableClockRuntime(t, validDefinition(), runner, env, &now)
@@ -217,6 +290,22 @@ func TestDurableRetryExhaustionIsInitialPlusTenAndTerminalIsStable(t *testing.T)
 	var waiting *RunWaitingError
 	if !errors.As(err, &waiting) {
 		t.Fatalf("initial retry schedule err=%v", err)
+	}
+	initial, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initial.Retry == nil || initial.Retry.FailureClass != "provider_transient" || initial.Retry.FailureCode != "provider_turn_failed" || initial.Retry.FailureOrigin != FailureOriginProviderCall || initial.Retry.ProviderStatus != 429 || initial.Retry.RetryAfter != 120*time.Second || initial.Retry.NextAt.Before(now.Add(120*time.Second)) {
+		t.Fatalf("initial durable retry provenance=%#v", initial.Retry)
+	}
+	initialScheduledEvents := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryScheduled)
+	for _, scheduled := range initialScheduledEvents {
+		if scheduled.Payload["failure_origin"] != string(FailureOriginProviderCall) {
+			t.Fatalf("scheduled event lost provider origin: %#v", scheduled.Payload)
+		}
+	}
+	if len(initialScheduledEvents) != 1 || fmt.Sprint(initialScheduledEvents[0].Payload["provider_status"]) != "429" || fmt.Sprint(initialScheduledEvents[0].Payload["retry_after_ms"]) != fmt.Sprint((120*time.Second).Milliseconds()) {
+		t.Fatalf("first scheduled event lost 429 Retry-After: %#v", initialScheduledEvents)
 	}
 	for recovery := 1; recovery <= 10; recovery++ {
 		record, loadErr := env.store.Load(context.Background(), request.RunID)
@@ -239,6 +328,25 @@ func TestDurableRetryExhaustionIsInitialPlusTenAndTerminalIsStable(t *testing.T)
 	}
 	if len(record.RetryHistory) != 1 || record.RetryHistory[0].RecoveryNumber != 10 || record.RetryHistory[0].Number != 11 {
 		t.Fatalf("persisted retry history=%#v", record.RetryHistory)
+	}
+	if record.RetryHistory[0].FailureOrigin != FailureOriginProviderCall || record.RetryHistory[0].ProviderStatus != 503 {
+		t.Fatalf("retry history origin=%q, want %q", record.RetryHistory[0].FailureOrigin, FailureOriginProviderCall)
+	}
+	if record.Failure == nil || record.Failure.FailureOrigin != FailureOriginProviderCall || record.Failure.ProviderStatus != 503 {
+		t.Fatalf("terminal failure origin=%#v, want %q", record.Failure, FailureOriginProviderCall)
+	}
+	scheduledEvents := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryScheduled)
+	if len(scheduledEvents) != 10 {
+		t.Fatalf("scheduled retry event count=%d, want 10", len(scheduledEvents))
+	}
+	for _, scheduled := range scheduledEvents {
+		if scheduled.Payload["failure_origin"] != string(FailureOriginProviderCall) {
+			t.Fatalf("scheduled event lost provider origin: %#v", scheduled.Payload)
+		}
+	}
+	exhaustedEvents := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryExhausted)
+	if len(exhaustedEvents) != 1 || exhaustedEvents[0].Payload["failure_origin"] != string(FailureOriginProviderCall) || fmt.Sprint(exhaustedEvents[0].Payload["provider_status"]) != "503" {
+		t.Fatalf("exhausted event provenance=%#v", exhaustedEvents)
 	}
 	if record.Failure == nil || record.Failure.Message != "retry_exhausted" || record.State.RoleStates[RolePlanner].LastError != "retry_exhausted" {
 		t.Fatalf("terminal retry reason=%#v role=%#v", record.Failure, record.State.RoleStates[RolePlanner])
@@ -264,6 +372,146 @@ func TestDurableRetryExhaustionIsInitialPlusTenAndTerminalIsStable(t *testing.T)
 	}
 	if failed["attempt_id"] == "" || fmt.Sprint(failed["attempt"]) != "11" || fmt.Sprint(failed["recovery_number"]) != "10" {
 		t.Fatalf("terminal attempt identity=%#v", failed)
+	}
+	if fmt.Sprint(failed["provider_status"]) != "503" {
+		t.Fatalf("terminal event lost safe provider metadata: %#v", failed)
+	}
+}
+
+func TestProviderAuthFailuresAreTerminalWithoutRetry(t *testing.T) {
+	for _, status := range []int{401, 403} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			env := newDurableTestEnvironment(t)
+			now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+			code := "provider_auth_rejected"
+			runner := &scriptedRunner{scripts: map[Role][]scriptedStep{RolePlanner: {{err: &subagent.SafeFailureError{Code: code, ProviderStatus: status}}}}}
+			runtime := newMutableClockRuntime(t, validDefinition(), runner, env, &now)
+			request := testRunRequest()
+			request.RunID = fmt.Sprintf("run-provider-auth-%d", status)
+			state, err := runtime.Run(context.Background(), request)
+			if err == nil || state.Status != RunStatusFailed {
+				t.Fatalf("auth failure state=%s err=%v", state.Status, err)
+			}
+			if got := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryScheduled); len(got) != 0 {
+				t.Fatalf("auth failure scheduled retries: %#v", got)
+			}
+			record, loadErr := env.store.Load(context.Background(), request.RunID)
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			if record.Failure == nil || record.Failure.ProviderStatus != status || record.Failure.FailureClass != "provider_rejected" || record.Failure.FailureOrigin != FailureOriginProviderCall {
+				t.Fatalf("safe auth failure metadata=%#v", record.Failure)
+			}
+		})
+	}
+}
+
+func TestDurableRetrySchedulerPersistsUnknownOriginWithoutRawError(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	steps := make([]scriptedStep, 11)
+	for i := range steps {
+		steps[i] = scriptedStep{err: retry.NewRetryableError(errors.New("PRIVATE_RAW_FAILURE_CANARY"))}
+	}
+	runner := &scriptedRunner{scripts: map[Role][]scriptedStep{RolePlanner: steps}}
+	runtime := newMutableClockRuntime(t, validDefinition(), runner, env, &now)
+	request := testRunRequest()
+	request.RunID = "run-retry-unknown-origin"
+	_, err := runtime.Run(context.Background(), request)
+	var waiting *RunWaitingError
+	if !errors.As(err, &waiting) {
+		t.Fatalf("initial retry schedule err=%v", err)
+	}
+	for recovery := 1; recovery <= 10; recovery++ {
+		record, loadErr := env.store.Load(context.Background(), request.RunID)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		now = record.Retry.NextAt.Add(time.Millisecond)
+		state, resumeErr := runtime.Resume(context.Background(), request.RunID)
+		if recovery < 10 {
+			if !errors.As(resumeErr, &waiting) || state.Status != RunStatusPaused {
+				t.Fatalf("recovery %d state=%s err=%v", recovery, state.Status, resumeErr)
+			}
+		} else if state.Status != RunStatusFailed || resumeErr == nil {
+			t.Fatalf("exhaustion state=%s err=%v", state.Status, resumeErr)
+		}
+	}
+	record, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Retry != nil || len(record.RetryHistory) != 1 || record.RetryHistory[0].FailureOrigin != FailureOriginUnknown || record.Failure == nil || record.Failure.FailureOrigin != FailureOriginUnknown {
+		t.Fatalf("unknown failure origin was not preserved: retry=%#v history=%#v failure=%#v", record.Retry, record.RetryHistory, record.Failure)
+	}
+	scheduledEvents := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryScheduled)
+	exhaustedEvents := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryExhausted)
+	if len(scheduledEvents) != 10 || len(exhaustedEvents) != 1 {
+		t.Fatalf("unknown-origin retry events: scheduled=%d exhausted=%d", len(scheduledEvents), len(exhaustedEvents))
+	}
+	for _, group := range []struct {
+		kind   string
+		events []event.Event
+	}{
+		{kind: event.EventMultiAgentRetryScheduled, events: scheduledEvents},
+		{kind: event.EventMultiAgentRetryExhausted, events: exhaustedEvents},
+	} {
+		for _, emitted := range group.events {
+			if emitted.Payload["failure_origin"] != string(FailureOriginUnknown) {
+				t.Fatalf("%s origin=%#v, want unknown", group.kind, emitted.Payload["failure_origin"])
+			}
+			encoded, marshalErr := json.Marshal(emitted.Payload)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			if strings.Contains(string(encoded), "PRIVATE_RAW_FAILURE_CANARY") {
+				t.Fatalf("%s leaked raw error: %s", group.kind, encoded)
+			}
+		}
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "PRIVATE_RAW_FAILURE_CANARY") {
+		t.Fatalf("durable run leaked raw error: %s", encoded)
+	}
+}
+
+func TestReservedFinalSchemaCorrectionSchedulesOneDurableRoleRecovery(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	runner := &scriptedRunner{scripts: map[Role][]scriptedStep{
+		RolePlanner:   {{result: RoleRunResult{LocalIterations: 2}, err: &subagent.SafeFailureError{Code: "invalid_final_schema"}}, {result: scriptedResult(OutcomePlanReady)}},
+		RoleDeveloper: {{result: scriptedResult(OutcomeImplementationReady)}},
+		RoleTester:    {{result: scriptedResult(OutcomeTestsPassed)}},
+		RoleReviewer:  {{result: scriptedResult(OutcomeReviewApproved)}},
+	}}
+	runtime := newMutableClockRuntime(t, validDefinition(), runner, env, &now)
+	request := testRunRequest()
+	request.RunID = "run-reserved-final-schema-recovery"
+	state, err := runtime.Run(context.Background(), request)
+	var waiting *RunWaitingError
+	if !errors.As(err, &waiting) || state.Status != RunStatusPaused {
+		t.Fatalf("schema correction did not schedule a durable visit: state=%s err=%v", state.Status, err)
+	}
+	stored, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Retry == nil || stored.Retry.RecoveryNumber != 1 || stored.Retry.Number != 2 || stored.Retry.MaxRecoveries != 10 || stored.Retry.FailureClass != "schema_correction" || stored.Retry.FailureCode != "invalid_final_schema" {
+		t.Fatalf("durable retry state=%#v", stored.Retry)
+	}
+	if calls := runnerCalls(runner); len(calls) != 1 || calls[0] != RolePlanner {
+		t.Fatalf("reserved final error caused an extra same-visit call: %v", calls)
+	}
+	now = stored.Retry.NextAt.Add(time.Millisecond)
+	completed, err := runtime.Resume(context.Background(), request.RunID)
+	if err != nil || completed.Status != RunStatusCompleted {
+		t.Fatalf("resumed schema correction state=%s err=%v", completed.Status, err)
+	}
+	if calls := runnerCalls(runner); len(calls) != 5 || calls[0] != RolePlanner || calls[1] != RolePlanner {
+		t.Fatalf("role visits after durable recovery=%v", calls)
 	}
 }
 
@@ -405,6 +653,80 @@ func TestSchemaCorrectionRetryAndStaleCallbackUseSharedBudget(t *testing.T) {
 	if len(final.RetryHistory) != 1 || final.RetryHistory[0].RecoveryNumber != 2 || final.RetryHistory[0].Corrections[0].Code != "invalid_schema" {
 		t.Fatalf("final retry summary=%#v", final.RetryHistory)
 	}
+}
+
+func TestInvalidProposalDiffRetryPersistsOnlySafeFeedbackAndResumes(t *testing.T) {
+	const (
+		rawPatchCanary = "RAW_PATCH_CANARY"
+		rawErrorCanary = "RAW_ERROR_CANARY"
+	)
+	env := newDurableTestEnvironment(t)
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	runner := &proposalDiffRecoveryRunner{
+		scriptedRunner: happyDurableRunner(),
+		failFirst:      true,
+		failure: fmt.Errorf("proposal rejected %s: private parser detail %s: %w",
+			rawPatchCanary, rawErrorCanary, &subagent.SafeFailureError{Code: "invalid_proposal_diff"}),
+	}
+	runtime := newMutableClockRuntime(t, validDefinition(), runner, env, &now)
+	request := testRunRequest()
+	request.RunID = "run-invalid-proposal-diff-feedback"
+	state, err := runtime.Run(context.Background(), request)
+	var waiting *RunWaitingError
+	if !errors.As(err, &waiting) || state.Status != RunStatusPaused {
+		t.Fatalf("retry schedule state=%s err=%v", state.Status, err)
+	}
+
+	record, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFeedback := correctionFeedback("invalid_proposal_diff")
+	for _, required := range []string{"apply_patch_proposal", `"type":"tool_request"`, `"patch"`, `"base_sha"`, "The proposal was not executed"} {
+		if !strings.Contains(wantFeedback, required) {
+			t.Fatalf("invalid-proposal-diff correction omits %q: %q", required, wantFeedback)
+		}
+	}
+	if record.Retry == nil || record.Retry.RecoveryFeedback != wantFeedback {
+		t.Fatalf("safe proposal-diff feedback was not persisted: %#v", record.Retry)
+	}
+	if len(record.Retry.Corrections) == 0 || record.Retry.Corrections[len(record.Retry.Corrections)-1].Feedback != wantFeedback {
+		t.Fatalf("safe proposal-diff correction history=%#v", record.Retry.Corrections)
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), rawPatchCanary) || strings.Contains(string(encoded), rawErrorCanary) {
+		t.Fatalf("retry record retained untrusted proposal/error detail: %s", encoded)
+	}
+
+	now = record.Retry.NextAt.Add(time.Millisecond)
+	state, err = runtime.Resume(context.Background(), request.RunID)
+	if err != nil || state.Status != RunStatusCompleted {
+		t.Fatalf("retry resume state=%s err=%v", state.Status, err)
+	}
+	if runner.recoveryFeedback != wantFeedback {
+		t.Fatalf("resumed role feedback=%q, want fixed correction %q", runner.recoveryFeedback, wantFeedback)
+	}
+}
+
+type proposalDiffRecoveryRunner struct {
+	*scriptedRunner
+	failFirst        bool
+	failure          error
+	recoveryFeedback string
+}
+
+func (r *proposalDiffRecoveryRunner) RunRole(ctx context.Context, request RoleRunRequest) (RoleRunResult, error) {
+	if request.Run.CurrentRole == RolePlanner && r.failFirst {
+		r.failFirst = false
+		return RoleRunResult{LocalIterations: 1}, r.failure
+	}
+	if request.Run.CurrentRole == RolePlanner {
+		r.recoveryFeedback = request.RecoveryFeedback
+	}
+	return r.scriptedRunner.RunRole(ctx, request)
 }
 
 func TestNoProgressObservationLedgerSurvivesRestartAndResetsOnChange(t *testing.T) {
@@ -604,6 +926,81 @@ func TestPersistedPauseStopsDueRetryUntilExplicitResume(t *testing.T) {
 	state, err = runtime.Resume(context.Background(), request.RunID)
 	if err != nil || state.Status != RunStatusCompleted || len(runnerCalls(runner)) != 5 {
 		t.Fatalf("explicit resume did not consume preserved retry: state=%s calls=%v err=%v", state.Status, runnerCalls(runner), err)
+	}
+}
+
+func TestPersistedCancellationStopsDueRetryBeforeProviderCall(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	runner := &scriptedRunner{scripts: map[Role][]scriptedStep{
+		RolePlanner:   {{err: retry.NewRetryableError(errors.New("temporary provider failure"))}, {result: scriptedResult(OutcomePlanReady)}},
+		RoleDeveloper: {{result: scriptedResult(OutcomeImplementationReady)}},
+		RoleTester:    {{result: scriptedResult(OutcomeTestsPassed)}},
+		RoleReviewer:  {{result: scriptedResult(OutcomeReviewApproved)}},
+	}}
+	runtime := newMutableClockRuntime(t, validDefinition(), runner, env, &now)
+	request := testRunRequest()
+	request.RunID = "run-cancel-at-due-retry"
+	state, err := runtime.Run(context.Background(), request)
+	var waiting *RunWaitingError
+	if !errors.As(err, &waiting) || waiting.Kind != "role_retry" || state.Status != RunStatusPaused {
+		t.Fatalf("initial retry state=%s err=%v", state.Status, err)
+	}
+	before, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil || before.Retry == nil || before.Waiting == nil {
+		t.Fatalf("waiting retry record=%#v err=%v", before, err)
+	}
+
+	// Hold the claim to model a scheduler owner while the API persists cancel.
+	claim, err := env.claimer.Acquire(context.Background(), request.RunID)
+	if err != nil {
+		t.Fatalf("hold scheduler claim: %v", err)
+	}
+	cancelState, err := runtime.Cancel(context.Background(), request.RunID, "operator stopped retry")
+	if err != nil || cancelState.Status != RunStatusPaused {
+		t.Fatalf("cancel while claimed state=%s err=%v", cancelState.Status, err)
+	}
+	claim.Release()
+	now = before.Retry.NextAt.Add(time.Second)
+
+	state, err = runtime.Resume(context.Background(), request.RunID)
+	if err != nil || state.Status != RunStatusCancelled || state.CancellationReason != "operator stopped retry" {
+		t.Fatalf("resume after cancellation state=%#v err=%v", state, err)
+	}
+	if calls := runnerCalls(runner); len(calls) != 1 || calls[0] != RolePlanner {
+		t.Fatalf("provider calls after persisted cancellation = %v, want only initial planner attempt", calls)
+	}
+	record, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil || record.Phase != CheckpointTerminal || record.State.Status != RunStatusCancelled || record.Waiting != nil || record.Retry != nil {
+		t.Fatalf("terminal cancellation record=%#v err=%v", record, err)
+	}
+	if record.State.RoleStates[RolePlanner].Status != RoleStatusCancelled {
+		t.Fatalf("planner terminal status=%q, want cancelled", record.State.RoleStates[RolePlanner].Status)
+	}
+	cancelEvents := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRunCancelled)
+	if len(cancelEvents) != 1 {
+		t.Fatalf("cancel events=%d, want one", len(cancelEvents))
+	}
+	if started := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRetryAttemptStarted); len(started) != 0 {
+		t.Fatalf("retry-start events=%d, want none after cancellation", len(started))
+	}
+	allEvents, err := env.events.Query(context.Background(), event.EventFilter{RunID: request.RunID, Limit: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := BuildDashboardSnapshot(validDefinition(), record, allEvents)
+	if snapshot.CancellationReason != "operator stopped retry" || snapshot.Waiting != nil {
+		t.Fatalf("dashboard cancellation snapshot reason=%q waiting=%#v", snapshot.CancellationReason, snapshot.Waiting)
+	}
+	state, err = runtime.Resume(context.Background(), request.RunID)
+	if err != nil || state.Status != RunStatusCancelled {
+		t.Fatalf("repeat terminal resume state=%s err=%v", state.Status, err)
+	}
+	if events := queryEventsForTest(t, env.events, request.RunID, event.EventMultiAgentRunCancelled); len(events) != 1 {
+		t.Fatalf("cancel events after repeat resume=%d, want one", len(events))
+	}
+	if calls := runnerCalls(runner); len(calls) != 1 {
+		t.Fatalf("provider calls after repeat resume=%v, want initial planner attempt only", calls)
 	}
 }
 

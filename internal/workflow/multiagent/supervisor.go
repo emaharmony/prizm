@@ -603,11 +603,20 @@ func (s *Supervisor) failRunWithRetryDiagnostic(state RunState, err error, diagn
 		if diagnostic.FailureCode != "" {
 			fields["failure_code"] = diagnostic.FailureCode
 		}
+		if diagnostic.FailureOrigin != "" {
+			fields["failure_origin"] = safeFailureOrigin(diagnostic.FailureClass, diagnostic.FailureCode, diagnostic.FailureOrigin)
+		}
 		if diagnostic.FailureReason != "" {
 			fields["failure_reason"] = diagnostic.FailureReason
 		}
 		fields["retryable"] = diagnostic.Retryable
 		fields["retry_exhausted"] = diagnostic.RetryExhausted
+		if diagnostic.ProviderStatus > 0 {
+			fields["provider_status"] = safeStatusValue(diagnostic.ProviderStatus)
+		}
+		if diagnostic.RetryAfterMS > 0 && diagnostic.RetryAfterMS <= int64((365*24*time.Hour)/time.Millisecond) {
+			fields["retry_after_ms"] = diagnostic.RetryAfterMS
+		}
 	}
 	s.emitRunWithFields(event.EventMultiAgentRunFailed, state, err.Error(), fields)
 	s.log(state, "run failed", slog.String("outcome", "failed"), slog.String("error", err.Error()))

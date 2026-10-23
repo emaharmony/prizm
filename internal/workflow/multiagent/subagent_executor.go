@@ -2,11 +2,13 @@ package multiagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/emaharmony/prizm/internal/cost"
+	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/emaharmony/prizm/internal/subagent"
 	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 )
@@ -25,6 +27,12 @@ func (e SubagentExecutor) ExecuteAgent(
 ) (AgentExecutionResult, error) {
 	if e.Runner == nil {
 		return AgentExecutionResult{}, fmt.Errorf("multiagent: sub-agent task runner is required")
+	}
+	if basis := request.TrustedTreeBasis; basis != nil {
+		if basis.RunID != request.RunID || basis.WorkspaceID != request.Workspace.ID || basis.Role != string(RoleDeveloper) || request.Role != RoleDeveloper {
+			return AgentExecutionResult{}, fmt.Errorf("multiagent: trusted patch basis scope does not match role execution")
+		}
+		ctx = gitx.ContextWithTrustedTreeBasis(ctx, *basis)
 	}
 
 	deadlineValue := ""
@@ -91,8 +99,14 @@ func (e SubagentExecutor) ExecuteAgent(
 		LocalIterations: result.Iterations,
 		ToolCalls:       result.ToolCalls,
 		DeniedToolCalls: result.DeniedToolCalls,
+		FailureClass:    result.LastRecoveryClass,
+		FailureCode:     result.LastRecoveryCode,
+		FailureOrigin:   FailureOrigin(result.LastRecoveryOrigin),
 	}
 	if err != nil {
+		if errors.Is(err, subagent.ErrRecoveryBudgetExhausted) {
+			return executionResult, ErrRetryBudgetExhausted
+		}
 		return executionResult, err
 	}
 	return executionResult, nil
@@ -137,6 +151,20 @@ func (h subagentRetryHooks) RecordCorrectionFeedback(id, class, code, feedback s
 		return nil
 	}
 	return h.handle.RecordCorrectionFeedback(id, class, code, feedback)
+}
+func (h subagentRetryHooks) RecordCorrectionWithOrigin(id, class, code, origin, feedback string) error {
+	if h.handle == nil {
+		return nil
+	}
+	if recorder, ok := h.handle.(interface {
+		RecordCorrectionWithOrigin(string, string, string, string, string) error
+	}); ok {
+		return recorder.RecordCorrectionWithOrigin(id, class, code, origin, feedback)
+	}
+	if feedback != "" {
+		return h.handle.RecordCorrectionFeedback(id, class, code, feedback)
+	}
+	return h.handle.RecordCorrection(id, class, code)
 }
 func (h subagentRetryHooks) ConfirmNoEffects(id, mutationID string) error {
 	if h.handle == nil {

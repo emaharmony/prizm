@@ -12,6 +12,7 @@ import (
 
 	prizmAdapter "github.com/emaharmony/prizm/internal/adapter"
 	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/emaharmony/prizm/internal/validation"
 )
 
@@ -261,6 +262,15 @@ func (r *DurableRuntime) resumeClaimed(
 		r.publishRecoveryFailure(ctx, runID, err)
 		return record.State, &RecoveryFailedError{RunID: runID, Cause: err}
 	}
+	if record.Phase != CheckpointTerminal {
+		record, cancelled, cancelErr := r.persistRequestedCancellation(ctx, record)
+		if cancelErr != nil {
+			return record.State, cancelErr
+		}
+		if cancelled {
+			return record.State, nil
+		}
+	}
 	// A scheduled retry is a safe role boundary. Honor a persisted operator
 	// pause before consuming that retry, including when the service recovery
 	// scanner calls Resume rather than an operator.
@@ -416,7 +426,7 @@ func (r *DurableRuntime) resumeClaimed(
 		}
 		r.supervisor.emitRun(event.EventMultiAgentRunResumed, record.State, "operator pause cleared")
 	}
-	if record.Phase == CheckpointRoleRunning && record.Retry != nil && record.Retry.ReplaySafe && !record.Retry.MutationPossible {
+	if record.Phase == CheckpointRoleRunning && retryStateReplaySafe(record.Retry) {
 		if record.Retry.RecoveryNumber >= record.Retry.MaxRecoveries {
 			returnState, terminalErr := r.persistRoleFailure(ctx, record, record.State.CurrentRole, ErrRetryBudgetExhausted)
 			return returnState.State, terminalErr
@@ -504,6 +514,79 @@ func (r *DurableRuntime) FailAcceptedRun(ctx context.Context, runID, code string
 	return saved.State, failureErr
 }
 
+// persistRequestedCancellation observes a durable operator request at a
+// recovery boundary. A retry may be resumed without passing through
+// prepareRole, so both resume ingress and the retry transition use this guard.
+func (r *DurableRuntime) persistRequestedCancellation(
+	ctx context.Context,
+	record DurableRun,
+) (DurableRun, bool, error) {
+	reason, requested, err := r.store.CancellationRequest(ctx, record.State.RunID)
+	if err != nil || !requested {
+		return record, false, err
+	}
+	if cancellationRequiresExecutionReconciliation(record) {
+		return record, false, nil
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "cancelled by user"
+	}
+	now := r.now().UTC()
+	role := record.State.CurrentRole
+	roleState := record.State.RoleStates[role]
+	if record.State.RoleStates == nil {
+		record.State.RoleStates = make(map[Role]RoleState)
+	}
+	if record.Retry != nil {
+		retryState := *record.Retry
+		retryState.FailureClass = "cancellation"
+		retryState.FailureCode = "cancelled"
+		roleState.LocalIterations += retryState.AccumulatedIterations
+		roleState.Retries += retryState.RecoveryNumber
+		roleState.TokenUsage = addTokenUsage(roleState.TokenUsage, retryState.AccumulatedUsage)
+		roleState.UpdatedAt = now
+		roleState.CompletedAt = timePointer(now)
+		record.State.BudgetUsage.TotalLocalIterations += retryState.AccumulatedIterations
+		record.State.BudgetUsage.Retries += retryState.RecoveryNumber
+		record.State.BudgetUsage.Tokens = addTokenUsage(record.State.BudgetUsage.Tokens, retryState.AccumulatedUsage)
+		record.Retry = &retryState
+	}
+	switch roleState.Status {
+	case RoleStatusCompleted, RoleStatusFailed, RoleStatusBlocked, RoleStatusCancelled:
+	default:
+		roleState.Status = RoleStatusCancelled
+		roleState.LastError = boundedDiagnostic(errors.New(reason))
+		roleState.UpdatedAt = now
+		roleState.CompletedAt = timePointer(now)
+	}
+	record.State.RoleStates[role] = roleState
+	record.State, _ = r.supervisor.cancelRun(record.State, errors.New(reason))
+	record.Phase = CheckpointTerminal
+	record.PendingTransition = nil
+	record.ActiveExecutionKey = ""
+	record.Waiting = nil
+	record.Failure = nil
+	saved, err := r.checkpoint(ctx, record)
+	if err != nil {
+		return saved, true, err
+	}
+	return saved, true, nil
+}
+
+// cancellationRequiresExecutionReconciliation keeps a persisted cancellation
+// request from erasing the evidence needed to reconcile an interrupted role.
+// Once recovery converts a safe interrupted attempt into role_retry, the normal
+// retry boundary can terminalize the cancellation before invoking the runner.
+func cancellationRequiresExecutionReconciliation(record DurableRun) bool {
+	if record.Phase == CheckpointRoleRunning {
+		return true
+	}
+	if record.Phase == CheckpointWaiting && record.Waiting != nil && record.Waiting.Kind == "execution_reconciliation" {
+		return true
+	}
+	return record.Retry != nil && !retryStateReplaySafe(record.Retry)
+}
+
 // Inspect loads and validates the durable source of truth without advancing it.
 func (r *DurableRuntime) Inspect(ctx context.Context, runID string) (DurableRun, error) {
 	record, err := r.store.Load(ctx, runID)
@@ -554,23 +637,14 @@ func (r *DurableRuntime) Cancel(
 	if record.Phase == CheckpointTerminal {
 		return record.State, nil
 	}
-	now := r.now().UTC()
-	roleState := record.State.RoleStates[record.State.CurrentRole]
-	if roleState.Status == RoleStatusRunning {
-		roleState.Status = RoleStatusCancelled
-		roleState.UpdatedAt = now
-		roleState.CompletedAt = timePointer(now)
-		record.State.RoleStates[record.State.CurrentRole] = roleState
-	}
-	record.State, _ = r.supervisor.cancelRun(record.State, errors.New(reason))
-	record.Phase = CheckpointTerminal
-	record.PendingTransition = nil
-	record.ActiveExecutionKey = ""
-	record.Waiting = nil
-	record.Failure = nil
-	record, err = r.checkpoint(ctx, record)
+	record, cancelled, err := r.persistRequestedCancellation(ctx, record)
 	if err != nil {
 		return record.State, err
+	}
+	if !cancelled {
+		// The request remains durable; recovery must first reconcile any
+		// interrupted execution before it can safely become terminal.
+		return record.State, nil
 	}
 	return record.State, nil
 }
@@ -676,7 +750,16 @@ func (r *DurableRuntime) drive(
 
 		case CheckpointWaiting:
 			if record.Waiting != nil && record.Waiting.Kind == "role_retry" {
-				if record.Retry == nil || !record.Retry.ReplaySafe || record.Retry.MutationPossible {
+				var cancelled bool
+				var cancelCheckErr error
+				record, cancelled, cancelCheckErr = r.persistRequestedCancellation(ctx, record)
+				if cancelCheckErr != nil {
+					return record.State, cancelCheckErr
+				}
+				if cancelled {
+					return record.State, nil
+				}
+				if !retryStateReplaySafe(record.Retry) {
 					return record.State, waitingError(record)
 				}
 				if r.now().UTC().Before(record.Retry.NextAt) {
@@ -691,10 +774,10 @@ func (r *DurableRuntime) drive(
 				record.Waiting = nil
 				record.Phase = CheckpointRoleRunning
 				r.emitRetry(event.EventMultiAgentRetryAttemptStarted, record, *record.Retry)
-				var err error
-				record, err = r.checkpoint(ctx, record)
-				if err != nil {
-					return record.State, err
+				var checkpointErr error
+				record, checkpointErr = r.checkpoint(ctx, record)
+				if checkpointErr != nil {
+					return record.State, checkpointErr
 				}
 				canExecutePrepared = true
 				continue
@@ -895,8 +978,9 @@ func (r *DurableRuntime) executePreparedRole(
 	}
 	retryHandle := newDurableRoleRetryHandle(ctx, r, record)
 	result, runErr := r.supervisor.runner.RunRole(ctx, RoleRunRequest{
-		Run:        r.supervisor.runView(record.State),
-		RoleConfig: cloneRoleConfig(roleConfig),
+		Run:              r.supervisor.runView(record.State),
+		RoleConfig:       cloneRoleConfig(roleConfig),
+		TrustedTreeBasis: trustedTreeBasisForRole(record, role),
 		RecoveryFeedback: func() string {
 			if record.Retry != nil {
 				return record.Retry.RecoveryFeedback
@@ -1130,7 +1214,7 @@ func (r *DurableRuntime) executeFanOutAdoption(ctx context.Context, record Durab
 func proposalProgressRefs(progress []ProposalProgress) []ProposalReference {
 	refs := make([]ProposalReference, 0, len(progress))
 	for _, item := range progress {
-		refs = append(refs, ProposalReference{ProposalID: item.ProposalID, ApprovalID: item.ApprovalID})
+		refs = append(refs, ProposalReference{ProposalID: item.ProposalID, ApprovalID: item.ApprovalID, PatchPlan: cloneGitPatchPlan(item.PatchPlan)})
 	}
 	return refs
 }
@@ -1140,8 +1224,26 @@ func cloneProposalReferences(refs []ProposalReference) []ProposalReference {
 	for i, ref := range refs {
 		cloned[i] = ref
 		cloned[i].Artifacts = cloneArtifactRefs(ref.Artifacts)
+		cloned[i].PatchPlan = cloneGitPatchPlan(ref.PatchPlan)
 	}
 	return cloned
+}
+
+func cloneGitPatchPlan(plan *gitx.PatchPlan) *gitx.PatchPlan {
+	if plan == nil {
+		return nil
+	}
+	cloned := gitx.ClonePatchPlan(*plan)
+	return &cloned
+}
+
+func cloneTrustedTreeBasis(basis *gitx.TrustedTreeBasis) *gitx.TrustedTreeBasis {
+	if basis == nil {
+		return nil
+	}
+	cloned := *basis
+	cloned.Paths = append([]string(nil), basis.Paths...)
+	return &cloned
 }
 
 func cloneFanOutAdoption(adoption *FanOutAdoptionState) *FanOutAdoptionState {
@@ -1344,7 +1446,8 @@ func (r *DurableRuntime) pauseForProposals(
 		operation := ProposalOperation{
 			RunID: record.State.RunID, ProposalID: proposalID, ApprovalID: approvalID,
 			ApplyKey:    proposalApplyKey(record.State.RunID, proposalID),
-			WorkspaceID: record.State.WorkspaceID, ExecutionKey: record.ActiveExecutionKey,
+			WorkspaceID: record.State.WorkspaceID, ExecutionKey: record.ActiveExecutionKey, Role: role,
+			PatchPlan: cloneGitPatchPlan(ref.PatchPlan),
 		}
 		progress = append(progress, ProposalProgress{ProposalOperation: operation, Phase: "waiting"})
 		r.emitProposal(event.EventProposalRecorded, operation, "")
@@ -1369,6 +1472,66 @@ func (r *DurableRuntime) pauseForProposals(
 		return record, err
 	}
 	return record, waitingError(record)
+}
+
+func trustedTreeBasisForRole(record DurableRun, role Role) *gitx.TrustedTreeBasis {
+	if role != RoleDeveloper {
+		return nil
+	}
+	if record.ApprovedTask != nil && record.ApprovedTask.Role == role {
+		for index := len(record.ApprovedTask.Proposals) - 1; index >= 0; index-- {
+			if basis := trustedTreeBasisFromProposal(record, role, record.ApprovedTask.Proposals[index]); basis != nil {
+				return basis
+			}
+		}
+	}
+	for index := len(record.ProposalResults) - 1; index >= 0; index-- {
+		if basis := trustedTreeBasisFromProposal(record, role, record.ProposalResults[index]); basis != nil {
+			return basis
+		}
+	}
+	return nil
+}
+
+func trustedTreeBasisFromProposal(record DurableRun, role Role, progress ProposalProgress) *gitx.TrustedTreeBasis {
+	op := progress.ProposalOperation
+	plan := progress.ResultPlan()
+	if plan == nil || progress.Phase != "applied" || op.PatchPlan == nil ||
+		op.RunID != record.State.RunID || op.WorkspaceID != record.State.WorkspaceID ||
+		op.ProposalID == "" || op.ApprovalID == "" || op.ApplyKey != proposalApplyKey(op.RunID, op.ProposalID) ||
+		op.ExecutionKey == "" || op.Role != role || progress.Result == nil || !progress.Result.Success ||
+		progress.Result.ReconcileCode != ProposalReconcileExpectedTree || progress.Result.ObservedTree != plan.ExpectedTree ||
+		!validTrustedPatchPlan(*plan) {
+		return nil
+	}
+	if op.PatchPlan != nil && !gitx.EqualPatchPlan(*op.PatchPlan, *plan) {
+		return nil
+	}
+	return &gitx.TrustedTreeBasis{
+		RunID: op.RunID, WorkspaceID: op.WorkspaceID, ProposalID: op.ProposalID, ApprovalID: op.ApprovalID,
+		ApplyKey: op.ApplyKey, ExecutionKey: op.ExecutionKey, Role: string(role),
+		BaseSHA: plan.BaseSHA, BaseTree: plan.BaseTree, ExpectedTree: plan.ExpectedTree,
+		PatchSHA256: plan.PatchSHA256, Paths: append([]string(nil), plan.Paths...),
+	}
+}
+
+func (progress ProposalProgress) ResultPlan() *gitx.PatchPlan {
+	if progress.Result == nil || progress.Result.PatchPlan == nil {
+		return nil
+	}
+	plan := gitx.ClonePatchPlan(*progress.Result.PatchPlan)
+	return &plan
+}
+
+func validTrustedPatchPlan(plan gitx.PatchPlan) bool {
+	if plan.BaseSHA == "" || plan.BaseTree == "" || plan.ExpectedTree == "" || plan.PatchSHA256 == "" || len(plan.Paths) == 0 {
+		return false
+	}
+	planningTree := plan.PlanningTree
+	if planningTree == "" {
+		planningTree = plan.BaseTree
+	}
+	return plan.ExpectedTree != planningTree
 }
 
 func (r *DurableRuntime) advanceApprovedTask(ctx context.Context, record DurableRun) (DurableRun, error) {
@@ -1608,6 +1771,13 @@ func (r *DurableRuntime) emitProposalReconcileFailure(operation ProposalOperatio
 	if validGitTreeID(result.ObservedTree) {
 		payload["observed_tree"] = result.ObservedTree
 	}
+	if validInspectionStage(result.InspectionStage) && validInspectionCategory(result.InspectionCategory) {
+		payload["inspection_stage"] = result.InspectionStage
+		payload["inspection_category"] = result.InspectionCategory
+		if result.InspectionCategory == "command_failed" && result.InspectionExitCode >= 0 && result.InspectionExitCode <= 255 {
+			payload["inspection_exit_code"] = result.InspectionExitCode
+		}
+	}
 	r.buffer.Emit(event.NewEvent(event.EventProposalApplyFailed, durableEventSource, payload).
 		WithCorrelationID(operation.ApplyKey).WithMetadata(event.EventMetadata{RunID: operation.RunID}))
 }
@@ -1629,6 +1799,13 @@ func safeProposalReconcileResult(result ProposalApplyResult) ProposalApplyResult
 	}
 	if validGitTreeID(result.ObservedTree) {
 		safe.ObservedTree = result.ObservedTree
+	}
+	if validInspectionStage(result.InspectionStage) && validInspectionCategory(result.InspectionCategory) {
+		safe.InspectionStage = result.InspectionStage
+		safe.InspectionCategory = result.InspectionCategory
+		if result.InspectionCategory == "command_failed" && result.InspectionExitCode >= 0 && result.InspectionExitCode <= 255 {
+			safe.InspectionExitCode = result.InspectionExitCode
+		}
 	}
 	return safe
 }
@@ -1781,6 +1958,7 @@ func (r *DurableRuntime) persistRoleFailure(
 	record.Failure.Message = failureCode
 	record.Failure.At = r.now().UTC()
 	record.PendingTransition = nil
+	record.Waiting = nil
 	record, checkpointErr := r.checkpoint(ctx, record)
 	if checkpointErr != nil {
 		return record, checkpointErr

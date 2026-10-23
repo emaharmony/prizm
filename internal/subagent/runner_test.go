@@ -3,9 +3,13 @@ package subagent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/retry"
 	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 )
 
@@ -244,8 +248,9 @@ func TestLoopRunnerFailsWhenToolRequestedDuringFinalization(t *testing.T) {
 	}}
 	r := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 3, MaxTokens: 1200, FinalReplyReserveTokens: 100})
 	_, err := r.Run(context.Background(), v2.TaskPacket{TaskID: "T-ignore-reserve"}, AgentRuntime{AgentID: "planner"})
-	if err == nil || !strings.Contains(err.Error(), "did not return a final answer during its reserved finalization turn") {
-		t.Fatalf("err=%v", err)
+	var safe *SafeFailureError
+	if !errors.As(err, &safe) || safe.Code != "invalid_final_schema" {
+		t.Fatalf("error=%v, want safe invalid_final_schema failure", err)
 	}
 	if len(backend.toolCalls) != 1 || backend.toolCalls[0] != "read_file" {
 		t.Fatalf("unexpected tool executions across finalization: %v", backend.toolCalls)
@@ -264,6 +269,44 @@ func TestLoopRunnerFailsWhenFinalizationTurnIsEmpty(t *testing.T) {
 	}
 	if len(backend.messages) != 2 {
 		t.Fatalf("finalization made %d provider calls, want exactly 2 total", len(backend.messages))
+	}
+}
+
+func TestLoopRunnerClassifiesMalformedReservedFinalResponseForDurableRecovery(t *testing.T) {
+	tests := []struct {
+		name string
+		code string
+	}{
+		{name: "invalid final schema", code: "invalid_final_schema"},
+		{name: "malformed tool input", code: "malformed_tool_input"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backend := &scriptBackend{
+				parse: func(text string) Action {
+					if text == "read" {
+						return Action{Tool: "read_file", Input: map[string]any{"path": "README.md"}}
+					}
+					return Action{CorrectionCode: tt.code}
+				},
+				turns: []Turn{
+					{Text: "read", PromptTokens: 400, CompletionTokens: 50},
+					{Text: "malformed final", PromptTokens: 20, CompletionTokens: 10},
+				},
+			}
+			runner := NewLoopRunner(LoopRunnerConfig{Backend: backend, MaxIterations: 3, MaxTokens: 1200, FinalReplyReserveTokens: 100})
+			result, err := runner.Run(context.Background(), v2.TaskPacket{TaskID: "T-malformed-final"}, AgentRuntime{AgentID: "developer"})
+			var safe *SafeFailureError
+			if !errors.As(err, &safe) || safe.Code != tt.code {
+				t.Fatalf("error=%v, want safe recoverable schema code %q", err, tt.code)
+			}
+			if strings.Contains(err.Error(), "malformed final") || result.Iterations != 2 {
+				t.Fatalf("raw output or partial metrics leaked: result=%+v err=%v", result, err)
+			}
+			if len(backend.toolCalls) != 1 || backend.toolCalls[0] != "read_file" || len(backend.messages) != 2 {
+				t.Fatalf("final recovery used unexpected tools or provider calls: tools=%v calls=%d", backend.toolCalls, len(backend.messages))
+			}
+		})
 	}
 }
 
@@ -479,6 +522,43 @@ func TestLoopRunnerRetriesSafePrerequisiteFailureBeforeFinal(t *testing.T) {
 	}
 	if strings.Contains(backend.messages[3][len(backend.messages[3])-1].Content, "required tool") {
 		t.Fatalf("final response was not offered after successful proposal: %#v", backend.messages[3])
+	}
+}
+
+func TestLoopRunnerRetainsCorrectionDiagnosticsWhenLaterProviderTurnFails(t *testing.T) {
+	retryAfter := 47 * time.Second
+	backend := &scriptBackend{
+		parse: lineParser,
+		turns: []Turn{
+			{Text: "TOOL read_file"},
+			{Text: "FINAL: should not be reached"},
+		},
+		turnErrors: []error{nil, retry.NewRetryableErrorAfter(errors.New("temporary provider failure"), retryAfter)},
+		toolErrOnce: map[string]error{
+			"read_file": &CorrectableToolError{Code: "patch_validation_failed"},
+		},
+	}
+	runner := NewLoopRunner(LoopRunnerConfig{Backend: backend})
+	result, err := runner.Run(context.Background(), v2.TaskPacket{TaskID: "T-correction-then-provider-failure"}, AgentRuntime{AgentID: "developer"})
+	var safeFailure *SafeFailureError
+	if !errors.As(err, &safeFailure) || safeFailure.Code != "provider_turn_failed" || safeFailure.RetryAfter() != retryAfter {
+		t.Fatalf("terminal provider error=%v, want retryable provider_turn_failed with Retry-After", err)
+	}
+	if result.LastRecoveryClass != "tool" || result.LastRecoveryCode != "tool_execution_error" || result.LastRecoveryOrigin != RecoveryOriginToolExecutor {
+		t.Fatalf("safe correction diagnostics were lost: class=%q code=%q origin=%q", result.LastRecoveryClass, result.LastRecoveryCode, result.LastRecoveryOrigin)
+	}
+}
+
+func TestLoopRunnerPreservesOnlySafeProviderFailureMetadata(t *testing.T) {
+	backend := &scriptBackend{parse: lineParser, turns: []Turn{{}}, turnErrors: []error{fmt.Errorf("PRIVATE_CANARY: %w", &provider.HTTPFailure{StatusCode: 429, RetryAfterWait: 90 * time.Second})}}
+	runner := NewLoopRunner(LoopRunnerConfig{Backend: backend})
+	_, err := runner.Run(context.Background(), v2.TaskPacket{TaskID: "T-provider-http"}, AgentRuntime{AgentID: "developer"})
+	var failure *SafeFailureError
+	if !errors.As(err, &failure) || failure.Code != "provider_turn_failed" || failure.ProviderStatus != 429 || failure.RetryAfter() != 90*time.Second {
+		t.Fatalf("safe provider metadata=%#v err=%v", failure, err)
+	}
+	if strings.Contains(err.Error(), "PRIVATE_CANARY") {
+		t.Fatalf("provider error leaked across subagent boundary: %v", err)
 	}
 }
 

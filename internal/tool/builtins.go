@@ -452,7 +452,16 @@ func (t *ApplyPatchProposal) Execute(ctx context.Context, input map[string]any) 
 	if !baseOK || strings.TrimSpace(base) == "" {
 		return ToolResult{Success: false, Error: "required parameter 'base_sha' must be a non-empty string", FailureEffect: FailureEffectNoEffects}, nil
 	}
-	plan, err := gitx.PlanPatch(ctx, t.WorkspaceRoot, patch, base)
+	var plan gitx.PatchPlan
+	var err error
+	if basis, ok := gitx.TrustedTreeBasisFromContext(ctx); ok {
+		if strings.TrimSpace(base) != basis.BaseSHA {
+			return ToolResult{Success: false, Error: "base_sha does not match trusted patch basis", FailureEffect: FailureEffectNoEffects}, nil
+		}
+		plan, err = gitx.PlanPatchOnTrustedTree(ctx, t.WorkspaceRoot, patch, basis)
+	} else {
+		plan, err = gitx.PlanPatch(ctx, t.WorkspaceRoot, patch, base)
+	}
 	if err != nil {
 		return ToolResult{Success: false, Error: err.Error(), FailureEffect: FailureEffectNoEffects}, nil
 	}
@@ -468,7 +477,7 @@ func (t *ApplyPatchProposal) Execute(ctx context.Context, input map[string]any) 
 	}
 	return ToolResult{Success: true, Output: map[string]any{
 		"mutation_type": "apply_patch", "target_path": fmt.Sprintf("%d files", len(plan.Paths)),
-		"paths": plan.Paths, "base_sha": plan.BaseSHA, "base_tree": plan.BaseTree,
+		"paths": plan.Paths, "base_sha": plan.BaseSHA, "base_tree": plan.BaseTree, "planning_tree": plan.PlanningTree,
 		"expected_tree": plan.ExpectedTree, "patch_sha256": plan.PatchSHA256,
 		"preview": fmt.Sprintf("Atomic patch changing %d files at %s", len(plan.Paths), plan.BaseSHA),
 	}}, nil

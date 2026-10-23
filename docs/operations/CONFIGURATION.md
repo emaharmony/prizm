@@ -86,6 +86,20 @@ Providers are selected per agent (`provider:` / `model:`) in `prizm.yaml`, or vi
 `claude_code`. API-backed providers require credentials via environment
 variables.
 
+### Provider text and tool execution
+
+For providers that return a text response, Prizm can parse a canonical JSON
+`tool_request` envelope from that text and pass the requested tool and input to
+Prizm's injected tool executor. The provider supplies the request; Prizm still
+checks and executes it through its own policy and approval path. A focused
+subagent test covers this text-to-Prizm-executor route.
+
+Providers that advertise native tool execution use a different path. For
+example, Codex CLI reports native tool support; isolated subagent execution
+requires such a provider to also support a run-scoped workspace. Do not treat
+native provider tools as equivalent to Prizm-parsed text envelopes or assume
+the text-envelope executor handles native calls.
+
 ## Agent Configuration
 
 Agents are defined under the `agents:` list in `prizm.yaml`. Each agent has an

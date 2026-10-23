@@ -4,11 +4,44 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestWorktreeTreeReportsBoundedGitDirectoryFailureStage(t *testing.T) {
+	root := t.TempDir()
+	initRepo := exec.Command("git", "init", "--quiet", root)
+	if output, err := initRepo.CombinedOutput(); err != nil {
+		t.Fatalf("initialize empty repository: %v (%d output bytes)", err, len(output))
+	}
+	_, err := WorktreeTree(context.Background(), root)
+	var inspection *WorktreeInspectionError
+	if !errors.As(err, &inspection) {
+		t.Fatalf("error type=%T, want WorktreeInspectionError", err)
+	}
+	if inspection.Stage != InspectReadTree || inspection.Category != InspectCommandFailed || inspection.ExitCode == 0 {
+		t.Fatalf("inspection=%#v", inspection)
+	}
+	if strings.Contains(err.Error(), root) {
+		t.Fatal("public error leaked the inspected path")
+	}
+}
+
+func TestWorktreeTreeReportsMissingGitWithoutEchoingExecutablePath(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	_, err := WorktreeTree(context.Background(), t.TempDir())
+	var inspection *WorktreeInspectionError
+	if !errors.As(err, &inspection) || inspection.Stage != InspectResolveGitDir || inspection.Category != InspectUnavailable {
+		t.Fatalf("inspection=%#v error=%v", inspection, err)
+	}
+	if strings.Contains(err.Error(), "git.exe") || strings.Contains(err.Error(), "PATH") {
+		t.Fatalf("missing executable diagnostic leaked host details: %v", err)
+	}
+}
 
 func TestPatchSourceRangesTreatsRemovedHeaderLikeLineAsHunkContent(t *testing.T) {
 	patch := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n" +
@@ -49,6 +82,110 @@ func TestPatchSourceRangesHandlesAddedAndDeletedFiles(t *testing.T) {
 	}
 }
 
+func TestPatchSourceRangesRejectsUnconsumedOrIncompleteHunks(t *testing.T) {
+	addedLines := strings.Repeat("+added\n", 21)
+	removedLines := strings.Repeat("-removed\n", 21)
+	tests := []struct {
+		name  string
+		patch string
+	}{
+		{
+			name: "trailing additions beyond declared count",
+			patch: "diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n" +
+				"@@ -0,0 +1,19 @@\n" + addedLines,
+		},
+		{
+			name: "trailing removals beyond declared count",
+			patch: "diff --git a/old.txt b/old.txt\n--- a/old.txt\n+++ /dev/null\n" +
+				"@@ -1,19 +0,0 @@\n" + removedLines,
+		},
+		{
+			name: "incomplete old side",
+			patch: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n" +
+				"@@ -1,2 +1 @@\n-old\n+new\n",
+		},
+		{
+			name: "incomplete new side",
+			patch: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n" +
+				"@@ -1 +1,2 @@\n-old\n+new\n",
+		},
+		{
+			name: "unconsumed line after completed hunk",
+			patch: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n" +
+				"@@ -1 +1 @@\n-old\n+new\nnot-a-diff-line\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := PatchSourceRanges(test.patch); err == nil {
+				t.Fatal("parser accepted a hunk with unconsumed or incomplete lines")
+			}
+		})
+	}
+}
+
+func TestPatchSourceRangesCountsContextAndAllowsNoNewlineMarker(t *testing.T) {
+	patch := "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n" +
+		"@@ -4,3 +4,3 @@ function context\n context\n context2\n-old\n+new\n\\ No newline at end of file\n"
+	ranges, err := PatchSourceRanges(patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []PatchSourceRange{{Path: "file.txt", StartLine: 4, LineCount: 3}}
+	if len(ranges) != len(want) || ranges[0] != want[0] {
+		t.Fatalf("ranges=%+v, want %+v", ranges, want)
+	}
+}
+
+func TestPatchSourceRangesValidatesCRLFHunks(t *testing.T) {
+	valid := strings.Join([]string{
+		"diff --git a/file.txt b/file.txt",
+		"--- a/file.txt",
+		"+++ b/file.txt",
+		"@@ -4,2 +4,2 @@",
+		" context",
+		"-old",
+		"+new",
+		"\\ No newline at end of file",
+		"",
+	}, "\r\n")
+	ranges, err := PatchSourceRanges(valid)
+	if err != nil {
+		t.Fatalf("valid CRLF patch rejected: %v", err)
+	}
+	want := []PatchSourceRange{{Path: "file.txt", StartLine: 4, LineCount: 2}}
+	if len(ranges) != len(want) || ranges[0] != want[0] {
+		t.Fatalf("ranges=%+v, want %+v", ranges, want)
+	}
+
+	invalid := strings.Join([]string{
+		"diff --git a/new.txt b/new.txt",
+		"new file mode 100644",
+		"--- /dev/null",
+		"+++ b/new.txt",
+		"@@ -0,0 +1,1 @@",
+		"+first",
+		"+unconsumed",
+		"",
+	}, "\r\n")
+	if _, err := PatchSourceRanges(invalid); err == nil {
+		t.Fatal("parser accepted unconsumed additions in a CRLF hunk")
+	}
+
+	incomplete := strings.Join([]string{
+		"diff --git a/file.txt b/file.txt",
+		"--- a/file.txt",
+		"+++ b/file.txt",
+		"@@ -1,2 +1,2 @@",
+		"-old",
+		"+new",
+		"",
+	}, "\r\n")
+	if _, err := PatchSourceRanges(incomplete); err == nil {
+		t.Fatal("parser accepted incomplete counts in a CRLF hunk")
+	}
+}
+
 func TestPlanAndApplyPatchAtomicallyChangesMultipleFiles(t *testing.T) {
 	root := initRepo(t)
 	ctx := context.Background()
@@ -69,6 +206,9 @@ func TestPlanAndApplyPatchAtomicallyChangesMultipleFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !CheckPatchDirection(ctx, root, patch, false) {
+		t.Fatal("valid patch was not detected in the forward direction")
+	}
 	if got := strings.Join(plan.Paths, ","); got != "README.md,doomed.txt,new.txt" {
 		t.Fatalf("paths=%q", got)
 	}
@@ -77,6 +217,9 @@ func TestPlanAndApplyPatchAtomicallyChangesMultipleFiles(t *testing.T) {
 	}
 	if err := ApplyPlannedPatch(ctx, root, patch, plan); err != nil {
 		t.Fatal(err)
+	}
+	if !CheckPatchDirection(ctx, root, patch, true) {
+		t.Fatal("valid patch was not detected in the reverse direction")
 	}
 	tree, err := WorktreeTree(ctx, root)
 	if err != nil || tree != plan.ExpectedTree {
@@ -87,35 +230,88 @@ func TestPlanAndApplyPatchAtomicallyChangesMultipleFiles(t *testing.T) {
 	}
 }
 
-func TestPlanAndApplyPatchRecountsIncorrectHunkCounts(t *testing.T) {
+func TestPlanPatchRejectsSecondPatchAfterFirstAppliedInSameWorktree(t *testing.T) {
+	root := initRepo(t)
+	ctx := context.Background()
+	base, err := CurrentSHA(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-hello\n+approved change\n"
+	firstPlan, err := PlanPatch(ctx, root, first, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyPlannedPatch(ctx, root, first, firstPlan); err != nil {
+		t.Fatal(err)
+	}
+	second := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-approved change\n+approved correction\n"
+	if _, err := PlanPatch(ctx, root, second, base); !errors.Is(err, ErrDirtyWorktree) {
+		t.Fatalf("second plan error=%v, want existing clean-worktree rejection", err)
+	}
+}
+
+func TestPlanPatchRejectsIncorrectHunkCounts(t *testing.T) {
 	root := initRepo(t)
 	ctx := context.Background()
 	base, _ := CurrentSHA(ctx, root)
 	patch := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1,99 +1,99 @@\n-hello\n+changed\n" +
 		"diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,99 @@\n+new\n"
+	if _, err := PlanPatch(ctx, root, patch, base); err == nil {
+		t.Fatal("planning accepted incorrect unified-diff hunk counts")
+	}
+	if CheckPatchDirection(ctx, root, patch, false) {
+		t.Fatal("forward direction accepted incorrect unified-diff hunk counts")
+	}
+	if err := EnsureClean(ctx, root); err != nil {
+		t.Fatalf("rejected proposal mutated repository: %v", err)
+	}
+}
+
+func TestPlanPatchRejectsNineteenLineHeaderWithTwentyOneAdditions(t *testing.T) {
+	root := initRepo(t)
+	ctx := context.Background()
+	base, err := CurrentSHA(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch := "diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n" +
+		"@@ -0,0 +1,19 @@\n" + strings.Repeat("+added\n", 21)
+	if _, err := PlanPatch(ctx, root, patch, base); err == nil {
+		t.Fatal("planning accepted 21 additions under a 19-line hunk header")
+	}
+	if err := EnsureClean(ctx, root); err != nil {
+		t.Fatalf("rejected proposal mutated repository: %v", err)
+	}
+}
+
+func TestPlanPatchPreservesCRLFBytesForGitValidation(t *testing.T) {
+	root := initRepo(t)
+	ctx := context.Background()
+	base, err := CurrentSHA(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch := strings.Join([]string{
+		"diff --git a/new.txt b/new.txt",
+		"new file mode 100644",
+		"--- /dev/null",
+		"+++ b/new.txt",
+		"@@ -0,0 +1,2 @@",
+		"+first",
+		"+second",
+		"",
+	}, "\r\n")
 	plan, err := PlanPatch(ctx, root, patch, base)
 	if err != nil {
-		t.Fatalf("plan recounted patch: %v", err)
+		t.Fatalf("plan valid CRLF patch: %v", err)
 	}
 	sum := sha256.Sum256([]byte(patch))
 	if plan.PatchSHA256 != hex.EncodeToString(sum[:]) {
-		t.Fatalf("patch hash=%q, want exact input hash", plan.PatchSHA256)
+		t.Fatal("planning normalized the original CRLF patch bytes")
 	}
-	if got := strings.Join(plan.Paths, ","); got != "README.md,new.txt" {
-		t.Fatalf("paths=%q", got)
-	}
-	if !CheckPatchDirection(ctx, root, patch, false) {
-		t.Fatal("forward direction was not detected before apply")
-	}
-	if err := ApplyPlannedPatch(ctx, root, patch, plan); err != nil {
-		t.Fatalf("apply recounted patch: %v", err)
-	}
-	actualTree, err := WorktreeTree(ctx, root)
-	if err != nil || actualTree != plan.ExpectedTree {
-		t.Fatalf("tree=%q want=%q err=%v", actualTree, plan.ExpectedTree, err)
-	}
-	if !CheckPatchDirection(ctx, root, patch, true) {
-		t.Fatal("reverse direction was not detected after apply")
+	if err := EnsureClean(ctx, root); err != nil {
+		t.Fatalf("proposal mutated repository: %v", err)
 	}
 }
 
@@ -175,6 +371,53 @@ func TestPatchPlanningAndWorktreeTreeUseLinkedGitMetadataWhenOSTempIsUnavailable
 	}
 	if len(leftovers) != 0 {
 		t.Fatalf("temporary metadata indexes were not cleaned up: %v", leftovers)
+	}
+}
+
+func TestTrustedTreeBasisAllowsApprovedSerialPatchAndRejectsForeignMutation(t *testing.T) {
+	ctx := context.Background()
+	root := initRepo(t)
+	base, err := CurrentSHA(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patchA := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-hello\n+changed\n"
+	planA, err := PlanPatch(ctx, root, patchA, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyPlannedPatch(ctx, root, patchA, planA); err != nil {
+		t.Fatalf("apply approved patch A: %v", err)
+	}
+	basis := TrustedTreeBasis{
+		RunID: "run", WorkspaceID: "workspace", ProposalID: "proposal-a", ApprovalID: "approval-a",
+		ApplyKey: "apply-a", ExecutionKey: "execution-a", Role: "developer", BaseSHA: planA.BaseSHA,
+		BaseTree: planA.BaseTree, ExpectedTree: planA.ExpectedTree, PatchSHA256: planA.PatchSHA256, Paths: append([]string(nil), planA.Paths...),
+	}
+	patchB := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-changed\n+corrected\n"
+	if _, err := PlanPatch(ctx, root, patchB, base); err == nil {
+		t.Fatal("legacy clean-HEAD planner accepted a dirty worktree")
+	}
+	planB, err := PlanPatchOnTrustedTree(ctx, root, patchB, basis)
+	if err != nil {
+		t.Fatalf("plan approved correction B from A receipt: %v", err)
+	}
+	if planB.BaseTree != planA.BaseTree || planB.PlanningTree != planA.ExpectedTree || planB.Basis == nil || !EqualTrustedTreeBasis(planB.Basis, &basis) {
+		t.Fatalf("correction plan did not preserve both source and planning trees: %#v", planB)
+	}
+	if err := ApplyPlannedPatch(ctx, root, patchB, planB); err != nil {
+		t.Fatalf("apply approved correction B: %v", err)
+	}
+	if tree, err := WorktreeTree(ctx, root); err != nil || tree != planB.ExpectedTree {
+		t.Fatalf("correction tree=%q want=%q err=%v", tree, planB.ExpectedTree, err)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("foreign edit\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	patchC := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-foreign edit\n+third\n"
+	if _, err := PlanPatchOnTrustedTree(ctx, root, patchC, basis); err == nil {
+		t.Fatal("trusted basis accepted an out-of-band worktree mutation")
 	}
 }
 

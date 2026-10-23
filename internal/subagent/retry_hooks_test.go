@@ -50,6 +50,12 @@ func TestLoopRunnerFailedToolRefreshesAttemptBeforeProgressCount(t *testing.T) {
 	if err != nil || result.Summary != "corrected" {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
+	if result.LastRecoveryClass != "tool" || result.LastRecoveryCode != "tool_execution_error" || result.LastRecoveryOrigin != RecoveryOriginToolExecutor {
+		t.Fatalf("last recovery provenance = class:%q code:%q origin:%q", result.LastRecoveryClass, result.LastRecoveryCode, result.LastRecoveryOrigin)
+	}
+	if result.RecoveryAttempts != 1 || result.Corrections != 1 {
+		t.Fatalf("recovery accounting changed: attempts=%d corrections=%d", result.RecoveryAttempts, result.Corrections)
+	}
 	if got := backend.toolCalls; len(got) != 1 || got[0] != "read_file" {
 		t.Fatalf("tool executions=%v, want one failed read", got)
 	}
@@ -160,6 +166,29 @@ func TestLoopRunner_MalformedToolInputConsumesSharedRecoveryAndKeepsFinalProgres
 	}
 	if len(hooks.progress) != 1 || len(diagnostics) != 0 {
 		t.Fatalf("final progress=%v diagnostics=%v", hooks.progress, diagnostics)
+	}
+}
+
+func TestLoopRunnerReportsExhaustedSchemaRecovery(t *testing.T) {
+	backend := &scriptBackend{
+		parse: func(string) Action { return Action{CorrectionCode: "invalid_response_schema"} },
+		turns: []Turn{{Text: "invalid response"}},
+	}
+	hooks := &recordingRetryHooks{attempt: RetryAttempt{
+		VisitID: "visit-1", AttemptID: "attempt-1", Number: 1, Remaining: 0,
+	}}
+	runner := NewLoopRunner(LoopRunnerConfig{Backend: backend})
+	_, err := runner.Run(context.Background(), v2.TaskPacket{TaskID: "task-schema"}, AgentRuntime{
+		AgentID: "planner", Role: "planner", RetryHooks: hooks,
+	})
+	if !errors.Is(err, ErrRecoveryBudgetExhausted) {
+		t.Fatalf("error = %v, want ErrRecoveryBudgetExhausted", err)
+	}
+	if len(hooks.corrections) != 1 || hooks.corrections[0] != "schema:invalid_response_schema" {
+		t.Fatalf("corrections = %v", hooks.corrections)
+	}
+	if len(hooks.consumed) != 0 {
+		t.Fatalf("exhausted recovery unexpectedly consumed another attempt: %v", hooks.consumed)
 	}
 }
 

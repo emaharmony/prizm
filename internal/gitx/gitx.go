@@ -158,10 +158,26 @@ func RunCommand(ctx context.Context, dir, stdin, name string, args ...string) (s
 	// combined output. Disable only the global excludes file for this isolated
 	// plumbing command; repository-local excludes remain active.
 	if name == "git" {
-		args = append([]string{"-c", "core.excludesFile="}, args...)
+		owned, err := ownedScopeForCommand(ctx, dir)
+		if err != nil {
+			return "", err
+		}
+		if owned != nil && hasRepositoryOverride(args) {
+			return "", fmt.Errorf("git repository override is not allowed for an owned worktree")
+		}
+		prefix := []string{"-c", "core.excludesFile="}
+		if owned != nil {
+			prefix = append([]string{"-c", "safe.directory=" + owned.workspace}, prefix...)
+		}
+		args = append(prefix, args...)
 	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	if name == "git" {
+		if _, scoped := ctx.Value(ownedWorktreeContextKey{}).(*ownedWorktreeScope); scoped {
+			cmd.Env = filteredGitEnvironment(os.Environ())
+		}
+	}
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}

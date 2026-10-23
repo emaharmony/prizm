@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/emaharmony/prizm/internal/gitx"
+	"github.com/emaharmony/prizm/internal/provider"
 	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 )
 
@@ -188,6 +189,7 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 	lastPromptTokens, lastCompletionTokens := 0, 0
 	finalPromptGrowthTokens := 0
 	recoveryAttempts, corrections := 0, 0
+	lastRecoveryClass, lastRecoveryOrigin := "", ""
 	lastRecoveryCode := ""
 	progressObservations := map[string]struct{}{}
 	lastNoProgressHash := ""
@@ -198,23 +200,36 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 	usage := func(r RunResult) RunResult {
 		r.PromptTokens, r.CompletionTokens = totalPrompt, totalCompletion
 		r.Iterations, r.ToolCalls, r.DeniedToolCalls = iterations, toolCalls, deniedToolCalls
-		r.RecoveryAttempts, r.Corrections, r.LastRecoveryCode = recoveryAttempts, corrections, lastRecoveryCode
+		r.RecoveryAttempts, r.Corrections = recoveryAttempts, corrections
+		r.LastRecoveryClass, r.LastRecoveryCode, r.LastRecoveryOrigin = lastRecoveryClass, lastRecoveryCode, lastRecoveryOrigin
 		return r
 	}
-	recordCorrection := func(expectedAttemptID, errorClass, code string, feedback ...string) error {
+	recordCorrection := func(expectedAttemptID, errorClass, code, origin string, feedback ...string) error {
 		corrections++
+		lastRecoveryClass = errorClass
 		lastRecoveryCode = code
+		lastRecoveryOrigin = origin
 		if runtime.RetryHooks == nil {
 			return nil
 		}
 		var err error
-		if len(feedback) > 0 && feedback[0] != "" {
-			err = runtime.RetryHooks.RecordCorrectionFeedback(expectedAttemptID, errorClass, code, feedback[0])
+		feedbackText := ""
+		if len(feedback) > 0 {
+			feedbackText = feedback[0]
+		}
+		if originHooks, ok := runtime.RetryHooks.(RetryOriginHooks); ok {
+			err = originHooks.RecordCorrectionWithOrigin(expectedAttemptID, errorClass, code, origin, feedbackText)
+		} else if feedbackText != "" {
+			err = runtime.RetryHooks.RecordCorrectionFeedback(expectedAttemptID, errorClass, code, feedbackText)
 		} else {
 			err = runtime.RetryHooks.RecordCorrection(expectedAttemptID, errorClass, code)
 		}
 		if err != nil {
 			return err
+		}
+		current := runtime.RetryHooks.CurrentAttempt()
+		if current.AttemptID == expectedAttemptID && current.Remaining <= 0 {
+			return ErrRecoveryBudgetExhausted
 		}
 		attempt, err := runtime.RetryHooks.ConsumeRecovery(expectedAttemptID, code)
 		if err != nil {
@@ -310,6 +325,18 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 		lastPromptTokens, lastCompletionTokens = turn.PromptTokens, turn.CompletionTokens
 		if err != nil {
 			failure := &SafeFailureError{Code: "provider_turn_failed"}
+			if errors.Is(err, provider.ErrQuotaExhausted) {
+				failure.Code = "provider_quota_exhausted"
+			}
+			var statusFailure interface{ HTTPStatusCode() int }
+			if errors.As(err, &statusFailure) {
+				failure.ProviderStatus = statusFailure.HTTPStatusCode()
+				if failure.ProviderStatus == 401 || failure.ProviderStatus == 403 {
+					failure.Code = "provider_auth_rejected"
+				} else if failure.ProviderStatus >= 400 && failure.ProviderStatus < 500 && failure.ProviderStatus != 408 && failure.ProviderStatus != 425 && failure.ProviderStatus != 429 {
+					failure.Code = "provider_http_rejected"
+				}
+			}
 			var retryAfter interface{ RetryAfter() time.Duration }
 			if errors.As(err, &retryAfter) {
 				failure.RetryAfterDelay = retryAfter.RetryAfter()
@@ -339,6 +366,19 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 			return usage(RunResult{Summary: strings.TrimSpace(action.Content), Artifacts: artifacts.result()}), nil
 		}
 		if finalOnly {
+			// The reserved final turn cannot request another in-loop provider
+			// turn, but a classified schema failure is still eligible for the
+			// durable role-visit recovery budget. Keep the failure category safe
+			// and let the durable runtime decide whether another visit fits.
+			if action.CorrectionCode != "" {
+				return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: action.CorrectionCode}
+			}
+			if action.Tool != "" {
+				// A tool request is a known violation of the reserved final
+				// response contract. It is safe to retry the role visit because
+				// this branch rejects it before tool execution.
+				return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "invalid_final_schema"}
+			}
 			return usage(RunResult{Artifacts: artifacts.result()}), fmt.Errorf("task %q did not return a final answer during its reserved finalization turn", packet.TaskID)
 		}
 
@@ -348,15 +388,18 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 			}
 			// Invalid structured tool input is a recoverable correction and shares
 			// the durable role-visit allowance with failures from other layers.
-			feedback := "Respond with a tool call or a final answer."
+			feedback := "Return exactly one valid JSON object with no Markdown or surrounding prose. For a tool call, use the required tool_request envelope; for completion, use the exact role schema in the task. Match the required property names and value types."
 			if action.CorrectionCode != "" {
-				if err := recordCorrection(modelAttemptID, "schema", action.CorrectionCode); err != nil {
+				if err := recordCorrection(modelAttemptID, "schema", action.CorrectionCode, ""); err != nil {
 					if ctx.Err() != nil {
 						return usage(RunResult{Artifacts: artifacts.result()}), ctx.Err()
 					}
+					if errors.Is(err, ErrRecoveryBudgetExhausted) {
+						return usage(RunResult{Artifacts: artifacts.result()}), ErrRecoveryBudgetExhausted
+					}
 					return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "schema_recovery_failed"}
 				}
-				feedback = "The response did not match the required tool or final-response schema. Correct the structure and try again."
+				feedback = "The response did not match the required tool or final-response schema. Return exactly one valid JSON object with no Markdown or surrounding prose; use the required tool_request envelope or match the role schema in the task."
 			}
 			messages = append(messages, v2.Message{Role: "user", Content: feedback})
 			growth := len(finalInstruction)
@@ -475,7 +518,7 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 						return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "no_effects_checkpoint_failed"}
 					}
 				}
-				if err := recordCorrection(toolAttemptID, "tool", correctable.Code, patchCorrectionFeedback()); err != nil {
+				if err := recordCorrection(toolAttemptID, "tool", correctable.Code, "", patchCorrectionFeedback()); err != nil {
 					if ctx.Err() != nil {
 						return usage(RunResult{Artifacts: artifacts.result()}), ctx.Err()
 					}
@@ -499,7 +542,7 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 				return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: safeToolErrorCode(terr), Tool: action.Tool}
 			}
 			// A tool failure is fed back so the agent can adapt, not fatal.
-			if err := recordCorrection(toolAttemptID, "tool", "tool_execution_error"); err != nil {
+			if err := recordCorrection(toolAttemptID, "tool", "tool_execution_error", RecoveryOriginToolExecutor); err != nil {
 				if ctx.Err() != nil {
 					return usage(RunResult{Artifacts: artifacts.result()}), ctx.Err()
 				}
@@ -546,7 +589,7 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 				return usage(RunResult{Artifacts: artifacts.result()}), &NoProgressError{RepeatedObservations: repeatCount}
 			}
 			if repeatCount >= 3 {
-				if err := recordCorrection(toolAttemptID, "no_progress", "repeated_tool_observation"); err != nil {
+				if err := recordCorrection(toolAttemptID, "no_progress", "repeated_tool_observation", ""); err != nil {
 					if ctx.Err() != nil {
 						return usage(RunResult{Artifacts: artifacts.result()}), ctx.Err()
 					}

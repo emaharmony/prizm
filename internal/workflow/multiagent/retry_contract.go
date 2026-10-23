@@ -15,6 +15,19 @@ import (
 
 const maxRoleRecoveryRetries = 10
 
+// FailureOrigin is a bounded source tag for diagnostics. Values are written
+// only by trusted execution boundaries and unknown is the compatibility default.
+type FailureOrigin string
+
+const (
+	FailureOriginUnknown      FailureOrigin = "unknown"
+	FailureOriginToolExecutor FailureOrigin = "tool_executor"
+	FailureOriginProviderCall FailureOrigin = "provider_call"
+	FailureOriginRoleSchema   FailureOrigin = "role_schema"
+	FailureOriginGovernance   FailureOrigin = "governance_gate"
+	FailureOriginFanOutJoin   FailureOrigin = "fanout_join"
+)
+
 var (
 	ErrRequestIdentityConflict = errors.New("multiagent: request idempotency identity conflicts with accepted run")
 	ErrRetryBudgetExhausted    = errors.New("multiagent: role visit recovery budget exhausted")
@@ -54,10 +67,12 @@ type RoleExecutionFailure struct {
 	AttemptID         string          `json:"attempt_id"`
 	Class             string          `json:"class"`
 	Code              string          `json:"code"`
+	Origin            FailureOrigin   `json:"failure_origin,omitempty"`
 	CorrectionField   string          `json:"correction_field,omitempty"`
 	ExpectedType      string          `json:"expected_type,omitempty"`
 	AllowedValues     []string        `json:"allowed_values,omitempty"`
 	RetryAfter        time.Duration   `json:"retry_after,omitempty"`
+	ProviderStatus    int             `json:"provider_status,omitempty"`
 	Retryable         bool            `json:"retryable"`
 	Usage             cost.TokenUsage `json:"usage,omitempty"`
 }
@@ -66,16 +81,79 @@ type RoleExecutionFailure struct {
 // Unknown failures remain nonretryable and do not expose their error string.
 func ClassifyRoleExecutionFailure(err error) RoleExecutionFailure {
 	class, code, retryAfter, retryable := classifyRetryableRoleFailure(err)
+	providerStatus := safeProviderStatus(err)
 	if !retryable {
 		class, code = classifySafeNonRetryableRoleFailure(err)
-		return RoleExecutionFailure{Class: class, Code: code}
+		return RoleExecutionFailure{Class: class, Code: code, Origin: failureOriginForError(err), RetryAfter: safeProviderRetryAfter(err), ProviderStatus: providerStatus}
 	}
-	failure := RoleExecutionFailure{Class: safeRetryCode(class), Code: safeRetryCode(code), RetryAfter: retryAfter, Retryable: true}
+	failure := RoleExecutionFailure{Class: safeRetryCode(class), Code: safeRetryCode(code), Origin: failureOriginForError(err), RetryAfter: retryAfter, ProviderStatus: providerStatus, Retryable: true}
 	var schema *SchemaCorrectionError
 	if errors.As(err, &schema) && schema != nil {
 		failure.CorrectionField, failure.ExpectedType, failure.AllowedValues = safeSchemaCorrectionDetails(schema.Role, schema.Code, schema.Fields, schema.AllowedValues)
 	}
 	return failure
+}
+
+// ClassifyRoleExecutionFailureWithResult classifies the terminal error. The
+// result may contain recovery facts from earlier turns in the same visit, so
+// it is deliberately not used to replace an unknown or typed terminal cause.
+func ClassifyRoleExecutionFailureWithResult(err error, _ RoleRunResult) RoleExecutionFailure {
+	return ClassifyRoleExecutionFailure(err)
+}
+
+func failureOriginForError(err error) FailureOrigin {
+	var schema *SchemaCorrectionError
+	if errors.As(err, &schema) && schema != nil {
+		return FailureOriginRoleSchema
+	}
+	var structured *StructuredOutputError
+	if errors.As(err, &structured) && structured != nil {
+		return FailureOriginRoleSchema
+	}
+	var governance *GovernanceError
+	if errors.As(err, &governance) && governance != nil {
+		return FailureOriginGovernance
+	}
+	var safeFailure *subagent.SafeFailureError
+	if errors.As(err, &safeFailure) && safeFailure != nil {
+		if safeFailure.Tool != "" {
+			return FailureOriginToolExecutor
+		}
+		if strings.HasPrefix(safeFailure.Code, "provider_") {
+			return FailureOriginProviderCall
+		}
+	}
+	return FailureOriginUnknown
+}
+
+func safeProviderStatus(err error) int {
+	var failure *subagent.SafeFailureError
+	if errors.As(err, &failure) && failure != nil && failure.ProviderStatus >= 100 && failure.ProviderStatus <= 599 {
+		return failure.ProviderStatus
+	}
+	return 0
+}
+
+func safeProviderRetryAfter(err error) time.Duration {
+	var failure *subagent.SafeFailureError
+	if errors.As(err, &failure) && failure != nil && failure.RetryAfter() > 0 && failure.RetryAfter() <= 365*24*time.Hour {
+		return failure.RetryAfter()
+	}
+	return 0
+}
+
+func safeStatusValue(status int) int {
+	if status < 100 || status > 599 {
+		return 0
+	}
+	return status
+}
+
+func safeRetryAfterMillis(delay time.Duration) int64 {
+	if delay <= 0 || delay > 365*24*time.Hour {
+		return 0
+	}
+	return delay.Milliseconds()
 }
 
 // sanitizeTerminalRoleFailure accepts only known failure pairs and schema
@@ -89,8 +167,9 @@ func sanitizeTerminalRoleFailure(role Role, failure RoleExecutionFailure) Termin
 	field, expected, values := safeSchemaCorrectionDetails(role, code,
 		[]string{failure.CorrectionField}, failure.AllowedValues)
 	return TerminalRoleFailure{
-		Class: class, Code: code, CorrectionField: field, ExpectedType: expected,
+		Class: class, Code: code, Origin: safeFailureOrigin(class, code, failure.Origin), CorrectionField: field, ExpectedType: expected,
 		AllowedValues: values, Retryable: failure.Retryable && knownRoleFailurePair(failure.Class, failure.Code),
+		ProviderStatus: safeStatusValue(failure.ProviderStatus), RetryAfterMS: safeRetryAfterMillis(failure.RetryAfter),
 	}
 }
 
@@ -98,12 +177,14 @@ func knownRoleFailurePair(class, code string) bool {
 	switch class {
 	case "schema_correction":
 		switch code {
-		case "invalid_json_syntax", "missing_required_fields", "invalid_field_type",
+		case "invalid_json_syntax", "invalid_response_schema", "missing_required_fields", "invalid_field_type",
 			"invalid_field_value", "invalid_structured_output", "invalid_proposal_diff":
 			return true
 		}
 	case "provider_transient":
 		return code == "provider_transient" || code == "provider_turn_failed"
+	case "provider_rejected":
+		return code == "provider_auth_rejected" || code == "provider_http_rejected" || code == "provider_quota_exhausted"
 	case "execution_transient":
 		return code == "deadline_exceeded" || code == "execution_error"
 	case "execution":
@@ -115,12 +196,12 @@ func knownRoleFailurePair(class, code string) bool {
 		}
 	case "tool":
 		switch code {
-		case "patch_validation_failed", "permission_denied", "not_found", "invalid_input":
+		case "patch_validation_failed", "permission_denied", "not_found", "invalid_input", "tool_execution_error":
 			return true
 		}
 	case "governance":
 		switch code {
-		case "policy", "tool_scope", "workspace_scope", "approval", "approval_required",
+		case "policy", "tool_scope", "workspace_scope", "approval", "capability", "approval_required",
 			"invalid_read_coverage", "invalid_proposal_context":
 			return true
 		}
@@ -137,14 +218,57 @@ func validTerminalRoleFailure(role Role, failure TerminalRoleFailure) bool {
 		return false
 	}
 	clean := sanitizeTerminalRoleFailure(role, RoleExecutionFailure{
-		Class: failure.Class, Code: failure.Code, CorrectionField: failure.CorrectionField,
+		Class: failure.Class, Code: failure.Code, Origin: failure.Origin, CorrectionField: failure.CorrectionField,
 		ExpectedType: failure.ExpectedType, AllowedValues: failure.AllowedValues, Retryable: failure.Retryable,
+		ProviderStatus: failure.ProviderStatus, RetryAfter: time.Duration(failure.RetryAfterMS) * time.Millisecond,
 	})
-	return clean.Class == failure.Class && clean.Code == failure.Code && clean.Retryable == failure.Retryable &&
+	return clean.Class == failure.Class && clean.Code == failure.Code &&
+		(failure.Origin == "" || clean.Origin == failure.Origin) && clean.Retryable == failure.Retryable &&
 		clean.CorrectionField == failure.CorrectionField && clean.ExpectedType == failure.ExpectedType &&
 		equalStrings(clean.AllowedValues, failure.AllowedValues) && failure.RecoveryNumber >= 0 &&
 		failure.MaxRecoveries >= 0 && failure.RecoveryNumber <= failure.MaxRecoveries &&
 		(failure.AttemptID == "" || validAttemptIdentity(failure.AttemptID))
+}
+
+func safeFailureOrigin(class, code string, origin FailureOrigin) FailureOrigin {
+	switch origin {
+	case FailureOriginToolExecutor:
+		if class == "tool" && (code == "tool_execution_error" || code == "patch_validation_failed" || code == "permission_denied" || code == "not_found" || code == "invalid_input") {
+			return origin
+		}
+	case FailureOriginProviderCall:
+		if (class == "provider_transient" && (code == "provider_transient" || code == "provider_turn_failed")) || class == "provider_rejected" {
+			return origin
+		}
+	case FailureOriginRoleSchema:
+		if class == "schema_correction" {
+			return origin
+		}
+	case FailureOriginGovernance:
+		if class == "governance" {
+			return origin
+		}
+	case FailureOriginFanOutJoin:
+		if class == "orchestration" && code == "delegation_join_failed" {
+			return origin
+		}
+	}
+	return FailureOriginUnknown
+}
+
+func correctionFailureClass(errorClass, code string) string {
+	code = safeRetryCode(code)
+	switch errorClass {
+	case "tool":
+		if knownRoleFailurePair("tool", code) {
+			return "tool"
+		}
+	case "schema":
+		if knownRoleFailurePair("schema_correction", code) {
+			return "schema_correction"
+		}
+	}
+	return "unknown"
 }
 
 func knownTerminalFailureReason(reason string) bool {
@@ -182,7 +306,7 @@ func classifySafeNonRetryableRoleFailure(err error) (string, string) {
 	var governance *GovernanceError
 	if errors.As(err, &governance) {
 		switch governance.Kind {
-		case "policy", "tool_scope", "workspace_scope", "approval":
+		case "policy", "tool_scope", "workspace_scope", "approval", "capability":
 			return "governance", governance.Kind
 		default:
 			return "unknown", "unknown"
@@ -197,6 +321,8 @@ func classifySafeNonRetryableRoleFailure(err error) (string, string) {
 		switch safeFailure.Code {
 		case "patch_validation_failed", "permission_denied", "not_found", "invalid_input":
 			return "tool", safeFailure.Code
+		case "provider_auth_rejected", "provider_http_rejected", "provider_quota_exhausted":
+			return "provider_rejected", safeFailure.Code
 		case "backend_bind_failed", "progress_checkpoint_failed", "schema_recovery_failed",
 			"tool_diagnostic_checkpoint_failed", "no_effects_checkpoint_failed",
 			"tool_recovery_failed", "invalid_read_coverage", "no_progress_checkpoint_failed",
@@ -262,6 +388,9 @@ type RetryState struct {
 	NextAt                    time.Time          `json:"next_at,omitempty"`
 	FailureClass              string             `json:"failure_class,omitempty"`
 	FailureCode               string             `json:"failure_code,omitempty"`
+	FailureOrigin             FailureOrigin      `json:"failure_origin,omitempty"`
+	ProviderStatus            int                `json:"provider_status,omitempty"`
+	RetryAfter                time.Duration      `json:"retry_after,omitempty"`
 	RecoveryFeedback          string             `json:"recovery_feedback,omitempty"`
 	MutationPossible          bool               `json:"mutation_possible,omitempty"`
 	UnresolvedMutationFailure bool               `json:"unresolved_mutation_failure,omitempty"`
@@ -293,9 +422,33 @@ type RetryProgress struct {
 
 // RetryCorrection stores only the classified schema/tool correction code.
 type RetryCorrection struct {
-	ErrorClass string `json:"error_class"`
-	Code       string `json:"code"`
-	Feedback   string `json:"feedback,omitempty"`
+	ErrorClass      string        `json:"error_class"`
+	Code            string        `json:"code"`
+	FailureOrigin   FailureOrigin `json:"failure_origin,omitempty"`
+	CorrectionField string        `json:"correction_field,omitempty"`
+	ExpectedType    string        `json:"expected_type,omitempty"`
+	AllowedValues   []string      `json:"allowed_values,omitempty"`
+	Reason          string        `json:"reason,omitempty"`
+	Feedback        string        `json:"feedback,omitempty"`
+}
+
+func appendScheduledRetryCorrection(state *RetryState, role Role, failure RoleExecutionFailure) RetryCorrection {
+	if state == nil {
+		return RetryCorrection{}
+	}
+	safe := sanitizeTerminalRoleFailure(role, failure)
+	feedback := roleFailureFeedback(role, safe.Code, safe.CorrectionField, safe.ExpectedType, safe.AllowedValues)
+	correction := RetryCorrection{
+		ErrorClass: safe.Class, Code: safe.Code, CorrectionField: safe.CorrectionField,
+		FailureOrigin: safe.Origin,
+		ExpectedType:  safe.ExpectedType, AllowedValues: append([]string(nil), safe.AllowedValues...),
+		Reason: "retry_scheduled", Feedback: feedback,
+	}
+	state.Corrections = append(state.Corrections, correction)
+	if len(state.Corrections) > 16 {
+		state.Corrections = append([]RetryCorrection(nil), state.Corrections[len(state.Corrections)-16:]...)
+	}
+	return correction
 }
 
 // RecoveryCandidate tells a supervised scanner whether automatic Resume is

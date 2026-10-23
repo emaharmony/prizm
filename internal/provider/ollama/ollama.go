@@ -122,10 +122,12 @@ func (o *Provider) Generate(ctx context.Context, req provider.GenerateRequest) (
 
 	if resp.StatusCode != http.StatusOK {
 		bodyStr := strings.TrimSpace(string(respBody))
+		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+		failure := &provider.HTTPFailure{StatusCode: resp.StatusCode, RetryAfterWait: retryAfter}
 		if resp.StatusCode == http.StatusTooManyRequests && isQuotaExhausted(bodyStr) {
-			return provider.GenerateResponse{}, fmt.Errorf("ollama: HTTP %d: %w", resp.StatusCode, provider.ErrQuotaExhausted)
+			return provider.GenerateResponse{}, fmt.Errorf("ollama: %w: %w", failure, provider.ErrQuotaExhausted)
 		}
-		return provider.GenerateResponse{}, fmt.Errorf("ollama: HTTP %d", resp.StatusCode)
+		return provider.GenerateResponse{}, failure
 	}
 
 	var oResp generateResponse

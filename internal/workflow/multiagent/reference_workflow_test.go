@@ -151,6 +151,7 @@ func TestBuildReferenceRunReportUsesDurableTaskAndValidationEvidence(t *testing.
 	}
 	safe, err := json.Marshal(SafeValidationEvidence(validation.Result{
 		Profile: "go_test_all", Status: "failed", Error: "sensitive process output",
+		FailureSummary: "KeyError: 'status' password=[REDACTED]",
 		Args: []string{
 			"test", "./...", "--token", "token-secret", "--password=password-secret",
 			"api_key=key-secret", "--authorization", "Bearer auth-secret", strings.Repeat("x", 300),
@@ -160,7 +161,8 @@ func TestBuildReferenceRunReportUsesDurableTaskAndValidationEvidence(t *testing.
 		strings.Contains(string(safe), "token-secret") || strings.Contains(string(safe), "password-secret") ||
 		strings.Contains(string(safe), "key-secret") || strings.Contains(string(safe), "auth-secret") ||
 		!strings.Contains(string(safe), strings.Repeat("x", 256)) ||
-		!strings.Contains(string(safe), `"args":["test","./..."`) {
+		!strings.Contains(string(safe), `"args":["test","./..."`) ||
+		!strings.Contains(string(safe), `"failure_summary":"KeyError: 'status' password=[REDACTED]"`) {
 		t.Fatalf("unsafe/unbounded validation projection: %s err=%v", safe, err)
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/gitx"
@@ -108,6 +110,19 @@ func (r *AgentRoleRunner) RunRole(
 			),
 		}
 	}
+	if basis := request.TrustedTreeBasis; basis != nil {
+		if request.Run.CurrentRole != RoleDeveloper || basis.RunID != request.Run.RunID || basis.WorkspaceID != workspace.ID ||
+			basis.ExecutionKey == "" || basis.Role != string(RoleDeveloper) || r.proposals == nil {
+			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "trusted patch basis does not match this developer visit"}
+		}
+		resolver, ok := r.proposals.(TrustedTreeBasisResolver)
+		if !ok {
+			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "trusted patch basis resolver is unavailable"}
+		}
+		if err := resolver.ValidateTrustedTreeBasis(ctx, *basis, workspace); err != nil {
+			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "trusted patch basis could not be verified"}
+		}
+	}
 
 	approvalStatus, err := r.checkApproval(ctx, request, profile)
 	if err != nil {
@@ -138,6 +153,7 @@ func (r *AgentRoleRunner) RunRole(
 		Profile:               profile,
 		Prompt:                prompt,
 		Workspace:             workspace,
+		TrustedTreeBasis:      cloneTrustedTreeBasis(request.TrustedTreeBasis),
 		AllowedTools:          append([]string(nil), request.RoleConfig.AllowedTools...),
 		RequiredCapabilities:  append([]string(nil), request.RoleConfig.Capabilities...),
 		FinalResponseContract: finalResponseContract,
@@ -162,7 +178,9 @@ func (r *AgentRoleRunner) RunRole(
 		if iterations <= 0 {
 			iterations = 1
 		}
-		return RoleRunResult{TokenUsage: execution.Usage, LocalIterations: iterations, Metadata: ExecutionMetadata{ToolCalls: execution.ToolCalls, DeniedToolCalls: execution.DeniedToolCalls, Attempt: request.Run.Visit, StartedAt: startedAt, FinishedAt: r.now().UTC()}}, err
+		return RoleRunResult{TokenUsage: execution.Usage, LocalIterations: iterations,
+			FailureClass: execution.FailureClass, FailureCode: execution.FailureCode, FailureOrigin: execution.FailureOrigin,
+			Metadata: ExecutionMetadata{ToolCalls: execution.ToolCalls, DeniedToolCalls: execution.DeniedToolCalls, Attempt: request.Run.Visit, StartedAt: startedAt, FinishedAt: r.now().UTC()}}, err
 	}
 	var proposals []ProposalReference
 	correctiveRetries := 0
@@ -419,13 +437,17 @@ func BuildRolePrompt(request RoleRunRequest) (string, error) {
 		return "", err
 	}
 
+	taskPrompt := request.Run.Task.Description
+	if request.ParentTask != nil {
+		taskPrompt = fmt.Sprintf("ORIGINAL TASK REQUIREMENTS (apply to this delegated lane):\n%s\nLANE TASK: %s", request.ParentTask.Description, taskPrompt)
+	}
 	prompt := fmt.Sprintf(
 		"ROLE: %s\nTASK ID: %s\nTASK: %s\nVISIT: %d\nTRANSITIONS USED: %d\n"+
 			"INCOMING HANDOFF JSON: %s\nLATEST REFLECTION JSON: %s\n\n%s\n"+
 			"Return exactly one JSON object. Do not wrap it in Markdown and do not add prose.",
 		request.Run.CurrentRole,
 		request.Run.Task.ID,
-		request.Run.Task.Description,
+		taskPrompt,
 		request.Run.Visit,
 		request.Run.TransitionCount,
 		handoffJSON,
@@ -435,10 +457,33 @@ func BuildRolePrompt(request RoleRunRequest) (string, error) {
 	if request.Run.CurrentRole == RoleDeveloper {
 		prompt += "\n\nDEVELOPER TOOL PROTOCOL: Before returning the developer role-schema JSON, emit exactly one separate JSON tool_request for apply_patch_proposal. Its input must contain the complete unified diff in patch and the exact observed git HEAD in base_sha. Do not combine the tool request with the role-schema JSON. After Prizm returns the tool result, return only the developer role-schema JSON."
 	}
-	if feedback := strings.TrimSpace(request.RecoveryFeedback); feedback != "" && len(feedback) <= 512 {
+	if feedback := boundedRecoveryFeedback(request.RecoveryFeedback); feedback != "" {
 		prompt += "\n\nRECOVERY CORRECTION: " + feedback
 	}
 	return prompt, nil
+}
+
+const (
+	maxRecoveryFeedbackBytes      = 512
+	recoveryFeedbackTruncationTag = " [truncated]"
+)
+
+// boundedRecoveryFeedback preserves valid feedback up to the prompt budget.
+// Schema corrections put their field and allowed values first; UTF-8-safe
+// prefix truncation keeps that actionable detail when it fits and marks the
+// omission explicitly instead of dropping the correction.
+func boundedRecoveryFeedback(feedback string) string {
+	feedback = strings.TrimSpace(strings.ToValidUTF8(feedback, "�"))
+	if len(feedback) <= maxRecoveryFeedbackBytes {
+		return feedback
+	}
+	maxPrefixBytes := maxRecoveryFeedbackBytes - len(recoveryFeedbackTruncationTag)
+	prefixEnd := maxPrefixBytes
+	for prefixEnd > 0 && !utf8.ValidString(feedback[:prefixEnd]) {
+		prefixEnd--
+	}
+	prefix := strings.TrimRightFunc(feedback[:prefixEnd], unicode.IsSpace)
+	return prefix + recoveryFeedbackTruncationTag
 }
 
 func BuildReflectionPrompt(request ReflectionRequest) (string, error) {
@@ -597,7 +642,7 @@ func roleSchemaInstruction(role Role) (string, error) {
 	case RoleTester:
 		return `JSON schema: {"schema_version":1,"result":"passed|failed","tests_executed":[{"name":"...","status":"passed|failed|timeout|error","evidence":[{"kind":"validation","uri":"path"}]}],"failure_evidence":[],"reproduction":["..."],"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"validation","uri":"path"}],"unresolved_issues":[{"id":"issue-1","summary":"...","blocking":false}],"notes":"..."}}. You must execute at least one allowed validation and include it in the non-empty tests_executed array. If validation cannot run, report it as an error or timeout; never omit tests_executed. Use [] when there is no evidence or unresolved issue.`, nil
 	case RoleReviewer:
-		return `JSON schema: {"schema_version":1,"decision":"approved|changes_requested","findings":[{"severity":"info|low|medium|high|critical","summary":"...","evidence":[{"kind":"validation","uri":"path"}]}],"required_corrections":["..."],"evidence":[{"kind":"validation","uri":"path"}],"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"validation","uri":"path"}],"unresolved_issues":[],"notes":"..."}}. Every evidence item must be an object with kind and uri; use [] when there is no evidence. Omit handoff when approved.`, nil
+		return `JSON schema: {"schema_version":1,"decision":"approved|changes_requested","findings":[{"severity":"info|low|medium|high|critical","summary":"...","evidence":[{"kind":"validation","uri":"path"}]}],"required_corrections":["..."],"evidence":[{"kind":"validation","uri":"path"}],"handoff":{"objective":"...","reason":"...","evidence":[{"kind":"validation","uri":"path"}],"unresolved_issues":[],"notes":"..."}}. Every evidence item must be an object with kind and uri; use [] when there is no evidence. For changes_requested, handoff must be a non-null object or concise string summary. Examples: {"handoff":{"objective":"fix","reason":"finding"}} or {"handoff":"Fix the finding"}. For approved, omit handoff or set it to null.`, nil
 	case RoleReflector:
 		return `JSON schema: {"schema_version":1,"verdict":"success|partial|failure|uncertain","confidence":0.0,"failure_class":"none|policy|tool|environment|model|verification|unknown","evidence":[],"lesson_candidate":{"summary":"...","content":"...","category":"decision|feedback|project|reference","topics":[]},"replan_requested":false,"replan_reason":"..."}`, nil
 	default:
@@ -618,7 +663,7 @@ func roleSchemaInstructionForRequest(request RoleRunRequest) (string, error) {
 	}
 	switch request.Run.CurrentRole {
 	case RoleReviewer:
-		schema += ` For changes_requested, handoff may be this object or a concise descriptive JSON string; omit handoff when approved. Prizm derives routing from the compiled graph.`
+		schema += ` Prizm derives routing from the compiled graph.`
 	case RolePlanner, RoleDeveloper, RoleTester:
 		schema += ` Handoff may be this object or a concise descriptive JSON string. Prizm derives routing from the compiled graph.`
 	}

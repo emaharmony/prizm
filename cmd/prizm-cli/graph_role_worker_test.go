@@ -40,6 +40,27 @@ func TestGraphRoleWorkerRestoresSafeCorrectionIntoRoleRequest(t *testing.T) {
 	}
 }
 
+func TestGraphRoleFailureOutcomePreservesCapabilityCodeWithoutReason(t *testing.T) {
+	const privateReason = "PRIVATE_CAPABILITY_REASON_CANARY"
+	command := graphWorkerTestCommand("run-capability-failure", time.Now().Add(time.Minute))
+	command.DeliveryAttemptID = "delivery-attempt-1"
+	result := graphRoleFailureOutcome(&multiagent.GovernanceError{Kind: "capability", Reason: privateReason}, command,
+		multiagent.RoleRunResult{LocalIterations: 0}, "attempt-1")
+	if result.Failure == nil || result.Failure.Class != "governance" || result.Failure.Code != "capability" || result.Failure.Retryable {
+		t.Fatalf("failure=%#v, want nonretryable governance/capability", result.Failure)
+	}
+	if result.Failure.DeliveryAttemptID != command.DeliveryAttemptID || result.Failure.AttemptID != "attempt-1" {
+		t.Fatalf("failure identity=%#v", result.Failure)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(privateReason)) {
+		t.Fatalf("private governance reason leaked in worker outcome: %s", encoded)
+	}
+}
+
 func TestGraphRoleWorkerEmbeddedNATSExecutesThreeFanoutLanesConcurrently(t *testing.T) {
 	runDir := t.TempDir()
 	base := graphWorkerTestCommand("run-fanout-nats", time.Now().Add(time.Minute))
@@ -337,6 +358,25 @@ func TestGraphRoleWorkerEmbeddedNATSRecoversPersistedFanoutJoin(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer nc.Close()
+	succeededChild := make(chan event.Outcome, 1)
+	outcomeSub, err := nc.Subscribe(graphRoleOutcomeSubject, func(message *nats.Msg) {
+		var outcome event.Outcome
+		if json.Unmarshal(message.Data, &outcome) != nil || outcome.RunID != runID ||
+			outcome.JoinID == "" || outcome.Lane == "" || outcome.Status != event.OutcomeSucceeded {
+			return
+		}
+		select {
+		case succeededChild <- outcome:
+		default:
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outcomeSub.Unsubscribe()
+	if err := nc.Flush(); err != nil {
+		t.Fatal(err)
+	}
 
 	graph, err := multiagent.CompatAdaptDefinition(multiagent.DefaultReferenceDefinition())
 	if err != nil {
@@ -426,6 +466,28 @@ func TestGraphRoleWorkerEmbeddedNATSRecoversPersistedFanoutJoin(t *testing.T) {
 		t.Fatalf("persisted delegation join=%#v err=%v", waiting.DelegationJoin, err)
 	}
 
+	var success event.Outcome
+	select {
+	case success = <-succeededChild:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for the immediate-success child's persisted outcome")
+	}
+	traces, err := box.Report(t.Context(), runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var successPersisted bool
+	for _, trace := range traces {
+		if trace.Command.IdempotencyKey != success.DeliveryKey || len(trace.Outcomes) == 0 {
+			continue
+		}
+		successPersisted = trace.Outcomes[len(trace.Outcomes)-1].Status == event.OutcomeSucceeded
+		break
+	}
+	if !successPersisted {
+		t.Fatalf("success outcome notification was not persisted before expiry: delivery_key=%q", success.DeliveryKey)
+	}
+
 	clock.Store(start.Add(11 * time.Second))
 	worker.wakeExpired(t.Context(), start.Add(11*time.Second))
 	deadline = time.Now().Add(3 * time.Second)
@@ -441,7 +503,7 @@ func TestGraphRoleWorkerEmbeddedNATSRecoversPersistedFanoutJoin(t *testing.T) {
 		t.Fatalf("terminal run=%#v err=%v", terminal, err)
 	}
 
-	traces, err := box.Report(t.Context(), runID)
+	traces, err = box.Report(t.Context(), runID)
 	if err != nil {
 		t.Fatal(err)
 	}
