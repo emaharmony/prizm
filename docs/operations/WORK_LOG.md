@@ -2469,3 +2469,12 @@ attempted, and the remote ref and PR metadata remain unchanged; therefore no
 fresh CI was triggered. Publishing is blocked on write authorization for the
 repository. Keep the PR draft until R1 acceptance and review/CI requirements
 are satisfied.
+
+**Publication follow-up:** the first push used the active `rhemmasfz` GitHub
+identity and was denied. `gh auth status` showed the already configured
+`emaharmony` account had repository scope. After switching to that existing
+account, the normal fast-forward push succeeded; the previous PR head
+`b2ec53de5` advanced to `f0478478e170a755c25210a7ac6d9e018c331484` on
+`codex/r1-parallel-acceptance-staging`. No force push was used, and the active
+GitHub account was restored to `rhemmasfz`. Fresh CI has been triggered; PR
+#91 remains draft while the served R1 acceptance blockers are unresolved.

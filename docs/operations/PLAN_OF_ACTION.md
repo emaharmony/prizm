@@ -3,9 +3,8 @@
 ## Current Handoff: R1 acceptance blocked after approved apply (2026-10-22)
 
 **Roadmap:** R1 remains incomplete. PR #91 is open and draft on `staging` at
-remote head `b2ec53de5a7a3fb6a08bb66634b8fc6ab6bdee8e`; GitHub reports
-`MERGEABLE` / `CLEAN` and its four checks pass. These checks apply to the
-remote head, not the uncommitted candidate.
+remote head `f0478478e170a755c25210a7ac6d9e018c331484`, which contains the
+independently reviewed candidate. GitHub's four fresh checks are pending.
 
 The latest isolated served run `run_6226c7988a6a938aaa4b98873d` used the
 unchanged authorized request and configured `ollama/glm-5.2:cloud` mapping.
@@ -22,9 +21,8 @@ The approved Factory worktree contains only the intended test modification.
 **Next action:** restore the already configured GLM provider authorization and
 pytest in the configured validation runtime, then continue only the existing
 approved run if the system supports recovery. Do not switch providers or
-reapply the proposal. Keep PR #91 draft and unpublished until R1 completes,
-then obtain independent review and fresh CI on the resulting remote head. Do
-not merge.
+reapply the proposal. Keep PR #91 draft until R1 completes, then obtain
+independent review and fresh CI on the resulting remote head. Do not merge.
 
 ## Previous Handoff: R1 served acceptance retry exhaustion (2026-10-18)
 
