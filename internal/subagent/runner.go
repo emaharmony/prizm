@@ -227,6 +227,10 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 		if err != nil {
 			return err
 		}
+		current := runtime.RetryHooks.CurrentAttempt()
+		if current.AttemptID == expectedAttemptID && current.Remaining <= 0 {
+			return ErrRecoveryBudgetExhausted
+		}
 		attempt, err := runtime.RetryHooks.ConsumeRecovery(expectedAttemptID, code)
 		if err != nil {
 			return err
@@ -384,15 +388,18 @@ func (r *LoopRunner) Run(ctx context.Context, packet v2.TaskPacket, runtime Agen
 			}
 			// Invalid structured tool input is a recoverable correction and shares
 			// the durable role-visit allowance with failures from other layers.
-			feedback := "Respond with a tool call or a final answer."
+			feedback := "Return exactly one valid JSON object with no Markdown or surrounding prose. For a tool call, use the required tool_request envelope; for completion, use the exact role schema in the task. Match the required property names and value types."
 			if action.CorrectionCode != "" {
 				if err := recordCorrection(modelAttemptID, "schema", action.CorrectionCode, ""); err != nil {
 					if ctx.Err() != nil {
 						return usage(RunResult{Artifacts: artifacts.result()}), ctx.Err()
 					}
+					if errors.Is(err, ErrRecoveryBudgetExhausted) {
+						return usage(RunResult{Artifacts: artifacts.result()}), ErrRecoveryBudgetExhausted
+					}
 					return usage(RunResult{Artifacts: artifacts.result()}), &SafeFailureError{Code: "schema_recovery_failed"}
 				}
-				feedback = "The response did not match the required tool or final-response schema. Correct the structure and try again."
+				feedback = "The response did not match the required tool or final-response schema. Return exactly one valid JSON object with no Markdown or surrounding prose; use the required tool_request envelope or match the role schema in the task."
 			}
 			messages = append(messages, v2.Message{Role: "user", Content: feedback})
 			growth := len(finalInstruction)

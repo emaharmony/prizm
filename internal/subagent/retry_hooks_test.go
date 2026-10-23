@@ -169,6 +169,29 @@ func TestLoopRunner_MalformedToolInputConsumesSharedRecoveryAndKeepsFinalProgres
 	}
 }
 
+func TestLoopRunnerReportsExhaustedSchemaRecovery(t *testing.T) {
+	backend := &scriptBackend{
+		parse: func(string) Action { return Action{CorrectionCode: "invalid_response_schema"} },
+		turns: []Turn{{Text: "invalid response"}},
+	}
+	hooks := &recordingRetryHooks{attempt: RetryAttempt{
+		VisitID: "visit-1", AttemptID: "attempt-1", Number: 1, Remaining: 0,
+	}}
+	runner := NewLoopRunner(LoopRunnerConfig{Backend: backend})
+	_, err := runner.Run(context.Background(), v2.TaskPacket{TaskID: "task-schema"}, AgentRuntime{
+		AgentID: "planner", Role: "planner", RetryHooks: hooks,
+	})
+	if !errors.Is(err, ErrRecoveryBudgetExhausted) {
+		t.Fatalf("error = %v, want ErrRecoveryBudgetExhausted", err)
+	}
+	if len(hooks.corrections) != 1 || hooks.corrections[0] != "schema:invalid_response_schema" {
+		t.Fatalf("corrections = %v", hooks.corrections)
+	}
+	if len(hooks.consumed) != 0 {
+		t.Fatalf("exhausted recovery unexpectedly consumed another attempt: %v", hooks.consumed)
+	}
+}
+
 func TestLoopRunner_CorrectsOnlyProvenNoEffectPatchFailure(t *testing.T) {
 	backend := &scriptBackend{
 		parse: func(text string) Action {

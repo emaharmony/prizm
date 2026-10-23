@@ -158,9 +158,11 @@ func correctionFeedback(code string) string {
 	case "patch_validation_failed":
 		return "The patch proposal failed validation before an approval was saved. Correct the request and try again: input must contain exactly the non-empty string fields \"patch\" and \"base_sha\"; patch must be one complete unified diff that applies cleanly, changes at least one file, and stays within this workspace's allowed write paths; base_sha must equal the trusted patch base supplied in the task. After the proposal succeeds, return the required final role JSON."
 	case "invalid_proposal_diff":
-		return "The proposal is not a valid complete unified diff. Correct its diff syntax and return the required final role JSON. The proposal was not executed."
+		return "The proposal was not executed: patch must be a complete unified diff. Correct it and request exactly this tool (not final JSON): {\"type\":\"tool_request\",\"tool\":\"apply_patch_proposal\",\"input\":{\"patch\":\"<complete unified diff>\",\"base_sha\":\"<exact trusted patch base from task>\"}}. Input must contain only non-empty string fields patch and base_sha. After the tool succeeds, return final role JSON."
 	case "invalid_json_syntax":
 		return "The previous response was not valid JSON syntax. Return exactly one JSON object matching the required role schema."
+	case "invalid_response_schema":
+		return "The response did not match the required response schema. Return exactly one valid JSON object with no Markdown or surrounding prose; use the required tool_request envelope or match the role schema in the task."
 	case "missing_required_fields":
 		return "The previous JSON omitted required fields. Add the missing fields listed by the required role schema and return exactly one JSON object."
 	case "invalid_field_type", "invalid_field_value", "invalid_structured_output", "malformed_tool_input":

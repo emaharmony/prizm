@@ -173,6 +173,31 @@ func TestChatProviderGLM53UsesLowEffortClearsThinkingAndExcludesItFromResponse(t
 	}
 }
 
+func TestChatProviderPassesJSONFormatToOllama(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if request["format"] != "json" {
+			t.Fatalf("request format=%#v", request["format"])
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "glm-5.2:cloud", "done": true,
+			"message": map[string]any{"role": "assistant", "content": `{"schema_version":1}`},
+		})
+	}))
+	defer server.Close()
+
+	_, err := ollama.NewChatProvider(server.URL).ChatGenerate(context.Background(), provider.ChatGenerateRequest{
+		Model: "glm-5.2:cloud", Format: "json",
+		Messages: []provider.ChatMessage{{Role: "user", Content: "return one JSON object"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestChatProviderGLM53PreservesConfiguredReasoningEffort(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request map[string]any

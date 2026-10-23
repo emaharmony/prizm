@@ -171,7 +171,7 @@ func TestSubAgentBackendUsesChatProviderForStructuredRoleOutput(t *testing.T) {
 	if turn.Text != `{"schema_version":1,"understanding":"done"}` || turn.PromptTokens != 11 || turn.CompletionTokens != 7 {
 		t.Fatalf("turn=%#v", turn)
 	}
-	if probe.captured.Model != "glm-5.3:cloud" || probe.captured.Agent != "planner" || probe.captured.MaxTokens != 8192 || probe.captured.ReasoningEffort != "max" {
+	if probe.captured.Model != "glm-5.3:cloud" || probe.captured.Agent != "planner" || probe.captured.MaxTokens != 8192 || probe.captured.ReasoningEffort != "max" || probe.captured.Format != "json" {
 		t.Fatalf("request=%#v", probe.captured)
 	}
 	if len(probe.captured.Messages) != 2 || probe.captured.Messages[1].Content != "bounded task" {

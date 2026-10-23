@@ -2352,3 +2352,120 @@ The test coverage includes a 429 with `Retry-After: 120` carried through durable
 **Validation:** uncached `go test -timeout 10m -count=1 ./...`, `go vet ./...`, and `git diff --check` passed after both review fixes. Focused `go test ./internal/provider/... -count=1` also passed with loopback enabled. `go build ./...` exited 0 with a warning that the global module stat cache could not be written; build/test cache and temporary paths were workspace-local.
 
 **Risk/next action:** a configured target list of length N may issue up to N distinct provider calls during a single role attempt; it does not increase the durable role recovery count. In a multi-target chain, an earlier transient failure followed by terminal auth failure on the last target may be classified from the last error and suppress durable retry; this risk is limited to multi-target failover, and the current deployment's target count is unknown. R1 remains incomplete. Keep target lists intentionally bounded, obtain independent review, then rerun the isolated served acceptance through Prizm. Do not commit or publish; keep staging-only and PR #91 draft.
+## 2026-10-22 — PR #91 mergeability audit
+
+**Roadmap ID:** R1. The live pull request targets `staging` at
+`b2ec53de5a7a3fb6a08bb66634b8fc6ab6bdee8e`; GitHub reports it open,
+`MERGEABLE` / `CLEAN`, and draft, with `lint-linux`, `test-linux`,
+`test-windows`, and `test-python` successful on that remote head.
+
+The repository-required Ollama context scout ran against filenames, diff
+summary, and bounded R1/retry search hits; no secrets were supplied. A separate
+detached worktree was based on the exact PR head, leaving the dirty staging
+checkout untouched. It received local follow-up changes for Ollama JSON format
+propagation, actionable schema correction feedback, and durable retry-budget
+exhaustion mapping. No package boundary changed. The first focused test run
+exposed a missing error translation; after fixing it, focused tests passed for
+`cmd/prizm-cli`, `internal/provider/ollama`, `internal/subagent`, and
+`internal/workflow/multiagent`. Full `go test ./... -count=1` passed; `go build
+./...`, `go vet ./...`, and `git diff --check` each exited 0.
+
+This local candidate has not been pushed, so the passing local checks are not
+remote PR checks. The latest served acceptance run still exhausted its
+provider retries before proposal and did not reach approval, apply, configured
+validation, review, or final reporting. PR readiness is therefore not
+complete: keep it draft until that R1 acceptance succeeds and the follow-up
+receives independent review plus CI on the resulting remote head. No PR
+metadata change, push, commit, or merge was made.
+
+**Next action:** resume the isolated served acceptance when the configured
+provider can return a turn, then review and publish the validated candidate so
+the PR receives fresh CI. Do not infer full R1 acceptance from clean merge
+state or green checks on the older head.
+
+## 2026-10-22 — PR #91 fresh served acceptance attempt
+
+**Roadmap ID:** R1. The exact previously authorized request body (SHA-256 `6BD2CA13898A5EDCA61BA80D8681B606CB85C9FCBE09304E01863FF00B0AA845`) and `software-delivery` workflow version 1 were run against an isolated service built from candidate PR head `b2ec53de5a7a3fb6a08bb66634b8fc6ab6bdee8e`, retaining the configured Ollama `glm-5.2:cloud` provider/model mapping and the existing approved Factory workspace. Run `run_dee1e84929ae92a870fb6a7b66` completed the planner (`plan_ready`, 27 local iterations, two schema recoveries) and entered developer. The developer then exhausted ten durable recoveries: the event trail records retry attempts 2 through 11, ending in `run.failed` at 2026-10-22 23:06:26Z with `retry_exhausted`, `max_recoveries=10`, `failure_class=schema_correction`, `failure_code=invalid_response_schema`, and `failure_origin=unknown`. A previous recovery recorded `invalid_proposal_diff`. No proposal event appeared and therefore no approval, apply, configured validation, reviewer, or final report occurred. No malformed proposal was approved or applied.
+
+The candidate's local follow-up code was validated earlier in this session with focused tests and uncached `go test ./... -count=1`, `go build ./...`, `go vet ./...`, and `git diff --check`; all passed. This is local-only evidence. PR #91 remains open and draft, based on `staging`, at the unchanged remote head `b2ec53de5a7a3fb6a08bb66634b8fc6ab6bdee8e`; GitHub still reports clean/mergeable and its four existing CI checks are successful. No commit, push, PR metadata edit, or merge occurred. No package boundary changed.
+
+**Risk/next action:** the attempted recovery fix improved planner output, but did not yield a valid developer proposal; the durable terminal reason is structured response validation, with unknown failure origin. R1 acceptance and PR readiness remain incomplete. Continue from the safe diagnostics in the isolated task, retain the authorized GLM provider/request, and do not change the draft state until proposal review, explicit approval, exactly-once apply, configured validation, review, resume, and final report all succeed. Independent review and fresh CI are required before publishing the local candidate.
+
+## 2026-10-22 — PR #91 served proposal reached, approval pending
+
+**Roadmap ID:** R1. A fresh isolated Prizm service built from the uncommitted candidate reused the exact authorized request body (SHA-256 `6BD2CA13898A5EDCA61BA80D8681B606CB85C9FCBE09304E01863FF00B0AA845`), registered `software-delivery` v1.0.1, and retained the configured Ollama `glm-5.2:cloud` provider/model mapping and approved Factory workspace. Run `run_6226c7988a6a938aaa4b98873d` advanced through planner to developer, with retries including `invalid_proposal_diff` and `invalid_response_schema`. The persisted `invalid_proposal_diff` correction was 394 bytes and contained the full required proposal tool envelope, complete unified-diff requirement, and trusted base SHA instruction. After further schema retries, a valid `apply_patch` proposal was recorded and the run paused at explicit approval.
+
+Proposal `prop_01M5JZA1663JYB9QA2ZZ4M6C15` has pending approval ID `appr_01M5JZA1665SZ0Y7S9RDRGWFBP`, targets the single path `tests/test_production_e2e_fake.py`, and is based on `dc8dfedabb3870e747c9bf892a5164e52444fdd4`. Its diff imports `BLOCKED`, `PASS`, and `adjudicate_readiness` and adds a regression where one PASS and one BLOCKED criterion must produce `production_ready=false`, blocked status, and the expected blocker. No approval or apply was made. No configured validation, review, resume, or final report occurred.
+
+The focused `internal/workflow/multiagent` package passed (`go test ./internal/workflow/multiagent -count=1`, 34.6s), `go build ./cmd/prizm-cli` passed, and `go vet ./...` passed. `go test ./...` emitted passing results through dozens of packages but ran 4m55s without reaching the final packages; it was interrupted with no reported test failure. PR #91 remains unmodified and draft on remote head `b2ec53de5a7a3fb6a08bb66634b8fc6ab6bdee8e`; no commit, push, merge, or PR metadata change occurred.
+
+**Risk/next action:** R1 and PR readiness remain incomplete at the explicit approval gate. Review this exact proposal and require user approval before applying. If approved, verify exactly-once apply, run configured validation, review, resume, and capture the final report. Keep PR #91 draft and unpushed until acceptance completes, then obtain independent review and fresh CI. Do not merge.
+
+## 2026-10-22 — PR #91 candidate scope and handoff cleanup
+
+**Roadmap ID:** R1. Independent review found Codex CLI provider guidance in `README.md` and `prizm.yaml.example` outside PR #91's recovery-safety scope. Removed those unrelated additions while preserving the existing provider configuration example. Updated the plan's opening handoff to match the live paused run `run_6226c7988a6a938aaa4b98873d` and pending proposal approval; retained the historical acceptance records. No code changed.
+
+The served run remains paused with proposal `prop_01M5JZA1663JYB9QA2ZZ4M6C15` awaiting explicit approval `appr_01M5JZA1665SZ0Y7S9RDRGWFBP`. No approval, apply, validation, or PR change occurred. Documentation-only diff checks remain required; no code tests/build were rerun for these cleanup edits.
+
+**Next action:** review the pending proposal and obtain explicit user approval before applying. Keep PR #91 draft, unpushed, and unmerged until the complete R1 acceptance and fresh candidate review/CI finish.
+
+## 2026-10-22 — PR #91 approved proposal and branch hygiene audit
+
+**Roadmap ID:** R1. The user explicitly authorized the exact pending proposal
+`prop_01M5JZA1663JYB9QA2ZZ4M6C15`. Approval
+`appr_01M5JZA1665SZ0Y7S9RDRGWFBP` was recorded once, and the isolated Factory
+workspace recorded one successful apply event
+`apply_104ded0699efc1de0b022ee552bef8fa` for
+`tests/test_production_e2e_fake.py`. The resumed run
+`run_6226c7988a6a938aaa4b98873d` failed in the Tester provider call before
+configured validation, review, or final report: sanitized terminal metadata
+reports HTTP 403, `failure_class=provider_rejected`,
+`failure_code=provider_auth_rejected`, and `failure_origin=provider_call`.
+No credentials or response body were recorded. The isolated service config
+has an Ollama endpoint configured; the local shell has no provider-auth
+environment variables. The current environment cannot confirm credentials
+available to the service process, so the existing GLM authorization remains an
+external blocker. Do not switch providers or reapply the proposal.
+
+The configured pytest command exited 1 because Python 3.12 reported
+`No module named pytest`. Python 3.14 and the available uv-managed Python 3.11
+also have no pytest module; `requirements.txt` does not declare pytest, and no
+existing uv environment was found. No network installation was attempted.
+The failed invocation left no tracked or ignored test artifacts in the Factory
+worktree, whose status contains only the approved test file.
+
+Candidate hygiene audit: the candidate worktree has exactly 16 modified,
+intended PR #91 files, no untracked files, and `git diff --check` passes.
+`.gitignore` covers `*.exe`, `.tmp/`, `runs/*`, `__pycache__/`,
+`.pytest_cache/`, `.venv/`, and coverage output; the ignored candidate
+`prizm-cli.exe` and `.tmp/` were retained. The original checkout has separate
+pre-existing edits to `README.md`, `docs/operations/CONFIGURATION.md`, and
+`prizm.yaml.example`, plus three untracked `.tmp-context-scout-*` files and
+several inaccessible temporary directories. They were left untouched and
+must not be included in a PR commit. No new ignore rules or cleanup were
+needed.
+
+Local code evidence remains: focused multiagent tests passed; `go build
+./cmd/prizm-cli`, `go vet ./...`, and `git diff --check` passed. The full Go
+suite did not finish within the prior 4m55s run and was interrupted without a
+reported test failure. The served R1 acceptance is incomplete, so no publish,
+push, or draft-state change is justified; PR #91 remains draft on its existing
+remote head.
+
+**Next action:** restore configured GLM authorization and pytest availability,
+then continue the existing authorized acceptance where supported. After the
+run reaches configured validation, review, and report, complete independent
+candidate review and fresh CI before publishing. Do not merge.
+
+## 2026-10-22 — PR #91 candidate publication attempt
+
+The 16-file candidate was committed locally as `69f8a8531` after confirming
+the live PR branch `codex/r1-parallel-acceptance-staging` still pointed to
+the candidate base `b2ec53de5a7a3fb6a08bb66634b8fc6ab6bdee8e`. The commit is a
+fast-forward descendant and includes only the intended candidate files. A
+normal push to that existing branch was rejected by GitHub with HTTP 403
+(`Permission to emaharmony/prizm.git denied to rhemmasfz`). No force push was
+attempted, and the remote ref and PR metadata remain unchanged; therefore no
+fresh CI was triggered. Publishing is blocked on write authorization for the
+repository. Keep the PR draft until R1 acceptance and review/CI requirements
+are satisfied.

@@ -1,6 +1,32 @@
 # Prizm Plan of Action
 
-## Current Handoff: R1 served acceptance retry exhaustion (2026-10-18)
+## Current Handoff: R1 acceptance blocked after approved apply (2026-10-22)
+
+**Roadmap:** R1 remains incomplete. PR #91 is open and draft on `staging` at
+remote head `b2ec53de5a7a3fb6a08bb66634b8fc6ab6bdee8e`; GitHub reports
+`MERGEABLE` / `CLEAN` and its four checks pass. These checks apply to the
+remote head, not the uncommitted candidate.
+
+The latest isolated served run `run_6226c7988a6a938aaa4b98873d` used the
+unchanged authorized request and configured `ollama/glm-5.2:cloud` mapping.
+Proposal `prop_01M5JZA1663JYB9QA2ZZ4M6C15` for
+`tests/test_production_e2e_fake.py` was explicitly approved once under
+`appr_01M5JZA1665SZ0Y7S9RDRGWFBP` and applied once (`apply_104ded0699efc1de0b022ee552bef8fa`).
+The resumed run failed in the Tester provider call with HTTP 403,
+`provider_rejected` / `provider_auth_rejected`, before configured validation,
+review, or final report. The configured Python 3.12 validation command also
+cannot start because `pytest` is absent from that interpreter; other checked
+local Python runtimes and the existing uv cache have no usable pytest install.
+The approved Factory worktree contains only the intended test modification.
+
+**Next action:** restore the already configured GLM provider authorization and
+pytest in the configured validation runtime, then continue only the existing
+approved run if the system supports recovery. Do not switch providers or
+reapply the proposal. Keep PR #91 draft and unpublished until R1 completes,
+then obtain independent review and fresh CI on the resulting remote head. Do
+not merge.
+
+## Previous Handoff: R1 served acceptance retry exhaustion (2026-10-18)
 
 **Roadmap:** R1 remains incomplete. Fresh served run
 `run_5196b66a70ec7f464b3f65d2cb` used Prizm's API and the isolated
@@ -669,3 +695,21 @@ The provider boundary now returns only an allowlisted numeric HTTP status and pa
 **Validation:** focused provider, subagent, and multiagent retry tests passed, followed by uncached `go test -timeout 10m -count=1 ./...`, `go build ./...`, `go vet ./...`, and `git diff --check` after the failover and legacy generate-path fixes. The build exited 0 with a benign warning that Go could not write its stat cache under the global module cache; the configured Go build/test cache and temporary paths were inside the candidate worktree.
 
 **Next action:** independent review of this candidate, then rebuild Prizm and rerun the isolated served acceptance with `ollama/glm-5.3:cloud`; inspect the bounded HTTP status and Retry-After metadata if it fails again.
+
+## Current Handoff: PR #91 served acceptance retry exhausted (2026-10-22)
+
+**Roadmap:** R1 acceptance remains incomplete. On the isolated exact-head candidate service, the previously authorized `software-delivery` v1 request was submitted unchanged (SHA-256 `6BD2CA13898A5EDCA61BA80D8681B606CB85C9FCBE09304E01863FF00B0AA845`) using the configured `ollama/glm-5.2:cloud` role mapping. Run `run_dee1e84929ae92a870fb6a7b66` reached a planner `plan_ready` handoff, but the developer role did not produce a valid proposal. Its durable event trail records ten recoveries and terminal `retry_exhausted` on attempt 11 (`failure_class=schema_correction`, `failure_code=invalid_response_schema`, `failure_origin=unknown`, `max_recoveries=10`). One intermediate failure was `invalid_proposal_diff`. There were no proposal, approval, apply, configured validation, review, or final report events.
+
+**Evidence:** terminal snapshot status `failed`; developer role failed with `retry_exhausted`; planner completed; no proposal-related events. The run's generated workspace/artifacts remained in the isolated Factory clone and no candidate proposal was applied. The exact PR remains open, draft, base `staging`, head `b2ec53de5a7a3fb6a08bb66634b8fc6ab6bdee8e`, GitHub `MERGEABLE` / `CLEAN`, with the four existing CI jobs successful. The local follow-up candidate remains uncommitted and unpushed; its repository test/build/vet/diff-check results are recorded in the preceding handoff. No PR metadata or remote branch was changed.
+
+**Risk:** the JSON/schema and proposal-diff recovery path improved the planner's ability to finish planning, but the required provider output still failed structured-output validation through all ten configured recoveries. `failure_origin=unknown` does not establish a transport/provider cause. Green CI on the older remote head and a planner handoff do not satisfy R1 or PR readiness.
+
+**Next action:** inspect why the GLM developer response remains schema-invalid using safe diagnostics only, preserve the configured provider and request identity, then run a fresh isolated acceptance. Keep PR #91 draft until a valid proposal is reviewed, explicitly approved, applied exactly once, validated by configured checks, reviewed, resumed, and reported. Obtain independent review and fresh CI for the candidate before any push; do not merge.
+
+## Acceptance Record: R1 proposal pending approval (2026-10-22)
+
+**Roadmap ID:** R1 remains incomplete. On the isolated candidate service, exact authorized request body SHA-256 `6BD2CA13898A5EDCA61BA80D8681B606CB85C9FCBE09304E01863FF00B0AA845` and `software-delivery` v1.0.1 used the unchanged configured Ollama `glm-5.2:cloud` mapping. Run `run_6226c7988a6a938aaa4b98873d` reached a developer proposal after planner/schema retries. Proposal `prop_01M5JZA1663JYB9QA2ZZ4M6C15` is pending approval `appr_01M5JZA1665SZ0Y7S9RDRGWFBP` for one `apply_patch` path, `tests/test_production_e2e_fake.py`, against base `dc8dfedabb3870e747c9bf892a5164e52444fdd4`. No approval or apply occurred; no configured validation, reviewer, or final report exists.
+
+**Evidence:** the durable retry record confirms the `invalid_proposal_diff` correction was preserved intact at 394 bytes and contained the required `apply_patch_proposal` envelope, complete diff requirement, and trusted base SHA instruction. Later generic `invalid_response_schema` recoveries were followed by a valid proposal. The proposal diff imports `BLOCKED`, `PASS`, and `adjudicate_readiness` and adds a mixed PASS/BLOCKED test asserting the blocked criterion prevents production readiness. Focused multiagent tests passed; CLI build and `go vet ./...` passed. Repository-wide `go test ./...` printed passing results through dozens of packages but was stopped after 4m55s before completion; no failure was reported. Remote PR #91 remains untouched, open, draft, base `staging`, head `b2ec53de5a7a3fb6a08bb66634b8fc6ab6bdee8e`.
+
+**Risk/next action:** R1 remains blocked at the explicit proposal approval gate. Review the pending diff and obtain user approval before any apply. Then require exactly-once apply, configured validation, review, resume, and final report. Keep PR #91 draft and unpushed until that acceptance completes, followed by independent review and fresh CI; do not merge.

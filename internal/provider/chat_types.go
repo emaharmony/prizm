@@ -33,6 +33,9 @@ type ChatGenerateRequest struct {
 	// ReasoningEffort selects a provider-supported named thinking level. Empty
 	// leaves the provider's model-specific default in effect.
 	ReasoningEffort string
+	// Format asks providers that support constrained output to return the
+	// requested format. Providers that do not support it may ignore the hint.
+	Format string
 }
 
 // ChatMessage represents a single message in a conversation.

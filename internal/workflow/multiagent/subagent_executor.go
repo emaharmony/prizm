@@ -2,6 +2,7 @@ package multiagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -103,6 +104,9 @@ func (e SubagentExecutor) ExecuteAgent(
 		FailureOrigin:   FailureOrigin(result.LastRecoveryOrigin),
 	}
 	if err != nil {
+		if errors.Is(err, subagent.ErrRecoveryBudgetExhausted) {
+			return executionResult, ErrRetryBudgetExhausted
+		}
 		return executionResult, err
 	}
 	return executionResult, nil

@@ -20,6 +20,10 @@ type RetryAttempt struct {
 	NextAt         time.Time
 }
 
+// ErrRecoveryBudgetExhausted marks a rejected response after all durable
+// correction attempts for the current role visit have been consumed.
+var ErrRecoveryBudgetExhausted = errors.New("subagent: schema recovery budget exhausted")
+
 // RetryHooks lets the loop checkpoint a recoverable correction without
 // importing the workflow runtime. All methods are optional for legacy runners.
 type RetryHooks interface {

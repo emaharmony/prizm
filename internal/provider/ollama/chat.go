@@ -56,6 +56,7 @@ type chatRequest struct {
 	Model         string           `json:"model"`
 	Messages      []ollamaMessage  `json:"messages"`
 	Tools         []ollamaFunction `json:"tools,omitempty"`
+	Format        string           `json:"format,omitempty"`
 	Stream        bool             `json:"stream"`
 	Think         any              `json:"think,omitempty"`
 	ClearThinking *bool            `json:"clear_thinking,omitempty"`
@@ -142,6 +143,7 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 		Model:    req.Model,
 		Messages: ollamaMsgs,
 		Tools:    ollamaTools,
+		Format:   req.Format,
 		Stream:   false,
 		Options: generateOptions{
 			Temperature: req.Temperature,

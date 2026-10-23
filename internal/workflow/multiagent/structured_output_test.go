@@ -289,6 +289,18 @@ func TestReviewerHandoffTypeFeedbackExplainsDecisionConditionalShape(t *testing.
 	}
 }
 
+func TestInvalidResponseSchemaFeedbackIsActionableAndSafe(t *testing.T) {
+	feedback := roleFailureFeedback(RolePlanner, "invalid_response_schema", "", "")
+	for _, required := range []string{"exactly one valid JSON object", "no Markdown", "tool_request envelope", "role schema"} {
+		if !strings.Contains(feedback, required) {
+			t.Fatalf("feedback missing %q: %q", required, feedback)
+		}
+	}
+	if strings.Contains(feedback, "PRIVATE") {
+		t.Fatalf("feedback contains untrusted response content: %q", feedback)
+	}
+}
+
 func TestEnumCorrectionFeedbackIsAllowlistedAndSpecific(t *testing.T) {
 	const privateValue = "PRIVATE_BAD_DECISION_CANARY"
 	raw := `{"schema_version":1,"decision":"` + privateValue + `","findings":[],"evidence":[]}`

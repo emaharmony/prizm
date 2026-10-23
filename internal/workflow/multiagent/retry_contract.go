@@ -177,7 +177,7 @@ func knownRoleFailurePair(class, code string) bool {
 	switch class {
 	case "schema_correction":
 		switch code {
-		case "invalid_json_syntax", "missing_required_fields", "invalid_field_type",
+		case "invalid_json_syntax", "invalid_response_schema", "missing_required_fields", "invalid_field_type",
 			"invalid_field_value", "invalid_structured_output", "invalid_proposal_diff":
 			return true
 		}

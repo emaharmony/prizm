@@ -682,6 +682,11 @@ func TestInvalidProposalDiffRetryPersistsOnlySafeFeedbackAndResumes(t *testing.T
 		t.Fatal(err)
 	}
 	wantFeedback := correctionFeedback("invalid_proposal_diff")
+	for _, required := range []string{"apply_patch_proposal", `"type":"tool_request"`, `"patch"`, `"base_sha"`, "The proposal was not executed"} {
+		if !strings.Contains(wantFeedback, required) {
+			t.Fatalf("invalid-proposal-diff correction omits %q: %q", required, wantFeedback)
+		}
+	}
 	if record.Retry == nil || record.Retry.RecoveryFeedback != wantFeedback {
 		t.Fatalf("safe proposal-diff feedback was not persisted: %#v", record.Retry)
 	}

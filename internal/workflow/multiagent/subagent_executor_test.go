@@ -2,6 +2,7 @@ package multiagent
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/emaharmony/prizm/internal/subagent"
@@ -20,6 +21,24 @@ func (f subagentTaskRunnerFunc) Run(
 	runtime subagent.AgentRuntime,
 ) (subagent.RunResult, error) {
 	return f(ctx, packet, runtime)
+}
+
+func TestSubagentExecutorPreservesExhaustedSchemaRecovery(t *testing.T) {
+	executor := SubagentExecutor{Runner: subagentTaskRunnerFunc(func(
+		context.Context,
+		v2.TaskPacket,
+		subagent.AgentRuntime,
+	) (subagent.RunResult, error) {
+		return subagent.RunResult{}, subagent.ErrRecoveryBudgetExhausted
+	})}
+	_, err := executor.ExecuteAgent(context.Background(), AgentExecutionRequest{
+		Role:      RolePlanner,
+		Profile:   AgentProfile{ID: "planner", Provider: "mock", Model: "mock"},
+		Workspace: Workspace{ID: "workspace", Path: "/workspace"},
+	})
+	if !errors.Is(err, ErrRetryBudgetExhausted) {
+		t.Fatalf("error = %v, want ErrRetryBudgetExhausted", err)
+	}
 }
 
 func TestSubagentExecutorMapsRuntimeAndResult(t *testing.T) {
