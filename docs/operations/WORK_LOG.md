@@ -2478,3 +2478,10 @@ account, the normal fast-forward push succeeded; the previous PR head
 `codex/r1-parallel-acceptance-staging`. No force push was used, and the active
 GitHub account was restored to `rhemmasfz`. Fresh CI has been triggered; PR
 #91 remains draft while the served R1 acceptance blockers are unresolved.
+
+Fresh CI run `39881869306` for published head
+`905e6d9e5e04d5edca0238c447e07a6770c01383` completed successfully:
+`lint-linux` passed in 1m03s, `test-linux` in 1m59s, `test-windows` in
+1m17s, and `test-python` in 27s. GitHub reports the PR clean and mergeable;
+it remains draft with no reviews. These checks validate the published
+candidate but do not resolve the separate R1 served acceptance blocker.

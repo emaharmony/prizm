@@ -3,8 +3,9 @@
 ## Current Handoff: R1 acceptance blocked after approved apply (2026-10-22)
 
 **Roadmap:** R1 remains incomplete. PR #91 is open and draft on `staging` at
-remote head `f0478478e170a755c25210a7ac6d9e018c331484`, which contains the
-independently reviewed candidate. GitHub's four fresh checks are pending.
+remote head `905e6d9e5e04d5edca0238c447e07a6770c01383`, which contains the
+independently reviewed candidate. Fresh CI run `39881869306` passed
+`lint-linux`, `test-linux`, `test-windows`, and `test-python`.
 
 The latest isolated served run `run_6226c7988a6a938aaa4b98873d` used the
 unchanged authorized request and configured `ollama/glm-5.2:cloud` mapping.
