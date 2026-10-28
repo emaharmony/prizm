@@ -319,6 +319,9 @@ func TestServedFreewillP1WakePersistsPolicyOnlyProposalAndHistory(t *testing.T) 
 
 	runtime.Close()
 	runtimeClosed = true
+	if err := runtime.Start(ctx, nc, true); err == nil {
+		t.Fatal("starting a closed Freewill runtime unexpectedly succeeded")
+	}
 	cfg.Freewill.Enabled = false
 	statusRuntime, err := openFreewillStatusRuntime(cfg, filepath.Join(root, "prizm.yaml"))
 	if err != nil || statusRuntime == nil || !statusRuntime.readOnly {
