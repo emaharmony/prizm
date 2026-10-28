@@ -9,9 +9,19 @@ import (
 	"time"
 
 	"github.com/emaharmony/prizm/internal/freewill"
+	prismsqlite "github.com/emaharmony/prizm/internal/sqlite"
 )
 
 var ErrFreewillActorAdmissionConflict = errors.New("multiagent: Freewill actor admission conflicts with an active intention")
+
+// OpenExistingSQLiteDurableRunStoreReadOnly opens an existing durable store
+// without creating tables or enabling write-capable workflow paths.
+func OpenExistingSQLiteDurableRunStoreReadOnly(dbPath string) (*SQLiteDurableRunStore, error) {
+	if dbPath == "" { return nil, errors.New("multiagent: sqlite database path is required") }
+	db, err := sql.Open(prismsqlite.DriverName, dbPath+"?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(5000)")
+	if err != nil { return nil, fmt.Errorf("multiagent store: open read-only: %w", err) }
+	return &SQLiteDurableRunStore{db: db}, nil
+}
 
 func (s *SQLiteDurableRunStore) ensureFreewillTables(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
