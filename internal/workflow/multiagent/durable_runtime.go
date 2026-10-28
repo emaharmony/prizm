@@ -565,6 +565,10 @@ func (r *DurableRuntime) persistRequestedCancellation(
 	record.PendingTransition = nil
 	record.ActiveExecutionKey = ""
 	record.Waiting = nil
+	// A delegation join is only valid while its waiting checkpoint is present.
+	// Cancellation clears that checkpoint, so clear the join atomically as well
+	// or the durable record fails validation and cannot be resumed/inspected.
+	record.DelegationJoin = nil
 	record.Failure = nil
 	saved, err := r.checkpoint(ctx, record)
 	if err != nil {
@@ -872,6 +876,7 @@ func (r *DurableRuntime) prepareRole(
 		record.PendingTransition = nil
 		record.ActiveExecutionKey = ""
 		record.Waiting = nil
+		record.DelegationJoin = nil
 		record.Failure = nil
 		record, checkpointErr := r.checkpoint(ctx, record)
 		if checkpointErr != nil {

@@ -80,6 +80,33 @@ func TestDurableRuntimeActiveCancellationStopsAtRoleBoundary(t *testing.T) {
 	}
 }
 
+func TestDurableRuntimeCancellationClearsDelegationJoinCheckpoint(t *testing.T) {
+	runID := "run-cancel-delegation-join"
+	runtime, _, _, _ := newWaitingPlannerDelegationRuntime(t, runID)
+	state, err := runtime.Cancel(t.Context(), runID, "operator stop at join")
+	if err != nil {
+		t.Fatalf("cancel join: %v", err)
+	}
+	if state.Status != RunStatusCancelled {
+		t.Fatalf("status=%q, want cancelled", state.Status)
+	}
+	record, err := runtime.Inspect(t.Context(), runID)
+	if err != nil {
+		t.Fatalf("inspect cancelled join: %v", err)
+	}
+	if record.Phase != CheckpointTerminal || record.Waiting != nil || record.DelegationJoin != nil {
+		t.Fatalf("cancelled join retained transient checkpoint: phase=%q waiting=%#v join=%#v", record.Phase, record.Waiting, record.DelegationJoin)
+	}
+	// A repeated operator cancel must remain idempotent after terminalization.
+	repeated, err := runtime.Cancel(t.Context(), runID, "operator stop again")
+	if err != nil {
+		t.Fatalf("repeat cancel: %v", err)
+	}
+	if repeated.Status != RunStatusCancelled {
+		t.Fatalf("repeat status=%q, want cancelled", repeated.Status)
+	}
+}
+
 type blockingPlannerRunner struct {
 	started chan struct{}
 	release chan struct{}

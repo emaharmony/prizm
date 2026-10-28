@@ -117,3 +117,15 @@ func TestCompatAdaptDefinitionBehavioralEquivalence(t *testing.T) {
 		t.Errorf("expected *InvalidTransitionError, got %T: %v", resolveErr, resolveErr)
 	}
 }
+
+func TestTestsSkippedIsTesterOutcome(t *testing.T) {
+	if !OutcomeTestsSkipped.Valid() {
+		t.Fatal("tests_skipped is not recognized")
+	}
+	if !OutcomeTestsSkipped.ValidFor(RoleTester) {
+		t.Fatal("tests_skipped is not valid for the tester role")
+	}
+	if OutcomeTestsSkipped.ValidFor(RoleReviewer) {
+		t.Fatal("tests_skipped is valid for the reviewer role")
+	}
+}

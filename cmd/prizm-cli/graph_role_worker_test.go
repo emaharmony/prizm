@@ -59,6 +59,36 @@ func TestGraphRoleFailureOutcomePreservesCapabilityCodeWithoutReason(t *testing.
 	if bytes.Contains(encoded, []byte(privateReason)) {
 		t.Fatalf("private governance reason leaked in worker outcome: %s", encoded)
 	}
+
+func TestWatchDurableRunCancellationStopsChildContext(t *testing.T) {
+	runDir := t.TempDir()
+	runID := "run-watch-cancel"
+	runPath := filepath.Join(runDir, runID)
+	if err := os.MkdirAll(runPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(runPath, "multiagent.db")
+	store, err := multiagent.NewSQLiteDurableRunStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.Create(t.Context(), multiagent.DurableRun{
+		SchemaVersion: multiagent.DurableRunSchemaVersion,
+		State:         multiagent.RunState{RunID: runID, UpdatedAt: time.Now().UTC()},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	ctx, stop := watchDurableRunCancellation(context.Background(), dbPath, runID)
+	defer stop()
+	if err := store.RequestCancellation(t.Context(), runID, "operator stop"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("child context did not observe durable cancellation")
+	}
 }
 
 func TestGraphRoleWorkerEmbeddedNATSExecutesThreeFanoutLanesConcurrently(t *testing.T) {

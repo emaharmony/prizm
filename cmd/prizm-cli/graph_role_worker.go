@@ -23,6 +23,8 @@ const graphRoleOutcomeSubject = graphRoleDelegationSubject + ".outcome"
 
 const graphRoleResumeRetryAfter = 50 * time.Millisecond
 
+const graphRoleCancellationPoll = 100 * time.Millisecond
+
 type natsCommandPublisher struct{ nc *nats.Conn }
 
 func (p natsCommandPublisher) Publish(ctx context.Context, subject string, payload []byte) error {
@@ -504,6 +506,11 @@ func (w *graphRoleWorker) execute(command multiagent.GraphRoleCommand) {
 	var retryHandle multiagent.RoleVisitRetryHandle
 	if err == nil {
 		execCtx, cancel := context.WithDeadline(ctx, command.Deadline)
+		// A graph child can outlive its parent runtime claim while the parent is
+		// waiting at delegation_join. Observe the durable cancellation request
+		// directly so an operator cancellation interrupts the provider loop and
+		// closes the child claim instead of letting the model continue turns.
+		execCtx, stopCancellationWatch := watchDurableRunCancellation(execCtx, ledgerPath, command.RunID)
 		command.Request.RecoveryFeedback = command.RecoveryFeedback
 		var retryStore *multiagent.SQLiteDurableRunStore
 		if command.DeliveryAttemptID != "" && command.AttemptID != "" {
@@ -540,6 +547,7 @@ func (w *graphRoleWorker) execute(command multiagent.GraphRoleCommand) {
 		if retryStore != nil {
 			_ = retryStore.Close()
 		}
+		stopCancellationWatch()
 		cancel()
 	}
 	if err != nil {
@@ -577,6 +585,43 @@ func graphRoleFailureOutcome(err error, command multiagent.GraphRoleCommand, res
 	failure.AttemptID = attemptID
 	failure.Usage = result.TokenUsage
 	return multiagent.GraphRoleOutcome{Failure: &failure}
+}
+
+// watchDurableRunCancellation binds a child provider execution to the
+// parent's durable cancellation record. Cancellation is deliberately
+// fail-open for read errors: the normal command deadline and parent context
+// still bound the execution, while transient SQLite contention must not
+// fabricate a cancelled outcome.
+func watchDurableRunCancellation(ctx context.Context, ledgerPath, runID string) (context.Context, context.CancelFunc) {
+	watched, cancel := context.WithCancel(ctx)
+	store, err := multiagent.NewSQLiteDurableRunStore(ledgerPath)
+	if err != nil {
+		return watched, cancel
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer store.Close()
+		ticker := time.NewTicker(graphRoleCancellationPoll)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-watched.Done():
+				return
+			case <-ticker.C:
+				reason, requested, queryErr := store.CancellationRequest(watched, runID)
+				if queryErr == nil && requested {
+					log.Printf("[GRAPH-WORKER] durable cancellation observed run=%s reason=%q", runID, reason)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return watched, func() {
+		cancel()
+		<-done
+	}
 }
 
 func (w *graphRoleWorker) persistAcceptedAndPublish(ctx context.Context, ledgerPath string, command multiagent.GraphRoleCommand) error {
