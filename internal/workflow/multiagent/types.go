@@ -116,6 +116,7 @@ const (
 	OutcomeImplementationReady TransitionOutcome = "implementation_ready"
 	OutcomeTestsPassed         TransitionOutcome = "tests_passed"
 	OutcomeTestsFailed         TransitionOutcome = "tests_failed"
+	OutcomeTestsSkipped        TransitionOutcome = "tests_skipped"
 	OutcomeReviewApproved      TransitionOutcome = "review_approved"
 	OutcomeChangesRequested    TransitionOutcome = "changes_requested"
 	OutcomeTerminalFailure     TransitionOutcome = "terminal_failure"
@@ -129,6 +130,7 @@ func (o TransitionOutcome) Valid() bool {
 		OutcomeImplementationReady,
 		OutcomeTestsPassed,
 		OutcomeTestsFailed,
+		OutcomeTestsSkipped,
 		OutcomeReviewApproved,
 		OutcomeChangesRequested,
 		OutcomeTerminalFailure,
@@ -147,7 +149,7 @@ func (o TransitionOutcome) ValidFor(role Role) bool {
 		return role == RolePlanner
 	case OutcomeImplementationReady:
 		return role == RoleDeveloper
-	case OutcomeTestsPassed, OutcomeTestsFailed:
+	case OutcomeTestsPassed, OutcomeTestsFailed, OutcomeTestsSkipped:
 		return role == RoleTester
 	case OutcomeReviewApproved, OutcomeChangesRequested:
 		return role == RoleReviewer

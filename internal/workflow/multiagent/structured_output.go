@@ -397,10 +397,6 @@ func validateDeveloperOutput(output DeveloperOutput) error {
 	return validateOutputHandoff(output.Handoff)
 }
 
-func validateTesterOutput(output TesterOutput) error {
-	return validateTesterOutputWithSkipped(output, false)
-}
-
 func validateTesterOutputWithSkipped(output TesterOutput, allowSkipped bool) error {
 	if err := validateSchemaVersion(output.SchemaVersion); err != nil {
 		return err

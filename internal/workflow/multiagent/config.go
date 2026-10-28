@@ -33,6 +33,9 @@ type RoleConfig struct {
 	Retry              retry.RetryConfig   `json:"retry"`
 	Approval           ApprovalRequirement `json:"approval"`
 	ValidationProfiles []string            `json:"validation_profiles,omitempty"`
+	// ValidationProfilesExplicit distinguishes an intentional empty profile
+	// set (skip automated validation) from an omitted, defaultable setting.
+	ValidationProfilesExplicit bool `json:"validation_profiles_explicit,omitempty"`
 }
 
 // ApprovalRequirement describes workflow-level approval routing. The approval
