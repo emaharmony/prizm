@@ -59,6 +59,7 @@ func TestGraphRoleFailureOutcomePreservesCapabilityCodeWithoutReason(t *testing.
 	if bytes.Contains(encoded, []byte(privateReason)) {
 		t.Fatalf("private governance reason leaked in worker outcome: %s", encoded)
 	}
+}
 
 func TestWatchDurableRunCancellationStopsChildContext(t *testing.T) {
 	runDir := t.TempDir()
