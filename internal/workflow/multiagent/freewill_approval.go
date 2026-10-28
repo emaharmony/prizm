@@ -2,11 +2,7 @@ package multiagent
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"sort"
 	"strings"
 	"time"
 
@@ -533,18 +529,6 @@ func freewillApprovalDecision(status string) (FreewillApprovalDecision, bool) {
 	}
 }
 
-func selectedFreewillCandidate(state *FreewillRunState) (freewill.CandidateIntention, bool) {
-	if state == nil {
-		return freewill.CandidateIntention{}, false
-	}
-	for _, candidate := range state.Candidates {
-		if candidate.CandidateID == state.ChoiceID {
-			return candidate, true
-		}
-	}
-	return freewill.CandidateIntention{}, false
-}
-
 // validateFreewillApprovalCandidate re-checks the untrusted selection at the
 // policy/approval boundary. Earlier selection validation is not sufficient:
 // the durable record may have been edited or recovered independently.
@@ -556,14 +540,6 @@ func validateFreewillApprovalCandidate(record DurableRun, candidate freewill.Can
 		return ErrFreewillApprovalStale
 	}
 	return nil
-}
-
-func freewillRequestFingerprint(request freewill.IntentionRequest) (string, freewill.IntentionRequest) {
-	request.RequestedCapabilities = append([]string(nil), request.RequestedCapabilities...)
-	sort.Strings(request.RequestedCapabilities)
-	data, _ := json.Marshal(request)
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), request
 }
 
 func safePolicyRuleID(id string) string {

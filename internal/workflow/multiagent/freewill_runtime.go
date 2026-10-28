@@ -21,7 +21,6 @@ const maxFreewillSelectionAttempts = uint64(maxRoleRecoveryRetries + 1)
 
 var ErrFreewillRuntimeUnavailable = errors.New("multiagent: Freewill decision runtime is not configured")
 var ErrFreewillWakeNotDue = errors.New("multiagent: Freewill selection retry is not due")
-var ErrFreewillActorAdmissionConflict = errors.New("multiagent: Freewill actor admission conflicts with an active intention")
 var ErrFreewillActorAdmissionAmbiguous = errors.New("multiagent: Freewill actor admission state is ambiguous")
 var ErrFreewillSelectionBudgetExceeded = errors.New("multiagent: Freewill selector attempt budget is exhausted")
 
