@@ -54,7 +54,7 @@ func (s *SQLiteDurableRunStore) LoadFreewillOperatorControl(ctx context.Context,
 func (s *SQLiteDurableRunStore) SetFreewillOperatorHalt(ctx context.Context, agentID string, scope freewill.Scope, halted bool, actor string, now time.Time) (FreewillOperatorControlState, error) {
 	if err := s.ensureFreewillTables(ctx); err != nil { return FreewillOperatorControlState{}, err }
 	key := freewillOperatorControlKey(agentID, scope)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO multiagent_freewill_controls(control_key,agent_id,project_id,workspace,halted,generation,actor,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(control_key) DO UPDATE SET halted=excluded.halted,generation=multiagent_freewill_controls.generation+1,actor=excluded.actor,updated_at=excluded.updated_at`, key, agentID, scope.ProjectID, scope.Workspace, boolInt(halted), 1, actor, now.UTC().Format(time.RFC3339Nano))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO multiagent_freewill_controls(control_key,agent_id,project_id,workspace,halted,generation,actor,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(control_key) DO UPDATE SET halted=excluded.halted,generation=multiagent_freewill_controls.generation+1,actor=excluded.actor,updated_at=excluded.updated_at WHERE multiagent_freewill_controls.halted != excluded.halted`, key, agentID, scope.ProjectID, scope.Workspace, boolInt(halted), 1, actor, now.UTC().Format(time.RFC3339Nano))
 	if err != nil { return FreewillOperatorControlState{}, err }
 	return s.LoadFreewillOperatorControl(ctx, agentID, scope)
 }
@@ -64,11 +64,46 @@ func boolInt(v bool) int { if v { return 1 }; return 0 }
 func (s *SQLiteDurableRunStore) EnsureFreewillActorAdmission(ctx context.Context, runID, agentID string, scope freewill.Scope) error {
 	if err := s.ensureFreewillTables(ctx); err != nil { return err }
 	key := freewillActorAdmissionKey(agentID)
-	var existing string
-	err := s.db.QueryRowContext(ctx, `SELECT run_id FROM multiagent_freewill_admissions WHERE actor_key = ?`, key).Scan(&existing)
-	if err == nil && existing != runID { return ErrFreewillActorAdmissionConflict }
-	if err != nil && !errors.Is(err, sql.ErrNoRows) { return err }
-	_, err = s.db.ExecContext(ctx, `INSERT INTO multiagent_freewill_admissions(actor_key,run_id,agent_id,project_id,workspace,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(actor_key) DO UPDATE SET run_id=excluded.run_id,updated_at=excluded.updated_at`, key, runID, agentID, scope.ProjectID, scope.Workspace, time.Now().UTC().Format(time.RFC3339Nano))
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil { return fmt.Errorf("multiagent store: begin Freewill admission: %w", err) }
+	defer tx.Rollback()
+	var existing, existingProject, existingWorkspace string
+	err = tx.QueryRowContext(ctx, `SELECT run_id, project_id, workspace FROM multiagent_freewill_admissions WHERE actor_key = ?`, key).Scan(&existing, &existingProject, &existingWorkspace)
+	if errors.Is(err, sql.ErrNoRows) {
+		return freewillInsertAdmission(ctx, tx, key, runID, agentID, scope)
+	}
+	if err != nil { return err }
+	if existing == runID {
+		if existingProject != scope.ProjectID || existingWorkspace != scope.Workspace {
+			return ErrFreewillActorAdmissionAmbiguous
+		}
+		return tx.Commit()
+	}
+	var raw string
+	err = tx.QueryRowContext(ctx, `SELECT record_json FROM multiagent_runs WHERE run_id = ?`, existing).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrFreewillActorAdmissionAmbiguous
+	}
+	if err != nil { return err }
+	var prior DurableRun
+	if err := json.Unmarshal([]byte(raw), &prior); err != nil {
+		return fmt.Errorf("multiagent store: decode Freewill admission run: %w", err)
+	}
+	if freewillAdmissionActive(prior) {
+		return ErrFreewillActorAdmissionConflict
+	}
+	if err := freewillReplaceAdmission(ctx, tx, key, runID, agentID, scope); err != nil { return err }
+	return tx.Commit()
+}
+
+func freewillInsertAdmission(ctx context.Context, tx *sql.Tx, key, runID, agentID string, scope freewill.Scope) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO multiagent_freewill_admissions(actor_key,run_id,agent_id,project_id,workspace,updated_at) VALUES(?,?,?,?,?,?)`, key, runID, agentID, scope.ProjectID, scope.Workspace, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil { return err }
+	return tx.Commit()
+}
+
+func freewillReplaceAdmission(ctx context.Context, tx *sql.Tx, key, runID, agentID string, scope freewill.Scope) error {
+	_, err := tx.ExecContext(ctx, `UPDATE multiagent_freewill_admissions SET run_id=?,agent_id=?,project_id=?,workspace=?,updated_at=? WHERE actor_key=?`, runID, agentID, scope.ProjectID, scope.Workspace, time.Now().UTC().Format(time.RFC3339Nano), key)
 	return err
 }
 
