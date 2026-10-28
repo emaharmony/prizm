@@ -35,7 +35,8 @@ func (p CheckpointPhase) Valid() bool {
 		CheckpointRoleRunning,
 		CheckpointTransitionPending,
 		CheckpointWaiting,
-		CheckpointTerminal:
+		CheckpointTerminal,
+		CheckpointFreewillWake:
 		return true
 	default:
 		return false
@@ -623,7 +624,7 @@ func (r DurableRun) validateFreewill() []string {
 	if r.State.RequestIdentity != nil && r.Freewill.DedupeKey != r.State.RequestIdentity.IdempotencyKey {
 		problems = append(problems, "Freewill dedupe key does not match accepted identity")
 	}
-	if r.Freewill.ExecutionDisabled == false && r.Freewill.Lifecycle != freewill.StateWaking && r.Freewill.Lifecycle != freewill.StateSelecting {
+	if !r.Freewill.ExecutionDisabled && r.Freewill.Lifecycle != freewill.StateWaking && r.Freewill.Lifecycle != freewill.StateSelecting {
 		problems = append(problems, "Freewill execution must remain disabled")
 	}
 	return problems
