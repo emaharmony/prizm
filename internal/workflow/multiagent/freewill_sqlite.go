@@ -11,6 +11,8 @@ import (
 	"github.com/emaharmony/prizm/internal/freewill"
 )
 
+var ErrFreewillActorAdmissionConflict = errors.New("multiagent: Freewill actor admission conflicts with an active intention")
+
 func (s *SQLiteDurableRunStore) ensureFreewillTables(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS multiagent_freewill_controls (
