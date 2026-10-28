@@ -435,12 +435,14 @@ type ApplyPatchProposal struct {
 
 func (t *ApplyPatchProposal) Name() string { return "apply_patch_proposal" }
 func (t *ApplyPatchProposal) Description() string {
-	return "Proposes one atomic multi-file unified diff for approval. Requires the exact current base SHA and does not modify the worktree."
+	return "Proposes one atomic patch for approval. Use patch plus base_sha for a complete unified diff, or the host-adapted single-new-file intent path plus content. The host supplies the trusted base for intents; this tool never modifies the worktree."
 }
 func (t *ApplyPatchProposal) Schema() ToolSchema {
 	return ToolSchema{Input: map[string]ParamSpec{
-		"patch":    {Type: "string", Description: "Complete unified diff for all requested file changes", Required: true},
-		"base_sha": {Type: "string", Description: "Exact git HEAD SHA the patch was prepared against", Required: true},
+		"patch":    {Type: "string", Description: "Complete unified diff (provide together with base_sha)", Required: false},
+		"base_sha": {Type: "string", Description: "Exact git HEAD SHA for a complete unified diff (omit for path/content intent)", Required: false},
+		"path":     {Type: "string", Description: "Workspace-relative path for one new file (provide together with content)", Required: false},
+		"content":  {Type: "string", Description: "Bounded content for one new file (provide together with path)", Required: false},
 	}, Output: ParamSpec{Type: "object", Description: "Approval identity, exact patch plan, and changed paths"}}
 }
 func (t *ApplyPatchProposal) Execute(ctx context.Context, input map[string]any) (ToolResult, error) {
