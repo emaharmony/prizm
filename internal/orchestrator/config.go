@@ -109,13 +109,57 @@ type Config struct {
 // FreewillConfig contains feature-off-by-default Freewill configuration.
 // Enabling these flags alone does not activate scheduling or execution.
 type FreewillConfig struct {
-	Enabled    bool                     `yaml:"enabled"`
-	Scheduling FreewillSchedulingConfig `yaml:"scheduling"`
+	Enabled         bool                     `yaml:"enabled"`
+	AgentID         string                   `yaml:"agent_id,omitempty"`
+	ProjectID       string                   `yaml:"project_id,omitempty"`
+	Model           string                   `yaml:"model,omitempty"`
+	ReasoningEffort string                   `yaml:"reasoning_effort,omitempty"`
+	PolicyDir       string                   `yaml:"policy_dir,omitempty"`
+	Scheduling      FreewillSchedulingConfig `yaml:"scheduling"`
 }
 
 // FreewillSchedulingConfig is a separate opt-in switch for future wake work.
 type FreewillSchedulingConfig struct {
-	Enabled bool `yaml:"enabled"`
+	Enabled  bool   `yaml:"enabled"`
+	Schedule string `yaml:"schedule,omitempty"`
+}
+
+// ValidateHostBinding checks the opt-in Freewill service bindings without
+// making ordinary config loading activate or require the feature.
+func (f FreewillConfig) ValidateHostBinding(agents []AgentConfig, projects []ProjectConfig) error {
+	if !f.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(f.AgentID) == "" || strings.TrimSpace(f.ProjectID) == "" {
+		return fmt.Errorf("config: freewill.agent_id and project_id are required when enabled")
+	}
+	projectFound := false
+	for _, project := range projects {
+		if project.ID == f.ProjectID && strings.TrimSpace(project.RepoPath) != "" {
+			projectFound = true
+			break
+		}
+	}
+	if !projectFound {
+		return fmt.Errorf("config: freewill.project_id must name a configured project with a repository path")
+	}
+	var selected *AgentConfig
+	for i := range agents {
+		if agents[i].ID == f.AgentID {
+			selected = &agents[i]
+			break
+		}
+	}
+	if selected == nil {
+		return fmt.Errorf("config: freewill.agent_id must name a configured agent")
+	}
+	if strings.TrimSpace(f.Model) != "" && selected.Model != f.Model {
+		return fmt.Errorf("config: freewill.model must match the selector agent's configured model")
+	}
+	if f.Scheduling.Enabled && strings.TrimSpace(f.Scheduling.Schedule) == "" {
+		return fmt.Errorf("config: freewill.scheduling.schedule is required when scheduling is enabled")
+	}
+	return nil
 }
 
 // MCPServerConfig declares one external MCP (Model Context Protocol) tool server.
@@ -1138,6 +1182,7 @@ func DefaultConfig() *Config {
 		},
 		Freewill: FreewillConfig{
 			Enabled:    false,
+			PolicyDir:  "policies",
 			Scheduling: FreewillSchedulingConfig{Enabled: false},
 		},
 		Shell: ShellConfig{
@@ -1221,6 +1266,11 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("config: agent[%d] %q fallback[%d] duplicates a prior target", i, id, j)
 			}
 			seenTargets[key] = true
+		}
+	}
+	if c.Freewill.Enabled {
+		if strings.TrimSpace(c.Freewill.PolicyDir) == "" {
+			c.Freewill.PolicyDir = "policies"
 		}
 	}
 

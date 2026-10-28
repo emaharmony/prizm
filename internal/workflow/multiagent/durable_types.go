@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/emaharmony/prizm/internal/cost"
 	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/freewill"
 	"github.com/emaharmony/prizm/internal/gitx"
 )
 
@@ -23,6 +25,7 @@ const (
 	CheckpointTransitionPending CheckpointPhase = "transition_pending"
 	CheckpointWaiting           CheckpointPhase = "waiting"
 	CheckpointTerminal          CheckpointPhase = "terminal"
+	CheckpointFreewillWake      CheckpointPhase = "freewill_wake"
 )
 
 // Valid reports whether the phase is recognized by this runtime.
@@ -304,6 +307,7 @@ type PersistedFailure struct {
 type DurableRun struct {
 	SchemaVersion               int                  `json:"schema_version"`
 	Revision                    int64                `json:"revision"`
+	Kind                        DurableRunKind       `json:"kind,omitempty"`
 	State                       RunState             `json:"state"`
 	Phase                       CheckpointPhase      `json:"phase"`
 	PendingTransition           *PendingTransition   `json:"pending_transition,omitempty"`
@@ -320,6 +324,87 @@ type DurableRun struct {
 	Reflections                 []ReflectionRecord   `json:"reflections,omitempty"`
 	ReplanCount                 int                  `json:"replan_count,omitempty"`
 	PendingDelegationOutcomeAck string               `json:"pending_delegation_outcome_ack,omitempty"`
+	Freewill                    *FreewillRunState    `json:"freewill,omitempty"`
+}
+
+type DurableRunKind string
+
+const (
+	DurableRunKindTask     DurableRunKind = "task"
+	DurableRunKindFreewill DurableRunKind = "freewill"
+	FreewillWorkflowID                    = "prizm.freewill.intention.v1"
+)
+
+type FreewillApprovalDecision string
+
+const (
+	FreewillApprovalPending FreewillApprovalDecision = "pending"
+	FreewillApprovalGranted FreewillApprovalDecision = "approved"
+	FreewillApprovalDenied  FreewillApprovalDecision = "denied"
+)
+
+type FreewillApprovalReceipt struct {
+	ApprovalID         string                   `json:"approval_id"`
+	RequestFingerprint string                   `json:"request_fingerprint"`
+	Decision           FreewillApprovalDecision `json:"decision"`
+	ControlGeneration  uint64                   `json:"control_generation,omitempty"`
+}
+
+type FreewillRunState struct {
+	Lifecycle               freewill.State                `json:"lifecycle"`
+	Scope                   freewill.Scope                `json:"scope"`
+	WakeID                  string                        `json:"wake_id"`
+	Trigger                 string                        `json:"trigger"`
+	DedupeKey               string                        `json:"dedupe_key"`
+	CorrelationID           string                        `json:"correlation_id"`
+	LeaseAttempt            uint64                        `json:"lease_attempt,omitempty"`
+	SelectionAttemptLimit   uint64                        `json:"selection_attempt_limit,omitempty"`
+	LeaseOwner              string                        `json:"lease_owner,omitempty"`
+	LeaseUntil              time.Time                     `json:"lease_until,omitempty"`
+	Candidates              []freewill.CandidateIntention `json:"candidates,omitempty"`
+	VerifiedResumeIDs       []string                      `json:"verified_resume_ids,omitempty"`
+	ChoiceID                string                        `json:"choice_id,omitempty"`
+	ReasonSummary           string                        `json:"reason_summary,omitempty"`
+	SleepReason             string                        `json:"sleep_reason,omitempty"`
+	ApprovalRef             string                        `json:"approval_ref,omitempty"`
+	ApprovalFingerprint     string                        `json:"approval_fingerprint,omitempty"`
+	ApprovalGeneration      uint64                        `json:"approval_generation,omitempty"`
+	ApprovalReceipt         *FreewillApprovalReceipt      `json:"approval_receipt,omitempty"`
+	PolicyDecision          string                        `json:"policy_decision,omitempty"`
+	PolicyRuleID            string                        `json:"policy_rule_id,omitempty"`
+	ExecutionDisabled       bool                          `json:"execution_disabled,omitempty"`
+	PauseReason             string                        `json:"pause_reason,omitempty"`
+	SelectionProvider       string                        `json:"selection_provider,omitempty"`
+	SelectionModel          string                        `json:"selection_model,omitempty"`
+	SelectionUsage          cost.TokenUsage               `json:"selection_usage,omitempty"`
+	SelectionAttempt        uint64                        `json:"selection_attempt,omitempty"`
+	SelectionRecoveryNumber int                           `json:"selection_recovery_number,omitempty"`
+	SelectionFailureClass   string                        `json:"selection_failure_class,omitempty"`
+	SelectionFailureCode    string                        `json:"selection_failure_code,omitempty"`
+	SelectionNextAt         time.Time                     `json:"selection_next_at,omitempty"`
+	SelectionFeedback       string                        `json:"selection_feedback,omitempty"`
+}
+
+type FreewillOperatorControlStore interface {
+	LoadFreewillOperatorControl(context.Context, string, freewill.Scope) (FreewillOperatorControlState, error)
+	SetFreewillOperatorHalt(context.Context, string, freewill.Scope, bool, string, time.Time) (FreewillOperatorControlState, error)
+}
+
+type FreewillActorAdmissionStore interface {
+	EnsureFreewillActorAdmission(context.Context, string, string, freewill.Scope) error
+}
+
+type FreewillRunLister interface {
+	ListFreewillRuns(context.Context, string, int) ([]DurableRun, error)
+}
+
+type FreewillOperatorControlState struct {
+	AgentID         string       `json:"agent_id"`
+	Scope           freewill.Scope `json:"scope"`
+	Halted          bool         `json:"halted"`
+	Generation      uint64       `json:"generation"`
+	Actor           string       `json:"actor,omitempty"`
+	UpdatedAt       time.Time    `json:"updated_at"`
 }
 
 // Validate rejects corrupt, internally contradictory, or future state.
@@ -334,6 +419,16 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 	}
 	if !r.Phase.Valid() {
 		problems = append(problems, fmt.Sprintf("unknown checkpoint phase %q", r.Phase))
+	}
+	if r.Kind == DurableRunKindFreewill {
+		problems = append(problems, r.validateFreewill()...)
+		if len(problems) != 0 {
+			return &ContractError{Problems: problems}
+		}
+		return nil
+	}
+	if r.Freewill != nil {
+		problems = append(problems, "ordinary task record cannot contain Freewill state")
 	}
 	if r.Failure != nil {
 		seenFailureChildren := make(map[string]struct{}, len(r.Failure.FanOutFailures))
@@ -504,6 +599,34 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 		return &ContractError{Problems: problems}
 	}
 	return nil
+}
+
+func (r DurableRun) validateFreewill() []string {
+	if r.Freewill == nil {
+		return []string{"Freewill run kind requires Freewill state"}
+	}
+	var problems []string
+	if r.Phase != CheckpointFreewillWake {
+		problems = append(problems, "Freewill record requires freewill_wake checkpoint")
+	}
+	if r.State.WorkflowID != FreewillWorkflowID || r.State.WorkflowVersion != 1 {
+		problems = append(problems, "Freewill record workflow identity is invalid")
+	}
+	if r.State.RequestIdentity == nil || strings.TrimSpace(r.State.RequestIdentity.IdempotencyKey) == "" {
+		problems = append(problems, "Freewill record requires accepted idempotency identity")
+	}
+	if strings.TrimSpace(r.Freewill.WakeID) == "" || strings.TrimSpace(r.Freewill.DedupeKey) == "" ||
+		strings.TrimSpace(r.Freewill.CorrelationID) == "" || strings.TrimSpace(r.Freewill.Scope.ProjectID) == "" ||
+		strings.TrimSpace(r.Freewill.Scope.Workspace) == "" {
+		problems = append(problems, "Freewill wake identity and scope are required")
+	}
+	if r.State.RequestIdentity != nil && r.Freewill.DedupeKey != r.State.RequestIdentity.IdempotencyKey {
+		problems = append(problems, "Freewill dedupe key does not match accepted identity")
+	}
+	if r.Freewill.ExecutionDisabled == false && r.Freewill.Lifecycle != freewill.StateWaking && r.Freewill.Lifecycle != freewill.StateSelecting {
+		problems = append(problems, "Freewill execution must remain disabled")
+	}
+	return problems
 }
 
 func validFanOutAdoptionSource(a FanOutAdoptionState, state RunState, graph *CompiledGraph) bool {
