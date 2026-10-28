@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/emaharmony/prizm/internal/freewill"
@@ -98,6 +99,9 @@ func (s *SQLiteDurableRunStore) EnsureFreewillActorAdmission(ctx context.Context
 
 func freewillInsertAdmission(ctx context.Context, tx *sql.Tx, key, runID, agentID string, scope freewill.Scope) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO multiagent_freewill_admissions(actor_key,run_id,agent_id,project_id,workspace,updated_at) VALUES(?,?,?,?,?,?)`, key, runID, agentID, scope.ProjectID, scope.Workspace, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed: multiagent_freewill_admissions.actor_key") {
+		return ErrFreewillActorAdmissionConflict
+	}
 	if err != nil { return err }
 	return tx.Commit()
 }
