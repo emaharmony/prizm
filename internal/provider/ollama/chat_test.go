@@ -173,6 +173,79 @@ func TestChatProviderGLM53UsesLowEffortClearsThinkingAndExcludesItFromResponse(t
 	}
 }
 
+func TestChatProviderGLM53FlashUsesLowEffortAndClearsThinking(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if request["model"] != "glm-5.3-flash:cloud" || request["clear_thinking"] != true || request["think"] != "low" {
+			t.Fatalf("Flash request must use GLM chat options: %#v", request)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "glm-5.3-flash:cloud", "done": true,
+			"message": map[string]any{"role": "assistant", "content": "OK"},
+		})
+	}))
+	defer server.Close()
+
+	response, err := ollama.NewChatProvider(server.URL).ChatGenerate(context.Background(), provider.ChatGenerateRequest{
+		Model: "glm-5.3-flash:cloud", Messages: []provider.ChatMessage{{Role: "user", Content: "return OK"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Content != "OK" {
+		t.Fatalf("response=%#v", response)
+	}
+}
+
+func TestChatProviderNonGLMModelDisablesThinking(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if request["model"] != "qwen3.5:9b" || request["think"] != false {
+			t.Fatalf("non-GLM request must retain non-GLM thinking behavior: %#v", request)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "qwen3.5:9b", "done": true,
+			"message": map[string]any{"role": "assistant", "content": "OK"},
+		})
+	}))
+	defer server.Close()
+
+	if _, err := ollama.NewChatProvider(server.URL).ChatGenerate(context.Background(), provider.ChatGenerateRequest{
+		Model: "qwen3.5:9b", Messages: []provider.ChatMessage{{Role: "user", Content: "return OK"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestChatProviderGLM53NearMissDoesNotUseGLMOptions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if _, present := request["clear_thinking"]; present || request["think"] != false {
+			t.Fatalf("near-miss model must use non-GLM options: %#v", request)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "glm-5.3-preview:cloud", "done": true,
+			"message": map[string]any{"role": "assistant", "content": "OK"},
+		})
+	}))
+	defer server.Close()
+
+	if _, err := ollama.NewChatProvider(server.URL).ChatGenerate(context.Background(), provider.ChatGenerateRequest{
+		Model: "glm-5.3-preview:cloud", Messages: []provider.ChatMessage{{Role: "user", Content: "return OK"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestChatProviderPassesJSONFormatToOllama(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request map[string]any

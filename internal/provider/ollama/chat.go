@@ -281,7 +281,16 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 }
 
 func isGLM53Cloud(model string) bool {
-	return strings.EqualFold(strings.TrimSpace(model), "glm-5.3:cloud")
+	model = strings.ToLower(strings.TrimSpace(model))
+	// Ollama exposes exactly these two registry names with the GLM chat
+	// contract. Keep this an exact allowlist so near-miss model names do not
+	// inherit GLM-specific request semantics.
+	switch model {
+	case "glm-5.3:cloud", "glm-5.3-flash:cloud":
+		return true
+	default:
+		return false
+	}
 }
 
 // isQuotaExhausted reports whether a 429 response body indicates an
