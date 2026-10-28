@@ -192,6 +192,10 @@ func TestServedFreewillP1WakePersistsPolicyOnlyProposalAndHistory(t *testing.T) 
 		runtime.Close()
 		t.Fatalf("start Freewill wake service: %v", err)
 	}
+	if err := runtime.Start(ctx, nc, true); err != nil {
+		runtime.Close()
+		t.Fatalf("duplicate Freewill start should be idempotent: %v", err)
+	}
 	if err := nc.Publish(freewillScheduleSubject, []byte(`{}`)); err != nil {
 		t.Fatal(err)
 	}
