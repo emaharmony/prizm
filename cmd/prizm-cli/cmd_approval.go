@@ -171,9 +171,14 @@ func executeApprovalApprove(approvalID, approvedBy, runID, workspace, runsDir, c
 	// Durable multi-agent runs persist their isolated worktree in the run
 	// manifest. Apply the exact approval there even when the CLI's global
 	// workspace flag points at the source checkout.
-	if manifest, manifestErr := loadReferenceManifest(runsDir, runID); manifestErr == nil {
-		workspace = manifest.WorkspacePath
-		writeRoots = append(writeRoots, manifest.WorkspacePath)
+	resolvedWorkspace, hasManifest, manifestErr := approvalWorkspaceForRun(runsDir, runID, workspace)
+	if manifestErr != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving approval workspace: %v\n", manifestErr)
+		os.Exit(1)
+	}
+	if hasManifest {
+		workspace = resolvedWorkspace
+		writeRoots = append(writeRoots, resolvedWorkspace)
 	}
 	executor := mutation.NewExecutor(workspace, store, writeRoots...)
 	// V62: enables applying MutationToolCall approvals — the human has
@@ -217,6 +222,24 @@ func executeApprovalApprove(approvalID, approvedBy, runID, workspace, runsDir, c
 		fmt.Printf("  Message:     %s\n", result.Message)
 	}
 	fmt.Println("═══════════════════════════════════════════")
+}
+
+// approvalWorkspaceForRun prefers the isolated workspace persisted by a
+// durable run. If a manifest exists but cannot be validated, fail closed:
+// silently keeping the process-wide workspace can apply an approved patch to
+// the source checkout instead of the run's isolated worktree.
+func approvalWorkspaceForRun(runsDir, runID, fallbackWorkspace string) (string, bool, error) {
+	manifest, err := loadReferenceManifest(runsDir, runID)
+	if err == nil {
+		return manifest.WorkspacePath, true, nil
+	}
+	manifestPath := referenceManifestPath(runsDir, runID)
+	if _, statErr := os.Stat(manifestPath); statErr == nil {
+		return "", true, fmt.Errorf("refusing approval because run manifest %q is invalid: %w", manifestPath, err)
+	} else if !os.IsNotExist(statErr) {
+		return "", true, fmt.Errorf("inspect run manifest %q: %w", manifestPath, statErr)
+	}
+	return fallbackWorkspace, false, nil
 }
 
 // executeApprovalDeny rejects a pending mutation — the file is NOT written.

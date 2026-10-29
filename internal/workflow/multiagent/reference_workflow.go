@@ -22,6 +22,7 @@ type ReferenceWorkflowInput struct {
 	Constraints        []string                 `json:"constraints,omitempty"`
 	AcceptanceCriteria []string                 `json:"acceptance_criteria,omitempty"`
 	RoleProfiles       map[Role]string          `json:"role_profiles,omitempty"`
+	ValidationProfiles map[Role][]string        `json:"validation_profiles,omitempty"`
 	Budgets            ReferenceBudgetOverrides `json:"budgets,omitempty"`
 }
 
@@ -54,6 +55,16 @@ func (i ReferenceWorkflowInput) Validate() error {
 		}
 		if strings.TrimSpace(profile) == "" {
 			problems = append(problems, fmt.Sprintf("role profile override %q is empty", role))
+		}
+	}
+	for role, profiles := range i.ValidationProfiles {
+		if !role.Valid() {
+			problems = append(problems, fmt.Sprintf("unknown validation profile role %q", role))
+		}
+		for _, profile := range profiles {
+			if strings.TrimSpace(profile) == "" {
+				problems = append(problems, fmt.Sprintf("validation profile for role %q is empty", role))
+			}
 		}
 	}
 	if len(problems) != 0 {
@@ -109,6 +120,7 @@ func DefaultReferenceDefinition() Definition {
 			{From: RoleDeveloper, Outcome: OutcomeImplementationReady, To: RoleTester},
 			{From: RoleTester, Outcome: OutcomeTestsPassed, To: RoleReviewer},
 			{From: RoleTester, Outcome: OutcomeTestsFailed, To: RoleDeveloper},
+			{From: RoleTester, Outcome: OutcomeTestsSkipped, To: RoleReviewer},
 			{From: RoleReviewer, Outcome: OutcomeChangesRequested, To: RoleDeveloper},
 			{From: RoleReviewer, Outcome: OutcomeReviewApproved, Terminal: TerminalConditionCompleted},
 			{From: RoleDeveloper, Outcome: OutcomeTerminalFailure, Terminal: TerminalConditionFailed},
@@ -147,6 +159,10 @@ func ApplyReferenceOverrides(
 	for index := range definition.Roles {
 		if profile, ok := input.RoleProfiles[definition.Roles[index].Role]; ok {
 			definition.Roles[index].AgentRef = strings.TrimSpace(profile)
+		}
+		if profiles, ok := input.ValidationProfiles[definition.Roles[index].Role]; ok {
+			definition.Roles[index].ValidationProfiles = append([]string(nil), profiles...)
+			definition.Roles[index].ValidationProfilesExplicit = true
 		}
 	}
 	developer, _ := definition.RoleConfig(RoleDeveloper)

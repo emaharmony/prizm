@@ -82,6 +82,74 @@ func TestReferenceManifestPersistsEffectiveDefinitionAndWorkspace(t *testing.T) 
 	}
 }
 
+func TestApprovalWorkspaceForRunUsesPersistedWorkspace(t *testing.T) {
+	runDir := t.TempDir()
+	workspace := t.TempDir()
+	workspacePath, workspaceID, err := referenceWorkspace(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := multiagent.ReferenceWorkflowInput{Objective: "approval workspace", Workspace: workspace}
+	definition, err := multiagent.ApplyReferenceOverrides(multiagent.DefaultReferenceDefinition(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := referenceWorkflowManifest{
+		SchemaVersion: referenceManifestSchemaVersion,
+		RunID:         "run-approval-workspace",
+		WorkflowID:    multiagent.ReferenceWorkflowID,
+		Input:         input,
+		Definition:    definition,
+		WorkspaceID:   workspaceID,
+		WorkspacePath: workspacePath,
+	}
+	if err := writeReferenceManifest(runDir, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, hasManifest, err := approvalWorkspaceForRun(runDir, manifest.RunID, "source-checkout")
+	if err != nil || !hasManifest || resolved != workspacePath {
+		t.Fatalf("resolved=%q hasManifest=%t err=%v", resolved, hasManifest, err)
+	}
+}
+
+func TestApprovalWorkspaceForRunFailsClosedOnInvalidManifest(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version int
+		flowID  string
+	}{
+		{name: "unknown workflow with missing pinned version", version: referenceManifestSchemaVersion, flowID: "future-workflow"},
+		{name: "unsupported manifest schema", version: referenceManifestSchemaVersion + 1, flowID: multiagent.ReferenceWorkflowID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runDir := t.TempDir()
+			manifest := referenceWorkflowManifest{
+				SchemaVersion: tc.version,
+				RunID:         "run-invalid-manifest",
+				WorkflowID:    tc.flowID,
+				WorkspacePath: filepath.Join(t.TempDir(), "isolated"),
+			}
+			if err := writeReferenceManifest(runDir, manifest); err != nil {
+				t.Fatal(err)
+			}
+
+			resolved, hasManifest, err := approvalWorkspaceForRun(runDir, manifest.RunID, "source-checkout")
+			if err == nil || !hasManifest || resolved != "" || !strings.Contains(err.Error(), "refusing approval") {
+				t.Fatalf("resolved=%q hasManifest=%t err=%v", resolved, hasManifest, err)
+			}
+		})
+	}
+}
+
+func TestApprovalWorkspaceForRunAllowsLegacyFallbackWithoutManifest(t *testing.T) {
+	workspace := t.TempDir()
+	resolved, hasManifest, err := approvalWorkspaceForRun(t.TempDir(), "run-without-manifest", workspace)
+	if err != nil || hasManifest || resolved != workspace {
+		t.Fatalf("resolved=%q hasManifest=%t err=%v", resolved, hasManifest, err)
+	}
+}
+
 func TestLoadReferenceManifestAllowsCleanedTerminalWorkspace(t *testing.T) {
 	runDir := t.TempDir()
 	workspace := t.TempDir()

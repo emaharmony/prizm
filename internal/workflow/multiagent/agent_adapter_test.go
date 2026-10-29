@@ -185,6 +185,27 @@ func TestAgentRoleRunnerPropagatesCanonicalFinalResponseContract(t *testing.T) {
 	}
 }
 
+func TestTesterPromptHonorsExplicitlyEmptyValidationProfiles(t *testing.T) {
+	request := adapterRoleRequest(RoleTester)
+	request.RoleConfig.ValidationProfilesExplicit = true
+	schema, err := roleSchemaInstructionForRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(schema, `"result":"skipped"`) || !strings.Contains(schema, `"tests_executed":[]`) || !strings.Contains(schema, "Do not execute or claim tests") {
+		t.Fatalf("explicit empty profile schema does not require a safe skip: %s", schema)
+	}
+
+	request.RoleConfig.ValidationProfiles = []string{"go_test_all"}
+	schema, err = roleSchemaInstructionForRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(schema, `"result":"passed|failed"`) || !strings.Contains(schema, "execute at least one allowed validation") {
+		t.Fatalf("configured profile schema did not retain required validation: %s", schema)
+	}
+}
+
 func TestAgentRoleRunnerAcceptsDescriptiveReviewerHandoffAndKeepsRoutingInGraph(t *testing.T) {
 	runner := newAdapterForTest(t, agentExecutorFunc(func(_ context.Context, _ AgentExecutionRequest) (AgentExecutionResult, error) {
 		return AgentExecutionResult{Output: `{"schema_version":1,"decision":"changes_requested","findings":[],"required_corrections":["Fix the reported issue"],"handoff":"Please fix the reported issue"}`}, nil

@@ -244,7 +244,7 @@ func (r *AgentRoleRunner) RunRole(
 	if request.Run.CurrentRole == RoleDeveloper && len(proposals) > 0 {
 		decoded, err = decodeDeveloperOutputForProposals(execution.Output, proposals)
 	} else {
-		decoded, err = decodeRoleOutput(request.Run.CurrentRole, execution.Output)
+		decoded, err = decodeRoleOutputForRequest(request, execution.Output)
 	}
 	if err != nil {
 		return RoleRunResult{}, err
@@ -651,6 +651,9 @@ func roleSchemaInstruction(role Role) (string, error) {
 }
 
 func roleSchemaInstructionForRequest(request RoleRunRequest) (string, error) {
+	if request.Run.CurrentRole == RoleTester && request.RoleConfig.ValidationProfilesExplicit && len(request.RoleConfig.ValidationProfiles) == 0 {
+		return `JSON schema: {"schema_version":1,"result":"skipped","tests_executed":[],"failure_evidence":[],"reproduction":[],"handoff":{"objective":"...","reason":"...","evidence":[],"unresolved_issues":[],"notes":"..."}}. Automated validation profiles were explicitly configured as empty. Do not execute or claim tests; return result "skipped" with an empty tests_executed array and explain the skip in the handoff.`, nil
+	}
 	schema, err := roleSchemaInstruction(request.Run.CurrentRole)
 	if err != nil {
 		return schema, err
