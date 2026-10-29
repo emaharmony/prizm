@@ -261,28 +261,31 @@ func (r *freewillServeRuntime) Start(ctx context.Context, nc *nats.Conn, schedul
 	if r.wake == nil || r.approvals == nil || (schedulingEnabled && nc == nil) {
 		return errors.New("freewill: serve runtime is incomplete")
 	}
+	// A scheduled wake must finish its durable decision even if the caller's
+	// request context is canceled after the subscription has been installed.
+	workerCtx := context.WithoutCancel(ctx)
 	if schedulingEnabled {
 		if err := nc.Flush(); err != nil {
 			return fmt.Errorf("freewill: NATS is not ready: %w", err)
 		}
 		_, err := nc.Subscribe(freewillScheduleSubject, func(msg *nats.Msg) {
 			select {
-			case <-ctx.Done():
+			case <-workerCtx.Done():
 				return
 			default:
 			}
-			if err := r.recoverPending(ctx); err != nil {
+			if err := r.recoverPending(workerCtx); err != nil {
 				log.Printf("[FREEWILL] recovery scan failed: %v", err)
 			}
 			// The scheduler message carries no scope, identity, candidate, or policy
 			// authority. Those values come only from the validated host config.
-			run, runErr := r.wake.HandleScheduledTick(ctx, time.Now().UTC())
+			run, runErr := r.wake.HandleScheduledTick(workerCtx, time.Now().UTC())
 			if runErr != nil {
 				log.Printf("[FREEWILL] scheduled wake failed: %v", runErr)
 				return
 			}
 			if run.Freewill != nil && run.Freewill.Lifecycle == freewill.StateProposed {
-				if _, approvalErr := r.approvals.RequestApproval(ctx, run.State.RunID); approvalErr != nil {
+				if _, approvalErr := r.approvals.RequestApproval(workerCtx, run.State.RunID); approvalErr != nil {
 					log.Printf("[FREEWILL] approval proposal could not be recorded: %v", approvalErr)
 				}
 			}
