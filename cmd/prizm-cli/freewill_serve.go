@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/emaharmony/prizm/internal/approval"
@@ -32,6 +33,13 @@ type freewillServeRuntime struct {
 	events            *event.SQLiteEventStore
 	schedulingEnabled bool
 	readOnly          bool
+	mu                sync.Mutex
+	started           bool
+	closed            bool
+	sub               *nats.Subscription
+	cancel            context.CancelFunc
+	done              chan struct{}
+	beforeSubscribe   func()
 }
 
 // openFreewillStatusRuntime exposes historical status only when Freewill is
@@ -243,6 +251,18 @@ func (r *freewillServeRuntime) Close() {
 	if r == nil {
 		return
 	}
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return
+	}
+	r.closed = true
+	sub, cancel, done := r.sub, r.cancel, r.done
+	r.sub, r.cancel, r.done = nil, nil, nil
+	r.mu.Unlock()
+	if sub != nil { _ = sub.Unsubscribe() }
+	if cancel != nil { cancel() }
+	if done != nil { <-done }
 	if r.events != nil {
 		_ = r.events.Close()
 	}
@@ -261,17 +281,41 @@ func (r *freewillServeRuntime) Start(ctx context.Context, nc *nats.Conn, schedul
 	if r.wake == nil || r.approvals == nil || (schedulingEnabled && nc == nil) {
 		return errors.New("freewill: serve runtime is incomplete")
 	}
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return errors.New("freewill: serve runtime is closed")
+	}
+	if r.started {
+		r.mu.Unlock()
+		return nil
+	}
+	workerCtx, cancel := context.WithCancel(ctx)
+	r.started, r.cancel, r.done = true, cancel, make(chan struct{})
+	done := r.done
+	r.mu.Unlock()
+	fail := func(err error) error {
+		cancel()
+		r.mu.Lock()
+		r.started, r.cancel, r.done = false, nil, nil
+		r.mu.Unlock()
+		close(done)
+		return err
+	}
 	if schedulingEnabled {
 		if err := nc.Flush(); err != nil {
-			return fmt.Errorf("freewill: NATS is not ready: %w", err)
+			return fail(fmt.Errorf("freewill: NATS is not ready: %w", err))
 		}
-		_, err := nc.Subscribe(freewillScheduleSubject, func(msg *nats.Msg) {
+		if r.beforeSubscribe != nil {
+			r.beforeSubscribe()
+		}
+		sub, err := nc.Subscribe(freewillScheduleSubject, func(msg *nats.Msg) {
 			select {
-			case <-ctx.Done():
+			case <-workerCtx.Done():
 				return
 			default:
 			}
-			if err := r.recoverPending(ctx); err != nil {
+			if err := r.recoverPending(workerCtx); err != nil {
 				log.Printf("[FREEWILL] recovery scan failed: %v", err)
 			}
 			// The scheduler message carries no scope, identity, candidate, or policy
@@ -288,14 +332,26 @@ func (r *freewillServeRuntime) Start(ctx context.Context, nc *nats.Conn, schedul
 			}
 		})
 		if err != nil {
-			return fmt.Errorf("freewill: subscribe to scheduled wake: %w", err)
+			return fail(fmt.Errorf("freewill: subscribe to scheduled wake: %w", err))
 		}
+		r.mu.Lock()
+		if r.closed {
+			r.mu.Unlock()
+			_ = sub.Unsubscribe()
+			cancel()
+			close(done)
+			return errors.New("freewill: serve runtime closed during start")
+		}
+		r.sub = sub
+		r.mu.Unlock()
 		if err := nc.Flush(); err != nil {
-			return fmt.Errorf("freewill: scheduled wake subscription did not become ready: %w", err)
+			_ = sub.Unsubscribe()
+			return fail(fmt.Errorf("freewill: scheduled wake subscription did not become ready: %w", err))
 		}
 	}
 	go func() {
-		if err := r.recoverPending(ctx); err != nil && ctx.Err() == nil {
+		defer close(done)
+		if err := r.recoverPending(workerCtx); err != nil && workerCtx.Err() == nil {
 			log.Printf("[FREEWILL] recovery scan failed: %v", err)
 		}
 	}()

@@ -188,9 +188,34 @@ func TestServedFreewillP1WakePersistsPolicyOnlyProposalAndHistory(t *testing.T) 
 	defer nc.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	raceRuntime, err := openFreewillServeRuntime(cfg, providers, "", filepath.Join(root, "prizm.yaml"))
+	if err != nil { t.Fatalf("compose race-test runtime: %v", err) }
+	entered, release := make(chan struct{}), make(chan struct{})
+	raceRuntime.beforeSubscribe = func() { close(entered); <-release }
+	startResult := make(chan error, 1)
+	go func() { startResult <- raceRuntime.Start(ctx, nc, true) }()
+	select { case <-entered: case <-time.After(2 * time.Second): t.Fatal("Start did not reach subscribe barrier") }
+	closed := make(chan struct{})
+	go func() { raceRuntime.Close(); close(closed) }()
+	closeDeadline := time.Now().Add(2 * time.Second)
+	for {
+		raceRuntime.mu.Lock()
+		isClosed := raceRuntime.closed
+		raceRuntime.mu.Unlock()
+		if isClosed { break }
+		if time.Now().After(closeDeadline) { t.Fatal("Close did not claim runtime before release") }
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	if err := <-startResult; err == nil { t.Fatal("Start unexpectedly succeeded after concurrent Close") }
+	select { case <-closed: case <-time.After(2 * time.Second): t.Fatal("Close remained blocked after Start race") }
 	if err := runtime.Start(ctx, nc, true); err != nil {
 		runtime.Close()
 		t.Fatalf("start Freewill wake service: %v", err)
+	}
+	if err := runtime.Start(ctx, nc, true); err != nil {
+		runtime.Close()
+		t.Fatalf("duplicate Freewill start should be idempotent: %v", err)
 	}
 	if err := nc.Publish(freewillScheduleSubject, []byte(`{}`)); err != nil {
 		t.Fatal(err)
@@ -315,6 +340,9 @@ func TestServedFreewillP1WakePersistsPolicyOnlyProposalAndHistory(t *testing.T) 
 
 	runtime.Close()
 	runtimeClosed = true
+	if err := runtime.Start(ctx, nc, true); err == nil {
+		t.Fatal("starting a closed Freewill runtime unexpectedly succeeded")
+	}
 	cfg.Freewill.Enabled = false
 	statusRuntime, err := openFreewillStatusRuntime(cfg, filepath.Join(root, "prizm.yaml"))
 	if err != nil || statusRuntime == nil || !statusRuntime.readOnly {
