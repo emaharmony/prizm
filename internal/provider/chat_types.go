@@ -36,6 +36,11 @@ type ChatGenerateRequest struct {
 	// Format asks providers that support constrained output to return the
 	// requested format. Providers that do not support it may ignore the hint.
 	Format string
+	// OutputSchema optionally constrains a provider response to this JSON schema.
+	OutputSchema map[string]any
+	// Think overrides provider thinking for short host-owned protocols.
+	Think *bool
+	JSONMode bool
 }
 
 // ChatMessage represents a single message in a conversation.

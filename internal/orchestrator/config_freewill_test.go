@@ -45,3 +45,23 @@ func TestFreewillConfigFlagsAreIndependentAndDoNotActivateRuntime(t *testing.T) 
 		t.Fatalf("scheduling flag must not enable feature flag: %#v", schedulingOnly.Freewill)
 	}
 }
+
+func TestEnabledFreewillRequiresTrustedAgentProjectAndSchedule(t *testing.T) {
+	agents := []AgentConfig{{ID: "selector", Role: "planner", Provider: "ollama", Model: "glm-5.3:cloud"}}
+	projects := []ProjectConfig{{ID: "project-a", RepoPath: `D:\projects\project-a`}}
+	config := FreewillConfig{Enabled: true, AgentID: "selector"}
+	if err := config.ValidateHostBinding(agents, projects); err == nil {
+		t.Fatal("enabled Freewill accepted a missing host project binding")
+	}
+	config = FreewillConfig{Enabled: true, AgentID: "selector", ProjectID: "project-a", Scheduling: FreewillSchedulingConfig{Enabled: true}}
+	if err := config.ValidateHostBinding(agents, projects); err == nil {
+		t.Fatal("enabled Freewill scheduling accepted a missing cron expression")
+	}
+	config.Scheduling.Schedule = "*/15 * * * *"
+	if err := config.ValidateHostBinding(agents, projects); err != nil {
+		t.Fatalf("valid host-bound Freewill config rejected: %v", err)
+	}
+	if err := config.ValidateHostBinding(agents, nil); err == nil {
+		t.Fatal("enabled Freewill accepted an unregistered project")
+	}
+}

@@ -14,9 +14,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite" // SQLite driver
@@ -98,6 +100,37 @@ func NewSQLiteEventStore(dbPath string) (*SQLiteEventStore, error) {
 		return nil, fmt.Errorf("event store: create table: %w", err)
 	}
 
+	return &SQLiteEventStore{db: db}, nil
+}
+
+// OpenExistingSQLiteEventStoreReadOnly opens an existing event store without
+// creating schema, directories, or journal state. It is intended for status
+// and history reads when the owning workflow is disabled.
+func OpenExistingSQLiteEventStoreReadOnly(dbPath string) (*SQLiteEventStore, error) {
+	if strings.TrimSpace(dbPath) == "" {
+		return nil, errors.New("event store: database path is required")
+	}
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("event store: existing database is not a regular file")
+	}
+	db, err := sql.Open("sqlite", dbPath+"?mode=ro&_pragma=query_only(1)")
+	if err != nil {
+		return nil, fmt.Errorf("event store: open read-only: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("event store: read-only database is unavailable: %w", err)
+	}
+	var found int
+	if err := db.QueryRow(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events'`).Scan(&found); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("event store: read-only schema is unavailable: %w", err)
+	}
 	return &SQLiteEventStore{db: db}, nil
 }
 

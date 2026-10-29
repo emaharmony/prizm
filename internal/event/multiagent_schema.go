@@ -1,6 +1,16 @@
 package event
 
 func init() {
+	Schemas[EventFreewillWakeClaimed] = Schema{Required: []string{"run_id", "wake_id", "attempt", "lease_until"}}
+	Schemas[EventFreewillWakeReleased] = Schema{Required: []string{"run_id", "wake_id", "attempt"}, Optional: []string{"reason"}}
+	Schemas[EventFreewillSelectionStarted] = Schema{Required: []string{"run_id", "wake_id", "attempt"}}
+	Schemas[EventFreewillSelectionCommitted] = Schema{Required: []string{"run_id", "wake_id", "attempt", "lifecycle", "candidate_count", "choice_id"}, Optional: []string{"candidate_ids", "candidate_budgets", "reason_summary", "sleep_reason", "outcome", "provider", "model", "prompt_tokens", "completion_tokens", "total_tokens", "recovery_count"}}
+	Schemas[EventFreewillSelectionRetryScheduled] = Schema{Required: []string{"run_id", "wake_id", "attempt", "recovery_count", "max_recoveries", "failure_class", "failure_code", "next_at"}}
+	Schemas[EventFreewillSelectionHalted] = Schema{Required: []string{"run_id", "wake_id", "attempt", "recovery_count", "failure_class", "failure_code", "reason"}}
+	Schemas[EventFreewillApprovalProposed] = Schema{Required: []string{"run_id", "request_id", "approval_id", "request_fingerprint", "execution_disabled"}}
+	Schemas[EventFreewillApprovalDecided] = Schema{Required: []string{"run_id", "request_id", "approval_id", "decision", "lifecycle", "execution_disabled"}, Optional: []string{"policy_rule_id"}}
+	Schemas[EventFreewillApprovalReconciled] = Schema{Required: []string{"run_id", "request_id", "approval_id", "decision", "lifecycle", "execution_disabled"}, Optional: []string{"policy_rule_id", "reason_code"}}
+	Schemas[EventFreewillPolicyDenied] = Schema{Required: []string{"run_id", "request_id", "policy_rule_id", "reason_code", "execution_disabled"}}
 	Schemas[EventProposalApplyFailed] = Schema{
 		Required: []string{"run_id", "proposal_id", "approval_id", "apply_key", "execution_key", "workspace_id", "reason"},
 		Optional: []string{"reconcile_code", "observed_tree", "inspection_stage", "inspection_category", "inspection_exit_code"},

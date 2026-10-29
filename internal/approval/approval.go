@@ -6,6 +6,7 @@ package approval
 
 import (
 	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -47,6 +48,11 @@ const (
 	MutationToolCall = "tool_call"
 )
 
+const (
+	SubjectMutation  = "mutation"
+	SubjectIntention = "intention"
+)
+
 // PolicyDecision constants.
 const (
 	DecisionRequiresApproval = "requires_approval"
@@ -56,17 +62,22 @@ const (
 
 // Approval represents a pending, approved, or denied file mutation.
 type Approval struct {
-	ProposalID    string `json:"proposal_id,omitempty"`
-	ApprovalID    string `json:"approval_id"`
-	RunID         string `json:"run_id"`
-	CorrelationID string `json:"correlation_id"`
-	Status        string `json:"status"` // pending, approved, denied, expired
-	RequestedBy   string `json:"requested_by"`
-	Project       string `json:"project"`
-	MutationType  string `json:"mutation_type"` // write_file, create_directory, apply_patch, tool_call
-	TargetPath    string `json:"target_path"`
-	Content       string `json:"content,omitempty"`
-	Preview       string `json:"preview,omitempty"`
+	// SubjectType separates ordinary mutation authorization from proposal-only
+	// Freewill intention authorization. Empty is accepted only for legacy
+	// mutation records written before this discriminator existed.
+	SubjectType   string                `json:"subject_type,omitempty"`
+	Intention     *IntentionApprovalRef `json:"intention,omitempty"`
+	ProposalID    string                `json:"proposal_id,omitempty"`
+	ApprovalID    string                `json:"approval_id"`
+	RunID         string                `json:"run_id"`
+	CorrelationID string                `json:"correlation_id"`
+	Status        string                `json:"status"` // pending, approved, denied, expired
+	RequestedBy   string                `json:"requested_by"`
+	Project       string                `json:"project"`
+	MutationType  string                `json:"mutation_type"` // write_file, create_directory, apply_patch, tool_call
+	TargetPath    string                `json:"target_path"`
+	Content       string                `json:"content,omitempty"`
+	Preview       string                `json:"preview,omitempty"`
 	// ToolName and Input preserve the original tool call for MutationToolCall
 	// approvals, so mutation.Executor can re-invoke the exact same tool with
 	// the exact same input after a human approves it.
@@ -81,6 +92,60 @@ type Approval struct {
 	DeniedAt     *time.Time     `json:"denied_at,omitempty"`
 	DenialReason string         `json:"denial_reason,omitempty"`
 	Policy       PolicyDecision `json:"policy"`
+}
+
+// IntentionApprovalRef binds an approval to one canonical, workflow-owned
+// intention request. It deliberately contains no executable task/tool data.
+type IntentionApprovalRef struct {
+	RequestID          string   `json:"request_id"`
+	RequestFingerprint string   `json:"request_fingerprint"`
+	ControlGeneration  uint64   `json:"control_generation,omitempty"`
+	ScopeSummary       string   `json:"scope_summary"`
+	Capabilities       []string `json:"capabilities,omitempty"`
+}
+
+func NewIntentionApproval(runID, correlationID, requestedBy, project string, ref IntentionApprovalRef, policy PolicyDecision) (*Approval, error) {
+	if decoded, err := hex.DecodeString(ref.RequestFingerprint); err != nil || len(decoded) != 32 {
+		return nil, fmt.Errorf("intention approval fingerprint is invalid")
+	}
+	if strings.TrimSpace(runID) == "" || strings.TrimSpace(ref.RequestID) == "" ||
+		strings.TrimSpace(ref.ScopeSummary) == "" ||
+		len(ref.ScopeSummary) > 512 || len(ref.Capabilities) > 16 {
+		return nil, fmt.Errorf("intention approval identity is invalid")
+	}
+	for _, capability := range ref.Capabilities {
+		if strings.TrimSpace(capability) == "" || len(capability) > 64 || strings.ContainsAny(capability, "\r\n\x00") {
+			return nil, fmt.Errorf("intention approval capability is invalid")
+		}
+	}
+	a := NewApproval(runID, correlationID, requestedBy, project, "", "", "", policy)
+	a.SubjectType = SubjectIntention
+	a.Intention = &ref
+	return a, nil
+}
+
+// ValidateSubject rejects mixed authority: intention records cannot carry
+// mutation payloads, and unknown subject kinds fail closed.
+func (a *Approval) ValidateSubject() error {
+	if a == nil {
+		return fmt.Errorf("approval is required")
+	}
+	switch a.SubjectType {
+	case "", SubjectMutation:
+		if a.Intention != nil {
+			return fmt.Errorf("mutation approval cannot contain an intention subject")
+		}
+	case SubjectIntention:
+		if a.Intention == nil || a.MutationType != "" || a.TargetPath != "" || a.Content != "" || a.ToolName != "" || len(a.Input) != 0 || a.PatchPlan != nil {
+			return fmt.Errorf("intention approval has mixed subject data")
+		}
+		if _, err := NewIntentionApproval(a.RunID, a.CorrelationID, a.RequestedBy, a.Project, *a.Intention, a.Policy); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("approval subject type is unsupported")
+	}
+	return nil
 }
 
 // PatchPlan is the immutable identity of one validated multi-file patch.

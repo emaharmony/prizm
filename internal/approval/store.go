@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 )
 
@@ -33,10 +34,27 @@ func (s *Store) approvalPath(runID, approvalID string) string {
 
 // Save persists an approval to disk.
 func (s *Store) Save(a *Approval) error {
+	if err := a.ValidateSubject(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	dir := s.approvalDir(a.RunID)
+	path := s.approvalPath(a.RunID, a.ApprovalID)
+	if priorBytes, err := os.ReadFile(path); err == nil {
+		var prior Approval
+		if json.Unmarshal(priorBytes, &prior) != nil || prior.ValidateSubject() != nil {
+			return fmt.Errorf("existing approval record is invalid")
+		}
+		if prior.SubjectType == SubjectIntention && (a.SubjectType != SubjectIntention || prior.RunID != a.RunID ||
+			prior.ApprovalID != a.ApprovalID || prior.ProposalID != a.ProposalID || prior.Intention == nil || a.Intention == nil ||
+			!reflect.DeepEqual(prior.Intention, a.Intention) || prior.Status != StatusPending && prior.Status != a.Status) {
+			return fmt.Errorf("intention approval identity is immutable")
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("failed to inspect existing approval: %w", err)
+	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create approvals directory: %w", err)
 	}
@@ -46,7 +64,6 @@ func (s *Store) Save(a *Approval) error {
 		return fmt.Errorf("failed to marshal approval: %w", err)
 	}
 
-	path := s.approvalPath(a.RunID, a.ApprovalID)
 	if err := os.WriteFile(path, append(data, '\n'), 0644); err != nil {
 		return fmt.Errorf("failed to write approval file: %w", err)
 	}
@@ -72,6 +89,9 @@ func (s *Store) Load(runID, approvalID string) (*Approval, error) {
 	var a Approval
 	if err := json.Unmarshal(data, &a); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal approval: %w", err)
+	}
+	if err := a.ValidateSubject(); err != nil {
+		return nil, fmt.Errorf("invalid approval subject")
 	}
 
 	return &a, nil
@@ -102,6 +122,9 @@ func (s *Store) List(runID string) ([]*Approval, error) {
 		}
 		var a Approval
 		if err := json.Unmarshal(data, &a); err != nil {
+			continue
+		}
+		if err := a.ValidateSubject(); err != nil {
 			continue
 		}
 		approvals = append(approvals, &a)

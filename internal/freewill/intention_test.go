@@ -2,6 +2,7 @@ package freewill
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -43,6 +44,55 @@ func TestCandidateIntentionRequiresEnvelopeAndValidRequest(t *testing.T) {
 	candidate.CandidateID = " "
 	if err := candidate.Validate(); err == nil {
 		t.Fatal("candidate without identity was accepted")
+	}
+}
+
+func TestSelectionRequiresThreeScopedFreshCandidatesAndServerVerifiedResume(t *testing.T) {
+	scope := Scope{ProjectID: "project-a", Workspace: "workspace-a"}
+	candidates := make([]CandidateIntention, 0, 4)
+	for i := 0; i < 3; i++ {
+		req := validRequest()
+		req.RequestID = fmt.Sprintf("request-%d", i)
+		req.AgentID = "agent-a"
+		req.Scope = scope
+		req.CandidateSource = SourceNew
+		candidates = append(candidates, CandidateIntention{CandidateID: fmt.Sprintf("candidate-%d", i), Request: req})
+	}
+	resume := validRequest()
+	resume.RequestID, resume.AgentID, resume.Scope, resume.CandidateSource = "resume-request", "agent-a", scope, SourceResume
+	candidates = append(candidates, CandidateIntention{CandidateID: "resume-1", Request: resume})
+	selection := Selection{Candidates: candidates, ChoiceID: "candidate-1", ReasonSummary: "Fits the current scope."}
+	if err := selection.Validate("agent-a", scope, map[string]struct{}{"resume-1": {}}); err != nil {
+		t.Fatalf("valid selection rejected: %v", err)
+	}
+	if err := selection.Validate("agent-a", scope, nil); err == nil {
+		t.Fatal("unverified resume candidate accepted")
+	}
+
+	selection.Candidates = selection.Candidates[:2]
+	if err := selection.Validate("agent-a", scope, nil); err == nil {
+		t.Fatal("selection with fewer than three fresh candidates accepted")
+	}
+}
+
+func TestSelectionRejectsScopeDriftAndSleepWithoutReason(t *testing.T) {
+	scope := Scope{ProjectID: "project-a", Workspace: "workspace-a"}
+	candidates := make([]CandidateIntention, 0, 3)
+	for i := 0; i < 3; i++ {
+		req := validRequest()
+		req.RequestID = fmt.Sprintf("request-%d", i)
+		req.AgentID, req.Scope, req.CandidateSource = "agent-a", scope, SourceNew
+		candidates = append(candidates, CandidateIntention{CandidateID: fmt.Sprintf("candidate-%d", i), Request: req})
+	}
+	selection := Selection{Candidates: candidates, ChoiceID: "candidate-1", ReasonSummary: "Scoped choice."}
+	selection.Candidates[0].Request.Scope.Workspace = "other-workspace"
+	if err := selection.Validate("agent-a", scope, nil); err == nil {
+		t.Fatal("scope-drifted candidate accepted")
+	}
+	selection.Candidates[0].Request.Scope = scope
+	selection.ChoiceID, selection.ReasonSummary, selection.SleepReason = "", "", " "
+	if err := selection.Validate("agent-a", scope, nil); err == nil {
+		t.Fatal("sleep without a reason accepted")
 	}
 }
 
