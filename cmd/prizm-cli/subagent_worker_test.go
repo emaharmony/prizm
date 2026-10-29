@@ -174,6 +174,9 @@ func TestSubAgentBackendUsesChatProviderForStructuredRoleOutput(t *testing.T) {
 	if probe.captured.Model != "glm-5.3:cloud" || probe.captured.Agent != "planner" || probe.captured.MaxTokens != 8192 || probe.captured.ReasoningEffort != "max" || probe.captured.Format != "json" {
 		t.Fatalf("request=%#v", probe.captured)
 	}
+	if len(probe.captured.Tools) != 0 {
+		t.Fatalf("no-tool delegated request exposed %d tools", len(probe.captured.Tools))
+	}
 	if len(probe.captured.Messages) != 2 || probe.captured.Messages[1].Content != "bounded task" {
 		t.Fatalf("messages=%#v", probe.captured.Messages)
 	}
@@ -209,6 +212,30 @@ func TestSubAgentBackendRoutesTextToolEnvelopeThroughPrizmExecutor(t *testing.T)
 	result, err := execute(context.Background(), action.Tool, action.Input)
 	if err != nil || !strings.Contains(result, "text-provider-probe") {
 		t.Fatalf("Prizm executor result=%q err=%v", result, err)
+	}
+}
+
+func TestSubAgentBackendRejectsUnexpectedNativeToolCalls(t *testing.T) {
+	probe := &chatProbeProvider{response: provider.ChatGenerateResponse{
+		Content:      `{"schema_version":1,"understanding":"done"}`,
+		OutputTokens: 7,
+		ToolCalls: []provider.ToolCall{{ID: "tc-1", Function: provider.FunctionCall{
+			Name: "write_file", Arguments: map[string]any{"path": "src/questions.ts"},
+		}}},
+	}}
+	registry := provider.NewProviderRegistry()
+	registry.Register("glm-5.3:cloud", probe, provider.ModelInfo{ProviderName: "ollama"})
+	backend := &subAgentBackend{providers: registry}
+	llm, _, _, err := backend.Bind(subagent.AgentRuntime{AgentID: "reviewer", Provider: "ollama", Model: "glm-5.3:cloud"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = llm(context.Background(), []v2.Message{{Role: "user", Content: "review only"}}, subagent.ReplyAllowance{})
+	if err == nil || !strings.Contains(err.Error(), "native tool calls are not enabled") {
+		t.Fatalf("native tool-call error = %v, want explicit rejection", err)
+	}
+	if len(probe.captured.Tools) != 0 {
+		t.Fatalf("request exposed %d tools", len(probe.captured.Tools))
 	}
 }
 

@@ -179,6 +179,9 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 			if chatErr != nil {
 				return subagent.Turn{}, chatErr
 			}
+			if chatResp.HasToolCalls() {
+				return subagent.Turn{}, fmt.Errorf("native tool calls are not enabled in the delegated role runner")
+			}
 			if replyMaxTokens > 0 && strings.TrimSpace(chatResp.Content) == "" && chatResp.OutputTokens >= replyMaxTokens {
 				return subagent.Turn{}, fmt.Errorf("model exhausted the %d-token reply allowance without final content", replyMaxTokens)
 			}
@@ -202,6 +205,12 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 		execInput := make(map[string]any, len(input)+1)
 		for key, value := range input {
 			execInput[key] = value
+		}
+		if toolName == "apply_patch_proposal" {
+			execInput, err = subagent.NormalizeApplyPatchInput(ctx, rt.WorkDir, execInput)
+			if err != nil {
+				return "", &subagent.CorrectableToolError{Code: "patch_validation_failed"}
+			}
 		}
 		if toolName == "read_file" {
 			if _, ok := execInput["start_line"]; !ok {
