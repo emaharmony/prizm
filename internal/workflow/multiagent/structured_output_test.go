@@ -329,6 +329,24 @@ func TestEnumCorrectionFeedbackIsAllowlistedAndSpecific(t *testing.T) {
 	}
 }
 
+func TestTesterSkippedOutcomeRequiresExplicitEmptyProfiles(t *testing.T) {
+	raw := `{"schema_version":1,"result":"skipped","tests_executed":[],"handoff":{"objective":"review the proposed change","reason":"no validation profiles configured"}}`
+	request := RoleRunRequest{Run: RunView{CurrentRole: RoleTester}, RoleConfig: RoleConfig{Role: RoleTester}}
+	if _, err := decodeRoleOutputForRequest(request, raw); err == nil {
+		t.Fatal("tests_skipped was accepted without explicit empty validation profiles")
+	}
+	request.RoleConfig.ValidationProfilesExplicit = true
+	decoded, err := decodeRoleOutputForRequest(request, raw)
+	if err != nil || decoded.Outcome != OutcomeTestsSkipped {
+		t.Fatalf("explicit skip decoded=%#v err=%v", decoded, err)
+	}
+
+	withClaimedRun := `{"schema_version":1,"result":"skipped","tests_executed":[{"name":"claimed","status":"passed"}],"handoff":{"objective":"review","reason":"no profiles"}}`
+	if _, err := decodeRoleOutputForRequest(request, withClaimedRun); err == nil {
+		t.Fatal("skipped result with a claimed test was accepted")
+	}
+}
+
 func TestDecodeRoleOutputRejectsMalformedOrAmbiguousResults(t *testing.T) {
 	tests := []struct {
 		name string

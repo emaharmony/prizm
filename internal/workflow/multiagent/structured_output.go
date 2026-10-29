@@ -201,20 +201,7 @@ func decodeRoleOutput(role Role, raw string) (decodedRoleOutput, error) {
 			Handoff: handoffFromOutput(output.Handoff, output.ChangedArtifacts),
 		}, nil
 	case RoleTester:
-		var output TesterOutput
-		if err := decodeStrictJSON(raw, &output); err != nil {
-			return decodedRoleOutput{}, structuredError(role, err)
-		}
-		if err := validateTesterOutput(output); err != nil {
-			return decodedRoleOutput{}, structuredError(role, err)
-		}
-		outcome := OutcomeTestsPassed
-		if output.Result == "failed" {
-			outcome = OutcomeTestsFailed
-		}
-		handoff := handoffFromOutput(output.Handoff, nil)
-		handoff.Evidence = append(handoff.Evidence, output.FailureEvidence...)
-		return decodedRoleOutput{Outcome: outcome, Handoff: handoff}, nil
+		return decodeTesterRoleOutput(raw, false)
 	case RoleReviewer:
 		var output ReviewerOutput
 		if err := decodeStrictJSON(raw, &output); err != nil {
@@ -239,6 +226,33 @@ func decodeRoleOutput(role Role, raw string) (decodedRoleOutput, error) {
 	default:
 		return decodedRoleOutput{}, structuredError(role, errors.New("unsupported role"))
 	}
+}
+
+func decodeRoleOutputForRequest(request RoleRunRequest, raw string) (decodedRoleOutput, error) {
+	if request.Run.CurrentRole == RoleTester && request.RoleConfig.ValidationProfilesExplicit && len(request.RoleConfig.ValidationProfiles) == 0 {
+		return decodeTesterRoleOutput(raw, true)
+	}
+	return decodeRoleOutput(request.Run.CurrentRole, raw)
+}
+
+func decodeTesterRoleOutput(raw string, allowSkipped bool) (decodedRoleOutput, error) {
+	var output TesterOutput
+	if err := decodeStrictJSON(raw, &output); err != nil {
+		return decodedRoleOutput{}, structuredError(RoleTester, err)
+	}
+	if err := validateTesterOutputWithSkipped(output, allowSkipped); err != nil {
+		return decodedRoleOutput{}, structuredError(RoleTester, err)
+	}
+	outcome := OutcomeTestsPassed
+	switch output.Result {
+	case "failed":
+		outcome = OutcomeTestsFailed
+	case "skipped":
+		outcome = OutcomeTestsSkipped
+	}
+	handoff := handoffFromOutput(output.Handoff, nil)
+	handoff.Evidence = append(handoff.Evidence, output.FailureEvidence...)
+	return decodedRoleOutput{Outcome: outcome, Handoff: handoff}, nil
 }
 
 // decodeDeveloperOutputForProposals preserves the strict developer schema but
@@ -383,12 +397,18 @@ func validateDeveloperOutput(output DeveloperOutput) error {
 	return validateOutputHandoff(output.Handoff)
 }
 
-func validateTesterOutput(output TesterOutput) error {
+func validateTesterOutputWithSkipped(output TesterOutput, allowSkipped bool) error {
 	if err := validateSchemaVersion(output.SchemaVersion); err != nil {
 		return err
 	}
-	if output.Result != "passed" && output.Result != "failed" {
+	if output.Result != "passed" && output.Result != "failed" && !(allowSkipped && output.Result == "skipped") {
 		return schemaEnumValueError{field: "result"}
+	}
+	if output.Result == "skipped" {
+		if len(output.TestsExecuted) != 0 {
+			return errors.New("skipped result cannot claim executed tests")
+		}
+		return validateOutputHandoff(output.Handoff)
 	}
 	if len(output.TestsExecuted) == 0 {
 		return errors.New("tests_executed is required")
