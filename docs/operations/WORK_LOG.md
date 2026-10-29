@@ -2485,3 +2485,36 @@ Fresh CI run `39881869306` for published head
 1m17s, and `test-python` in 27s. GitHub reports the PR clean and mergeable;
 it remains draft with no reviews. These checks validate the published
 candidate but do not resolve the separate R1 served acceptance blocker.
+
+## 2026-10-28 — FW-P1 served duplicate-wake handoff
+
+**Roadmap IDs:** FW-002, FW-P1, FW-G2, with R1/G1 as prerequisites.
+**Branch/baseline:** cumulative D stack after the FW-P1 serve lifecycle and
+concurrent shutdown fixes; the separate handoff-docs branch is based on that
+stack and the published R1 mapper head.
+
+- The served decision-only runtime was exercised with `glm-5.3-flash:cloud`
+  on an isolated 11435 Ollama endpoint and a fresh D-backed synthetic state.
+  Earlier post-wiring runs were `freewill-510205fe50228fb6d97977628146402f`
+  and `freewill-7bd2e4853b11c9af7133ca91c81797c9`; they reached selection and
+  policy denial without approval, dispatch, or tool events.
+- The focused same-minute duplicate run was
+  `freewill-4cb0cfb07254b56b4ba7702649ed62b4`. Two scheduled publishes at
+  17:21:18Z and 17:21:20Z resulted in one run row, one correlation ID, one
+  `run.created`, one wake claim, one selection, and one policy denial. The
+  provider log contained two calls total; the second publish added no run or
+  provider call. `ExecutionDisabled` remained true and the workspace had no
+  Freewill mutation.
+- Evidence is retained in
+  `D:\_projects_\prism\.tmp\fw-p1-acceptance\duplicate-same-minute-manifest.json`
+  and its referenced DB/log files. Isolated service processes were stopped.
+- Focused Freewill/workflow/provider/CLI/serve tests, `go build ./...`,
+  `go vet ./...`, and `git diff --check` passed. This supports a provisional
+  decision-only 7/10 assessment; it does not establish full R1/G1 or FW-G2.
+
+**Risks and next action:** R1 still lacks the continuous approved apply,
+configured validation, verify/resume, reviewer/final-report, and in-flight
+lost-worker trace. FW-G2 still requires the governed execution safety proof.
+Independent review should inspect the preserved manifest before the next
+single milestone; no source export or permission widening is justified by this
+trace.
