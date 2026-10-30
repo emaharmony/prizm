@@ -39,6 +39,7 @@ type freewillServeRuntime struct {
 	sub               *nats.Subscription
 	cancel            context.CancelFunc
 	done              chan struct{}
+	beforeSubscribe   func()
 }
 
 // openFreewillStatusRuntime exposes historical status only when Freewill is
@@ -306,6 +307,9 @@ func (r *freewillServeRuntime) Start(ctx context.Context, nc *nats.Conn, schedul
 	if schedulingEnabled {
 		if err := nc.Flush(); err != nil {
 			return fail(fmt.Errorf("freewill: NATS is not ready: %w", err))
+		}
+		if r.beforeSubscribe != nil {
+			r.beforeSubscribe()
 		}
 		sub, err := nc.Subscribe(freewillScheduleSubject, func(msg *nats.Msg) {
 			select {
