@@ -332,7 +332,16 @@ func (r *freewillServeRuntime) Start(ctx context.Context, nc *nats.Conn, schedul
 		if err != nil {
 			return fail(fmt.Errorf("freewill: subscribe to scheduled wake: %w", err))
 		}
-		r.mu.Lock(); r.sub = sub; r.mu.Unlock()
+		r.mu.Lock()
+		if r.closed {
+			r.mu.Unlock()
+			_ = sub.Unsubscribe()
+			cancel()
+			close(done)
+			return errors.New("freewill: serve runtime closed during start")
+		}
+		r.sub = sub
+		r.mu.Unlock()
 		if err := nc.Flush(); err != nil {
 			_ = sub.Unsubscribe()
 			return fail(fmt.Errorf("freewill: scheduled wake subscription did not become ready: %w", err))
