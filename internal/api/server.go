@@ -66,6 +66,7 @@ import (
 	costpkg "github.com/emaharmony/prizm/internal/cost"
 	"github.com/emaharmony/prizm/internal/delegation"
 	"github.com/emaharmony/prizm/internal/editor"
+	"github.com/emaharmony/prizm/internal/freewill"
 	"github.com/emaharmony/prizm/internal/invocation"
 	"github.com/emaharmony/prizm/internal/memory"
 	"github.com/emaharmony/prizm/internal/orchestrator"
@@ -183,6 +184,18 @@ type Server struct {
 	multiAgentController MultiAgentController
 	definitionStore      *multiagent.DefinitionStore
 	workflowRunStarter   WorkflowRunStarter
+	freewillApprovals    FreewillApprovalController
+	freewillControl      FreewillOperatorControlController
+}
+
+type FreewillApprovalController interface {
+	Status(contextctx.Context, string) (multiagent.FreewillApprovalStatus, error)
+	DecideStatus(contextctx.Context, string, string, string, string, string) (multiagent.FreewillApprovalStatus, error)
+}
+
+type FreewillOperatorControlController interface {
+	Status(contextctx.Context, string, freewill.Scope) (multiagent.FreewillOperatorControlState, error)
+	SetHalted(contextctx.Context, string, freewill.Scope, bool, string) (multiagent.FreewillOperatorControlState, error)
 }
 
 // SchedulerAction describes a wake action a cron job can trigger. Presented in
@@ -268,6 +281,8 @@ type Config struct {
 	MultiAgentController MultiAgentController
 	DefinitionStore      *multiagent.DefinitionStore
 	WorkflowRunStarter   WorkflowRunStarter
+	FreewillApprovals    FreewillApprovalController
+	FreewillControl      FreewillOperatorControlController
 }
 
 // AutoPatchStarter is the API surface needed from the autopatch service.
@@ -320,6 +335,8 @@ func NewServer(cfg Config) *Server {
 		multiAgentController:  cfg.MultiAgentController,
 		definitionStore:       cfg.DefinitionStore,
 		workflowRunStarter:    cfg.WorkflowRunStarter,
+		freewillApprovals:     cfg.FreewillApprovals,
+		freewillControl:       cfg.FreewillControl,
 	}
 	if s.maxRequestBytes <= 0 {
 		s.maxRequestBytes = 1 << 20 // 1 MiB
@@ -346,6 +363,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/v1/autopatch", s.handleAutoPatch)
 	s.mux.HandleFunc("/api/v1/approvals", s.handleApprovals)
 	s.mux.HandleFunc("/api/v1/approvals/", s.handleApprovalAction)
+	s.mux.HandleFunc("/api/v1/freewill/runs/", s.handleFreewillApproval)
+	s.mux.HandleFunc("/api/v1/freewill/control", s.handleFreewillControl)
 	s.mux.HandleFunc("/api/v1/events/stream", s.handleEventStream)
 	s.mux.HandleFunc("/api/v1/workflows", s.handleWorkflows)
 	s.mux.HandleFunc("/api/v1/workflows/start", s.handleWorkflowStart)
@@ -402,7 +421,7 @@ func (s *Server) Start() error {
 	if s.authToken == "" {
 		log.Printf("[API] WARNING: no api.auth_token set — state-changing endpoints are unauthenticated (loopback bind expected)")
 	}
-	handler := s.corsMiddleware(s.authMiddleware(panicRecovery(s.mux)))
+	handler := s.Handler()
 
 	srv := &http.Server{
 		Addr:           s.addr,
@@ -483,7 +502,8 @@ func requiresAuth(r *http.Request) bool {
 	case http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch:
 		return true
 	}
-	return r.URL.Path == "/api/v1/events/stream" ||
+	return r.URL.Path == "/api/v1/events/stream" || r.URL.Path == "/api/v1/freewill/control" ||
+		strings.HasPrefix(r.URL.Path, "/api/v1/freewill/runs/") ||
 		(strings.HasPrefix(r.URL.Path, "/api/v1/multiagent/runs/") &&
 			(strings.HasSuffix(r.URL.Path, "/events/stream") ||
 				(r.Method == http.MethodGet && (strings.HasSuffix(r.URL.Path, "/report") || isMultiAgentProposalReadPath(r.URL.Path)))))
@@ -509,10 +529,10 @@ func (s *Server) authorized(r *http.Request) bool {
 	return false
 }
 
-// StartWithHandler returns the http.Handler without starting a server.
-// Useful for embedding in another server or testing.
+// Handler returns the same protected middleware stack used by Start, without
+// starting a listener. It is suitable for embedding and tests.
 func (s *Server) Handler() http.Handler {
-	return s.mux
+	return s.corsMiddleware(s.authMiddleware(panicRecovery(s.mux)))
 }
 
 // --- Status ---
