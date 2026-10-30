@@ -1331,6 +1331,32 @@ func executeServe(args []string) {
 		}
 		log.Printf("[GRAPH-WORKER] started: %s -> %s", graphRoleDelegationSubject, graphRoleOutcomeSubject)
 	}
+	var freewillRuntime *freewillServeRuntime
+	if cfg.Freewill.Enabled {
+		freewillRuntime, err = openFreewillServeRuntime(cfg, provReg, natsURL, *configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error starting Freewill runtime: %v\n", err)
+			return
+		}
+	} else {
+		freewillRuntime, err = openFreewillStatusRuntime(cfg, *configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Freewill historical status unavailable: %v\n", err)
+			freewillRuntime = nil
+		}
+	}
+	if freewillRuntime != nil {
+		defer freewillRuntime.Close()
+		if err := freewillRuntime.Start(ctx, natsConn, cfg.Freewill.Enabled && cfg.Freewill.Scheduling.Enabled); err != nil {
+			fmt.Fprintf(os.Stderr, "Error starting Freewill lifecycle: %v\n", err)
+			return
+		}
+		if cfg.Freewill.Enabled {
+			fmt.Printf("  Freewill: decision-only runtime enabled (scheduling=%t)\n", cfg.Freewill.Scheduling.Enabled)
+		} else {
+			fmt.Println("  Freewill: historical status reader enabled")
+		}
+	}
 	apiServer := api.NewServer(api.Config{
 		Addr:               cfg.BindAddr(apiPort),
 		Orch:               orch,
@@ -1353,6 +1379,8 @@ func executeServe(args []string) {
 		Usage:              usageStore,
 		UsageWindows:       usageWindowsFromConfig(cfg),
 		Workspace:          cfg.Prizm.Workspace,
+		FreewillApprovals:  func() api.FreewillApprovalController { if freewillRuntime == nil { return nil }; return freewillRuntime.approvals }(),
+		FreewillControl:    func() api.FreewillOperatorControlController { if freewillRuntime == nil { return nil }; return freewillRuntime.control }(),
 
 		MaxRequestBytes:       cfg.API.MaxRequestBytes,
 		MaxWorkspaceFileBytes: cfg.API.MaxWorkspaceFileBytes,
