@@ -1,3 +1,36 @@
+## Current Handoff: FW-P1 decision-only served evidence (2026-10-28)
+
+**Roadmap:** R1/G1 remains an upstream dependency for FW-G2. The FW-P1
+(FW-002/003/004) implementation now has a served decision-only trace on the
+D-backed synthetic workspace. Runs `freewill-510205fe50228fb6d97977628146402f`
+and `freewill-7bd2e4853b11c9af7133ca91c81797c9` exercised the post-wiring
+service; the same-minute duplicate proof run
+`freewill-4cb0cfb07254b56b4ba7702649ed62b4` produced one durable run and one
+correlation ID from two scheduled publishes.
+
+The preserved duplicate evidence at
+`D:\_projects_\prism\.tmp\fw-p1-acceptance\duplicate-same-minute-manifest.json`
+records one `run.created`, one wake claim, one selection start/commit, one
+policy denial, zero approval/dispatch/tool events, `ExecutionDisabled=true`,
+and exactly two provider requests for the single run's idea and choice phases.
+The second publish created no additional run or provider request. The isolated
+workspace tree was unchanged during the duplicate test; only the general
+service-created `state` directory was present. The owned Prizm and Ollama
+processes were stopped after capture.
+
+Local checks on the cumulative FW-P1 stack passed for focused Freewill,
+workflow, provider, CLI, and serve-lifecycle tests, plus `go build ./...`,
+`go vet ./...`, and `git diff --check`. This is provisional decision-only
+7/10 evidence, not full R1 or FW-G2 acceptance. Remaining gates include the
+continuous R1 approval -> apply -> configured validation -> verify -> resume ->
+reviewer/final-report trace, an in-flight lost-worker/restart proof tied to the
+same accepted task, and the FW-G2 governed execution boundary with no
+permission widening. FW-P2 remains gated on R1 and FW-G2.
+
+**Next action:** obtain independent review of the preserved served evidence,
+then run the smallest remaining FW-G2 safety gate only after the R1/G1
+acceptance dependency is resolved. Keep the source and C worktree isolated;
+do not treat unit tests or the decision-only trace as execution authorization.
 # Prizm Plan of Action
 
 ## Current Handoff: R1 acceptance blocked after approved apply (2026-10-22)
