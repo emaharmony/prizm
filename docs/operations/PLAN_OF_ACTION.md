@@ -774,11 +774,12 @@ The provider boundary now returns only an allowlisted numeric HTTP status and pa
 **Risk/next action:** R1 remains blocked at the explicit proposal approval gate. Review the pending diff and obtain user approval before any apply. Then require exactly-once apply, configured validation, review, resume, and final report. Keep PR #91 draft and unpushed until that acceptance completes, followed by independent review and fresh CI; do not merge.
 ## Current Handoff: R1/G1 hermetic worker-loss continuity (2026-11-01)
 
-The unpublished branch `codex/r1-g1-lost-worker-continuity` is now rebased
-onto fetched `origin/staging` at `b53dd64debeab0db95185efd192f4439af49eb70`.
-Its single milestone adds the hermetic approved-apply worker-loss recovery
-regression and truthful handoff documentation; the C worktree and untracked
-`.tmp` evidence remain untouched.
+The branch `codex/r1-g1-lost-worker-continuity` is published as open PR #124
+([github.com/emaharmony/prizm/pull/124](https://github.com/emaharmony/prizm/pull/124)),
+based on fetched `origin/staging` at
+`b53dd64debeab0db95185efd192f4439af49eb70`. Its single milestone adds the
+hermetic approved-apply worker-loss recovery regression and truthful handoff
+documentation; the C worktree and untracked `.tmp` evidence remain untouched.
 
 Verification passed: the full `internal/workflow/multiagent` package suite,
 `go build ./...`, `go vet ./internal/workflow/multiagent`, the focused
@@ -789,5 +790,5 @@ validation, tester, reviewer, and terminal report evidence complete once.
 This is hermetic continuity evidence only. R1/G1 still lacks a provider-backed
 continuous approval -> apply -> verify -> resume -> reviewer trace with an
 in-flight service worker loss, so FW-G2 remains gated and no full R1 claim is
-made. Next action is independent review of this small branch before any
- publication; do not export source or widen permissions from this test.
+made. PR #124 is open for independent review; do not export source or widen
+permissions from this test.

@@ -2568,11 +2568,12 @@ separate.
 
 **Roadmap IDs:** R1/G1, with FW-P1/FW-G2 dependencies retained.
 
-The unpublished `codex/r1-g1-lost-worker-continuity` branch was rebased onto
-fetched `origin/staging` `b53dd64debeab0db95185efd192f4439af49eb70`; its
-single commit adds the hermetic approved-apply worker-loss regression and
-handoff documentation. The C worktree and untracked `.tmp` evidence were not
-changed.
+The `codex/r1-g1-lost-worker-continuity` branch is published as open PR #124
+([github.com/emaharmony/prizm/pull/124](https://github.com/emaharmony/prizm/pull/124)),
+based on fetched `origin/staging`
+`b53dd64debeab0db95185efd192f4439af49eb70`; its single commit adds the
+hermetic approved-apply worker-loss regression and handoff documentation. The
+C worktree and untracked `.tmp` evidence were not changed.
 
 **Evidence:** the focused worker-loss test and adjacent real atomic approved-
 task test passed in the unsandboxed D-temp run. The full
@@ -2588,4 +2589,5 @@ and no duplicate apply.
 the provider-backed continuous R1/G1 trace or the in-flight service-worker
 loss gate. FW-P1 remains provisional decision-only 7/10 evidence, R1/G1 and
 FW-G2 remain open, and no source export or permission widening is justified.
-Obtain independent review of the small rebased branch before publication.
+Obtain independent review of PR #124; no merge or source export is authorized
+by this hermetic evidence alone.
