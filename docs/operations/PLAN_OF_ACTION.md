@@ -31,6 +31,33 @@ permission widening. FW-P2 remains gated on R1 and FW-G2.
 then run the smallest remaining FW-G2 safety gate only after the R1/G1
 acceptance dependency is resolved. Keep the source and C worktree isolated;
 do not treat unit tests or the decision-only trace as execution authorization.
+## Current Handoff: R1/G1 hermetic worker-loss continuity slice (2026-11-01)
+
+**Roadmap:** R1/G1 remains incomplete. The unpublished branch
+`codex/r1-g1-lost-worker-continuity` is now based directly on fetched
+`origin/staging` `b53dd64debeab0db95185efd192f4439af49eb70`; the earlier
+`f43180b013` ancestry and launcher-blocked notes are historical and superseded.
+The branch adds a hermetic test for a worker disappearing after a real approved
+mutation but before the apply result/checkpoint. Restart must reconcile the
+expected tree exactly once, preserve approval identity, continue
+validation/tester/reviewer, and produce the terminal report without duplicate
+apply or unauthorized pre-approval mutation.
+
+Verification passed: the focused lost-worker test, adjacent real atomic
+approved-task test, full `internal/workflow/multiagent` package suite,
+`go build ./...`, `go vet ./internal/workflow/multiagent`, and
+`git diff --check`. The C worktree and untracked `.tmp` evidence remain
+untouched.
+
+The served FW-P1 trace remains provisional decision-only evidence. Full R1
+still requires the real provider/repository approval -> apply -> configured
+validation -> verify -> resume -> reviewer/final-report trace and in-flight
+service-worker-loss evidence. FW-G2 remains gated on R1/G1. The isolated
+`developer-learning-tracker@4c13e52` acceptance target remains separate.
+
+**Next action:** independently review this small rebased branch before any
+publication; do not start write-capable Freewill or claim full R1/G1.
+
 # Prizm Plan of Action
 
 ## Current Handoff: R1 acceptance blocked after approved apply (2026-10-22)
@@ -745,3 +772,22 @@ The provider boundary now returns only an allowlisted numeric HTTP status and pa
 **Evidence:** the durable retry record confirms the `invalid_proposal_diff` correction was preserved intact at 394 bytes and contained the required `apply_patch_proposal` envelope, complete diff requirement, and trusted base SHA instruction. Later generic `invalid_response_schema` recoveries were followed by a valid proposal. The proposal diff imports `BLOCKED`, `PASS`, and `adjudicate_readiness` and adds a mixed PASS/BLOCKED test asserting the blocked criterion prevents production readiness. Focused multiagent tests passed; CLI build and `go vet ./...` passed. Repository-wide `go test ./...` printed passing results through dozens of packages but was stopped after 4m55s before completion; no failure was reported. Remote PR #91 remains untouched, open, draft, base `staging`, head `b2ec53de5a7a3fb6a08bb66634b8fc6ab6bdee8e`.
 
 **Risk/next action:** R1 remains blocked at the explicit proposal approval gate. Review the pending diff and obtain user approval before any apply. Then require exactly-once apply, configured validation, review, resume, and final report. Keep PR #91 draft and unpushed until that acceptance completes, followed by independent review and fresh CI; do not merge.
+## Current Handoff: R1/G1 hermetic worker-loss continuity (2026-11-01)
+
+The unpublished branch `codex/r1-g1-lost-worker-continuity` is now rebased
+onto fetched `origin/staging` at `b53dd64debeab0db95185efd192f4439af49eb70`.
+Its single milestone adds the hermetic approved-apply worker-loss recovery
+regression and truthful handoff documentation; the C worktree and untracked
+`.tmp` evidence remain untouched.
+
+Verification passed: the full `internal/workflow/multiagent` package suite,
+`go build ./...`, `go vet ./internal/workflow/multiagent`, the focused
+worker-loss test, and the adjacent real atomic approved-task test. The focused
+test proves the real approved mutation is not repeated after restart and that
+validation, tester, reviewer, and terminal report evidence complete once.
+
+This is hermetic continuity evidence only. R1/G1 still lacks a provider-backed
+continuous approval -> apply -> verify -> resume -> reviewer trace with an
+in-flight service worker loss, so FW-G2 remains gated and no full R1 claim is
+made. Next action is independent review of this small branch before any
+ publication; do not export source or widen permissions from this test.

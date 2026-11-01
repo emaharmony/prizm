@@ -2518,3 +2518,74 @@ lost-worker trace. FW-G2 still requires the governed execution safety proof.
 Independent review should inspect the preserved manifest before the next
 single milestone; no source export or permission widening is justified by this
 trace.
+
+## 2026-11-01 — R1/G1 hermetic worker-loss continuity slice
+
+**Roadmap IDs:** R1/G1, with FW-P1/FW-G2 dependencies retained.
+
+Created branch `codex/r1-g1-lost-worker-continuity` from the current local
+content (local commit `f43180b013`; ancestry is stale relative to merged
+staging `b53dd64debeab0db95185efd192f4439af49eb70`). Added a focused
+`TestDurableApprovedTaskReconcilesWorkerLossAfterRealApply` regression in
+`internal/workflow/multiagent/approved_task_test.go`. It injects worker loss
+after the real approved patch mutates the isolated Git workspace and before
+the apply result/event checkpoint, then requires restart reconciliation,
+approval identity preservation, exactly-once apply, ordered reconciliation ->
+validation -> tester -> reviewer -> terminal evidence, and no pre-approval
+workspace change.
+
+`git diff --check` passed. Three bounded focused Go test attempts produced no
+output and were stopped; no Go process remained afterward, so the test result
+is unresolved rather than passing. `git fetch origin staging` was blocked by
+`getaddrinfo() thread failed to start`; no publish or merge was attempted and
+the untracked `.tmp` evidence plus C worktree were preserved. FW-P1 remains a
+provisional decision-only 7/10 trace; R1/G1 and FW-G2 remain open. The
+developer-learning-tracker `4c13e52` isolated acceptance target is unchanged.
+
+**Next action:** rerun the focused test after launcher recovery, review the
+test diff, then commit only this milestone on the new branch once green.
+
+## 2026-11-01 — R1/G1 validation fixture correction
+
+The continuity test's synthetic `EventValidationCompleted` event now includes
+the required `EventMetadata` run and agent fields. A bounded focused test attempt
+(`-v -timeout=90s -p=1 -count=1`, workspace-local Go temp/cache) produced no
+output and was stopped after the compile/test wait; no pass is claimed. The
+adjacent atomic test was not run because the same Go launcher remained stalled.
+R1/G1 remains open.
+
+## 2026-11-01 — R1/G1 focused verification correction
+
+The focused lost-worker continuity test and adjacent real atomic approved-task
+test subsequently passed in an unsandboxed run. Earlier launcher-stalled notes
+remain historical and are superseded; no broad repository test/build claim is
+made here. The branch parent `f43180b013` retains the content tree corresponding
+to merged staging `b53dd64d`; this branch adds the R1/G1 continuity test and
+handoff documentation. R1/G1 remains open, FW-P1 remains provisional
+decision-only 7/10 evidence, and `developer-learning-tracker@4c13e52` remains
+separate.
+## 2026-11-01 — R1/G1 continuity verification completed
+
+**Roadmap IDs:** R1/G1, with FW-P1/FW-G2 dependencies retained.
+
+The unpublished `codex/r1-g1-lost-worker-continuity` branch was rebased onto
+fetched `origin/staging` `b53dd64debeab0db95185efd192f4439af49eb70`; its
+single commit adds the hermetic approved-apply worker-loss regression and
+handoff documentation. The C worktree and untracked `.tmp` evidence were not
+changed.
+
+**Evidence:** the focused worker-loss test and adjacent real atomic approved-
+task test passed in the unsandboxed D-temp run. The full
+`internal/workflow/multiagent` package suite passed in 176.231s;
+`go build ./...`, `go vet ./internal/workflow/multiagent`, and
+`git diff --check` also passed. The prior sandbox cleanup denial was therefore
+environmental, not an assertion failure. The focused test covers real approved
+mutation, crash before result checkpoint, exact-once restart reconciliation,
+approval identity, validation/tester/reviewer completion, terminal reporting,
+and no duplicate apply.
+
+**Risk/next action:** this is hermetic continuity evidence and does not prove
+the provider-backed continuous R1/G1 trace or the in-flight service-worker
+loss gate. FW-P1 remains provisional decision-only 7/10 evidence, R1/G1 and
+FW-G2 remain open, and no source export or permission widening is justified.
+Obtain independent review of the small rebased branch before publication.
