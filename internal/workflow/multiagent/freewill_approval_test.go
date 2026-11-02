@@ -51,6 +51,42 @@ func TestFreewillApprovalPolicyAllowsAndRequiresApprovalRemainExecutionDisabled(
 	}
 }
 
+func TestFreewillApprovalPolicyDenialIsFinalAndQueryable(t *testing.T) {
+	env, _, service, record, roleRunner := newFreewillApprovalTestService(t, policy.DecisionDenied)
+
+	denied, err := service.RequestApproval(context.Background(), record.State.RunID)
+	if err != nil {
+		t.Fatalf("evaluate denied proposal: %v", err)
+	}
+	if denied.Freewill.Lifecycle != freewill.StateDenied || denied.Freewill.PolicyDecision != string(policy.DecisionDenied) ||
+		denied.Freewill.PauseReason != "policy_denied" || !denied.Freewill.ExecutionDisabled || denied.Freewill.ApprovalRef != "" {
+		t.Fatalf("policy denial was not final and execution-disabled: %#v", denied.Freewill)
+	}
+
+	status, err := service.Status(context.Background(), record.State.RunID)
+	if err != nil {
+		t.Fatalf("query denied proposal: %v", err)
+	}
+	if status.Lifecycle != freewill.StateDenied || status.PolicyDecision != string(policy.DecisionDenied) ||
+		status.PauseReason != "policy_denied" || !status.ExecutionDisabled || status.ApprovalID != "" {
+		t.Fatalf("queryable status lost policy denial: %#v", status)
+	}
+	if calls := runnerCalls(roleRunner); len(calls) != 0 {
+		t.Fatalf("denied proposal executed workflow roles: %v", calls)
+	}
+	assertFreewillApprovalEventsDoNotExecute(t, env.events, record.State.RunID)
+	events, err := env.events.Query(context.Background(), event.EventFilter{RunID: record.State.RunID, Limit: 100})
+	if err != nil {
+		t.Fatalf("query denial event: %v", err)
+	}
+	for _, current := range events {
+		if current.Type == event.EventFreewillPolicyDenied {
+			return
+		}
+	}
+	t.Fatal("policy denial event was not persisted")
+}
+
 func TestFreewillApprovalEditedRequestInvalidatesPriorFingerprint(t *testing.T) {
 	_, _, service, record, _ := newFreewillApprovalTestService(t, policy.DecisionRequiresApproval)
 
