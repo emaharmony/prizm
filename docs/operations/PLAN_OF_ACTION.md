@@ -1,3 +1,13 @@
+## Current Handoff: FW-P1 atomic scheduled wake admission and legacy recovery
+
+**Roadmap IDs:** FW-P1 / FW-002–FW-004 reliability. Isolated snapshot based on live staging head 06f57318aa97653e27ea3e3e940103e3002e8bdd. Scheduled wake persistence, idempotency/outbox creation, and actor-slot admission now share the SQLite owner's transaction and existing run-acceptance helper. Admission validates the requested persisted Freewill run, actor, scope, execution-disabled flag, and lifecycle before mutating the slot. A slot conflict is returned only for a validated active prior run; malformed or missing receipts remain ambiguous. Recovery leaves only verified conflicting legacy Waking rows durable and continues the scan.
+
+**Validation and limits:** Added regression coverage for transactional rollback, idempotency, concurrent one-winner admission, malformed-target no-slot rollback, legacy conflict skip-and-continue, and ambiguous legacy receipt failure. gofmt completed. Focused go test ./internal/workflow/multiagent timed out after 120 seconds without output; no local test pass is claimed. No live runtime or provider was accessed or changed. Exact-head CI and independent diff review remain required.
+
+**Next action:** Review this staging-based diff and run exact-head CI; merge only if review, required checks, and mergeability are clear. Parser repair remains a separate milestone; decision-only and execution-disabled gates stay unchanged.
+
+---
+
 ## Current Handoff: FW-004 gate-only policy and approval tests (2026-11-02)
 
 **Roadmap IDs:** FW-P1 / FW-004. Branch codex/fw004-approval-gate-tests starts at merged staging head 8331a6348be07051b2c33893ad65e2fc0be5d522. The tests cover policy-allowed and requires-approval proposals remaining execution-disabled after a human grant, policy denial remaining final and queryable, edited requests invalidating prior approvals, and composition failing when the policy evaluator is unavailable. This is a tests-only milestone; no product code changed.

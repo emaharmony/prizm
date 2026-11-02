@@ -400,12 +400,12 @@ type FreewillRunLister interface {
 }
 
 type FreewillOperatorControlState struct {
-	AgentID         string       `json:"agent_id"`
-	Scope           freewill.Scope `json:"scope"`
-	Halted          bool         `json:"halted"`
-	Generation      uint64       `json:"generation"`
-	Actor           string       `json:"actor,omitempty"`
-	UpdatedAt       time.Time    `json:"updated_at"`
+	AgentID    string         `json:"agent_id"`
+	Scope      freewill.Scope `json:"scope"`
+	Halted     bool           `json:"halted"`
+	Generation uint64         `json:"generation"`
+	Actor      string         `json:"actor,omitempty"`
+	UpdatedAt  time.Time      `json:"updated_at"`
 }
 
 // Validate rejects corrupt, internally contradictory, or future state.
@@ -747,6 +747,12 @@ type DurableRunStore interface {
 // binds its idempotency key to the durable record.
 type IdempotentRunAcceptor interface {
 	AcceptRun(context.Context, DurableRun, []event.Event) (DurableRun, bool, error)
+}
+
+// FreewillWakeAcceptor atomically creates a scheduled wake and reserves its
+// actor admission slot, so a rejected tick cannot leave a durable Waking run.
+type FreewillWakeAcceptor interface {
+	AcceptFreewillWake(context.Context, DurableRun, []event.Event, FreewillWakeRequest) (DurableRun, bool, error)
 }
 
 // NonterminalRunLister supplies bounded startup-recovery candidates.

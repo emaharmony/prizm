@@ -2759,3 +2759,14 @@ is included. Do not touch provider services or claim R1/G1/FW-G2 acceptance.
 - No live provider or service was invoked. FW-P2 execution, provider-backed scoring, R1/G1, and FW-G2 remain open.
 
 **Next action:** validate this exact PR head with CI; merge only if required checks pass.
+
+## 2026-11-02 — FW-P1 atomic scheduled wake admission and legacy recovery
+
+**Roadmap IDs:** FW-P1 / FW-002–FW-004 reliability. Isolated staging snapshot based on 06f57318aa97653e27ea3e3e940103e3002e8bdd.
+
+- Moved idempotent run, acceptance-key, and outbox insertion behind a transaction helper so the SQLite-owned Freewill actor slot is acquired atomically with the accepted wake. Both the requested run and any persisted slot receipt are verified against a validated Freewill run, identity, actor, and scope before admission changes; malformed or missing state remains ambiguous. A malformed legacy target cannot reserve the actor slot.
+- Recovery skips only ErrFreewillActorAdmissionConflict, leaving legacy Waking receipts in place for later scans. Ambiguous and other unexpected errors remain visible. Decision-only and execution-disabled behavior is unchanged.
+- Added tests for rollback (no run, key, or outbox left after slot conflict), idempotent acceptance, concurrent one-winner admission, malformed target not reserving a slot, legacy conflict scan continuation, and ambiguous legacy failure. gofmt completed. The focused multiagent Go test launch timed out at 120 seconds with no output, so no local test pass is claimed.
+- No provider or running service was accessed or changed.
+
+**Next action:** independent review and exact-head CI on the single staging-based PR; merge only if approved and all required checks pass. Parser work remains separate.

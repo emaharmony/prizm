@@ -363,6 +363,11 @@ func (s *FreewillWakeService) RecoverPending(ctx context.Context, now time.Time,
 				continue
 			}
 			processed, processErr := s.ProcessWake(ctx, run.State.RunID)
+			if errors.Is(processErr, ErrFreewillActorAdmissionConflict) {
+				// A verified slot conflict means this legacy accepted wake is queued
+				// behind the actor's active run. Leave it durable for a later scan.
+				continue
+			}
 			if processErr != nil && !errors.Is(processErr, ErrFreewillWakeLeaseHeld) && !errors.Is(processErr, ErrFreewillWakeNotDue) && !errors.Is(processErr, ErrFreewillHalted) {
 				// A failed provider call is already durably classified and either
 				// scheduled or halted. Continue scanning other accepted wakes.
