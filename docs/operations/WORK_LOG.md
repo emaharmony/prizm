@@ -2749,3 +2749,13 @@ fresh CI.
 staging, verify all changed files and CI on that head, then merge only #126 if
 green. Afterward close #125 as superseded only after confirming its entire diff
 is included. Do not touch provider services or claim R1/G1/FW-G2 acceptance.
+
+## 2026-11-02 — FW-004 gate-only policy and approval tests
+
+**Roadmap IDs:** FW-P1 and FW-004. Branch codex/fw004-approval-gate-tests starts from merged staging 8331a6348be07051b2c33893ad65e2fc0be5d522.
+
+- Added focused tests for allowed and requires-approval decisions followed by a human grant that remains paused with execution disabled, policy denial that remains final and queryable, edited-request fingerprint invalidation, and missing-policy composition rejection. No production code changed.
+- gofmt -d internal/workflow/multiagent/freewill_approval_test.go produced no diff. The first focused Go test attempt exposed an unused variable, which was removed. The next normal and cache-local launches stalled before a Go process became visible; no local pass is claimed.
+- No live provider or service was invoked. FW-P2 execution, provider-backed scoring, R1/G1, and FW-G2 remain open.
+
+**Next action:** validate this exact PR head with CI; merge only if required checks pass.
