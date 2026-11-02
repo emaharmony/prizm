@@ -26,6 +26,8 @@ type actualPatchLifecycle struct {
 	onApply         func()
 }
 
+var errWorkerLostAfterApply = errors.New("injected worker loss after approved mutation")
+
 func (l actualPatchLifecycle) Decision(_ context.Context, op ProposalOperation) (ProposalDecision, string, error) {
 	a, err := l.store.Load(op.RunID, op.ApprovalID)
 	if err != nil {
@@ -172,6 +174,190 @@ func TestDurableApprovedTaskRealAtomicPatchRestartThroughValidation(t *testing.T
 	}
 	if data, err := os.ReadFile(filepath.Join(workspace, "new.txt")); err != nil || strings.TrimSpace(string(data)) != "new" {
 		t.Fatalf("new file=%q err=%v", data, err)
+	}
+}
+
+func TestDurableApprovedTaskReconcilesWorkerLossAfterRealApply(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, args := range [][]string{{"init", "-b", "main"}, {"config", "user.email", "test@prizm.local"}, {"config", "user.name", "Prizm Test"}} {
+		if _, err := gitx.RunCommand(ctx, workspace, "", "git", args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitx.RunCommand(ctx, workspace, "", "git", "add", "."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitx.RunCommand(ctx, workspace, "", "git", "commit", "-m", "base"); err != nil {
+		t.Fatal(err)
+	}
+	base, _ := gitx.CurrentSHA(ctx, workspace)
+	patch := "diff --git a/base.txt b/base.txt\n--- a/base.txt\n+++ b/base.txt\n@@ -1 +1 @@\n-base\n+changed\n" +
+		"diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+new\n"
+	runID := "run-real-atomic-patch-worker-loss"
+	approvalStore := approval.NewStore(t.TempDir())
+	registry := tool.NewRegistry()
+	tool.RegisterBuiltinsV4(registry, workspace, 1024*1024, "", workspace)
+	cfg := tool.PolicyConfig{WorkspaceRoot: workspace, AllowedPaths: []string{workspace}, MaxFileSize: 1024 * 1024}
+	toolExecutor := tool.NewExecutor(registry, &cfg)
+	toolExecutor.SetApprovalStore(approvalStore)
+	proposal, err := toolExecutor.ExecuteWithPolicy(ctx, "apply_patch_proposal", "developer", "prizm", "execution-real-patch", map[string]any{"_run_id": runID, "patch": patch, "base_sha": base})
+	if err != nil || !proposal.Success {
+		t.Fatalf("proposal=%#v err=%v", proposal, err)
+	}
+	approvalID, _ := proposal.Output["approval_id"].(string)
+	proposalID, _ := proposal.Output["proposal_id"].(string)
+	baseRunner := approvedTaskRunner()
+	tester := baseRunner.scripts[RoleTester][0].result
+	tester.Metadata.ValidationStatus = "passed"
+	tester.OutgoingHandoff.ValidationResults = []validation.Result{{
+		Profile: "post_apply", Status: "passed", ExitCode: 0,
+		Command: "go", Args: []string{"test", "./internal/workflow/multiagent"}, WorkingDir: workspace,
+	}}
+	baseRunner.scripts[RoleTester][0].result = tester
+	developer := baseRunner.scripts[RoleDeveloper][0].result
+	developer.Proposals = []ProposalReference{{ProposalID: proposalID, ApprovalID: approvalID, Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "base.txt"}, {Kind: ArtifactFile, URI: "new.txt"}}}}
+	baseRunner.scripts[RoleDeveloper][0].result = developer
+	runner := &postApplyValidationRunner{scriptedRunner: baseRunner}
+	env := newDurableTestEnvironment(t)
+	runner.events = env.events
+	applies := 0
+	lifecycle := actualPatchLifecycle{
+		store: approvalStore, executor: mutation.NewExecutor(workspace, approvalStore, workspace), workspace: workspace,
+		onApply: func() { applies++; runner.workspaceChanged = true; panic(errWorkerLostAfterApply) },
+	}
+	runtime := newDurableRuntimeForTest(t, validDefinition(), runner, env.store, env.claimer, env.events, DurableRuntimeOptions{Proposals: lifecycle})
+	request := testRunRequest()
+	request.RunID = runID
+	state, err := runtime.Run(ctx, request)
+	var waiting *RunWaitingError
+	if !errors.As(err, &waiting) || state.Status != RunStatusPaused {
+		t.Fatalf("pre-approval state=%q err=%v", state.Status, err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "new.txt")); !os.IsNotExist(err) {
+		t.Fatalf("proposal mutated workspace before approval: stat err=%v", err)
+	}
+	a, err := approvalStore.Load(runID, approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Approve("operator"); err != nil {
+		t.Fatal(err)
+	}
+	if err := approvalStore.Save(a); err != nil {
+		t.Fatal(err)
+	}
+	workerLost := false
+	func() {
+		defer func() {
+			if recovered := recover(); recovered == errWorkerLostAfterApply {
+				workerLost = true
+			} else if recovered != nil {
+				t.Fatalf("unexpected worker-loss panic: %v", recovered)
+			}
+		}()
+		_, _ = runtime.Resume(ctx, runID)
+	}()
+	if !workerLost {
+		t.Fatal("worker loss after approved mutation was not injected")
+	}
+	if applies != 1 {
+		t.Fatalf("approved mutation count=%d, want 1", applies)
+	}
+	if data, err := os.ReadFile(filepath.Join(workspace, "new.txt")); err != nil || strings.TrimSpace(string(data)) != "new" {
+		t.Fatalf("worker-loss mutation data=%q err=%v", data, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(workspace, "base.txt")); err != nil || strings.TrimSpace(string(data)) != "changed" {
+		t.Fatalf("worker-loss base data=%q err=%v", data, err)
+	}
+	checkpoint, err := env.store.Load(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.ApprovedTask == nil || checkpoint.ApprovedTask.Proposals[0].Phase != "applying" || checkpoint.ApprovedTask.Proposals[0].Result != nil {
+		t.Fatalf("durable crash checkpoint=%#v, want applying proposal", checkpoint.ApprovedTask)
+	}
+
+	restarted := newDurableRuntimeForTest(t, validDefinition(), runner, env.store, env.claimer, env.events, DurableRuntimeOptions{Proposals: lifecycle})
+	state, err = restarted.Resume(ctx, runID)
+	if err != nil || state.Status != RunStatusCompleted || runner.validationCalls != 1 || applies != 1 {
+		t.Fatalf("recovered state=%q validation=%d applies=%d err=%v", state.Status, runner.validationCalls, applies, err)
+	}
+	if got := runnerCalls(baseRunner); !reflect.DeepEqual(got, []Role{RolePlanner, RoleDeveloper, RoleTester, RoleReviewer}) {
+		t.Fatalf("recovery role sequence=%v", got)
+	}
+	record, err := env.store.Load(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.ApprovedTask != nil || len(record.ProposalResults) != 1 || record.ProposalResults[0].ApprovalID != approvalID {
+		t.Fatalf("approval identity/result not retained: task=%#v results=%#v", record.ApprovedTask, record.ProposalResults)
+	}
+	ordered, err := env.events.QueryInInsertionOrder(ctx, event.EventFilter{RunID: runID, Limit: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantOrder := []string{event.EventProposalApprovalGranted, event.EventProposalApplyStarted, event.EventProposalReconciled, event.EventValidationCompleted, event.EventMultiAgentRunResumed, event.EventMultiAgentRunCompleted}
+	last := -1
+	for _, typ := range wantOrder {
+		found := -1
+		for i := last + 1; i < len(ordered); i++ {
+			if ordered[i].Type == typ {
+				found = i
+				break
+			}
+		}
+		if found == -1 {
+			t.Fatalf("ordered event %q missing after index %d; events=%v", typ, last, ordered)
+		}
+		last = found
+	}
+	if got := len(queryEventsForTest(t, env.events, runID, event.EventProposalApplied)); got != 0 {
+		t.Fatalf("proposal applied events=%d, want zero before crash checkpoint", got)
+	}
+	if got := len(queryEventsForTest(t, env.events, runID, event.EventProposalReconciled)); got != 1 {
+		t.Fatalf("proposal reconciled events=%d, want exactly one", got)
+	}
+	countType := func(typ string) int {
+		count := 0
+		for _, evt := range ordered {
+			if evt.Type == typ {
+				count++
+			}
+		}
+		return count
+	}
+	for _, check := range []struct {
+		typ  string
+		want int
+	}{
+		{event.EventMultiAgentRunResumed, 1},
+		{event.EventValidationCompleted, 1},
+		{event.EventMultiAgentRunCompleted, 1},
+		{event.EventProposalApplyFailed, 0},
+	} {
+		if got := countType(check.typ); got != check.want {
+			t.Fatalf("event %q count=%d, want %d", check.typ, got, check.want)
+		}
+	}
+	roleCompleted := map[Role]int{}
+	for _, evt := range ordered {
+		if evt.Type == event.EventMultiAgentRoleCompleted {
+			roleCompleted[Role(payloadString(evt.Payload, "role"))]++
+		}
+	}
+	if roleCompleted[RoleTester] != 1 || roleCompleted[RoleReviewer] != 1 {
+		t.Fatalf("tester/reviewer completion counts=%v, want one each", roleCompleted)
+	}
+	report := BuildReferenceRunReport(ReferenceWorkflowInput{Objective: request.Task.Description}, state, ordered)
+	if report.FinalStatus != RunStatusCompleted || report.TestOutcome != "passed" || report.ReviewOutcome != OutcomeReviewApproved || report.TerminalOutcome == nil || len(report.TestsExecuted) == 0 {
+		t.Fatalf("final report=%#v, want validation/test/review/terminal evidence", report)
 	}
 }
 
@@ -346,6 +532,7 @@ type postApplyValidationRunner struct {
 	validationCalls  int
 	lastResult       RoleRunResult
 	validationErr    error
+	events           *event.SQLiteEventStore
 }
 
 type roleRunnerWithoutPostValidation struct{ inner *scriptedRunner }
@@ -373,6 +560,14 @@ func (r *postApplyValidationRunner) ValidateApprovedRole(_ context.Context, requ
 		return result, r.validationErr
 	}
 	result.OutgoingHandoff.ValidationResults = []validation.Result{{Profile: "post_apply", Status: "passed"}}
+	if r.events != nil {
+		_ = r.events.Store(context.Background(), event.NewEvent(event.EventValidationCompleted, "test-post-apply-validation", map[string]any{
+			"run_id": request.Run.RunID, "workflow_id": request.Run.WorkflowID, "role": request.Run.CurrentRole,
+			"profile": "post_apply", "status": "passed",
+		}).WithCorrelationID(request.Run.RunID).WithMetadata(event.EventMetadata{
+			RunID: request.Run.RunID, Agent: string(request.Run.CurrentRole),
+		}))
+	}
 	r.lastResult = result
 	return result, nil
 }
