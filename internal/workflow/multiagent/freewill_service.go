@@ -25,6 +25,7 @@ type FreewillSelectionInput struct {
 	CorrelationID    string
 	AgentID          string
 	Scope            freewill.Scope
+	Objective        string
 	ResumeCandidates []freewill.CandidateIntention
 	Budget           freewill.ResourceBudget
 	RecoveryFeedback string
@@ -47,6 +48,7 @@ type FreewillWakeServiceConfig struct {
 	SchedulingEnabled bool
 	AgentID           string
 	Scope             freewill.Scope
+	Objective         string
 	Owner             string
 	LeaseFor          time.Duration
 	Budget            freewill.ResourceBudget
@@ -71,6 +73,9 @@ func NewFreewillWakeService(runtime *DurableRuntime, store DurableRunStore, sele
 	}
 	if strings.TrimSpace(cfg.AgentID) == "" || strings.TrimSpace(cfg.Scope.ProjectID) == "" || strings.TrimSpace(cfg.Scope.Workspace) == "" || strings.TrimSpace(cfg.Owner) == "" || cfg.LeaseFor <= 0 {
 		return nil, errors.New("multiagent: Freewill agent, trusted scope, owner, and lease are required")
+	}
+	if err := freewill.ValidateSelectionObjective(cfg.Objective); err != nil {
+		return nil, errors.New("multiagent: Freewill selection objective is invalid")
 	}
 	if clock == nil {
 		clock = time.Now
@@ -180,7 +185,7 @@ func (s *FreewillWakeService) ProcessWake(ctx context.Context, runID string) (Du
 	}
 	selection, evidence, err := s.selector.SelectFreewill(providerCtx, FreewillSelectionInput{
 		RunID: runID, CorrelationID: record.Freewill.CorrelationID, AgentID: s.config.AgentID,
-		Scope: s.config.Scope, ResumeCandidates: resumes, Budget: s.config.Budget,
+		Scope: s.config.Scope, Objective: s.config.Objective, ResumeCandidates: resumes, Budget: s.config.Budget,
 		RecoveryFeedback: freewillSelectionRecoveryFeedback(record.Freewill.SelectionFailureCode),
 	})
 	if err != nil {

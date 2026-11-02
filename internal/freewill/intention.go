@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Origin identifies who initiated a request. FW-001 accepts agent proposals;
@@ -30,6 +32,25 @@ const (
 type Scope struct {
 	ProjectID string `json:"project_id"`
 	Workspace string `json:"workspace"`
+}
+
+const MaxSelectionObjectiveBytes = 512
+
+// ValidateSelectionObjective bounds the optional host-authored subject sent
+// with a Freewill selector request. It is context only, never authority.
+func ValidateSelectionObjective(objective string) error {
+	if objective == "" {
+		return nil
+	}
+	if !utf8.ValidString(objective) || len(objective) > MaxSelectionObjectiveBytes || strings.TrimSpace(objective) == "" {
+		return errors.New("freewill selection objective is invalid or exceeds its limit")
+	}
+	for _, r := range objective {
+		if unicode.IsControl(r) {
+		return errors.New("freewill selection objective must be single-line text")
+		}
+	}
+	return nil
 }
 
 // ResourceBudget is a proposal. Nil values mean unspecified; validation does
@@ -63,7 +84,7 @@ type IntentionRequest struct {
 type CandidateIntention struct {
 	CandidateID    string           `json:"candidate_id"`
 	Request        IntentionRequest `json:"request"`
-	Score          int              `json:"score,omitempty"`
+	Score          int              `json:"score"`
 	ScoreFactors   []string         `json:"score_factors,omitempty"`
 	ScoreRationale string           `json:"score_rationale,omitempty"`
 }

@@ -18,6 +18,31 @@ func validRequest() IntentionRequest {
 	}
 }
 
+func TestValidateSelectionObjectiveBoundsHostAuthoredContext(t *testing.T) {
+	if err := ValidateSelectionObjective("Review the synthetic Freewill selector fixture."); err != nil {
+		t.Fatalf("valid objective rejected: %v", err)
+	}
+	if err := ValidateSelectionObjective(""); err != nil {
+		t.Fatalf("absent objective rejected: %v", err)
+	}
+	for name, objective := range map[string]string{
+		"oversized":    strings.Repeat("a", MaxSelectionObjectiveBytes+1),
+		"whitespace":   "   ",
+		"newline":      "first line\nsecond line",
+		"tab":          "objective\twith tab",
+		"invalid UTF8": string([]byte{0xff, 0xfe}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateSelectionObjective(objective); err == nil {
+				t.Fatal("invalid objective accepted")
+			}
+		})
+	}
+	if err := ValidateSelectionObjective(strings.Repeat("é", MaxSelectionObjectiveBytes/2)); err != nil {
+		t.Fatalf("exact byte limit rejected: %v", err)
+	}
+}
+
 func TestDecodeIntentionRequestAcceptsUntrustedScopedProposal(t *testing.T) {
 	want := validRequest()
 	data, err := json.Marshal(want)
@@ -162,5 +187,20 @@ func TestValidateTransitionDocumentsEdgesWithoutGrantingAuthority(t *testing.T) 
 	}
 	if InitialState != StateDisabled {
 		t.Fatalf("InitialState = %q, want disabled", InitialState)
+	}
+}
+
+func TestCandidateScoreZeroSerializesExplicitly(t *testing.T) {
+	candidate := CandidateIntention{CandidateID: "candidate-zero", Request: validRequest(), Score: 0}
+	data, err := json.Marshal(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["score"]) != "0" {
+		t.Fatalf("zero score omitted or changed: %s", data)
 	}
 }

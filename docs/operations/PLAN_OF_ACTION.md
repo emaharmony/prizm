@@ -1,3 +1,54 @@
+## Current Handoff: Combined FW-003 scoring and objective PR #126 (2026-11-02)
+
+**Roadmap IDs:** FW-P1 / FW-003. The staging-based combined change includes
+model-authored scored candidates and the bounded optional `freewill.objective`
+context. It retains decision-only proposals, host-bound identity/scope,
+no-tools behavior, and policy-only evaluation. No provider-backed scored
+proposal is claimed; R1/G1 and FW-G2 remain separate incomplete gates.
+
+**Branch and review route:** staging is unchanged at `f196a125272afb9d42c117c33916da78811b464e`.
+PR #125 now has a conflict-free scoring-only head `6acff1b13ae01d1b32c66cf652412b43bab777a1`
+and its exact-head CI passed. The combined worktree starts from the staging-based
+scoring replay and adds the existing FW-003 objective change. Publish this
+combined tree directly through PR #126 to `staging`; do not merge PR #125. After
+the combined PR is green and merged, close #125 as superseded if its diff is
+fully redundant. Future Freewill milestones should be committed and reviewed
+without a cascading PR chain; create one staging-based review when requested.
+
+**Validation and limits:** retain the prior synthetic fake-provider evidence
+and its no-approval/dispatch/tool/action/apply assertions. Re-run the affected
+Go tests, build, vet, Staticcheck, and diff check on the combined exact head,
+then require exact-head CI before merge. No live model or service was run for
+this combined publication. The cross-process loopback limit still prevents a
+fresh served provider proof; FW-P1 remains provisional.
+
+**Next action:** finish the combined handoff edits, validate and publish #126
+directly to staging with a guarded ref update, then verify its complete diff,
+mergeability, and exact-head CI. Merge only #126 after those checks; leave R1/G1
+and FW-G2 open.
+
+## Current Handoff: FW-003 bounded selector objective input (2026-11-01)
+
+The new local branch `codex/fw-003-bounded-selection-context` is based on the
+scoring checkpoint `519b8b9cda761c6edabe860808a377460f2ab51b`. It adds an
+optional host-authored `freewill.objective` field, bounded to 512 UTF-8 bytes
+of single-line text. The CLI passes it through the wake service to both the
+GLM scored-ideas path and the generic structured selector as subject context;
+the compact prompts explicitly say it is context only. The selector continues
+to bind identity and scope, use no tools, and keep choices as unapproved
+proposals. No objective is synthesized when the field is absent, and absence
+does not force a sleep response.
+
+The example config warns that this field is sent to the configured provider,
+including remote/cloud providers, and must contain only explicitly approved,
+non-secret context. Focused validation passed for the objective bounds and
+YAML round-trip, both selector contracts, and the hermetic served GLM policy-
+only regression. No live provider request or service was started.
+
+**Next action:** coordinator review of the local commit. Provider conformance,
+R1/G1, and FW-G2 remain separate open gates; do not claim a provider-backed
+scored proposal from this synthetic test.
+
 ## Current Handoff: FW-P1 decision-only served evidence (2026-10-28)
 
 **Roadmap:** R1/G1 remains an upstream dependency for FW-G2. The FW-P1
@@ -792,3 +843,41 @@ continuous approval -> apply -> verify -> resume -> reviewer trace with an
 in-flight service worker loss, so FW-G2 remains gated and no full R1 claim is
 made. PR #124 is open for independent review; do not export source or widen
 permissions from this test.
+
+## Current Handoff: FW-003 scored Freewill proposals (2026-11-01)
+
+The isolated branch `codex/fw-p1-scoring-trace` starts at the exact published PR #124 head `c5dd919b647c40c69e51c83bd2dca4aa8b183c87`. This slice addresses FW-P1/FW-003: the GLM-5.3-Flash selector previously emitted IDEA-only output and the host assigned every candidate score 0 with generic rationale. The selector now requires three bounded IDEA/SCORE/FACTORS/RATIONALE blocks; its compact prompt lists the five allowed factor labels. The model supplies score evidence while the host still binds candidate IDs, identity, scope, decision-only capability, and budget. Invalid choices fall back to the highest model score, with lexical candidate ID as a stable tie-break. Candidate JSON always emits `score`, including zero.
+
+Focused multiagent/freewill suites passed, including the fake-provider scoring tests; the served P1 policy/history regression, CLI build, and affected-package vet also passed. No provider-backed inference, serve process, approval, or execution was performed. The last observed synthetic cloud record exposed omitted `score` fields and confirms a real FW-003 trace gap; it is not evidence that the provider scoring fix has passed live acceptance.
+
+**Remaining gate:** provider conformance is still unverified. The local served P1 regression confirms policy-only persistence/history compatibility but uses the existing synthetic selector; any provider-backed confirmation requires a separate bounded acceptance. Until then FW-P1 remains provisional; R1/G1 and FW-G2 remain separate gates and are not part of this patch.
+
+## Current Handoff: FW-P1/FW-003 rationale protocol normalization (2026-11-01)
+
+The scoring branch `codex/fw-p1-scoring-trace` now accepts one to five repeated `RATIONALE:` lines as model-authored fragments and joins them before the existing length, specificity, authority, and path checks. Candidate count, numeric score range, factor allowlist, unknown-field rejection, host-bound identity/scope, and the fail-closed `ToolCalls` check are unchanged.
+
+**Provider evidence:** the first isolated served wake used one capped GLM call and ended sleeping with zero candidates, choice, policy decision, or approval; `execution_disabled=true`, with no dispatch/tool/action events. Two exact-wire synthetic probes then used only the compact fixed instruction and `{"mode":"decision_only","max_ideas":3}`, `think=low`, `clear_thinking=true`, no tools, and 1024 output cap. Both produced three scored idea blocks but also one unsolicited tool-call object; one output repeated three labeled rationale fragments per block, while another had one rationale line per block but included factors outside the allowlist. Only sanitized lengths/counts/score metadata were retained; no prompts, raw completion, tool arguments, source, or user data were stored.
+
+**Validation:** focused `TestFreewillFlash` tests passed, including repeated-rationale preservation, rejection of authority/unknown/over-fragmented input, and tool-call fail-closed behavior. The new `TestServedFreewillP1GLMFlashAnnotatedScoresPersistPolicyOnly` uses the exact GLM selector with a loopback fake Ollama endpoint and verifies score/factor/rationale persistence through durable reload and authenticated history, with denied policy and no approval/dispatch/tool/action/project mutation. The standalone served test, combined `TestServedFreewillP1` set, `go build ./cmd/prizm-cli`, `go vet ./cmd/prizm-cli ./internal/workflow/multiagent ./internal/freewill`, scorer-focused tests, and `git diff --check` passed.
+
+**Risk/next action:** parser normalization for an observed `allowed_label=<integer>` token was committed as `65f09e38e11e0a33f5899f5048c9f59462c04a1a`; it validates 0–100 and unique canonical labels, then stores labels only because `CandidateIntention.ScoreFactors` has no numeric annotation field. A fresh exact-head synthetic wake made exactly one GLM request, returned no scored blocks, and committed the host's explicit sleep sentinel. It therefore adds no successful scoring evidence and does not confirm the prior parser mismatch. The isolated config also started default memory/tracker/context components and logged context compression configured for DeepSeek; the one-shot proxy saw no extra request, but this is not a clean no-auxiliary acceptance. The GLM text path serialized an empty `format` string rather than applying the JSON schema.
+
+The normal Freewill selector currently has no mission/brief input: `FreewillSelectionInput` carries host identity, scope, resume candidates, budget, and retry feedback; the GLM request sends only `mode`, `max_ideas`, and optional correction. Scope workspace is not added to the prompt. An empty synthetic project therefore has no objective and the provider's permitted `NONE` response is a valid sleep outcome. Do not fake an objective through retry feedback or fabricate ideas in the host. A bounded host-authored synthetic brief would require an explicit product/input contract; it is not presently a config-only test fixture. Before any further provider acceptance, explicitly disable context compression and memory capture, bind workspace and local stores inside the synthetic root, route any model-capable auxiliary endpoint through the same strict proxy, and verify the proxy remains the only observed egress. The task/delegation tracker starts unconditionally with local empty stores; it is local-only and no task was created by this wake. Keep score/factor validation strict and leave R1/G1 and FW-G2 gates unchanged.
+
+The fake-provider served regression verifies composition and persistence but does not exercise live GLM behavior. The roadmap asks for explainable scoring and a saved proposed intention; it does not require the selected candidate to be the numeric argmax. A valid model choice remains authoritative, while invalid choices use highest score then lexical candidate ID. This test deliberately selects a non-argmax candidate. Provider conformance and the bounded mission/brief input contract remain open; keep FW-P1 provisional and do not claim a successful provider-backed scored proposal.
+
+## Current Handoff: FW-P1/FW-003 live proof environment gate (2026-11-01)
+
+A fresh exact-head provider proof was prepared from `codex/fw-003-bounded-selection-context` at `a7a34632f493fd871b18be237df9b85b3ed5b8bb`. External provenance records the clean tracked tree, package/module paths, `go build -a -buildvcs=false`, and binary SHA-256 `B1BA03CDCFF059FB942C69B7957F634F99E87F1BD6AE540EFFC748662F3666B1`; because VCS stamping was disabled to avoid a stale embedded revision, do not claim binary embedded VCS provenance.
+
+The isolated proof root contains the synthetic-only config and an empty project directory. No proxy, Prizm proof service, or model request was started. A local-only diagnostic server listened in one managed process on loopback, but a separate client could not connect (HTTP 000); Ollama behaved the same across processes. This is an execution-environment loopback boundary, not an application/provider result. Protected idle PID 68312 was absent, and ports 8391/8392 had no listener; no attempt was made to restart or modify it.
+
+**Next action:** run the same one-wake synthetic acceptance only from an execution environment where a local proxy and service can communicate over loopback. Keep exact model, no-tools, output cap, synthetic-only objective, zero approval/dispatch/action requirements, and FW-P1 provisional until provider-backed scoring passes. Do not classify this preflight as a provider failure or successful acceptance.
+
+## Current Handoff: FW-003 served outbox assertion race (2026-11-02)
+
+PR #126 CI exposed a timing gap in the hermetic scored-Freewill serve test: it observed the durable denied lifecycle before the asynchronous policy-denied outbox event was visible. The test now polls both selection-committed and policy-denied history for up to two seconds before checking the zero-action invariants. No product behavior changed. The next action is publish this test-only stabilization on PR #125, then restack PR #126; do not merge. Provider-backed scoring, R1/G1, and FW-G2 remain open.
+
+## Current Handoff: FW-003 Staticcheck correction for PR #126 (2026-11-02)
+
+Exact-head PR #126 CI passed Linux tests/race, Windows tests, and Python tests; `lint-linux` failed only on two ST1005 diagnostics in the newly added objective validator. Both error strings now begin lowercase. Affected Go package tests and repository-wide `staticcheck -checks inherit ./...` pass locally. The next action is to advance the PR branch only if its remote head still matches the reviewed parent SHA; do not merge. FW-P1 provider acceptance, R1/G1, and FW-G2 remain separate open gates.

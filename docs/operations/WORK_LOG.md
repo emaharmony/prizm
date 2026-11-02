@@ -2591,3 +2591,161 @@ loss gate. FW-P1 remains provisional decision-only 7/10 evidence, R1/G1 and
 FW-G2 remain open, and no source export or permission widening is justified.
 Obtain independent review of PR #124; no merge or source export is authorized
 by this hermetic evidence alone.
+
+## 2026-11-01 — FW-P1/FW-003 model-authored scoring
+
+**Roadmap IDs:** FW-P1 and FW-003.
+
+On isolated branch `codex/fw-p1-scoring-trace` at the exact PR #124 head, the GLM-5.3-Flash idea shortcut now requires exactly three scored blocks. Each candidate must contain a bounded objective, integer score 0–100, allowed unique factors, and substantive rationale. Weak/missing/out-of-range/authority-bearing score evidence fails closed with the sanitized `invalid_scored_ideas` diagnostic. The host binds IDs, origin/source, scope, decision-only capability, and configured budget; it does not invent scores or rationale. Candidate score JSON no longer omits numeric zero.
+
+**Evidence:** `go test ./internal/workflow/multiagent ./internal/freewill` passed (`multiagent` 302.729s; `freewill` cached). The post-suite focused regressions passed (`multiagent` 0.574s; `freewill` 0.664s): model-authored score preservation, fail-closed missing/invalid score, weak/authority-bearing rationale, compact/no-tools request, highest-score ranking, valid zero score, and explicit zero serialization. `go test ./cmd/prizm-cli -run '^TestServedFreewillP1WakePersistsPolicyOnlyProposalAndHistory$' -count=1` passed (3.103s); `go build ./cmd/prizm-cli` and `go vet ./internal/workflow/multiagent ./internal/freewill` passed. `git diff --check` passed. No live inference/serve request or policy/execution action was made. The earlier synthetic GLM trace had three candidates with missing serialized score values and a policy-denied, no-execution outcome; that trace motivates this change but does not validate it.
+
+**Risk/next action:** provider conformance remains unknown because no cloud call was made. The next useful gate is a separately bounded provider-backed selector acceptance that confirms the compact score format can be produced reliably and persists all score evidence. Keep R1/G1 and FW-G2 outside this milestone and retain their existing provider-backed gates.
+
+**FW-003 review follow-up:** the compact scoring instruction now enumerates `scope_fit`, `feasibility`, `impact`, `novelty`, and `readiness`. A fake-provider regression verifies an invalid choice falls back to the highest model-authored score, and equal scores resolve by lexicographically smallest candidate ID. The focused selector test command passed (0.370s); provider-backed served confirmation remains unrun pending the current isolated acceptance attempt.
+
+## 2026-11-01 — FW-P1/FW-003 rationale normalization and provider diagnostics
+
+**Roadmap IDs:** FW-P1 and FW-003.
+
+On `codex/fw-p1-scoring-trace`, the host parser now joins one to five repeated model-authored `RATIONALE:` fragments, with the existing 500-character, six-word, authority, and path checks. Tests retain exact score/factor/rationale provenance and confirm unknown fields, authority language, excessive fragments, and any tool-call response still fail closed. No score, factor, title, or rationale is synthesized by the host.
+
+A prior isolated served wake produced no candidates and slept with execution disabled; it recorded one provider request and no policy decision, approval, dispatch, tool, or action. Two exact-wire diagnostics used only the compact fixed instruction plus synthetic decision-only mode, no tools, `think=low`, `clear_thinking=true`, and a 1024-token cap. Both returned three scored blocks but also one unsolicited tool-call response. One used repeated rationale labels; the other contained factor values outside the fixed allowlist. Safe metadata only was retained, without raw response text or tool arguments.
+
+Focused `TestFreewillFlash` regressions passed; `go build ./cmd/prizm-cli`, `go vet ./internal/workflow/multiagent ./internal/freewill`, and `git diff --check` passed. Provider-backed served acceptance remains open. Next, run one fresh isolated served wake from the committed branch head; stop after the first failed stage, and preserve all existing score/factor/tool gates. R1/G1 and FW-G2 remain separate.
+
+## 2026-11-01 — FW-P1/FW-003 numeric factor annotation normalization
+
+**Roadmap IDs:** FW-P1 and FW-003.
+
+The first isolated served wake from `394963644bfe1a1843fd93f3e50e3f141786210c` returned three scored blocks but failed closed with `invalid_scored_ideas`. Its durable run recorded zero candidates, choice, policy decision, or approval; it was stopped before the scheduled retry. No execution, dispatch, tool, or action event occurred. The safe served record did not preserve raw completion text or factor tokens, so the precise cause cannot be confirmed from that wake alone.
+
+A separate direct synthetic diagnostic observed the token syntax `scope_fit=85` (and analogous allowlisted labels with integer annotations). It also returned one unsolicited tool-call object; the selector's no-tools/tool-call fail-closed gate remains unchanged. The direct probe is diagnostic evidence, not proof of the served completion's exact factor syntax. The parser now accepts a canonical factor label with an optional single `=<ASCII integer>` annotation in the inclusive 0–100 range, while rejecting unknown or duplicate labels, authority/path/text suffixes, malformed numbers, decimals, negatives, and out-of-range values. Numeric annotations are validated but not persisted because `CandidateIntention.ScoreFactors` is `[]string`; the host stores canonical labels only and retains model-authored overall score and rationale.
+
+**Validation:** `go test ./internal/workflow/multiagent -run '^TestFreewillFlash' -count=1` passed (0.275s). Added positive coverage for annotated labels, overall scores and rationale preservation, and negative coverage for malformed/unsafe suffixes. Existing selector tests retain host-bound IDs/scope, ranking, invalid-choice fallback, and tool-call rejection. `git diff --check` passed with only CRLF normalization warnings. The exact-head CLI build succeeded to the fresh proof root, and `go vet ./internal/workflow/multiagent ./internal/freewill` passed after the served attempt. Full affected package suite remains pending.
+
+**Next action:** run affected tests/build/vet and `git diff --check`, inspect the selective diff, commit only parser/tests/plan/log on `codex/fw-p1-scoring-trace`, then perform one fresh isolated served wake from the exact new head. Do not reuse the failed proof root or touch the idle served instance. If the first stage fails, preserve its safe durable evidence and stop; do not weaken validation or replay that wake.
+
+## 2026-11-01 — FW-P1/FW-003 fresh served sleep outcome
+
+**Roadmap IDs:** FW-P1, FW-003, and the first usable demonstration criterion. This remains a decision-only test; R1/G1 and FW-G2 execution gates are untouched.
+
+Built and served exact scoring head `65f09e38e11e0a33f5899f5048c9f59462c04a1a` in fresh synthetic root `D:\_projects_\prism\.tmp\fw-p1-scoring-proof-20261101-e`; binary SHA-256 `11A27EC81FF8BE900069574A58E12F2A2F74600053A6A06BF53F0E38B28EB6EF`. The empty project, state, run, and policy directories were isolated; the service and metadata proxy bound only to loopback. Health and authenticated status returned 200 twice, with zero tasks before the wake. The fixed model was `glm-5.3-flash:cloud`, selector output cap 1024, timeout 60 seconds, and the proxy allowed one ordered idea-stage request with no tools and at most one optional choice request. Exactly one empty scheduled event was published and exactly one provider POST traversed the proxy.
+
+The safe wire record reports model `glm-5.3-flash`, HTTP 200, 84 prompt / 18 output tokens, no tool calls, zero scored blocks, and no rationale/factor evidence. Durable run `freewill-49532f9b9fc4f0c13b47ffbb377f30fb` committed the host's explicit `NONE` sleep sentinel: sleeping lifecycle, zero candidates/choice/policy decision/approval, execution disabled, and only run-created, wake-claimed, selection-started, and selection-committed events. This is a valid no-safe-set sleep, not parser failure and not successful scoring evidence. The response's native Ollama `format` key was present as an empty string on the plain-text GLM path; this run did not exercise the JSON schema format.
+
+The service log showed context compression enabled by default with `deepseek-v4-flash:cloud`, plus local memory/event consumers and the task/delegation tracker. The one-shot proxy observed no second request, and the synthetic run created no task; however, context compression's configured default URL was outside the proxy, so this is not proof that all potential auxiliary egress was contained. Both owned processes were stopped after the first response before a retry; ports 39581–39583 are free. Protected idle PID 68312 at 8391/8392 remained alive and untouched. Synthetic DB and sanitized wire summary are retained in the proof root.
+
+Source review found that no mission/brief can currently be supplied through normal Freewill config. `FreewillSelectionInput` includes identity/scope, resume candidates, budget, and retry feedback; the initial GLM user payload contains only `mode` and `max_ideas`. Scope workspace is host-bound and not included. Therefore an empty synthetic project provides no objective, and the provider's valid `NONE` result is expected. Do not seed retry feedback or modify production code solely to force a candidate. A host-bound bounded mission/goal would need an explicit input contract and should be treated as a scoped FW-003 context-design decision, not a harness-only setting.
+
+**Next action:** review whether FW-003 should accept a bounded host-authored selection context, then test through that normal contract. In any later run, disable `context_compression`, disable memory auto-capture, pin workspace/local stores to the synthetic root, and route all model-capable auxiliary URLs through the same strict proxy; preserve no-tools, one-wake, no-approval, and no-execution controls. The tracker is currently unconditional but remains a local observer over the synthetic task DB. No successful provider-backed score/factor/rationale result is claimed.
+
+## 2026-11-01 — FW-P1/FW-003 hermetic GLM served scoring regression
+
+**Roadmap IDs:** FW-P1, FW-003, and FW-004 policy-only boundary.
+
+Added `TestServedFreewillP1GLMFlashAnnotatedScoresPersistPolicyOnly` in the CLI serve tests. It starts the composed Freewill runtime and embedded loopback bus over fresh empty synthetic directories, routes the exact `glm-5.3-flash:cloud` selector to a loopback fake Ollama HTTP endpoint, and publishes one scheduled wake. The fake wire contract checks the exact model, no tools, compact two-message selector request, `think=low`, `clear_thinking=true`, and 1024 output cap. Its synthetic fixture supplies three distinct model-authored non-placeholder overall scores, allowlisted annotated factor labels, and two rationale fragments per candidate; the separate choice response is valid but deliberately not the highest score.
+
+The test proves scores/factors/rationales survive the production mapper, durable store reload, and authenticated history API. Policy denial remains queryable with execution disabled and no approval, dispatch, tool, action, or synthetic-project mutation. The roadmap requires explainable scoring plus a saved proposed intention, not that every valid choice equal the numeric argmax; invalid choices still use deterministic highest-score fallback and lexical-ID tie-break. This is hermetic composition coverage only; it does not invoke a cloud model or prove GLM output conformance. The prior real-provider run's safe `NONE` sleep remains the only served GLM outcome, so no successful provider-backed scored proposal is claimed. A bounded mission/brief is not currently a normal Freewill input and remains a product-contract gap.
+
+**Validation:** standalone `go test ./cmd/prizm-cli -run '^TestServedFreewillP1GLMFlashAnnotatedScoresPersistPolicyOnly$' -count=1` passed; combined `go test ./cmd/prizm-cli -run '^TestServedFreewillP1' -count=1` passed; `go test ./internal/workflow/multiagent -run '^TestFreewillFlash' -count=1` passed; `go build ./cmd/prizm-cli`, `go vet ./cmd/prizm-cli ./internal/workflow/multiagent ./internal/freewill`, and `git diff --check` passed.
+
+**Next action:** review the synthetic mission/brief input contract and isolate all auxiliary model paths before any fresh provider acceptance. Do not seed retry feedback or fabricate model decisions. Keep FW-P1 decision-only, with R1/G1 and FW-G2 as separate incomplete gates.
+## 2026-11-01 — FW-003 bounded host-authored selector objective
+
+**Roadmap IDs:** FW-P1 and FW-003; the served decision-only and FW-004
+policy-only boundaries remain unchanged.
+
+Added optional `freewill.objective` config and carried it through CLI
+composition, `FreewillWakeService`, and `FreewillSelectionInput`. The host
+validates a maximum of 512 UTF-8 bytes, rejects whitespace-only, multiline,
+control-character, and invalid UTF-8 values, and allows absence. Both the
+GLM-5.3-Flash scored-ideas request and the generic structured selector receive
+the objective as user-context data. Their compact system instructions say it
+is subject context only. Host identity/scope binding, decision-only proposal
+semantics, no-tools behavior, and policy/approval boundaries are unchanged.
+
+The example config explicitly states that the objective is sent to the
+configured provider, including remote/cloud, and must contain only approved
+context with no secrets, private user data, tool or approval instructions. The
+objective is not derived from a workspace or tracker, and an absent objective
+does not force the model to sleep. No provider request or service was run.
+
+**Validation:** focused tests passed for objective byte/line/UTF-8 validation,
+config YAML round-trip/default-off behavior, structured selector forwarding and
+host bindings, and `TestServedFreewillP1GLMFlashAnnotatedScoresPersistPolicyOnly`
+through the fake loopback provider. Full `go test -count=1` passed for
+`internal/freewill`, `internal/orchestrator`, `internal/workflow/multiagent`,
+and `cmd/prizm-cli`; `go build ./cmd/prizm-cli`, `go vet ./cmd/prizm-cli
+./internal/workflow/multiagent ./internal/freewill ./internal/orchestrator`, and
+`git diff --check` passed. `gofmt -d` showed only pre-existing formatting
+deviations in unrelated runtime-close and race-test code; edited code is
+formatted.
+
+**Next action:** coordinator review of the local commit. Do not run a live
+provider, alter the idle service, or claim provider-backed scored-proposal
+acceptance. Keep R1/G1 and FW-G2 as separate incomplete gates.
+
+## 2026-11-01 — FW-003 exact-head provider proof preflight blocked
+
+**Roadmap IDs:** FW-P1 and FW-003. No code or provider behavior was changed.
+
+Prepared the exact-head synthetic proof in `.tmp/fw-003-objective-proof-20261101-a7a34632`. The source branch/head is `codex/fw-003-bounded-selection-context` / `a7a34632f493fd871b18be237df9b85b3ed5b8bb`; source tree is `4c984a2bc2180ab79222cd2d7cd4bf1e8b8eca2a`. The binary was built with `-buildvcs=false` after the compiler's embedded VCS revision disagreed with the checkout; SHA-256 is `B1BA03CDCFF059FB942C69B7957F634F99E87F1BD6AE540EFFC748662F3666B1`. The proof config has one synthetic fictional objective, an empty project directory, default-deny policy, no channels/MCP/bridge/actions, disabled auxiliary memory/context compression, and all model endpoints routed to a planned local guard proxy.
+
+A bounded cross-process loopback diagnostic failed: a trivial HTTP server was live in a managed process, but a separate client received HTTP 000/refused. Ollama showed the same boundary; no model request, proxy request, or Prizm proof serve was started. The protected PID 68312 was absent, and its old ports 8391/8392 were down. These are environment observations only, not an Ollama/provider/application failure. Existing proof config and provenance remain in the proof root; raw output and credentials were not recorded.
+
+**Validation:** exact-head source/build provenance was independently recorded; model call count is zero. No tests were run for this preflight-only change.
+
+**Next action:** continue FW-003 provider acceptance only where the proof proxy and service can communicate over loopback. Preserve one wake, strict model/no-tools/cap/isolation controls, and require persisted scored candidates plus decision-only/policy evidence before raising FW-P1 readiness. Keep R1/G1 and FW-G2 separate.
+
+## 2026-11-02 — FW-003 served outbox assertion race
+
+**Roadmap IDs:** FW-P1, FW-003, FW-004. The exact-head PR #126 rerun failed the hermetic `TestServedFreewillP1GLMFlashAnnotatedScoresPersistPolicyOnly` because it queried event history once immediately after the durable lifecycle became denied. CI contained the selection-committed event but not yet the policy-denied event; the background outbox acknowledgement then logged context cancellation at teardown. This is an asynchronous test observation race; the product writes the denied state before dispatching/acknowledging its outbox event.
+
+Changed the test to wait up to two seconds for both persisted selection-committed and policy-denied events before evaluating the existing no-approval/dispatch/tool/action/apply assertions. No production code changed.
+
+**Validation:** the exact served test passed 20 consecutive runs; repository-wide `staticcheck -checks inherit ./...` and `git diff --check` passed. No provider or service was invoked.
+
+**Next action:** publish the narrow test fix on PR #125, then rebase/restack PR #126 onto the updated scoring head using guarded expected-head updates. Do not merge. Keep real-provider scoring and R1/G1/FW-G2 as separate open gates.
+
+## 2026-11-02 — PR #126 Staticcheck correction
+
+**Roadmap IDs:** FW-P1 and FW-003. Exact-head PR #126 CI completed with Linux tests/race, Windows tests, and Python tests passing; `lint-linux` failed on two ST1005 findings in `internal/freewill/intention.go`, where the new bounded objective validator returned capitalized error strings. Lowercased only those two string initials. No behavior or validation rules changed.
+
+**Validation:** `go test -count=1 ./internal/freewill ./internal/config ./internal/workflow/multiagent ./cmd/prizm-cli` passed; `staticcheck -checks inherit ./...` passed; `git diff --check` passed. No model/provider call or service was run.
+
+**Next action:** advance PR #126 only from its exact reviewed parent head after rechecking the remote ref, then confirm the updated PR diff and exact-head CI. Do not merge. Provider-backed scoring, R1/G1, and FW-G2 remain incomplete.
+
+## 2026-11-02 — Combine FW-003 scoring and objective directly on staging
+
+**Roadmap IDs:** FW-P1 and FW-003. User-directed landing now combines the
+scoring trace and bounded objective input into one staging-based PR #126;
+future milestones use commits rather than a cascading PR chain. Do not merge
+the separate scoring-only PR #125. Staging was verified identical to
+`f196a125272afb9d42c117c33916da78811b464e`; PR #125 is conflict-free and green
+at head `6acff1b13ae01d1b32c66cf652412b43bab777a1`.
+
+The local combined tree replays the scoring-only diff and adds the existing
+FW-003 objective config/validation/selector forwarding. It preserves compact
+model instructions, host-bound identity and scope, no tools, decision-only
+proposals, policy-only evaluation, and the no-execution assertions. Existing
+synthetic evidence remains the only served acceptance; no real model call was
+made. Provider-backed scored selection remains unproven, and R1/G1 and FW-G2
+remain open.
+
+**Validation:** exact-head PR #125 CI run `41461332048` passed Linux tests and
+race, Windows tests and CLI smoke, Python tests, vet, and Staticcheck. Local
+`go test ./internal/freewill` passed on the scoring replay; local CLI/multiagent
+test launch stalled without a visible Go test process, so those local results
+are not claimed. The combined objective code previously passed its exact-head
+CI. On the newly assembled combined worktree, `go test -count=1
+./internal/freewill` passed. Combined package, orchestrator, CLI build, and
+targeted Staticcheck launches then stalled without a visible Go/compiler/test
+process and were stopped; `go vet ./internal/freewill` passed, and no pass is
+claimed for the stalled local checks. The combined exact head still requires
+fresh CI.
+
+**Next action:** validate and publish this combined tree as PR #126 directly to
+staging, verify all changed files and CI on that head, then merge only #126 if
+green. Afterward close #125 as superseded only after confirming its entire diff
+is included. Do not touch provider services or claim R1/G1/FW-G2 acceptance.

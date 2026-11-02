@@ -375,6 +375,292 @@ func TestServedFreewillP1WakePersistsPolicyOnlyProposalAndHistory(t *testing.T) 
 	}
 }
 
+func TestServedFreewillP1GLMFlashAnnotatedScoresPersistPolicyOnly(t *testing.T) {
+	const cfgObjective = "Review the empty synthetic project and propose read-only selector follow-ups."
+	root := t.TempDir()
+	projectPath := filepath.Join(root, "synthetic-project")
+	policyDir := filepath.Join(root, "policies")
+	dataDir := filepath.Join(root, "data")
+	runsDir := filepath.Join(root, "runs")
+	for _, dir := range []string{projectPath, policyDir, runsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ideas := "IDEA: Map dependency boundaries\nSCORE: 82\nFACTORS: scope_fit=85, feasibility=70\n" +
+		"RATIONALE: Maps direct dependencies and identifies a bounded review target.\n" +
+		"RATIONALE: This can guide a later migration without changing project files.\n" +
+		"IDEA: Document service ownership\nSCORE: 64\nFACTORS: impact=60, readiness=75\n" +
+		"RATIONALE: Clear ownership notes reduce cross-package changes for maintainers.\n" +
+		"RATIONALE: They help contributors route future work to the right domain.\n" +
+		"IDEA: Review test coverage seams\nSCORE: 91\nFACTORS: novelty=80, feasibility=90\n" +
+		"RATIONALE: A focused gap list can guide later test improvements.\n" +
+		"RATIONALE: It keeps this review read only and within project scope."
+	type wireMessage struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	type wireRequest struct {
+		Model         string                     `json:"model"`
+		Messages      []wireMessage              `json:"messages"`
+		Tools         json.RawMessage            `json:"tools"`
+		Format        json.RawMessage            `json:"format"`
+		Think         string                     `json:"think"`
+		ClearThinking bool                       `json:"clear_thinking"`
+		Options       map[string]json.RawMessage `json:"options"`
+	}
+	const model = "glm-5.3-flash:cloud"
+	var mu sync.Mutex
+	requestCount := 0
+	requestFailure := ""
+	fakeProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		requestCount++
+		if r.Method != http.MethodPost || r.URL.Path != "/api/chat" {
+			requestFailure = "unexpected fake provider endpoint"
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		var request wireRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			requestFailure = "invalid provider request"
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if request.Model != model || len(request.Messages) != 2 || request.Messages[0].Role != "system" || request.Messages[1].Role != "user" ||
+			request.Tools != nil || request.Think != "low" || !request.ClearThinking {
+			requestFailure = "GLM model, compact messages, think mode, or no-tools wire contract mismatch"
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		var maxPredict int
+		if err := json.Unmarshal(request.Options["num_predict"], &maxPredict); err != nil || maxPredict != 1024 {
+			requestFailure = "output cap mismatch"
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+
+		content := ""
+		if strings.Contains(request.Messages[0].Content, "FACTORS (scope_fit, feasibility, impact, novelty, readiness)") {
+			var user struct {
+				Mode      string `json:"mode"`
+				MaxIdeas  int    `json:"max_ideas"`
+				Objective string `json:"objective"`
+			}
+			if err := json.Unmarshal([]byte(request.Messages[1].Content), &user); err != nil || user.Mode != "decision_only" || user.MaxIdeas != 3 || user.Objective != cfgObjective || len(request.Messages[0].Content) > 500 {
+				requestFailure = "idea stage did not carry the compact synthetic-only request"
+				http.Error(w, "invalid request", http.StatusBadRequest)
+				return
+			}
+			content = ideas
+		} else if strings.Contains(request.Messages[0].Content, "Choose one supplied candidate ID") {
+			var user struct {
+				CandidateIDs []string `json:"candidate_ids"`
+			}
+			if err := json.Unmarshal([]byte(request.Messages[1].Content), &user); err != nil || len(user.CandidateIDs) != 3 {
+				requestFailure = "choice stage did not provide three host-bound candidate IDs"
+				http.Error(w, "invalid request", http.StatusBadRequest)
+				return
+			}
+			// A valid choice is a distinct model judgment from the explanatory score.
+			// The roadmap requires both scoring and choosing, but does not require argmax.
+			content = "choice: " + user.CandidateIDs[0]
+		} else {
+			requestFailure = "unexpected GLM selector instruction"
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "glm-5.3-flash", "done": true, "done_reason": "stop", "prompt_eval_count": 24, "eval_count": 128,
+			"message": map[string]any{"role": "assistant", "content": content, "thinking": "", "tool_calls": []any{}},
+		})
+	}))
+	defer fakeProvider.Close()
+
+	cfg := &orchestrator.Config{}
+	cfg.Prizm.DataDir, cfg.Prizm.RunsDir = dataDir, runsDir
+	cfg.Freewill = orchestrator.FreewillConfig{Enabled: true, AgentID: "synthetic-agent", ProjectID: "synthetic-project", Model: model,
+		Objective: cfgObjective,
+		PolicyDir: policyDir, Scheduling: orchestrator.FreewillSchedulingConfig{Enabled: true, Schedule: "0 0 1 1 *"}}
+	cfg.Agents = []orchestrator.AgentConfig{{ID: "synthetic-agent", Provider: "ollama", Model: model}}
+	cfg.Projects = []orchestrator.ProjectConfig{{ID: "synthetic-project", RepoPath: projectPath}}
+	providers := provider.NewProviderRegistry()
+	providers.Register(model, &directFreewillChatStub{chat: ollama.NewChatProvider(fakeProvider.URL)}, provider.ModelInfo{ProviderName: "ollama"})
+	runtime, err := openFreewillServeRuntime(cfg, providers, "", filepath.Join(root, "prizm.yaml"))
+	if err != nil {
+		t.Fatalf("compose GLM Freewill runtime: %v", err)
+	}
+	runtimeClosed := false
+	defer func() {
+		if !runtimeClosed {
+			runtime.Close()
+		}
+	}()
+	busURL, stopBus, err := bus.StartEmbeddedBus(0)
+	if err != nil {
+		t.Fatalf("start loopback bus: %v", err)
+	}
+	defer stopBus()
+	nc, err := nats.Connect(busURL)
+	if err != nil {
+		t.Fatalf("connect loopback bus: %v", err)
+	}
+	defer nc.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := runtime.Start(ctx, nc, true); err != nil {
+		t.Fatalf("start GLM Freewill runtime: %v", err)
+	}
+	if err := nc.Publish(freewillScheduleSubject, []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := nc.FlushTimeout(2 * time.Second); err != nil {
+		t.Fatalf("flush one synthetic wake: %v", err)
+	}
+
+	var run multiagent.DurableRun
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		runs, listErr := runtime.store.ListFreewillRuns(ctx, "", 10)
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		if len(runs) > 0 && runs[0].Freewill != nil && runs[0].Freewill.Lifecycle == freewill.StateDenied {
+			run = runs[0]
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if run.Freewill == nil || len(run.Freewill.Candidates) != 3 || run.Freewill.ChoiceID == "" {
+		t.Fatalf("GLM annotated scores did not reach a durable denied proposal: %#v", run.Freewill)
+	}
+	if run.Freewill.PolicyDecision != "denied" || run.Freewill.PauseReason != "policy_denied" || !run.Freewill.ExecutionDisabled || run.Freewill.ApprovalRef != "" {
+		t.Fatalf("policy-only boundary changed: %#v", run.Freewill)
+	}
+	chosen := -1
+	for i, candidate := range run.Freewill.Candidates {
+		if candidate.CandidateID == run.Freewill.ChoiceID {
+			chosen = i
+		}
+	}
+	wantScores := []int{82, 64, 91}
+	wantFactors := [][]string{{"scope_fit", "feasibility"}, {"impact", "readiness"}, {"novelty", "feasibility"}}
+	wantRationales := []string{
+		"Maps direct dependencies and identifies a bounded review target. This can guide a later migration without changing project files.",
+		"Clear ownership notes reduce cross-package changes for maintainers. They help contributors route future work to the right domain.",
+		"A focused gap list can guide later test improvements. It keeps this review read only and within project scope.",
+	}
+	for i, candidate := range run.Freewill.Candidates {
+		if candidate.Score != wantScores[i] || !reflect.DeepEqual(candidate.ScoreFactors, wantFactors[i]) || candidate.ScoreRationale != wantRationales[i] {
+			t.Fatalf("candidate %d lost model score/factor/rationale evidence: %#v", i, candidate)
+		}
+		if candidate.Request.AgentID != "synthetic-agent" || candidate.Request.Scope.ProjectID != "synthetic-project" || !reflect.DeepEqual(candidate.Request.RequestedCapabilities, []string{"decision_only"}) {
+			t.Fatalf("candidate %d escaped host-bound identity/scope/capabilities: %#v", i, candidate.Request)
+		}
+	}
+	if chosen != 0 || run.Freewill.Candidates[chosen].Score == 91 {
+		t.Fatalf("valid model choice should remain distinct from advisory highest score: choice_index=%d candidates=%#v", chosen, run.Freewill.Candidates)
+	}
+	mu.Lock()
+	if requestCount != 2 || requestFailure != "" {
+		t.Fatalf("fake GLM request count=%d failure=%q", requestCount, requestFailure)
+	}
+	mu.Unlock()
+
+	var storedEvents []event.Event
+	seenSelection, seenDenied := false, false
+	eventDeadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(eventDeadline) {
+		storedEvents, err = runtime.events.Query(ctx, event.EventFilter{RunID: run.State.RunID, Limit: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		seenSelection, seenDenied = false, false
+		for _, e := range storedEvents {
+			if e.Type == event.EventFreewillSelectionCommitted {
+				seenSelection = true
+			}
+			if e.Type == event.EventFreewillPolicyDenied {
+				seenDenied = true
+			}
+		}
+		if seenSelection && seenDenied {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	for _, e := range storedEvents {
+		if e.Type == event.EventFreewillApprovalProposed || e.Type == event.EventFreewillApprovalDecided ||
+			e.Type == event.EventMultiAgentFanoutChildDispatched || e.Type == event.EventMultiAgentToolDiagnostic ||
+			e.Type == event.EventProposalApplyStarted || e.Type == event.EventProposalApplied || e.Type == event.EventProposalApplyFailed ||
+			e.Type == event.EventInteractionActionExecuted || strings.Contains(e.Type, ".tool.") {
+			t.Fatalf("GLM policy-only wake emitted approval/dispatch/tool event %q", e.Type)
+		}
+	}
+	if !seenSelection || !seenDenied {
+		t.Fatalf("durable trace missing selection or policy denial: %#v", storedEvents)
+	}
+	if entries, err := os.ReadDir(projectPath); err != nil || len(entries) != 0 {
+		t.Fatalf("synthetic project changed: entries=%v err=%v", entries, err)
+	}
+
+	runtime.Close()
+	runtimeClosed = true
+	cfg.Freewill.Enabled = false
+	statusRuntime, err := openFreewillStatusRuntime(cfg, filepath.Join(root, "prizm.yaml"))
+	if err != nil || statusRuntime == nil || !statusRuntime.readOnly {
+		t.Fatalf("open reloaded read-only history: runtime=%#v err=%v", statusRuntime, err)
+	}
+	defer statusRuntime.Close()
+	reloaded, err := statusRuntime.store.Load(ctx, run.State.RunID)
+	if err != nil || reloaded.Freewill == nil || !reflect.DeepEqual(reloaded.Freewill.Candidates, run.Freewill.Candidates) {
+		t.Fatalf("durable reload lost annotated score evidence: %#v err=%v", reloaded.Freewill, err)
+	}
+	historyAPI := api.NewServer(api.Config{AuthToken: "synthetic-token", FreewillApprovals: statusRuntime.approvals})
+	historyHTTP := httptest.NewServer(historyAPI.Handler())
+	defer historyHTTP.Close()
+	unauthorized, err := http.Get(historyHTTP.URL + "/api/v1/freewill/runs/" + run.State.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unauthorized.Body.Close()
+	if unauthorized.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("historical endpoint did not require auth: %d", unauthorized.StatusCode)
+	}
+	get, _ := http.NewRequest(http.MethodGet, historyHTTP.URL+"/api/v1/freewill/runs/"+run.State.RunID, nil)
+	get.Header.Set("Authorization", "Bearer synthetic-token")
+	response, err := http.DefaultClient.Do(get)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var status multiagent.FreewillApprovalStatus
+	if response.StatusCode != http.StatusOK || json.NewDecoder(response.Body).Decode(&status) != nil {
+		t.Fatalf("authenticated historical status failed: %d", response.StatusCode)
+	}
+	if status.PolicyDecision != "denied" || status.ChoiceID != run.Freewill.ChoiceID || status.Selected == nil || status.Selected.CandidateID != run.Freewill.ChoiceID || status.ApprovalID != "" || !status.ExecutionDisabled {
+		t.Fatalf("authenticated history lost policy-only choice: %#v", status)
+	}
+	public := append([]multiagent.FreewillPublicCandidate{*status.Selected}, status.Alternatives...)
+	if len(public) != 3 {
+		t.Fatalf("authenticated history returned %d candidates", len(public))
+	}
+	for _, candidate := range public {
+		index := -1
+		for i, persisted := range run.Freewill.Candidates {
+			if persisted.CandidateID == candidate.CandidateID {
+				index = i
+				break
+			}
+		}
+		if index < 0 || candidate.Score == nil || *candidate.Score != wantScores[index] || !reflect.DeepEqual(candidate.ScoreFactors, wantFactors[index]) || candidate.ScoreRationale != run.Freewill.Candidates[index].ScoreRationale {
+			t.Fatalf("authenticated history lost candidate scoring evidence: %#v", candidate)
+		}
+	}
+}
+
 func TestDisabledFreewillStatusRuntimeDoesNotCreateOrWake(t *testing.T) {
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "data")
