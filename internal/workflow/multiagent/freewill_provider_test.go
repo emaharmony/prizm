@@ -206,7 +206,11 @@ func TestFreewillScoredIdeaFailuresHaveSafeCategoriesAndAccurateCounts(t *testin
 		name, content, code string
 		markers, parsed     int
 	}{
+		{name: "empty response", content: "", code: "count", markers: 0, parsed: 0},
+		{name: "oversize response", content: strings.Repeat("x", 4097), code: "size", markers: 0, parsed: 0},
 		{name: "one marker", content: "IDEA: Map project dependencies\nSCORE: 72\nRATIONALE: This maps direct dependencies and identifies risky coupling for a bounded review.", code: "count", markers: 1, parsed: 1},
+		{name: "overlong idea shape", content: strings.Replace(block1, "IDEA: Map project dependencies", "IDEA: "+strings.Repeat("x", 161), 1), code: "idea_shape", markers: 1, parsed: 0},
+		{name: "duplicate idea", content: block1 + strings.Replace(block2, "IDEA: Document service boundaries", "IDEA: Map project dependencies", 1) + block3, code: "duplicate", markers: 3, parsed: 1},
 		{name: "three markers with malformed third score", content: block1 + block2 + strings.Replace(block3, "SCORE: 61", "SCORE: high", 1), code: "score", markers: 3, parsed: 2},
 		{name: "case-sensitive field", content: strings.Replace(block1+block2+block3, "SCORE: 72", "score: 72", 1), code: "structure", markers: 3, parsed: 0},
 		{name: "field order", content: "IDEA: Map project dependencies\nRATIONALE: This maps direct dependencies and identifies risky coupling for a bounded review.\nSCORE: 72", code: "structure", markers: 1, parsed: 0},
@@ -231,8 +235,18 @@ func TestFreewillScoredIdeaFailuresHaveSafeCategoriesAndAccurateCounts(t *testin
 	}
 }
 
+func TestFreewillMapperDiagnosticOmitsUnsupportedRetryCount(t *testing.T) {
+	diagnostic := freewillMapperDiagnostic("idea", provider.ChatGenerateResponse{}, "synthetic", "invalid_scored_ideas_count", 1, 0, true)
+	if strings.Contains(diagnostic, "retry=") {
+		t.Fatalf("mapper diagnostic reported a retry count without durable attempt evidence: %s", diagnostic)
+	}
+	if !strings.Contains(diagnostic, "idea_markers=1") || !strings.Contains(diagnostic, "parsed_blocks=0") {
+		t.Fatalf("mapper diagnostic omitted count metrics: %s", diagnostic)
+	}
+}
+
 func TestFreewillScoredIdeaRecoveryFeedbackIsCategorySpecificAndLegacyCompatible(t *testing.T) {
-	codes := []string{"invalid_scored_ideas_count", "invalid_scored_ideas_structure", "invalid_scored_ideas_score", "invalid_scored_ideas_factors", "invalid_scored_ideas_rationale", "invalid_scored_ideas_unsafe"}
+	codes := []string{"invalid_scored_ideas_count", "invalid_scored_ideas_size", "invalid_scored_ideas_structure", "invalid_scored_ideas_idea_shape", "invalid_scored_ideas_duplicate", "invalid_scored_ideas_score", "invalid_scored_ideas_factors", "invalid_scored_ideas_rationale", "invalid_scored_ideas_unsafe"}
 	seen := make(map[string]bool)
 	for _, code := range codes {
 		feedback := freewillSelectionRecoveryFeedback(code)
