@@ -74,7 +74,7 @@ func (r *DurableRuntime) AcceptFreewillWake(ctx context.Context, wake FreewillWa
 	if _, ok := r.store.(FreewillOperatorControlStore); !ok {
 		return DurableRun{}, false, ErrFreewillControlUnavailable
 	}
-	if _, ok := r.store.(IdempotentRunAcceptor); !ok {
+	if _, ok := r.store.(FreewillWakeAcceptor); !ok {
 		return DurableRun{}, false, ErrFreewillControlUnavailable
 	}
 	now := r.now().UTC()
@@ -121,13 +121,11 @@ func (r *DurableRuntime) AcceptFreewillWake(ctx context.Context, wake FreewillWa
 	evt.Timestamp = now.Format(time.RFC3339Nano)
 	evt.CorrelationID = wake.CorrelationID
 	evt.Metadata.RunID = wake.RunID
-	created := true
-	var err error
-	if acceptor, ok := r.store.(IdempotentRunAcceptor); ok {
-		record, created, err = acceptor.AcceptRun(ctx, record, []event.Event{evt})
-	} else {
-		record, err = r.store.Create(ctx, record, []event.Event{evt})
+	acceptor, ok := r.store.(FreewillWakeAcceptor)
+	if !ok {
+		return DurableRun{}, false, ErrFreewillControlUnavailable
 	}
+	record, created, err := acceptor.AcceptFreewillWake(ctx, record, []event.Event{evt}, wake)
 	if err != nil {
 		return DurableRun{}, false, err
 	}

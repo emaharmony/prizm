@@ -94,23 +94,47 @@ func (s *SQLiteDurableRunStore) AcceptRun(
 	record DurableRun,
 	events []event.Event,
 ) (DurableRun, bool, error) {
-	key := ""
-	if identity := record.State.RequestIdentity; identity != nil && identity.IdempotencyKey != "" {
-		sum := sha256.Sum256([]byte(identity.IdempotencyKey))
-		key = fmt.Sprintf("%x", sum[:])
-	}
+	key := runAcceptanceKey(record)
 	if key == "" {
 		created, err := s.Create(ctx, record, events)
 		return created, err == nil, err
 	}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return DurableRun{}, false, fmt.Errorf("multiagent store: begin accept: %w", err)
 	}
 	defer tx.Rollback()
+	accepted, created, err := s.acceptRunTx(ctx, tx, record, events, key)
+	if err != nil || !created {
+		return accepted, created, err
+	}
+	if err := tx.Commit(); err != nil {
+		return DurableRun{}, false, fmt.Errorf("multiagent store: commit accept: %w", err)
+	}
+	return accepted, true, nil
+}
+
+func runAcceptanceKey(record DurableRun) string {
+	identity := record.State.RequestIdentity
+	if identity == nil || identity.IdempotencyKey == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(identity.IdempotencyKey))
+	return fmt.Sprintf("%x", sum[:])
+}
+
+// acceptRunTx creates an idempotent run and its outbox records without
+// committing, allowing domain-specific acceptance invariants to share the
+// transaction.
+func (s *SQLiteDurableRunStore) acceptRunTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	record DurableRun,
+	events []event.Event,
+	key string,
+) (DurableRun, bool, error) {
 	var existingRunID string
-	err = tx.QueryRowContext(ctx, `SELECT run_id FROM multiagent_acceptance_keys WHERE key_hash = ?`, key).Scan(&existingRunID)
+	err := tx.QueryRowContext(ctx, `SELECT run_id FROM multiagent_acceptance_keys WHERE key_hash = ?`, key).Scan(&existingRunID)
 	if err == nil {
 		var data string
 		if err := tx.QueryRowContext(ctx, `SELECT record_json FROM multiagent_runs WHERE run_id = ?`, existingRunID).Scan(&data); err != nil {
@@ -125,7 +149,6 @@ func (s *SQLiteDurableRunStore) AcceptRun(
 	if !errors.Is(err, sql.ErrNoRows) {
 		return DurableRun{}, false, fmt.Errorf("multiagent store: lookup idempotency key: %w", err)
 	}
-
 	record.Revision = 1
 	data, err := json.Marshal(record)
 	if err != nil {
@@ -141,9 +164,6 @@ func (s *SQLiteDurableRunStore) AcceptRun(
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO multiagent_acceptance_keys(key_hash, run_id, created_at) VALUES(?, ?, ?)`, key, record.State.RunID, record.State.CreatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 		return DurableRun{}, false, fmt.Errorf("multiagent store: bind idempotency key: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return DurableRun{}, false, fmt.Errorf("multiagent store: commit accept: %w", err)
 	}
 	return record, true, nil
 }
