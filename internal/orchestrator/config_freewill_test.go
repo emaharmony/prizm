@@ -1,8 +1,10 @@
 package orchestrator
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/emaharmony/prizm/internal/freewill"
 	"gopkg.in/yaml.v3"
 )
 
@@ -63,5 +65,22 @@ func TestEnabledFreewillRequiresTrustedAgentProjectAndSchedule(t *testing.T) {
 	}
 	if err := config.ValidateHostBinding(agents, nil); err == nil {
 		t.Fatal("enabled Freewill accepted an unregistered project")
+	}
+}
+
+func TestFreewillObjectiveRoundTripsAndIsValidated(t *testing.T) {
+	cfg, err := LoadConfigFromBytes([]byte("freewill:\n  objective: Review the synthetic selector path.\n"))
+	if err != nil {
+		t.Fatalf("load optional objective: %v", err)
+	}
+	if cfg.Freewill.Objective != "Review the synthetic selector path." || cfg.Freewill.Enabled {
+		t.Fatalf("objective changed feature default or was not retained: %#v", cfg.Freewill)
+	}
+	if err := cfg.Freewill.ValidateHostBinding(nil, nil); err != nil {
+		t.Fatalf("valid disabled objective rejected: %v", err)
+	}
+	cfg.Freewill.Objective = strings.Repeat("x", freewill.MaxSelectionObjectiveBytes+1)
+	if err := cfg.Freewill.ValidateHostBinding(nil, nil); err == nil {
+		t.Fatal("oversized objective accepted")
 	}
 }

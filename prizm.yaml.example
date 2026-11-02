@@ -72,6 +72,20 @@ prizm:
           action: "factory_status_digest"
         enabled: false
 
+# Optional decision-only Freewill selector configuration. Both switches default
+# off. If objective is set, it is sent to freewill.model/agent.model, which may
+# be a remote or cloud provider. Include only short, explicitly approved context;
+# never put secrets, private user data, or tool/approval instructions here.
+freewill:
+  enabled: false
+  agent_id: ""
+  project_id: ""
+  model: ""
+  objective: "" # Optional host-authored subject, at most 512 UTF-8 bytes, one line.
+  scheduling:
+    enabled: false
+    schedule: ""
+
 # HTTP API authentication and CORS. Optional when bound to loopback; required
 # when prizm.bind_host is non-loopback.
 api:

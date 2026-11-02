@@ -14,6 +14,7 @@ import (
 
 	"github.com/emaharmony/prizm/internal/agent"
 	"github.com/emaharmony/prizm/internal/cost"
+	"github.com/emaharmony/prizm/internal/freewill"
 	"github.com/emaharmony/prizm/internal/validation"
 	"gopkg.in/yaml.v3"
 )
@@ -109,10 +110,12 @@ type Config struct {
 // FreewillConfig contains feature-off-by-default Freewill configuration.
 // Enabling these flags alone does not activate scheduling or execution.
 type FreewillConfig struct {
-	Enabled         bool                     `yaml:"enabled"`
-	AgentID         string                   `yaml:"agent_id,omitempty"`
-	ProjectID       string                   `yaml:"project_id,omitempty"`
-	Model           string                   `yaml:"model,omitempty"`
+	Enabled   bool   `yaml:"enabled"`
+	AgentID   string `yaml:"agent_id,omitempty"`
+	ProjectID string `yaml:"project_id,omitempty"`
+	Model     string `yaml:"model,omitempty"`
+	// Objective is explicit host-authored selector context. It is sent to the configured provider, including remote/cloud providers; it grants no authority.
+	Objective       string                   `yaml:"objective,omitempty"`
 	ReasoningEffort string                   `yaml:"reasoning_effort,omitempty"`
 	PolicyDir       string                   `yaml:"policy_dir,omitempty"`
 	Scheduling      FreewillSchedulingConfig `yaml:"scheduling"`
@@ -127,6 +130,9 @@ type FreewillSchedulingConfig struct {
 // ValidateHostBinding checks the opt-in Freewill service bindings without
 // making ordinary config loading activate or require the feature.
 func (f FreewillConfig) ValidateHostBinding(agents []AgentConfig, projects []ProjectConfig) error {
+	if err := freewill.ValidateSelectionObjective(f.Objective); err != nil {
+		return fmt.Errorf("config: freewill.objective is invalid")
+	}
 	if !f.Enabled {
 		return nil
 	}

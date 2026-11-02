@@ -181,7 +181,8 @@ func openFreewillServeRuntime(cfg *orchestrator.Config, providers *provider.Prov
 			ReasoningEffort: freewillFirstNonEmpty(freewillCfg.ReasoningEffort, selectorAgent.ReasoningEffort)},
 		multiagent.FreewillWakeServiceConfig{Enabled: true, SchedulingEnabled: freewillCfg.Scheduling.Enabled,
 			AgentID: selectorAgent.ID, Scope: freewill.Scope{ProjectID: freewillCfg.ProjectID, Workspace: projectPath},
-			Owner: "prizm-freewill-scheduler", LeaseFor: 2 * time.Minute, OperatorControl: control}, nil)
+			Objective: freewillCfg.Objective,
+			Owner:     "prizm-freewill-scheduler", LeaseFor: 2 * time.Minute, OperatorControl: control}, nil)
 	if err != nil {
 		_ = events.Close()
 		_ = store.Close()
