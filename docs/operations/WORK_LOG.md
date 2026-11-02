@@ -2783,3 +2783,15 @@ is included. Do not touch provider services or claim R1/G1/FW-G2 acceptance.
 
 **Open risks:** Local Go validation is incomplete. Verify exact-head CI and independent review before merge.
 **Next action:** Independent Luna diff review, publish one staging PR, then merge only after exact-head checks pass and mergeability is confirmed.
+
+
+## 2026-11-02 — FW-P1 parser CI and conformance follow-up
+
+**Roadmap IDs:** FW-P1 / FW-002–FW-004 reliability
+**Branch/baseline:** `codex/freewill-flash-normalization-staging`, PR #131, exact head `c127a2e838ea15c9778811dc39419bcd678524bb`
+
+- Exact-head CI run #261 passed on rerun. Its first attempt caught two parser test issues, which were fixed. The next first-attempt failure was an unrelated fanout timeout (`TestGraphRoleWorkerEmbeddedNATSRecoversPersistedFanoutJoin`); the single rerun passed.
+- After CI passed, attempted one bounded no-tools GLM-5.3-Flash call with the exact current system contract and a synthetic objective. The request could not reach Ollama because sandbox socket policy denied loopback at `127.0.0.1:11434`; no provider call was made. No live Freewill service was touched.
+
+**Open risks:** Live provider conformance remains unverified because the sandbox blocks its local Ollama endpoint.
+**Next action:** Merge only while exact-head CI remains green and PR #131 remains mergeable; preserve decision-only runtime gates.
