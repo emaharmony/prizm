@@ -228,6 +228,8 @@ func (s *FreewillWakeService) validateConfiguredWake(record DurableRun) error {
 
 func freewillSelectionRecoveryFeedback(code string) string {
 	switch code {
+	case "invalid_scored_ideas":
+		return "Repeat this block exactly three times:\nIDEA: Map project dependencies\nSCORE: 72\nFACTORS: scope_fit: 9/10\nRATIONALE: This maps direct dependencies for a bounded review.\nFACTORS optional; keep rationale specific and add no preamble, footer, paths, authority, or execution requests."
 	case "invalid_idea_lines":
 		return "Return only three lines, each beginning exactly IDEA: followed by a short decision-only objective. No preamble, bullets, explanation, JSON, paths, authority, tools, network, secrets, approval, or execution requests."
 	case "invalid_selection_schema", "empty_selection_response", "selection_tool_request", "invalid_selection_json", "unknown_selection_field", "selection_candidate_count", "selection_contract_invalid":

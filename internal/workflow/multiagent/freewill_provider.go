@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/emaharmony/prizm/internal/cost"
 	"github.com/emaharmony/prizm/internal/freewill"
@@ -145,7 +146,7 @@ type freewillScoredIdea struct {
 // label=integer. Per-factor annotations are not part of CandidateIntention's
 // durable schema, so only their validated model-authored labels are retained.
 func parseFreewillScoreFactors(raw string) ([]string, error) {
-	parts := strings.Split(raw, ",")
+	parts := strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ';' || r == '\n' })
 	if len(parts) == 0 || len(parts) > 5 {
 		return nil, errors.New("multiagent: Freewill score factors are invalid")
 	}
@@ -153,8 +154,32 @@ func parseFreewillScoreFactors(raw string) ([]string, error) {
 	seen := make(map[string]struct{}, len(parts))
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
+		part = strings.TrimLeft(part, "-* \t")
 		label := part
-		if strings.Contains(part, "=") {
+		if strings.Contains(part, ":") {
+			if strings.Count(part, ":") != 1 {
+				return nil, errors.New("multiagent: Freewill score factor annotation is invalid")
+			}
+			var annotation string
+			label, annotation, _ = strings.Cut(part, ":")
+			label = strings.TrimSpace(label)
+			annotation = strings.TrimSpace(annotation)
+			if dash := strings.Index(annotation, "—"); dash >= 0 {
+				description := strings.TrimSpace(annotation[dash+len("—"):])
+				annotation = strings.TrimSpace(annotation[:dash])
+				if description == "" || len(description) > 160 || !freewillInertEnvelopeLine(description) {
+					return nil, errors.New("multiagent: Freewill score factor annotation is malformed")
+				}
+			}
+			numerator, denominator, ok := strings.Cut(annotation, "/")
+			if !ok || denominator != "10" || strings.Contains(numerator, "/") {
+				return nil, errors.New("multiagent: Freewill score factor annotation must be N/10")
+			}
+			value, err := strconv.Atoi(numerator)
+			if err != nil || value < 0 || value > 10 {
+				return nil, errors.New("multiagent: Freewill score factor annotation is out of range")
+			}
+		} else if strings.Contains(part, "=") {
 			if strings.Count(part, "=") != 1 {
 				return nil, errors.New("multiagent: Freewill score factor annotation is invalid")
 			}
@@ -186,6 +211,30 @@ func parseFreewillScoreFactors(raw string) ([]string, error) {
 	}
 	return factors, nil
 }
+
+func freewillInertEnvelopeLine(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return true
+	}
+	if len(line) > 500 || strings.IndexFunc(line, unicode.IsControl) >= 0 || strings.ContainsAny(line, "{}[]\\") || strings.Contains(line, "://") || strings.Contains(line, "..") || freewillIdeaContainsForbiddenAuthority(line) {
+		return false
+	}
+	lower := strings.ToLower(line)
+	for _, marker := range []string{"idea:", "score:", "factors:", "rationale:", "ignore", "disregard", "override", "bypass", "system prompt", "developer message", "execute", "tool call"} {
+		if strings.Contains(lower, marker) {
+			return false
+		}
+	}
+	if colon := strings.IndexByte(line, ':'); colon > 0 {
+		header := strings.TrimSpace(line[:colon])
+		if header != "" && header == strings.ToUpper(header) {
+			return false
+		}
+	}
+	return true
+}
+
 func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, error) {
 	if len(content) == 0 || len(content) > 4096 {
 		return nil, false, errors.New("multiagent: Freewill scored response is empty or exceeds limit")
@@ -203,27 +252,91 @@ func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, e
 	lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
 	ideas := make([]freewillScoredIdea, 0, 3)
 	seen := make(map[string]struct{})
+	envelopeBytes, envelopeLines := 0, 0
 	for i := 0; i < len(lines); {
 		if strings.TrimSpace(lines[i]) == "" {
 			i++
 			continue
 		}
-		if len(ideas) == 3 || i+3 >= len(lines) {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, "BLOCK ") {
+			blockNumber, err := strconv.Atoi(strings.TrimPrefix(line, "BLOCK "))
+			if err != nil || blockNumber != len(ideas)+1 || blockNumber > 3 || i+1 >= len(lines) || !strings.HasPrefix(strings.TrimSpace(lines[i+1]), "IDEA:") {
+				return nil, false, errors.New("multiagent: Freewill block marker is invalid")
+			}
+			i++
+			line = strings.TrimSpace(lines[i])
+		}
+		if !strings.HasPrefix(line, "IDEA:") {
+			for i < len(lines) {
+				line = strings.TrimSpace(lines[i])
+				if line == "" {
+					i++
+					continue
+				}
+				if strings.HasPrefix(line, "IDEA:") || strings.HasPrefix(line, "BLOCK ") {
+					if len(ideas) == 3 {
+						return nil, false, errors.New("multiagent: Freewill response has content after the third candidate")
+					}
+					break
+				}
+				if len(ideas) != 0 && len(ideas) < 3 {
+					return nil, false, errors.New("multiagent: Freewill contains prose between candidate blocks")
+				}
+				if !freewillInertEnvelopeLine(line) {
+					return nil, false, errors.New("multiagent: Freewill response envelope contains unsafe or structured content")
+				}
+				envelopeBytes += len(line)
+				envelopeLines++
+				if envelopeBytes > 2048 || envelopeLines > 24 {
+					return nil, false, errors.New("multiagent: Freewill response envelope exceeds limit")
+				}
+				i++
+			}
+			continue
+		}
+		if len(ideas) == 3 || i+2 >= len(lines) {
 			return nil, false, errors.New("multiagent: Freewill scored blocks are incomplete")
 		}
-		labels := []string{"IDEA:", "SCORE:", "FACTORS:"}
-		values := make([]string, len(labels))
-		for j, label := range labels {
-			line := strings.TrimSpace(lines[i+j])
+		readField := func(index int, label string) (string, error) {
+			line := strings.TrimSpace(lines[index])
 			if !strings.HasPrefix(line, label) {
-				return nil, false, errors.New("multiagent: Freewill scored block has invalid fields")
+				return "", errors.New("multiagent: Freewill scored block has invalid fields")
 			}
-			values[j] = strings.TrimSpace(strings.TrimPrefix(line, label))
-			if values[j] == "" {
-				return nil, false, errors.New("multiagent: Freewill scored field is empty")
+			field := strings.TrimSpace(strings.TrimPrefix(line, label))
+			if field == "" || strings.IndexFunc(field, unicode.IsControl) >= 0 {
+				return "", errors.New("multiagent: Freewill scored field is empty or malformed")
+			}
+			return field, nil
+		}
+		idea, err := readField(i, "IDEA:")
+		if err != nil {
+			return nil, false, err
+		}
+		scoreValue, err := readField(i+1, "SCORE:")
+		if err != nil {
+			return nil, false, err
+		}
+		i += 2
+		var factorValue string
+		if i < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i]), "FACTORS:") {
+			factorValue = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[i]), "FACTORS:"))
+			if strings.IndexFunc(factorValue, unicode.IsControl) >= 0 {
+				return nil, false, errors.New("multiagent: Freewill score factors contain control text")
+			}
+			i++
+			for i < len(lines) {
+				bullet := strings.TrimSpace(lines[i])
+				if !strings.HasPrefix(bullet, "- ") && !strings.HasPrefix(bullet, "* ") {
+					break
+				}
+				factorValue += "\n" + bullet
+				i++
+			}
+			if strings.TrimSpace(factorValue) == "" {
+				return nil, false, errors.New("multiagent: Freewill score factors are empty")
 			}
 		}
-		i += len(labels)
 		// GLM sometimes wraps one rationale across several identically labeled
 		// lines. Join only those model-authored fragments; any other label or
 		// prose returns to the strict outer parser and is rejected.
@@ -248,30 +361,29 @@ func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, e
 			return nil, false, errors.New("multiagent: Freewill scored block has no rationale")
 		}
 		rationale := strings.Join(rationaleParts, " ")
-		idea := values[0]
-		if idea == "" || len(idea) > 160 || strings.ContainsAny(idea, "{}[]\\") || strings.Contains(idea, "://") || strings.Contains(idea, "..") {
+		if len(idea) > 160 || strings.ContainsAny(idea, "{}[]\\") || strings.Contains(idea, "://") || strings.Contains(idea, "..") {
 			return nil, false, errors.New("multiagent: Freewill idea is malformed or contains a path")
 		}
-		lower := strings.ToLower(idea)
-		for _, word := range []string{"execute", "shell", "command", "tool", "network", "http", "secret", "credential", "password", "token", "write file", "delete", "install", "ignore policy", "bypass policy", "override policy", "approve this action", "run shell"} {
-			if strings.Contains(lower, word) {
-				return nil, false, errors.New("multiagent: Freewill idea requests a forbidden authority")
-			}
+		if freewillIdeaContainsForbiddenAuthority(idea) {
+			return nil, false, errors.New("multiagent: Freewill idea requests a forbidden authority")
 		}
 		key := strings.ToLower(strings.Join(strings.Fields(idea), " "))
 		if _, exists := seen[key]; exists {
 			return nil, false, errors.New("multiagent: Freewill ideas must be unique")
 		}
 		seen[key] = struct{}{}
-		score, err := strconv.Atoi(values[1])
+		score, err := strconv.Atoi(scoreValue)
 		if err != nil || score < 0 || score > 100 {
 			return nil, false, errors.New("multiagent: Freewill score must be an integer from 0 to 100")
 		}
-		factors, err := parseFreewillScoreFactors(values[2])
-		if err != nil {
-			return nil, false, err
+		var factors []string
+		if factorValue != "" {
+			factors, err = parseFreewillScoreFactors(factorValue)
+			if err != nil {
+				return nil, false, err
+			}
 		}
-		if len(rationale) < 30 || len(rationale) > 500 || len(strings.Fields(rationale)) < 6 || freewillIdeaContainsForbiddenAuthority(rationale) || strings.ContainsAny(rationale, "\\") || strings.Contains(rationale, "://") {
+		if len(rationale) < 30 || len(rationale) > 500 || len(strings.Fields(rationale)) < 6 || strings.IndexFunc(rationale, unicode.IsControl) >= 0 || freewillIdeaContainsForbiddenAuthority(rationale) || strings.ContainsAny(rationale, "\\") || strings.Contains(rationale, "://") {
 			return nil, false, errors.New("multiagent: Freewill score rationale is not specific enough")
 		}
 		ideas = append(ideas, freewillScoredIdea{Idea: idea, Score: score, Factors: factors, Rationale: rationale})
@@ -284,7 +396,7 @@ func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, e
 
 func freewillIdeaContainsForbiddenAuthority(text string) bool {
 	lower := strings.ToLower(text)
-	for _, word := range []string{"execute", "shell", "command", "tool", "network", "http", "secret", "credential", "password", "token", "write file", "delete", "install", "ignore policy", "bypass policy", "override policy", "approve this action", "run shell"} {
+	for _, word := range []string{"execute", "shell", "command", "tool", "network", "http", "secret", "credential", "password", "token", "write file", "delete", "install", "ignore policy", "bypass policy", "override policy", "approve this action", "run shell", "authorize deployment", "authorize this action", "grant authorization", "grant permission", "grant access", "approve deployment"} {
 		if strings.Contains(lower, word) {
 			return true
 		}
