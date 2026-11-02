@@ -164,3 +164,18 @@ func TestValidateTransitionDocumentsEdgesWithoutGrantingAuthority(t *testing.T) 
 		t.Fatalf("InitialState = %q, want disabled", InitialState)
 	}
 }
+
+func TestCandidateScoreZeroSerializesExplicitly(t *testing.T) {
+	candidate := CandidateIntention{CandidateID: "candidate-zero", Request: validRequest(), Score: 0}
+	data, err := json.Marshal(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["score"]) != "0" {
+		t.Fatalf("zero score omitted or changed: %s", data)
+	}
+}

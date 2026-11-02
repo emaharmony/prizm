@@ -63,7 +63,7 @@ type IntentionRequest struct {
 type CandidateIntention struct {
 	CandidateID    string           `json:"candidate_id"`
 	Request        IntentionRequest `json:"request"`
-	Score          int              `json:"score,omitempty"`
+	Score          int              `json:"score"`
 	ScoreFactors   []string         `json:"score_factors,omitempty"`
 	ScoreRationale string           `json:"score_rationale,omitempty"`
 }

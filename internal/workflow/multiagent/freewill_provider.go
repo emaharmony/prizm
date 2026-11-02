@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/emaharmony/prizm/internal/cost"
@@ -94,7 +95,7 @@ const freewillSelectionMaxOutputTokens = 4096
 
 const freewillChoiceSystemPrompt = `Choose one supplied candidate ID using its short host-provided label. Reply on a final line as exactly "choice: <candidate ID>" or "choice: NONE". Do not explain, add JSON, paths, budgets, tools, or authority.`
 const freewillChoiceMaxOutputTokens = 1024
-const freewillIdeaSystemPrompt = `Return exactly three short task ideas for a read-only decision list. End your answer with exactly three lines, each in this form: IDEA: <short objective>. Use plain text only. Do not mention tools, commands, files, paths, network access, secrets, or execution. If three safe ideas are impossible, end with NONE.`
+const freewillIdeaSystemPrompt = `Return exactly three scored candidate blocks with IDEA, SCORE (0-100), FACTORS (scope_fit, feasibility, impact, novelty, readiness), and specific RATIONALE lines. Plain text only; no tools, authority, paths, or execution. Reply NONE only if no safe set exists.`
 const freewillIdeaMaxOutputTokens = 1024
 
 func freewillMapperDiagnostic(stage string, response provider.ChatGenerateResponse, model string, code string, ideaLines int, retry int, glmPlain bool) string {
@@ -103,18 +104,25 @@ func freewillMapperDiagnostic(stage string, response provider.ChatGenerateRespon
 	return fmt.Sprintf("stage=%s model=%s content_len=%d think_len=%d tool_calls=%d done_reason=%s idea_lines=%d parser_code=%s glm_plain=%t retry=%d", stage, model, len(response.Content), thinkLen, len(response.ToolCalls), doneReason, ideaLines, code, glmPlain, retry)
 }
 
-func freewillIdeaMarkerCount(content string) int { return strings.Count(strings.ToUpper(content), "IDEA:") }
+func freewillIdeaMarkerCount(content string) int {
+	return strings.Count(strings.ToUpper(content), "IDEA:")
+}
 
-func ideaRetryNumber(feedback string) int { if strings.TrimSpace(feedback) == "" { return 0 }; return 1 }
+func ideaRetryNumber(feedback string) int {
+	if strings.TrimSpace(feedback) == "" {
+		return 0
+	}
+	return 1
+}
 
 // FreewillCandidateChoiceInput is a host-owned allowlist for the small
 // decision phase. Candidate IDs are already bound by the host; the provider
 // cannot create or modify an intention here.
 type FreewillCandidateChoiceInput struct {
-	RunID         string
-	CorrelationID string
-	AgentID       string
-	CandidateIDs  []string
+	RunID           string
+	CorrelationID   string
+	AgentID         string
+	CandidateIDs    []string
 	CandidateLabels []string
 }
 
@@ -126,9 +134,61 @@ type FreewillCandidateChoice struct {
 	Sleep    bool
 }
 
-func parseFreewillIdeaLines(content string) ([]string, bool, error) {
-	if len(content) == 0 || len(content) > 2048 {
-		return nil, false, errors.New("multiagent: Freewill idea response is empty or exceeds limit")
+type freewillScoredIdea struct {
+	Idea      string
+	Score     int
+	Factors   []string
+	Rationale string
+}
+
+// parseFreewillScoreFactors accepts canonical labels and the observed GLM form
+// label=integer. Per-factor annotations are not part of CandidateIntention's
+// durable schema, so only their validated model-authored labels are retained.
+func parseFreewillScoreFactors(raw string) ([]string, error) {
+	parts := strings.Split(raw, ",")
+	if len(parts) == 0 || len(parts) > 5 {
+		return nil, errors.New("multiagent: Freewill score factors are invalid")
+	}
+	factors := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		label := part
+		if strings.Contains(part, "=") {
+			if strings.Count(part, "=") != 1 {
+				return nil, errors.New("multiagent: Freewill score factor annotation is invalid")
+			}
+			var annotation string
+			label, annotation, _ = strings.Cut(part, "=")
+			label = strings.TrimSpace(label)
+			annotation = strings.TrimSpace(annotation)
+			if annotation == "" {
+				return nil, errors.New("multiagent: Freewill score factor annotation is invalid")
+			}
+			for _, digit := range annotation {
+				if digit < '0' || digit > '9' {
+					return nil, errors.New("multiagent: Freewill score factor annotation is invalid")
+				}
+			}
+			value, err := strconv.Atoi(annotation)
+			if err != nil || value < 0 || value > 100 {
+				return nil, errors.New("multiagent: Freewill score factor annotation is out of range")
+			}
+		}
+		if _, ok := freewillScoreFactorSet[label]; !ok {
+			return nil, errors.New("multiagent: Freewill score factor is not allowed")
+		}
+		if _, duplicate := seen[label]; duplicate {
+			return nil, errors.New("multiagent: Freewill score factors must be unique")
+		}
+		seen[label] = struct{}{}
+		factors = append(factors, label)
+	}
+	return factors, nil
+}
+func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, error) {
+	if len(content) == 0 || len(content) > 4096 {
+		return nil, false, errors.New("multiagent: Freewill scored response is empty or exceeds limit")
 	}
 	value := strings.TrimSpace(content)
 	if idx := strings.LastIndex(strings.ToLower(value), "</think>"); idx >= 0 {
@@ -137,32 +197,63 @@ func parseFreewillIdeaLines(content string) ([]string, bool, error) {
 	if value == "NONE" {
 		return nil, true, nil
 	}
-	if strings.HasPrefix(value, "{") || strings.HasPrefix(value, "[") || strings.Contains(value, "```") {
-		return nil, false, errors.New("multiagent: Freewill ideas must be bounded plain lines")
+	if strings.Contains(value, "```") || strings.HasPrefix(value, "{") || strings.HasPrefix(value, "[") {
+		return nil, false, errors.New("multiagent: Freewill scores must use bounded plain lines")
 	}
-	banned := []string{"execute", "shell", "command", "tool", "network", "http", "secret", "credential", "password", "token", "write file", "delete", "install", "ignore policy", "bypass policy", "override policy", "approve this action", "reject this action", "run shell"}
-	seen := make(map[string]struct{})
-	ideas := make([]string, 0, 3)
 	lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		marker := strings.Index(line, "IDEA:")
-		if marker < 0 {
+	ideas := make([]freewillScoredIdea, 0, 3)
+	seen := make(map[string]struct{})
+	for i := 0; i < len(lines); {
+		if strings.TrimSpace(lines[i]) == "" {
+			i++
 			continue
 		}
-		if marker > 0 {
-			prefix := strings.ToLower(strings.TrimSpace(line[:marker]))
-			if strings.Contains(prefix, "example") || strings.Contains(prefix, "candidate") || strings.Contains(prefix, "sample") {
-				return nil, false, errors.New("multiagent: Freewill idea response contains a labeled example or candidate block")
+		if len(ideas) == 3 || i+3 >= len(lines) {
+			return nil, false, errors.New("multiagent: Freewill scored blocks are incomplete")
+		}
+		labels := []string{"IDEA:", "SCORE:", "FACTORS:"}
+		values := make([]string, len(labels))
+		for j, label := range labels {
+			line := strings.TrimSpace(lines[i+j])
+			if !strings.HasPrefix(line, label) {
+				return nil, false, errors.New("multiagent: Freewill scored block has invalid fields")
+			}
+			values[j] = strings.TrimSpace(strings.TrimPrefix(line, label))
+			if values[j] == "" {
+				return nil, false, errors.New("multiagent: Freewill scored field is empty")
 			}
 		}
-		line = strings.TrimSpace(line[marker:])
-		idea := strings.TrimSpace(strings.TrimPrefix(line, "IDEA:"))
-		if idea == "" || len(idea) > 160 || strings.ContainsAny(idea, "\r\n{}[]") || strings.Contains(idea, "\\") || strings.Contains(idea, "://") || strings.Contains(idea, "..") {
+		i += len(labels)
+		// GLM sometimes wraps one rationale across several identically labeled
+		// lines. Join only those model-authored fragments; any other label or
+		// prose returns to the strict outer parser and is rejected.
+		rationaleParts := make([]string, 0, 3)
+		for i < len(lines) {
+			line := strings.TrimSpace(lines[i])
+			if line == "" {
+				i++
+				continue
+			}
+			if !strings.HasPrefix(line, "RATIONALE:") {
+				break
+			}
+			part := strings.TrimSpace(strings.TrimPrefix(line, "RATIONALE:"))
+			if part == "" || len(rationaleParts) == 5 {
+				return nil, false, errors.New("multiagent: Freewill score rationale is empty or has too many fragments")
+			}
+			rationaleParts = append(rationaleParts, part)
+			i++
+		}
+		if len(rationaleParts) == 0 {
+			return nil, false, errors.New("multiagent: Freewill scored block has no rationale")
+		}
+		rationale := strings.Join(rationaleParts, " ")
+		idea := values[0]
+		if idea == "" || len(idea) > 160 || strings.ContainsAny(idea, "{}[]\\") || strings.Contains(idea, "://") || strings.Contains(idea, "..") {
 			return nil, false, errors.New("multiagent: Freewill idea is malformed or contains a path")
 		}
 		lower := strings.ToLower(idea)
-		for _, word := range banned {
+		for _, word := range []string{"execute", "shell", "command", "tool", "network", "http", "secret", "credential", "password", "token", "write file", "delete", "install", "ignore policy", "bypass policy", "override policy", "approve this action", "run shell"} {
 			if strings.Contains(lower, word) {
 				return nil, false, errors.New("multiagent: Freewill idea requests a forbidden authority")
 			}
@@ -172,22 +263,36 @@ func parseFreewillIdeaLines(content string) ([]string, bool, error) {
 			return nil, false, errors.New("multiagent: Freewill ideas must be unique")
 		}
 		seen[key] = struct{}{}
-		ideas = append(ideas, idea)
-		if len(ideas) > 3 {
-			return nil, false, errors.New("multiagent: Freewill returned more than three ideas")
+		score, err := strconv.Atoi(values[1])
+		if err != nil || score < 0 || score > 100 {
+			return nil, false, errors.New("multiagent: Freewill score must be an integer from 0 to 100")
 		}
-	}
-	for _, line := range lines {
-		lower := strings.ToLower(strings.TrimSpace(line))
-		if strings.Contains(lower, "candidate:") || strings.Contains(lower, "example:") || strings.Contains(lower, "sample:") {
-			return nil, false, errors.New("multiagent: Freewill idea response contains a labeled example or candidate block")
+		factors, err := parseFreewillScoreFactors(values[2])
+		if err != nil {
+			return nil, false, err
 		}
+		if len(rationale) < 30 || len(rationale) > 500 || len(strings.Fields(rationale)) < 6 || freewillIdeaContainsForbiddenAuthority(rationale) || strings.ContainsAny(rationale, "\\") || strings.Contains(rationale, "://") {
+			return nil, false, errors.New("multiagent: Freewill score rationale is not specific enough")
+		}
+		ideas = append(ideas, freewillScoredIdea{Idea: idea, Score: score, Factors: factors, Rationale: rationale})
 	}
-	if len(ideas) == 0 {
-		return nil, false, errors.New("multiagent: Freewill returned no ideas")
+	if len(ideas) != 3 {
+		return nil, false, errors.New("multiagent: Freewill must return exactly three scored candidates")
 	}
 	return ideas, false, nil
 }
+
+func freewillIdeaContainsForbiddenAuthority(text string) bool {
+	lower := strings.ToLower(text)
+	for _, word := range []string{"execute", "shell", "command", "tool", "network", "http", "secret", "credential", "password", "token", "write file", "delete", "install", "ignore policy", "bypass policy", "override policy", "approve this action", "run shell"} {
+		if strings.Contains(lower, word) {
+			return true
+		}
+	}
+	return false
+}
+
+var freewillScoreFactorSet = map[string]struct{}{"scope_fit": {}, "feasibility": {}, "impact": {}, "novelty": {}, "readiness": {}}
 
 // parseFreewillCandidateChoice accepts one exact allowlisted ID or NONE, or one
 // explicit final marker. Ordinary prose mentions are never interpreted.
@@ -317,7 +422,7 @@ func (s ChatFreewillSelector) SelectCandidateChoice(ctx context.Context, input F
 		labels[i] = label
 	}
 	user, err := json.Marshal(struct {
-		CandidateIDs   []string `json:"candidate_ids"`
+		CandidateIDs    []string `json:"candidate_ids"`
 		CandidateLabels []string `json:"candidate_labels,omitempty"`
 	}{ids, labels})
 	if err != nil {
@@ -486,10 +591,10 @@ func (s ChatFreewillSelector) selectFreewillFlashIdeas(ctx context.Context, inpu
 		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("idea", response, s.Model, "idea_tool_request", freewillIdeaMarkerCount(response.Content), ideaRetryNumber(input.RecoveryFeedback), true))
 		return freewill.Selection{}, FreewillSelectionEvidence{}, &SchemaCorrectionError{Role: RolePlanner, Code: "idea_tool_request"}
 	}
-	ideas, none, err := parseFreewillIdeaLines(response.Content)
+	ideas, none, err := parseFreewillScoredIdeaLines(response.Content)
 	if err != nil {
-		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("idea", response, s.Model, "invalid_idea_lines", freewillIdeaMarkerCount(response.Content), ideaRetryNumber(input.RecoveryFeedback), true))
-		return freewill.Selection{}, FreewillSelectionEvidence{}, &SchemaCorrectionError{Role: RolePlanner, Code: "invalid_idea_lines"}
+		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("idea", response, s.Model, "invalid_scored_ideas", freewillIdeaMarkerCount(response.Content), ideaRetryNumber(input.RecoveryFeedback), true))
+		return freewill.Selection{}, FreewillSelectionEvidence{}, &SchemaCorrectionError{Role: RolePlanner, Code: "invalid_scored_ideas"}
 	}
 	providerName, model := response.Provider, response.Model
 	if providerName == "" {
@@ -507,15 +612,17 @@ func (s ChatFreewillSelector) selectFreewillFlashIdeas(ctx context.Context, inpu
 		candidateID := fmt.Sprintf("candidate-%s-%d", input.RunID, i+1)
 		request := freewill.IntentionRequest{
 			RequestID: "request-" + input.RunID + fmt.Sprintf("-%d", i+1), AgentID: input.AgentID,
-			Origin: freewill.OriginAgent, CandidateSource: freewill.SourceNew, Title: idea, Goal: idea,
-			ReasonSummary: "Host-bounded decision-only candidate.", RequestedCapabilities: []string{"decision_only"},
+			Origin: freewill.OriginAgent, CandidateSource: freewill.SourceNew, Title: idea.Idea, Goal: idea.Idea,
+			ReasonSummary: idea.Rationale, RequestedCapabilities: []string{"decision_only"},
 			Scope: input.Scope, IdempotencyKey: "freewill-" + input.RunID + fmt.Sprintf("-%d", i+1), CorrelationID: input.CorrelationID, Budget: input.Budget,
 		}
-		selection.Candidates = append(selection.Candidates, freewill.CandidateIntention{CandidateID: candidateID, Request: request, Score: 0, ScoreFactors: []string{"scope_fit"}, ScoreRationale: "Host-bounded scope fit."})
+		selection.Candidates = append(selection.Candidates, freewill.CandidateIntention{CandidateID: candidateID, Request: request, Score: idea.Score, ScoreFactors: idea.Factors, ScoreRationale: idea.Rationale})
 	}
 	ids := []string{selection.Candidates[0].CandidateID, selection.Candidates[1].CandidateID, selection.Candidates[2].CandidateID}
 	labels := make([]string, len(selection.Candidates))
-	for i, candidate := range selection.Candidates { labels[i] = candidate.Request.Title }
+	for i, candidate := range selection.Candidates {
+		labels[i] = candidate.Request.Title
+	}
 	choice, choiceMeta, err := s.SelectCandidateChoice(ctx, FreewillCandidateChoiceInput{RunID: input.RunID, CorrelationID: input.CorrelationID, AgentID: input.AgentID, CandidateIDs: ids, CandidateLabels: labels})
 	if err != nil {
 		var schemaErr *SchemaCorrectionError
@@ -544,7 +651,9 @@ func (s ChatFreewillSelector) selectFreewillFlashIdeas(ctx context.Context, inpu
 }
 
 func deterministicFreewillChoiceID(candidates []freewill.CandidateIntention) string {
-	if len(candidates) == 0 { return "" }
+	if len(candidates) == 0 {
+		return ""
+	}
 	best := candidates[0]
 	for _, candidate := range candidates[1:] {
 		if candidate.Score > best.Score || (candidate.Score == best.Score && candidate.CandidateID < best.CandidateID) {
