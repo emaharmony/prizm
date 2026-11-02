@@ -3,11 +3,14 @@ package multiagent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/freewill"
 )
 
@@ -343,6 +346,91 @@ func freewillWakeAcceptanceFixture(runID, agentID string, scope freewill.Scope, 
 			DedupeKey: dedupe, CorrelationID: runID, ExecutionDisabled: true},
 	}
 	return wake, record
+}
+
+type categoryRecoverySelector struct {
+	calls  int
+	inputs []FreewillSelectionInput
+}
+
+func (s *categoryRecoverySelector) SelectFreewill(_ context.Context, input FreewillSelectionInput) (freewill.Selection, FreewillSelectionEvidence, error) {
+	s.calls++
+	s.inputs = append(s.inputs, input)
+	if s.calls == 1 {
+		return freewill.Selection{}, FreewillSelectionEvidence{}, &SchemaCorrectionError{
+			Role: RolePlanner, Code: "invalid_scored_ideas_score", Cause: errors.New("synthetic raw response sentinel"),
+		}
+	}
+	return freewill.Selection{SleepReason: "No safe set is available."}, FreewillSelectionEvidence{}, nil
+}
+
+func TestFreewillCategoryFeedbackPersistsAcrossDurableRetry(t *testing.T) {
+	ctx := context.Background()
+	env := newDurableTestEnvironment(t)
+	now := time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	runtime := newDurableRuntimeForTest(t, validDefinition(), &scriptedRunner{}, env.store, env.claimer, env.events,
+		DurableRuntimeOptions{Clock: clock})
+	scope := freewill.Scope{ProjectID: "p", Workspace: "w"}
+	control, err := NewFreewillOperatorControl(env.store, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selector := &categoryRecoverySelector{}
+	service, err := NewFreewillWakeService(runtime, env.store, selector, FreewillWakeServiceConfig{
+		Enabled: true, SchedulingEnabled: true, AgentID: "agent", Scope: scope,
+		Objective: "Choose a safe read-only next action.", Owner: "category-retry-test", LeaseFor: time.Minute,
+		OperatorControl: control,
+	}, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wake := FreewillWakeRequest{
+		RunID: "freewill-category-retry", AgentID: "agent", Scope: scope, Trigger: "scheduled_tick",
+		DedupeKey: "dedupe-category-retry", CorrelationID: "corr-category-retry",
+	}
+	accepted, _, err := runtime.AcceptFreewillWake(ctx, wake)
+	if err != nil {
+		t.Fatalf("accept test wake: %v", err)
+	}
+	failed, err := service.ProcessWake(ctx, accepted.State.RunID)
+	if err == nil {
+		t.Fatal("first categorized schema failure unexpectedly succeeded")
+	}
+	wantCode := "invalid_scored_ideas_score"
+	wantFeedback := freewillSelectionRecoveryFeedback(wantCode)
+	if failed.Freewill.SelectionFailureCode != wantCode || failed.Freewill.SelectionFeedback != wantFeedback ||
+		failed.Freewill.SelectionRecoveryNumber != 1 || !failed.Freewill.ExecutionDisabled {
+		t.Fatalf("durable retry state lost categorized correction or safety: %#v", failed.Freewill)
+	}
+	if strings.Contains(failed.Freewill.SelectionFeedback, "synthetic raw response sentinel") || strings.Contains(err.Error(), "synthetic raw response sentinel") {
+		t.Fatalf("raw response sentinel escaped through failure or feedback")
+	}
+	events, err := env.events.Query(ctx, event.EventFilter{RunID: wake.RunID, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, current := range events {
+		if strings.Contains(fmt.Sprint(current.Payload), "synthetic raw response sentinel") {
+			t.Fatalf("raw response sentinel was persisted in event %s", current.Type)
+		}
+		if current.Type == event.EventFreewillApprovalProposed || current.Type == event.EventFreewillApprovalDecided ||
+			current.Type == event.EventFreewillPolicyDenied {
+			t.Fatalf("selection retry crossed a proposal or policy boundary: %s", current.Type)
+		}
+	}
+	now = failed.Freewill.SelectionNextAt.Add(time.Second)
+	succeeded, err := service.ProcessWake(ctx, accepted.State.RunID)
+	if err != nil {
+		t.Fatalf("process retry: %v", err)
+	}
+	if len(selector.inputs) != 2 || selector.inputs[1].RecoveryFeedback != wantFeedback {
+		t.Fatalf("next wake did not receive persisted category feedback: %#v", selector.inputs)
+	}
+	if succeeded.Freewill.Lifecycle != freewill.StateSleeping || !succeeded.Freewill.ExecutionDisabled ||
+		succeeded.Freewill.SelectionRecoveryNumber != 1 || succeeded.Freewill.SelectionFailureCode != "" {
+		t.Fatalf("successful retry crossed safety or lost recovery state: %#v", succeeded.Freewill)
+	}
 }
 
 type recoveryAdmissionStore struct {

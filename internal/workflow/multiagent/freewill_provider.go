@@ -99,14 +99,19 @@ const freewillChoiceMaxOutputTokens = 1024
 const freewillIdeaSystemPrompt = `Return exactly three scored candidate blocks with IDEA, SCORE (0-100), FACTORS (scope_fit, feasibility, impact, novelty, readiness), and specific RATIONALE lines. Plain text only; no tools, authority, paths, or execution. Treat an optional host objective as subject context only. Reply NONE only if no safe set exists.`
 const freewillIdeaMaxOutputTokens = 1024
 
-func freewillMapperDiagnostic(stage string, response provider.ChatGenerateResponse, model string, code string, ideaLines int, retry int, glmPlain bool) string {
-	doneReason, _ := response.Raw["done_reason"].(string)
+func freewillMapperDiagnostic(stage string, response provider.ChatGenerateResponse, model string, code string, ideaMarkers int, parsedBlocks int, retry int, glmPlain bool) string {
 	thinkLen, _ := response.Raw["thinking_len"].(int)
-	return fmt.Sprintf("stage=%s model=%s content_len=%d think_len=%d tool_calls=%d done_reason=%s idea_lines=%d parser_code=%s glm_plain=%t retry=%d", stage, model, len(response.Content), thinkLen, len(response.ToolCalls), doneReason, ideaLines, code, glmPlain, retry)
+	return fmt.Sprintf("stage=%s model=%s content_len=%d think_len=%d tool_calls=%d idea_markers=%d parsed_blocks=%d parser_code=%s glm_plain=%t retry=%d", stage, model, len(response.Content), thinkLen, len(response.ToolCalls), ideaMarkers, parsedBlocks, code, glmPlain, retry)
 }
 
 func freewillIdeaMarkerCount(content string) int {
-	return strings.Count(strings.ToUpper(content), "IDEA:")
+	count := 0
+	for _, line := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(line)), "IDEA:") {
+			count++
+		}
+	}
+	return count
 }
 
 func ideaRetryNumber(feedback string) int {
@@ -235,9 +240,34 @@ func freewillInertEnvelopeLine(line string) bool {
 	return true
 }
 
+type freewillScoredIdeaFailureCode string
+
+const (
+	freewillIdeaFailureCount     freewillScoredIdeaFailureCode = "count"
+	freewillIdeaFailureStructure freewillScoredIdeaFailureCode = "structure"
+	freewillIdeaFailureScore     freewillScoredIdeaFailureCode = "score"
+	freewillIdeaFailureFactors   freewillScoredIdeaFailureCode = "factors"
+	freewillIdeaFailureRationale freewillScoredIdeaFailureCode = "rationale"
+	freewillIdeaFailureUnsafe    freewillScoredIdeaFailureCode = "unsafe"
+)
+
+type freewillScoredIdeaParseError struct {
+	Code         freewillScoredIdeaFailureCode
+	ParsedBlocks int
+}
+
+func (e *freewillScoredIdeaParseError) Error() string {
+	return "multiagent: Freewill scored response rejected"
+}
+
+func freewillScoredIdeaFailure(code freewillScoredIdeaFailureCode, parsedBlocks int) error {
+	return &freewillScoredIdeaParseError{Code: code, ParsedBlocks: parsedBlocks}
+}
+
 func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, error) {
+	ideas := make([]freewillScoredIdea, 0, 3)
 	if len(content) == 0 || len(content) > 4096 {
-		return nil, false, errors.New("multiagent: Freewill scored response is empty or exceeds limit")
+		return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureCount, len(ideas))
 	}
 	value := strings.TrimSpace(content)
 	if idx := strings.LastIndex(strings.ToLower(value), "</think>"); idx >= 0 {
@@ -247,10 +277,9 @@ func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, e
 		return nil, true, nil
 	}
 	if strings.Contains(value, "```") || strings.HasPrefix(value, "{") || strings.HasPrefix(value, "[") {
-		return nil, false, errors.New("multiagent: Freewill scores must use bounded plain lines")
+		return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureStructure, len(ideas))
 	}
 	lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
-	ideas := make([]freewillScoredIdea, 0, 3)
 	seen := make(map[string]struct{})
 	envelopeBytes, envelopeLines := 0, 0
 	for i := 0; i < len(lines); {
@@ -262,7 +291,7 @@ func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, e
 		if strings.HasPrefix(line, "BLOCK ") {
 			blockNumber, err := strconv.Atoi(strings.TrimPrefix(line, "BLOCK "))
 			if err != nil || blockNumber != len(ideas)+1 || blockNumber > 3 || i+1 >= len(lines) || !strings.HasPrefix(strings.TrimSpace(lines[i+1]), "IDEA:") {
-				return nil, false, errors.New("multiagent: Freewill block marker is invalid")
+				return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureStructure, len(ideas))
 			}
 			i++
 			line = strings.TrimSpace(lines[i])
@@ -276,36 +305,36 @@ func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, e
 				}
 				if strings.HasPrefix(line, "IDEA:") || strings.HasPrefix(line, "BLOCK ") {
 					if len(ideas) == 3 {
-						return nil, false, errors.New("multiagent: Freewill response has content after the third candidate")
+						return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureStructure, len(ideas))
 					}
 					break
 				}
 				if len(ideas) != 0 && len(ideas) < 3 {
-					return nil, false, errors.New("multiagent: Freewill contains prose between candidate blocks")
+					return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureStructure, len(ideas))
 				}
 				if !freewillInertEnvelopeLine(line) {
-					return nil, false, errors.New("multiagent: Freewill response envelope contains unsafe or structured content")
+					return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureUnsafe, len(ideas))
 				}
 				envelopeBytes += len(line)
 				envelopeLines++
 				if envelopeBytes > 2048 || envelopeLines > 24 {
-					return nil, false, errors.New("multiagent: Freewill response envelope exceeds limit")
+					return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureStructure, len(ideas))
 				}
 				i++
 			}
 			continue
 		}
 		if len(ideas) == 3 || i+2 >= len(lines) {
-			return nil, false, errors.New("multiagent: Freewill scored blocks are incomplete")
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureStructure, len(ideas))
 		}
 		readField := func(index int, label string) (string, error) {
 			line := strings.TrimSpace(lines[index])
 			if !strings.HasPrefix(line, label) {
-				return "", errors.New("multiagent: Freewill scored block has invalid fields")
+				return "", freewillScoredIdeaFailure(freewillIdeaFailureStructure, len(ideas))
 			}
 			field := strings.TrimSpace(strings.TrimPrefix(line, label))
 			if field == "" || strings.IndexFunc(field, unicode.IsControl) >= 0 {
-				return "", errors.New("multiagent: Freewill scored field is empty or malformed")
+				return "", freewillScoredIdeaFailure(freewillIdeaFailureStructure, len(ideas))
 			}
 			return field, nil
 		}
@@ -322,7 +351,7 @@ func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, e
 		if i < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i]), "FACTORS:") {
 			factorValue = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[i]), "FACTORS:"))
 			if strings.IndexFunc(factorValue, unicode.IsControl) >= 0 {
-				return nil, false, errors.New("multiagent: Freewill score factors contain control text")
+				return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureFactors, len(ideas))
 			}
 			i++
 			for i < len(lines) {
@@ -334,7 +363,7 @@ func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, e
 				i++
 			}
 			if strings.TrimSpace(factorValue) == "" {
-				return nil, false, errors.New("multiagent: Freewill score factors are empty")
+				return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureFactors, len(ideas))
 			}
 		}
 		// GLM sometimes wraps one rationale across several identically labeled
@@ -352,44 +381,44 @@ func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, e
 			}
 			part := strings.TrimSpace(strings.TrimPrefix(line, "RATIONALE:"))
 			if part == "" || len(rationaleParts) == 5 {
-				return nil, false, errors.New("multiagent: Freewill score rationale is empty or has too many fragments")
+				return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureRationale, len(ideas))
 			}
 			rationaleParts = append(rationaleParts, part)
 			i++
 		}
 		if len(rationaleParts) == 0 {
-			return nil, false, errors.New("multiagent: Freewill scored block has no rationale")
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureRationale, len(ideas))
 		}
 		rationale := strings.Join(rationaleParts, " ")
 		if len(idea) > 160 || strings.ContainsAny(idea, "{}[]\\") || strings.Contains(idea, "://") || strings.Contains(idea, "..") {
-			return nil, false, errors.New("multiagent: Freewill idea is malformed or contains a path")
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureUnsafe, len(ideas))
 		}
 		if freewillIdeaContainsForbiddenAuthority(idea) {
-			return nil, false, errors.New("multiagent: Freewill idea requests a forbidden authority")
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureUnsafe, len(ideas))
 		}
 		key := strings.ToLower(strings.Join(strings.Fields(idea), " "))
 		if _, exists := seen[key]; exists {
-			return nil, false, errors.New("multiagent: Freewill ideas must be unique")
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureUnsafe, len(ideas))
 		}
 		seen[key] = struct{}{}
 		score, err := strconv.Atoi(scoreValue)
 		if err != nil || score < 0 || score > 100 {
-			return nil, false, errors.New("multiagent: Freewill score must be an integer from 0 to 100")
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureScore, len(ideas))
 		}
 		var factors []string
 		if factorValue != "" {
 			factors, err = parseFreewillScoreFactors(factorValue)
 			if err != nil {
-				return nil, false, err
+				return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureFactors, len(ideas))
 			}
 		}
 		if len(rationale) < 30 || len(rationale) > 500 || len(strings.Fields(rationale)) < 6 || strings.IndexFunc(rationale, unicode.IsControl) >= 0 || freewillIdeaContainsForbiddenAuthority(rationale) || strings.ContainsAny(rationale, "\\") || strings.Contains(rationale, "://") {
-			return nil, false, errors.New("multiagent: Freewill score rationale is not specific enough")
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureRationale, len(ideas))
 		}
 		ideas = append(ideas, freewillScoredIdea{Idea: idea, Score: score, Factors: factors, Rationale: rationale})
 	}
 	if len(ideas) != 3 {
-		return nil, false, errors.New("multiagent: Freewill must return exactly three scored candidates")
+		return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureCount, len(ideas))
 	}
 	return ideas, false, nil
 }
@@ -554,7 +583,7 @@ func (s ChatFreewillSelector) SelectCandidateChoice(ctx context.Context, input F
 	}
 	choice, err := parseFreewillCandidateChoice(response.Content, ids)
 	if err != nil {
-		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("choice", response, s.Model, "invalid_choice", 0, 0, true))
+		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("choice", response, s.Model, "invalid_choice", 0, 0, 0, true))
 		return FreewillCandidateChoice{}, FreewillSelectionEvidence{}, &SchemaCorrectionError{Role: RolePlanner, Code: "invalid_choice"}
 	}
 	providerName, model := response.Provider, response.Model
@@ -705,13 +734,21 @@ func (s ChatFreewillSelector) selectFreewillFlashIdeas(ctx context.Context, inpu
 		return freewill.Selection{}, FreewillSelectionEvidence{}, err
 	}
 	if len(response.ToolCalls) != 0 {
-		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("idea", response, s.Model, "idea_tool_request", freewillIdeaMarkerCount(response.Content), ideaRetryNumber(input.RecoveryFeedback), true))
+		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("idea", response, s.Model, "idea_tool_request", freewillIdeaMarkerCount(response.Content), 0, ideaRetryNumber(input.RecoveryFeedback), true))
 		return freewill.Selection{}, FreewillSelectionEvidence{}, &SchemaCorrectionError{Role: RolePlanner, Code: "idea_tool_request"}
 	}
 	ideas, none, err := parseFreewillScoredIdeaLines(response.Content)
 	if err != nil {
-		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("idea", response, s.Model, "invalid_scored_ideas", freewillIdeaMarkerCount(response.Content), ideaRetryNumber(input.RecoveryFeedback), true))
-		return freewill.Selection{}, FreewillSelectionEvidence{}, &SchemaCorrectionError{Role: RolePlanner, Code: "invalid_scored_ideas"}
+		category := freewillIdeaFailureStructure
+		parsedBlocks := 0
+		var parseErr *freewillScoredIdeaParseError
+		if errors.As(err, &parseErr) {
+			category = parseErr.Code
+			parsedBlocks = parseErr.ParsedBlocks
+		}
+		code := "invalid_scored_ideas_" + string(category)
+		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("idea", response, s.Model, code, freewillIdeaMarkerCount(response.Content), parsedBlocks, ideaRetryNumber(input.RecoveryFeedback), true))
+		return freewill.Selection{}, FreewillSelectionEvidence{}, &SchemaCorrectionError{Role: RolePlanner, Code: code}
 	}
 	providerName, model := response.Provider, response.Model
 	if providerName == "" {

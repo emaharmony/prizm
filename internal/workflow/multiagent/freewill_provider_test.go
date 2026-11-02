@@ -198,6 +198,61 @@ func TestFreewillSelectionRecoveryFeedbackForInvalidScoredIdeas(t *testing.T) {
 	}
 }
 
+func TestFreewillScoredIdeaFailuresHaveSafeCategoriesAndAccurateCounts(t *testing.T) {
+	block1 := "IDEA: Map project dependencies\nSCORE: 72\nFACTORS: scope_fit\nRATIONALE: This maps direct dependencies and identifies risky coupling for a bounded review.\n"
+	block2 := "IDEA: Document service boundaries\nSCORE: 88\nRATIONALE: Clear ownership notes reduce cross-package changes and help contributors route future work.\n"
+	block3 := "IDEA: Review test coverage gaps\nSCORE: 61\nRATIONALE: A focused gap list can guide later tests while keeping this review read only and scoped."
+	cases := []struct {
+		name, content, code string
+		markers, parsed     int
+	}{
+		{name: "one marker", content: "IDEA: Map project dependencies\nSCORE: 72\nRATIONALE: This maps direct dependencies and identifies risky coupling for a bounded review.", code: "count", markers: 1, parsed: 1},
+		{name: "three markers with malformed third score", content: block1 + block2 + strings.Replace(block3, "SCORE: 61", "SCORE: high", 1), code: "score", markers: 3, parsed: 2},
+		{name: "case-sensitive field", content: strings.Replace(block1+block2+block3, "SCORE: 72", "score: 72", 1), code: "structure", markers: 3, parsed: 0},
+		{name: "field order", content: "IDEA: Map project dependencies\nRATIONALE: This maps direct dependencies and identifies risky coupling for a bounded review.\nSCORE: 72", code: "structure", markers: 1, parsed: 0},
+		{name: "missing rationale", content: "IDEA: Map project dependencies\nSCORE: 72\nEXTRA: no rationale", code: "rationale", markers: 1, parsed: 0},
+		{name: "invalid factors", content: strings.Replace(block1+block2+block3, "FACTORS: scope_fit", "FACTORS: permission_grant", 1), code: "factors", markers: 3, parsed: 0},
+		{name: "unsafe authority", content: strings.Replace(block1+block2+block3, "IDEA: Map project dependencies", "IDEA: Execute shell commands", 1), code: "unsafe", markers: 3, parsed: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := parseFreewillScoredIdeaLines(tc.content)
+			parseErr, ok := err.(*freewillScoredIdeaParseError)
+			if !ok || string(parseErr.Code) != tc.code || parseErr.ParsedBlocks != tc.parsed {
+				t.Fatalf("failure classification mismatch: error=%T code/parsed=%v want=%s/%d", err, parseErr, tc.code, tc.parsed)
+			}
+			if got := freewillIdeaMarkerCount(tc.content); got != tc.markers {
+				t.Fatalf("marker count=%d want=%d", got, tc.markers)
+			}
+			if strings.Contains(err.Error(), "Map project") || strings.Contains(err.Error(), "Execute shell") {
+				t.Fatalf("parser error leaked model text: %v", err)
+			}
+		})
+	}
+}
+
+func TestFreewillScoredIdeaRecoveryFeedbackIsCategorySpecificAndLegacyCompatible(t *testing.T) {
+	codes := []string{"invalid_scored_ideas_count", "invalid_scored_ideas_structure", "invalid_scored_ideas_score", "invalid_scored_ideas_factors", "invalid_scored_ideas_rationale", "invalid_scored_ideas_unsafe"}
+	seen := make(map[string]bool)
+	for _, code := range codes {
+		feedback := freewillSelectionRecoveryFeedback(code)
+		if feedback == "" || len(feedback) > 350 || !strings.Contains(feedback, "three") {
+			t.Fatalf("missing or unbounded feedback for %s: %q", code, feedback)
+		}
+		if seen[feedback] {
+			t.Fatalf("category %s reused non-specific feedback", code)
+		}
+		seen[feedback] = true
+		if strings.Contains(strings.ToLower(feedback), "approve") || strings.Contains(strings.ToLower(feedback), "execute") {
+			t.Fatalf("feedback contains authority language for %s: %q", code, feedback)
+		}
+	}
+	legacy := freewillSelectionRecoveryFeedback("invalid_scored_ideas")
+	if legacy == "" || !strings.Contains(legacy, "IDEA:") || !strings.Contains(legacy, "RATIONALE:") {
+		t.Fatalf("legacy failure code lost correction compatibility: %q", legacy)
+	}
+}
+
 func TestStructuredFreewillSelectorForwardsObjectiveAsNonAuthorityContext(t *testing.T) {
 	const objective = "Review the synthetic selector path and propose read-only follow-up ideas."
 	chat := &scoredFreewillChatStub{responses: []provider.ChatGenerateResponse{{Content: `{"candidates":[` +
