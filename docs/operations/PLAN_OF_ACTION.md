@@ -1,3 +1,11 @@
+## Current Handoff: FW-004 gate-only policy and approval tests (2026-11-02)
+
+**Roadmap IDs:** FW-P1 / FW-004. Branch codex/fw004-approval-gate-tests starts at merged staging head 8331a6348be07051b2c33893ad65e2fc0be5d522. The tests cover policy-allowed and requires-approval proposals remaining execution-disabled after a human grant, policy denial remaining final and queryable, edited requests invalidating prior approvals, and composition failing when the policy evaluator is unavailable. This is a tests-only milestone; no product code changed.
+
+**Validation and limits:** gofmt -d internal/workflow/multiagent/freewill_approval_test.go produced no diff. The first focused Go test attempt found and fixed an unused test variable. The follow-up normal and workspace-cache-local Go test launches stalled before a Go process became visible and were stopped; no local test pass is claimed. No provider or service was invoked. Exact-head CI remains required.
+
+**Next action:** review the complete PR diff, require exact-head CI to pass, and merge only if all required checks are green. Provider-backed selection, R1/G1, and FW-G2 remain separate open gates.
+
 ## Current Handoff: Combined FW-003 scoring and objective PR #126 (2026-11-02)
 
 **Roadmap IDs:** FW-P1 / FW-003. The staging-based combined change includes
