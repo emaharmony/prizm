@@ -112,6 +112,12 @@ func makeLinkedRunWorktree(t *testing.T) (source, workspace, runID, base string)
 	if err := os.MkdirAll(source, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Canonicalize before verification: on macOS t.TempDir() lives under the
+	// /var → /private/var symlink, so raw temp paths cannot pass the strict
+	// canonical-directory check the production code applies to run worktrees.
+	if resolved, err := filepath.EvalSymlinks(source); err == nil {
+		source = resolved
+	}
 	gitTestCommand(t, source, "init", "-b", "main")
 	gitTestCommand(t, source, "config", "user.email", "test@prizm.local")
 	gitTestCommand(t, source, "config", "user.name", "Prizm Test")
@@ -126,6 +132,9 @@ func makeLinkedRunWorktree(t *testing.T) (source, workspace, runID, base string)
 		t.Fatal(err)
 	}
 	gitTestCommand(t, source, "worktree", "add", "--detach", workspace, base)
+	if resolved, err := filepath.EvalSymlinks(workspace); err == nil {
+		workspace = resolved
+	}
 	return source, workspace, runID, base
 }
 

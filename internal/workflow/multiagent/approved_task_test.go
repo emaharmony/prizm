@@ -367,6 +367,12 @@ func TestDurableFailedValidationRetainsReceiptForSeparatelyApprovedCorrection(t 
 	if err := os.MkdirAll(source, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Canonicalize before verification: macOS temp roots live behind the
+	// /var → /private/var symlink, which the strict canonical-directory check
+	// in WithVerifiedRunWorktree rejects.
+	if resolved, err := filepath.EvalSymlinks(source); err == nil {
+		source = resolved
+	}
 	ctx := context.Background()
 	for _, args := range [][]string{{"init", "-b", "main"}, {"config", "user.email", "test@prizm.local"}, {"config", "user.name", "Prizm Test"}} {
 		if _, err := gitx.RunCommand(ctx, source, "", "git", args...); err != nil {
@@ -392,6 +398,9 @@ func TestDurableFailedValidationRetainsReceiptForSeparatelyApprovedCorrection(t 
 	}
 	if _, err := gitx.RunCommand(ctx, source, "", "git", "worktree", "add", "--detach", workspace, base); err != nil {
 		t.Fatalf("create owned run worktree: %v", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(workspace); err == nil {
+		workspace = resolved
 	}
 	patchA := "diff --git a/base.txt b/base.txt\n--- a/base.txt\n+++ b/base.txt\n@@ -1 +1 @@\n-base\n+changed\n"
 	approvalStore := approval.NewStore(t.TempDir())
