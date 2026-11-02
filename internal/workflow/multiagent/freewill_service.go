@@ -230,6 +230,18 @@ func freewillSelectionRecoveryFeedback(code string) string {
 	switch code {
 	case "invalid_scored_ideas":
 		return "Repeat this block exactly three times:\nIDEA: Map project dependencies\nSCORE: 72\nFACTORS: scope_fit: 9/10\nRATIONALE: This maps direct dependencies for a bounded review.\nFACTORS optional; keep rationale specific and add no preamble, footer, paths, authority, or execution requests."
+	case "invalid_scored_ideas_count":
+		return "Return exactly three scored blocks. Each block needs IDEA, SCORE, optional FACTORS, and specific RATIONALE on separate labeled lines. Add no other candidates or prose."
+	case "invalid_scored_ideas_structure":
+		return "Use uppercase labels in this order in each of exactly three blocks: IDEA, SCORE, optional FACTORS, then RATIONALE. Put each field on its own line and add no preamble, footer, or extra fields."
+	case "invalid_scored_ideas_score":
+		return "Each of exactly three blocks needs SCORE as one integer from 0 to 100 on its own line. Keep IDEA, optional FACTORS, and specific RATIONALE in the required labeled order; no extra fields or prose."
+	case "invalid_scored_ideas_factors":
+		return "FACTORS is optional. When present, use only scope_fit, feasibility, impact, novelty, or readiness with valid 0-10 ratings; omit FACTORS if uncertain. Keep exactly three blocks with specific RATIONALE and no extra fields."
+	case "invalid_scored_ideas_rationale":
+		return "Give each of exactly three blocks a specific RATIONALE of at least six words, after IDEA, SCORE, and optional FACTORS. Keep it decision-only and avoid extra fields or prose."
+	case "invalid_scored_ideas_unsafe":
+		return "Return exactly three bounded decision-only ideas with IDEA, SCORE, optional FACTORS, and specific RATIONALE. Do not include paths, authority, approval, tools, network, secrets, or execution requests."
 	case "invalid_idea_lines":
 		return "Return only three lines, each beginning exactly IDEA: followed by a short decision-only objective. No preamble, bullets, explanation, JSON, paths, authority, tools, network, secrets, approval, or execution requests."
 	case "invalid_selection_schema", "empty_selection_response", "selection_tool_request", "invalid_selection_json", "unknown_selection_field", "selection_candidate_count", "selection_contract_invalid":
