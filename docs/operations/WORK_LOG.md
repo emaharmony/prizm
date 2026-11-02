@@ -2770,3 +2770,16 @@ is included. Do not touch provider services or claim R1/G1/FW-G2 acceptance.
 - No provider or running service was accessed or changed.
 
 **Next action:** independent review and exact-head CI on the single staging-based PR; merge only if approved and all required checks pass. Parser work remains separate.
+
+
+## 2026-11-02 — FW-P1 GLM-5.3-Flash parser normalization
+
+**Roadmap IDs:** FW-P1 / FW-002–FW-004 reliability
+**Branch/baseline:** Isolated snapshot from live staging `813305c729b163a22cc5c44800f0cc1e41b056f6`; candidate PR `codex/freewill-flash-normalization-staging`
+
+- Normalized the two sanitized served response shapes while retaining the strict three-candidate and decision-only contracts. FACTORS may be omitted; accepted factor labels remain allowlisted, unique, and bounded, with observed `N/10` annotations validated but not persisted. Bounded inert envelope text and exact BLOCK markers are handled explicitly; unsafe authority, path, control, extra field, and trailing candidate content remain rejected.
+- Added concise `invalid_scored_ideas` retry feedback, and regression coverage for parser boundaries, format variants, labels in the second choice request, and no-tools calls. The source already forwarded host-bounded CandidateLabels, so no production change was needed there.
+- No live service, provider, credentials, or runtime state was accessed. Local gofmt passed. One bounded focused Go test attempt failed to complete without useful diagnostics; CI is the validation gate.
+
+**Open risks:** Local Go validation is incomplete. Verify exact-head CI and independent review before merge.
+**Next action:** Independent Luna diff review, publish one staging PR, then merge only after exact-head checks pass and mergeability is confirmed.
