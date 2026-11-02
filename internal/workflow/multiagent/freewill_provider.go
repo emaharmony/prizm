@@ -280,7 +280,7 @@ func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, e
 					}
 					break
 				}
-				if len(ideas) != 0 {
+				if len(ideas) != 0 && len(ideas) < 3 {
 					return nil, false, errors.New("multiagent: Freewill contains prose between candidate blocks")
 				}
 				if !freewillInertEnvelopeLine(line) {

@@ -183,7 +183,7 @@ func TestFreewillFlashRejectsUnsafeEnvelopeAndMalformedObservedFactors(t *testin
 
 func TestFreewillSelectionRecoveryFeedbackForInvalidScoredIdeas(t *testing.T) {
 	feedback := freewillSelectionRecoveryFeedback("invalid_scored_ideas")
-	for _, want := range []string{"exactly three blocks", "Map project dependencies", "FACTORS optional", "RATIONALE"} {
+	for _, want := range []string{"exactly three times", "Map project dependencies", "FACTORS optional", "RATIONALE"} {
 		if !strings.Contains(feedback, want) {
 			t.Fatalf("invalid_scored_ideas feedback omitted %q: %q", want, feedback)
 		}
