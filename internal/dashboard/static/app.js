@@ -51,7 +51,7 @@
 
   async function request(path, options) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 9000);
+    const timeout = setTimeout(() => controller.abort(), 30000);
     try {
       const method = String((options && options.method) || 'GET').toUpperCase();
       const mutates = method !== 'GET' && method !== 'HEAD';
@@ -116,7 +116,15 @@
       toggle.setAttribute('aria-expanded', String(open));
     });
     request('/status').then(status => setShellHealth(status.status === 'running' ? 'System healthy' : String(status.status || 'Service available'), status.status === 'running'))
-      .catch(() => setShellHealth('Service unavailable', false));
+      .catch(() => {
+        // One retry before declaring the service down — phone/tailnet first
+        // connections can be slower than expected, and a false 'unavailable'
+        // chip makes a healthy service look broken.
+        setTimeout(() => {
+          request('/status').then(status => setShellHealth(status.status === 'running' ? 'System healthy' : String(status.status || 'Service available'), status.status === 'running'))
+            .catch(() => setShellHealth('Service unavailable', false));
+        }, 2500);
+      });
   }
 
   document.addEventListener('DOMContentLoaded', initShell);
