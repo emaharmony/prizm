@@ -393,6 +393,9 @@ type FreewillOperatorControlStore interface {
 
 type FreewillActorAdmissionStore interface {
 	EnsureFreewillActorAdmission(context.Context, string, string, freewill.Scope) error
+	// ReconcileFreewillWakeAdmission verifies same-run ownership before recovery
+	// and terminalizes accepted legacy orphans without replacing another slot.
+	ReconcileFreewillWakeAdmission(context.Context, string, string, freewill.Scope, time.Time) (DurableRun, bool, error)
 }
 
 type FreewillRunLister interface {

@@ -138,8 +138,11 @@ func (s *FreewillWakeService) ProcessWake(ctx context.Context, runID string) (Du
 	if err := s.validateConfiguredWake(preflight); err != nil {
 		return preflight, err
 	}
-	_, lease, err := s.runtime.ClaimFreewillWake(ctx, runID, s.config.Owner, s.config.LeaseFor)
+	claimed, lease, err := s.runtime.ClaimFreewillWake(ctx, runID, s.config.Owner, s.config.LeaseFor)
 	if err != nil {
+		if errors.Is(err, ErrFreewillWakeAdmissionReconciled) {
+			return claimed, err
+		}
 		return DurableRun{}, err
 	}
 	selectionCtx, stopRenewal, currentLease := s.maintainLease(ctx, lease)
@@ -383,9 +386,9 @@ func (s *FreewillWakeService) RecoverPending(ctx context.Context, now time.Time,
 				continue
 			}
 			processed, processErr := s.ProcessWake(ctx, run.State.RunID)
-			if errors.Is(processErr, ErrFreewillActorAdmissionConflict) {
-				// A verified slot conflict means this legacy accepted wake is queued
-				// behind the actor's active run. Leave it durable for a later scan.
+			if errors.Is(processErr, ErrFreewillWakeAdmissionReconciled) {
+				// Acceptance wrote the actor slot atomically with the run. A wake
+				// without its own slot is legacy orphan history, not queued work.
 				continue
 			}
 			if processErr != nil && !errors.Is(processErr, ErrFreewillWakeLeaseHeld) && !errors.Is(processErr, ErrFreewillWakeNotDue) && !errors.Is(processErr, ErrFreewillHalted) {

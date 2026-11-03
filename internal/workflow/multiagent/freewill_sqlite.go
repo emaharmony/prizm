@@ -15,6 +15,8 @@ import (
 
 var ErrFreewillActorAdmissionConflict = errors.New("multiagent: Freewill actor admission conflicts with an active intention")
 
+var _ FreewillActorAdmissionStore = (*SQLiteDurableRunStore)(nil)
+
 // OpenExistingSQLiteDurableRunStoreReadOnly opens an existing durable store
 // without creating tables or enabling write-capable workflow paths.
 func OpenExistingSQLiteDurableRunStoreReadOnly(dbPath string) (*SQLiteDurableRunStore, error) {
@@ -127,6 +129,137 @@ func (s *SQLiteDurableRunStore) AcceptFreewillWake(
 		return DurableRun{}, false, fmt.Errorf("multiagent store: commit Freewill wake acceptance: %w", err)
 	}
 	return accepted, created, nil
+}
+
+// ReconcileFreewillWakeAdmission verifies same-run ownership before recovery.
+// A valid but unowned legacy wake is durably halted with its audit event in the
+// same transaction; the other run's admission slot is never changed.
+func (s *SQLiteDurableRunStore) ReconcileFreewillWakeAdmission(
+	ctx context.Context,
+	runID, agentID string,
+	scope freewill.Scope,
+	now time.Time,
+) (DurableRun, bool, error) {
+	if err := s.ensureFreewillTables(ctx); err != nil {
+		return DurableRun{}, false, err
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return DurableRun{}, false, fmt.Errorf("multiagent store: begin Freewill wake admission reconciliation: %w", err)
+	}
+	defer tx.Rollback()
+
+	var raw string
+	err = tx.QueryRowContext(ctx, `SELECT record_json FROM multiagent_runs WHERE run_id = ?`, runID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DurableRun{}, false, fmt.Errorf("%w: %s", ErrRunNotFound, runID)
+	}
+	if err != nil {
+		return DurableRun{}, false, err
+	}
+	var record DurableRun
+	if err := json.Unmarshal([]byte(raw), &record); err != nil {
+		return DurableRun{}, false, fmt.Errorf("%w: decode Freewill wake: %v", ErrFreewillActorAdmissionAmbiguous, err)
+	}
+	if record.State.RunID != runID || record.Kind != DurableRunKindFreewill || record.Freewill == nil ||
+		record.Phase != CheckpointFreewillWake || record.State.RequestIdentity == nil ||
+		record.State.RequestIdentity.RequesterID != agentID || record.Freewill.Scope != scope ||
+		!record.Freewill.ExecutionDisabled || record.Validate(nil) != nil {
+		return record, false, ErrFreewillActorAdmissionAmbiguous
+	}
+	if record.Freewill.Lifecycle != freewill.StateWaking && record.Freewill.Lifecycle != freewill.StateSelecting {
+		return record, false, errors.New("multiagent: Freewill wake is not recoverable")
+	}
+	if record.Freewill.LeaseOwner != "" && record.Freewill.LeaseUntil.After(now) {
+		return record, false, ErrFreewillWakeLeaseHeld
+	}
+	if record.Freewill.SelectionNextAt.After(now) {
+		return record, false, ErrFreewillWakeNotDue
+	}
+
+	key := freewillActorAdmissionKey(agentID)
+	var existing, existingAgent, existingProject, existingWorkspace string
+	err = tx.QueryRowContext(ctx, `SELECT run_id, agent_id, project_id, workspace FROM multiagent_freewill_admissions WHERE actor_key = ?`, key).
+		Scan(&existing, &existingAgent, &existingProject, &existingWorkspace)
+	failureCode := ""
+	if errors.Is(err, sql.ErrNoRows) {
+		failureCode = freewillAdmissionMissingCode
+	} else if err != nil {
+		return record, false, err
+	} else {
+		if existing == "" || existingAgent != agentID || existingProject == "" || existingWorkspace == "" {
+			return record, false, ErrFreewillActorAdmissionAmbiguous
+		}
+		ownerScope := freewill.Scope{ProjectID: existingProject, Workspace: existingWorkspace}
+		owner, err := loadFreewillAdmissionRun(ctx, tx, existing, existingAgent, ownerScope)
+		if err != nil {
+			return record, false, err
+		}
+		if existing == runID {
+			if owner.State.RunID != runID || ownerScope != scope {
+				return record, false, ErrFreewillActorAdmissionAmbiguous
+			}
+			return record, false, nil
+		}
+		failureCode = freewillAdmissionOtherOwnerCode
+	}
+	if failureCode == "" {
+		return record, false, ErrFreewillActorAdmissionAmbiguous
+	}
+	if err := freewill.ValidateTransition(record.Freewill.Lifecycle, freewill.StateHalted); err != nil {
+		return record, false, err
+	}
+	record.Freewill.Lifecycle = freewill.StateHalted
+	record.Freewill.ExecutionDisabled = true
+	record.Freewill.PauseReason = freewillAdmissionReconciledReason
+	record.Freewill.SelectionFailureClass = freewillAdmissionReconciliationClass
+	record.Freewill.SelectionFailureCode = failureCode
+	record.Freewill.LeaseOwner = ""
+	record.Freewill.LeaseUntil = time.Time{}
+	record.Freewill.SelectionNextAt = time.Time{}
+	record.Freewill.SelectionFeedback = ""
+	record.State.UpdatedAt = now
+	if err := record.Validate(nil); err != nil {
+		return record, false, err
+	}
+	expectedRevision := record.Revision
+	record.Revision = expectedRevision + 1
+	data, err := json.Marshal(record)
+	if err != nil {
+		return DurableRun{}, false, fmt.Errorf("multiagent store: marshal Freewill admission reconciliation: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `
+UPDATE multiagent_runs
+SET schema_version = ?, revision = ?, record_json = ?, updated_at = ?
+WHERE run_id = ? AND revision = ?`,
+		record.SchemaVersion, record.Revision, string(data), now.Format(time.RFC3339Nano), runID, expectedRevision)
+	if err != nil {
+		return DurableRun{}, false, fmt.Errorf("multiagent store: update Freewill admission reconciliation: %w", err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return DurableRun{}, false, err
+	}
+	if updated != 1 {
+		return DurableRun{}, false, fmt.Errorf("%w: run %s expected revision %d", ErrRevisionConflict, runID, expectedRevision)
+	}
+	evt := freewillLeaseEvent(event.EventFreewillSelectionHalted, record, map[string]any{
+		"attempt": record.Freewill.LeaseAttempt, "recovery_count": record.Freewill.SelectionRecoveryNumber,
+		"failure_class": record.Freewill.SelectionFailureClass, "failure_code": record.Freewill.SelectionFailureCode,
+		"reason": record.Freewill.PauseReason,
+	})
+	if err := enqueueEvents(ctx, tx, runID, record.Revision, []event.Event{evt}); err != nil {
+		return DurableRun{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return DurableRun{}, false, fmt.Errorf("multiagent store: commit Freewill admission reconciliation: %w", err)
+	}
+	return record, true, nil
 }
 
 func (s *SQLiteDurableRunStore) EnsureFreewillActorAdmission(ctx context.Context, runID, agentID string, scope freewill.Scope) error {

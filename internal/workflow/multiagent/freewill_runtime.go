@@ -22,6 +22,15 @@ const maxFreewillSelectionAttempts = uint64(maxRoleRecoveryRetries + 1)
 var ErrFreewillRuntimeUnavailable = errors.New("multiagent: Freewill decision runtime is not configured")
 var ErrFreewillWakeNotDue = errors.New("multiagent: Freewill selection retry is not due")
 var ErrFreewillActorAdmissionAmbiguous = errors.New("multiagent: Freewill actor admission state is ambiguous")
+var ErrFreewillWakeAdmissionReconciled = errors.New("multiagent: Freewill wake halted because its actor admission was not owned")
+
+const (
+	freewillAdmissionReconciliationClass = "admission_reconciliation"
+	freewillAdmissionMissingCode         = "actor_admission_missing"
+	freewillAdmissionOtherOwnerCode      = "actor_admission_owned_by_other_run"
+	freewillAdmissionReconciledReason    = "actor_admission_reconciled"
+)
+
 var ErrFreewillSelectionBudgetExceeded = errors.New("multiagent: Freewill selector attempt budget is exhausted")
 
 // FreewillWakeRequest is a scheduler-owned wake envelope. Trigger is an
@@ -171,10 +180,17 @@ func (r *DurableRuntime) ClaimFreewillWake(ctx context.Context, runID, owner str
 	}
 	admission, ok := r.store.(FreewillActorAdmissionStore)
 	if !ok {
-		return preflight, FreewillWakeLease{}, ErrFreewillActorAdmissionConflict
+		return preflight, FreewillWakeLease{}, ErrFreewillActorAdmissionAmbiguous
 	}
-	if err := admission.EnsureFreewillActorAdmission(ctx, runID, agentID, preflight.Freewill.Scope); err != nil {
-		return preflight, FreewillWakeLease{}, err
+	admitted, reconciled, err := admission.ReconcileFreewillWakeAdmission(ctx, runID, agentID, preflight.Freewill.Scope, r.now().UTC())
+	if err != nil {
+		return admitted, FreewillWakeLease{}, err
+	}
+	if reconciled {
+		if err := r.dispatchOutbox(ctx, runID); err != nil {
+			return admitted, FreewillWakeLease{}, err
+		}
+		return admitted, FreewillWakeLease{}, ErrFreewillWakeAdmissionReconciled
 	}
 	claim, err := r.claimer.Acquire(ctx, runID)
 	if err != nil {
