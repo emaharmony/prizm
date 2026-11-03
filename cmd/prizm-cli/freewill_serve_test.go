@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/provider"
 	"github.com/emaharmony/prizm/internal/provider/ollama"
+	prismsqlite "github.com/emaharmony/prizm/internal/sqlite"
 	multiagent "github.com/emaharmony/prizm/internal/workflow/multiagent"
 	"github.com/nats-io/nats.go"
 )
@@ -753,4 +756,215 @@ func TestDisabledFreewillStatusRuntimeDoesNotCreateOrWake(t *testing.T) {
 		t.Fatalf("disabled-composed historical status=%d body=%s", response.Code, response.Body.String())
 	}
 	statusRuntime.Close()
+}
+
+func TestServedFreewillPendingApprovalSuppressesWakesAndGrantReleasesAdmission(t *testing.T) {
+	root := t.TempDir()
+	projectPath, policyDir := filepath.Join(root, "project"), filepath.Join(root, "policies")
+	dataDir, runsDir := filepath.Join(root, "data"), filepath.Join(root, "runs")
+	for _, dir := range []string{projectPath, policyDir, runsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	policyYAML := `policies:
+  - id: require_freewill_approval
+    description: Synthetic approval gate.
+    match:
+      action: intention.propose
+      resource.type: intention
+      resource.name: freewill_candidate
+      context.mode: proposal
+    decision: requires_approval
+    reason: "Synthetic test requires approval."
+`
+	if err := os.WriteFile(filepath.Join(policyDir, "test.yaml"), []byte(policyYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	selection := `{"candidates":[{"title":"A","goal":"Task A","reason_summary":"Small and safe.","requested_capabilities":["memory.read"],"budget":null,"score":71,"score_factors":["scope_fit"],"score_rationale":"Fits the empty synthetic project."},{"title":"B","goal":"Task B","reason_summary":"Bounded review.","requested_capabilities":["memory.read"],"budget":null,"score":91,"score_factors":["impact"],"score_rationale":"Highest impact without mutation."},{"title":"C","goal":"Task C","reason_summary":"Low risk.","requested_capabilities":["memory.read"],"budget":null,"score":61,"score_factors":["feasibility"],"score_rationale":"Feasible but less useful."}],"resume_candidate_id":"","reason_summary":"B is strongest.","sleep_reason":""}`
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.Method != http.MethodPost || r.URL.Path != "/api/chat" {
+			http.Error(w, "unexpected endpoint", 400)
+			return
+		}
+		var req map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		var schema any
+		if err := json.Unmarshal(multiagent.FreewillSelectionOutputSchema(), &schema); err != nil {
+			http.Error(w, "invalid schema", 500)
+			return
+		}
+		opts, _ := req["options"].(map[string]any)
+		if req["model"] != "synthetic-model" || req["stream"] != false || !reflect.DeepEqual(req["format"], schema) || opts["num_predict"] != float64(4096) {
+			http.Error(w, "request mismatch", 400)
+			return
+		}
+		if _, ok := req["tools"]; ok {
+			http.Error(w, "tools present", 400)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"model": "synthetic-model", "done": true, "message": map[string]any{"role": "assistant", "content": selection}})
+	}))
+	defer server.Close()
+	cfg := &orchestrator.Config{}
+	cfg.Prizm.DataDir, cfg.Prizm.RunsDir = dataDir, runsDir
+	cfg.Freewill = orchestrator.FreewillConfig{Enabled: true, AgentID: "synthetic-agent", ProjectID: "synthetic-project", Model: "synthetic-model", PolicyDir: policyDir,
+		Scheduling: orchestrator.FreewillSchedulingConfig{Enabled: true, Schedule: "0 0 1 1 *"}}
+	cfg.Agents = []orchestrator.AgentConfig{{ID: "synthetic-agent", Provider: "ollama", Model: "synthetic-model"}}
+	cfg.Projects = []orchestrator.ProjectConfig{{ID: "synthetic-project", RepoPath: projectPath}}
+	providers := provider.NewProviderRegistry()
+	providers.Register("synthetic-model", &directFreewillChatStub{chat: ollama.NewChatProvider(server.URL)}, provider.ModelInfo{ProviderName: "ollama"})
+	runtime, err := openFreewillServeRuntime(cfg, providers, "", filepath.Join(root, "prizm.yaml"))
+	if err != nil {
+		t.Fatalf("compose runtime: %v", err)
+	}
+	defer runtime.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	firstAt := time.Date(2031, time.January, 2, 3, 4, 10, 0, time.UTC)
+	first, err := runtime.wake.HandleScheduledTick(ctx, firstAt)
+	if err != nil {
+		t.Fatalf("first wake: %v", err)
+	}
+	first, err = runtime.approvals.RequestApproval(ctx, first.State.RunID)
+	if err != nil {
+		t.Fatalf("create proposal: %v", err)
+	}
+	if first.Freewill == nil || first.Freewill.Lifecycle != freewill.StateApprovalPending || first.Freewill.ApprovalRef == "" || !first.Freewill.ExecutionDisabled {
+		t.Fatalf("first wake not safely pending: %#v", first.Freewill)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("initial provider calls=%d, want 1", calls.Load())
+	}
+	dbPath := filepath.Join(dataDir, "freewill.db")
+	before, err := countServedFreewillOutbox(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dup, err := runtime.wake.HandleScheduledTick(ctx, firstAt.Add(20*time.Second))
+	if err != nil {
+		t.Fatalf("duplicate wake: %v", err)
+	}
+	if dup.State.RunID != first.State.RunID || calls.Load() != 1 {
+		t.Fatalf("duplicate changed run/calls: %s/%d", dup.State.RunID, calls.Load())
+	}
+	afterDuplicate, err := countServedFreewillOutbox(ctx, dbPath)
+	if err != nil || afterDuplicate != before {
+		t.Fatalf("duplicate wake changed outbox: %d to %d err=%v", before, afterDuplicate, err)
+	}
+	if _, err = runtime.wake.HandleScheduledTick(ctx, firstAt.Add(time.Minute)); !errors.Is(err, multiagent.ErrFreewillActorAdmissionConflict) {
+		t.Fatalf("pending wake error=%v, want admission conflict", err)
+	}
+	runs, err := runtime.store.ListFreewillRuns(ctx, "", 10)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("pending conflict left ghost run: %d err=%v", len(runs), err)
+	}
+	after, err := countServedFreewillOutbox(ctx, dbPath)
+	if err != nil || after != before {
+		t.Fatalf("pending conflict changed outbox: %d to %d err=%v", before, after, err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("pending conflict provider calls=%d", calls.Load())
+	}
+	granted, err := runtime.approvals.Decide(ctx, first.State.RunID, first.Freewill.ApprovalRef, "grant", "synthetic-test-owner", "")
+	if err != nil {
+		t.Fatalf("grant test approval: %v", err)
+	}
+	if granted.Freewill == nil || granted.Freewill.Lifecycle != freewill.StatePaused || granted.Freewill.PauseReason != "execution_disabled" || !granted.Freewill.ExecutionDisabled {
+		t.Fatalf("grant crossed execution boundary: %#v", granted.Freewill)
+	}
+	busURL, stop, err := bus.StartEmbeddedBus(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	nc, err := nats.Connect(busURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	if err = runtime.Start(ctx, nc, true); err != nil {
+		t.Fatalf("start served callback: %v", err)
+	}
+	if err = nc.Publish(freewillScheduleSubject, []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err = nc.FlushTimeout(2 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	var all []multiagent.DurableRun
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		all, err = runtime.store.ListFreewillRuns(ctx, "", 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(all) == 2 {
+			for _, run := range all {
+				if run.State.RunID == first.State.RunID || run.Freewill == nil || run.Freewill.Lifecycle != freewill.StateApprovalPending {
+					continue
+				}
+				events, queryErr := runtime.events.Query(ctx, event.EventFilter{RunID: run.State.RunID, Limit: 100})
+				if queryErr != nil {
+					t.Fatal(queryErr)
+				}
+				for _, e := range events {
+					if e.Type == event.EventFreewillApprovalProposed {
+						goto secondProposalReady
+					}
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("post-grant served wake did not reach approval_pending")
+secondProposalReady:
+	if len(all) != 2 {
+		t.Fatalf("post-grant run count=%d, want 2", len(all))
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("post-grant provider calls=%d, want 2", calls.Load())
+	}
+	proposals, actions := 0, 0
+	for _, run := range all {
+		if run.Freewill == nil || !run.Freewill.ExecutionDisabled {
+			t.Fatalf("run %s crossed execution boundary", run.State.RunID)
+		}
+		events, err := runtime.events.Query(ctx, event.EventFilter{RunID: run.State.RunID, Limit: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range events {
+			if e.Type == event.EventFreewillApprovalProposed {
+				proposals++
+			}
+			if strings.HasPrefix(e.Type, "prism.workflow.multi_agent.role.") || strings.HasPrefix(e.Type, "prizm.workflow.proposal.apply_") ||
+				e.Type == event.EventMultiAgentFanoutChildDispatched || e.Type == event.EventMultiAgentToolDiagnostic ||
+				strings.Contains(e.Type, ".tool.") || strings.Contains(e.Type, ".dispatch.") || strings.Contains(e.Type, ".action.") {
+				actions++
+			}
+		}
+	}
+	if proposals != 2 {
+		t.Fatalf("approval proposal events=%d, want 2", proposals)
+	}
+	if actions != 0 {
+		t.Fatalf("decision-only runs emitted %d action/dispatch/tool events", actions)
+	}
+}
+
+func countServedFreewillOutbox(ctx context.Context, dbPath string) (int, error) {
+	db, err := sql.Open(prismsqlite.DriverName, dbPath+"?mode=ro&_pragma=query_only(1)")
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	var n int
+	err = db.QueryRowContext(ctx, "SELECT count(*) FROM multiagent_outbox").Scan(&n)
+	return n, err
 }
