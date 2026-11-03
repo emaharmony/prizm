@@ -45,13 +45,29 @@
     return `<span class="status-badge ${statusClass(status)}"><span aria-hidden="true">●</span> ${escape(text)}</span>`;
   }
 
+  function apiToken() {
+    try { return sessionStorage.getItem('prizm-api-token') || ''; } catch (_) { return ''; }
+  }
+
   async function request(path, options) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 9000);
     try {
-      const endpoint = path.startsWith('/api/') ? path : API + (path.startsWith('/') ? path : '/' + path);
+      const method = String((options && options.method) || 'GET').toUpperCase();
+      const mutates = method !== 'GET' && method !== 'HEAD';
+      let token = apiToken();
+      if (mutates && !token) {
+        // The API requires a bearer token on state-changing calls after the
+        // loopback-only era. Ask once per tab session.
+        const entered = window.prompt('Prizm API token (required to make changes):', '');
+        if (entered === null) throw new Error('No API token provided — this change was not made.');
+        token = entered.trim();
+        try { sessionStorage.setItem('prizm-api-token', token); } catch (_) { /* private mode */ }
+      }
+      const headers = { Accept: 'application/json', ...(options && options.headers) };
+      if (token) headers.Authorization = `Bearer ${token}`;
       const response = await fetch(endpoint, {
-        headers: { Accept: 'application/json', ...(options && options.headers) },
+        headers,
         signal: controller.signal, ...options
       });
       const text = await response.text();
@@ -59,6 +75,10 @@
       let parsed = !text;
       try { if (text) { payload = JSON.parse(text); parsed = true; } } catch (_) { /* handled below */ }
       if (!response.ok) {
+        if (response.status === 401 && mutates) {
+          try { sessionStorage.removeItem('prizm-api-token'); } catch (_) { /* ignore */ }
+          throw new Error('Invalid or expired API token — retry the change to enter a new one');
+        }
         const message = payload && (payload.error || payload.message) || response.statusText || 'Request failed';
         throw new Error(`${message} (${response.status})`);
       }
