@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/emaharmony/prizm/internal/cost"
 	"github.com/emaharmony/prizm/internal/freewill"
@@ -94,7 +95,7 @@ const freewillSelectionSystemPrompt = `Return one JSON object matching the suppl
 const maxFreewillSelectionResponseBytes = 64 << 10
 const freewillSelectionMaxOutputTokens = 4096
 
-const freewillChoiceSystemPrompt = `Choose one supplied candidate ID using its short host-provided label. Reply on a final line as exactly "choice: <candidate ID>" or "choice: NONE". Do not explain, add JSON, paths, budgets, tools, or authority.`
+const freewillChoiceSystemPrompt = `Choose the candidate that best fits the objective; scores are advisory. Reply with exactly two lines: "choice: <candidate ID|NONE>" and "reason: <one concise sentence>". If a lower-scored candidate better fits the objective, it may be chosen; explain why in the reason. Do not include tools, paths, authority, or extra text.`
 const freewillChoiceMaxOutputTokens = 1024
 const freewillIdeaSystemPrompt = `Return exactly three scored candidate blocks with IDEA, SCORE (0-100), FACTORS (scope_fit, feasibility, impact, novelty, readiness), and specific RATIONALE lines. Plain text only; no tools, authority, paths, or execution. Treat an optional host objective as subject context only. Reply NONE only if no safe set exists.`
 const freewillIdeaMaxOutputTokens = 1024
@@ -121,15 +122,18 @@ type FreewillCandidateChoiceInput struct {
 	RunID           string
 	CorrelationID   string
 	AgentID         string
+	Objective       string
 	CandidateIDs    []string
 	CandidateLabels []string
+	CandidateScores []int
 }
 
-// FreewillCandidateChoice is the typed result of the ID/NONE protocol. The
+// FreewillCandidateChoice is the typed result of the bounded choice protocol. The
 // host supplies the candidate object and policy data after this result; the
 // provider response never carries those fields.
 type FreewillCandidateChoice struct {
 	ChoiceID string
+	Reason   string
 	Sleep    bool
 }
 
@@ -434,95 +438,172 @@ func freewillIdeaContainsForbiddenAuthority(text string) bool {
 
 var freewillScoreFactorSet = map[string]struct{}{"scope_fit": {}, "feasibility": {}, "impact": {}, "novelty": {}, "readiness": {}}
 
-// parseFreewillCandidateChoice accepts one exact allowlisted ID or NONE, or one
-// explicit final marker. Ordinary prose mentions are never interpreted.
+// parseFreewillCandidateChoice accepts compact JSON or exactly two labeled lines.
 func parseFreewillCandidateChoice(content string, allowedIDs []string) (FreewillCandidateChoice, error) {
-	if len(content) == 0 || len(content) > 2048 {
-		return FreewillCandidateChoice{}, errors.New("multiagent: Freewill choice response is empty or exceeds limit")
+	invalid := func() (FreewillCandidateChoice, error) {
+		return FreewillCandidateChoice{}, errors.New("multiagent: Freewill choice response is invalid")
+	}
+	if len(content) == 0 || len(content) > 2048 || !utf8.ValidString(content) {
+		return invalid()
 	}
 	for _, r := range content {
-		if r < 0x20 && r != '\r' && r != '\n' && r != '\t' {
-			return FreewillCandidateChoice{}, errors.New("multiagent: Freewill choice contains control characters")
+		if unicode.IsControl(r) && r != '\r' && r != '\n' && r != '\t' {
+			return invalid()
 		}
 	}
 	allowed := make(map[string]struct{}, len(allowedIDs))
 	for _, id := range allowedIDs {
 		id = strings.TrimSpace(id)
 		if id == "" || strings.ContainsAny(id, " \t\r\n{}[]\"'") {
-			return FreewillCandidateChoice{}, errors.New("multiagent: Freewill choice allowlist contains invalid candidate ID")
+			return invalid()
 		}
-		if _, exists := allowed[id]; exists {
-			return FreewillCandidateChoice{}, errors.New("multiagent: Freewill choice allowlist contains duplicate candidate ID")
+		if _, ok := allowed[id]; ok {
+			return invalid()
 		}
 		allowed[id] = struct{}{}
 	}
-	value := strings.TrimSpace(content)
-	// GLM may append a private-reasoning boundary without an opening tag in
-	// the public content. Treat that measured delimiter as a line boundary;
-	// it never grants a value or changes the allowlist.
-	value = strings.ReplaceAll(value, "</think>", "\n")
-	value = strings.ReplaceAll(value, "</THINK>", "\n")
-	if strings.HasPrefix(value, "{") || strings.HasPrefix(value, "[") {
-		return FreewillCandidateChoice{}, errors.New("multiagent: Freewill choice must not be JSON")
-	}
-	if strings.HasPrefix(value, "```") && strings.HasSuffix(value, "```") {
-		lines := strings.Split(value, "\n")
-		if len(lines) < 3 || strings.TrimSpace(lines[len(lines)-1]) != "```" {
-			return FreewillCandidateChoice{}, errors.New("multiagent: malformed Freewill choice code fence")
+	var selected, reason string
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmed, "{") {
+		data := []byte(trimmed)
+		if validateNoDuplicateJSONKeys(data) != nil {
+			return invalid()
 		}
-		value = strings.TrimSpace(strings.Join(lines[1:len(lines)-1], "\n"))
-	}
-	if _, ok := allowed[value]; ok || value == "NONE" {
-		if value == "NONE" {
-			return FreewillCandidateChoice{Sleep: true}, nil
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(data, &fields) != nil || len(fields) < 2 || len(fields) > 5 {
+			return invalid()
 		}
-		return FreewillCandidateChoice{ChoiceID: value}, nil
-	}
-	var marked string
-	for _, line := range strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(line)
-		lower := strings.ToLower(line)
-		prefix := ""
-		for _, candidate := range []string{"choice:", "reply exactly:", "answer:"} {
-			if strings.HasPrefix(lower, candidate) {
-				prefix = candidate
-				break
-			}
-		}
-		if prefix == "" {
-			continue
-		}
-		item := strings.TrimSpace(line[len(prefix):])
-		if strings.Contains(item, "choice:") {
-			parts := strings.Split(item, "choice:")
-			if len(parts) > 1 {
-				first := strings.TrimSpace(parts[0])
-				consistent := first != ""
-				for _, part := range parts[1:] {
-					if strings.TrimSpace(part) != first {
-						consistent = false
+		seenChoice, seenReason := false, false
+		var ignoredNotes []string
+		for key, raw := range fields {
+			switch strings.ToLower(key) {
+			case "choice":
+				if seenChoice || json.Unmarshal(raw, &selected) != nil {
+					return invalid()
+				}
+				seenChoice = true
+			case "reason", "rationale":
+				if seenReason || json.Unmarshal(raw, &reason) != nil {
+					return invalid()
+				}
+				seenReason = true
+			case "confidence", "score":
+				var value float64
+				if json.Unmarshal(raw, &value) != nil || value < 0 || value > 100 {
+					return invalid()
+				}
+			default:
+				lowerKey := strings.ToLower(key)
+				for _, unsafeKey := range []string{"tool", "command", "approval", "authority", "dispatch", "execute", "action", "path", "url", "permission", "policy", "system"} {
+					if strings.Contains(lowerKey, unsafeKey) {
+						return invalid()
 					}
 				}
-				if consistent {
-					item = first
+				if lowerKey != "note" {
+					return invalid()
 				}
+				var note string
+				if json.Unmarshal(raw, &note) != nil || len(note) > 256 {
+					return invalid()
+				}
+				ignoredNotes = append(ignoredNotes, note)
 			}
 		}
-		if item == "" || strings.ContainsAny(item, " \t\r\n{}[]\"'") {
-			return FreewillCandidateChoice{}, errors.New("multiagent: Freewill choice marker is not one token")
+		if !seenChoice || !seenReason {
+			return invalid()
 		}
-		if marked != "" && marked != item {
-			return FreewillCandidateChoice{}, errors.New("multiagent: Freewill choice contains conflicting markers")
+		for _, note := range ignoredNotes {
+			if !validFreewillChoiceReason(note, "", allowedIDs) {
+				return invalid()
+			}
 		}
-		marked = item
+
+	} else {
+		lines := strings.Split(strings.ReplaceAll(trimmed, "\r\n", "\n"), "\n")
+		if len(lines) != 2 {
+			return invalid()
+		}
+		seenChoice, seenReason := false, false
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			lower := strings.ToLower(line)
+			switch {
+			case strings.HasPrefix(lower, "choice:") && !seenChoice:
+				selected = strings.TrimSpace(line[len("choice:"):])
+				seenChoice = true
+			case strings.HasPrefix(lower, "reason:") && !seenReason:
+				reason = strings.TrimSpace(line[len("reason:"):])
+				seenReason = true
+			default:
+				return invalid()
+			}
+		}
+		if !seenChoice || !seenReason {
+			return invalid()
+		}
 	}
-	if marked == "NONE" {
-		return FreewillCandidateChoice{Sleep: true}, nil
+	if selected != "NONE" {
+		if _, ok := allowed[selected]; !ok {
+			return invalid()
+		}
 	}
-	if _, ok := allowed[marked]; !ok || marked == "" {
-		return FreewillCandidateChoice{}, errors.New("multiagent: Freewill choice marker is not allowlisted")
+	reason = strings.TrimSpace(reason)
+	if !validFreewillChoiceReason(reason, selected, allowedIDs) {
+		return invalid()
 	}
-	return FreewillCandidateChoice{ChoiceID: marked}, nil
+	if selected == "NONE" {
+		return FreewillCandidateChoice{Reason: reason, Sleep: true}, nil
+	}
+	return FreewillCandidateChoice{ChoiceID: selected, Reason: reason}, nil
+}
+func validFreewillChoiceReason(reason, selectedID string, candidateIDs []string) bool {
+	if reason == "" || len(reason) > 512 || !utf8.ValidString(reason) || strings.ContainsAny(reason, "\r\n") || strings.Contains(reason, "://") || strings.Contains(reason, "\\") || freewillChoiceReasonContainsPath(reason) {
+		return false
+	}
+	for _, r := range reason {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	lower := strings.ToLower(reason)
+	for _, phrase := range []string{"ignore policy", "override policy", "bypass policy", "ignore all prior", "ignore all previous", "ignore previous instructions", "disregard instructions", "disregard all instructions", "override instructions", "grant approval", "grant permission", "grant authority", "approval granted", "approve candidate", "approve request", "approve proposal", "approve this", "approve that", "approve the", "apply patch", "apply this", "apply that", "apply the", "execute command", "execute the command", "execute this command", "execute tool", "run command", "run the command", "run this command", "run tool", "run shell", "dispatch this", "dispatch that", "dispatch the", "call tool", "use tool", "invoke tool", "shell command", "dispatch action", "dispatch operation", "tool_calls", "<system", "<assistant"} {
+		if strings.Contains(lower, phrase) {
+			return false
+		}
+	}
+	for _, id := range candidateIDs {
+		if id != selectedID && strings.Contains(lower, strings.ToLower(id)) {
+			return false
+		}
+	}
+	return true
+}
+func freewillChoiceReasonContainsPath(reason string) bool {
+	for _, field := range strings.Fields(reason) {
+		token := strings.Trim(field, ".,;:()[]{}<>\"'")
+		lower := strings.ToLower(token)
+		if strings.HasPrefix(token, "/") || strings.HasPrefix(token, "./") || strings.HasPrefix(token, "../") {
+			return true
+		}
+		if strings.Contains(token, "/") && (strings.Contains(lower, ".") || strings.HasPrefix(lower, "src/") || strings.HasPrefix(lower, "docs/") || strings.HasPrefix(lower, "internal/") || strings.HasPrefix(lower, "cmd/") || strings.HasPrefix(lower, "config/") || strings.HasPrefix(lower, "tests/")) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateFreewillChoiceAllowlist(ids []string) error {
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id == "" || len(id) > 160 || strings.TrimSpace(id) != id || strings.ContainsAny(id, " \t\r\n{}[]\"'") {
+			return errors.New("multiagent: Freewill choice input is invalid")
+		}
+		if _, ok := seen[id]; ok {
+			return errors.New("multiagent: Freewill choice input is invalid")
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
 }
 
 // ChatFreewillSelector is a read-only provider adapter. It sends no tools and
@@ -542,7 +623,7 @@ func (s ChatFreewillSelector) SelectCandidateChoice(ctx context.Context, input F
 	if s.Provider == nil || strings.TrimSpace(s.AgentID) == "" || strings.TrimSpace(s.Model) == "" || input.AgentID != s.AgentID {
 		return FreewillCandidateChoice{}, FreewillSelectionEvidence{}, errors.New("multiagent: Freewill choice provider configuration is incomplete")
 	}
-	if strings.TrimSpace(input.RunID) == "" || strings.TrimSpace(input.CorrelationID) == "" || len(input.CandidateIDs) > 16 || (len(input.CandidateLabels) != 0 && len(input.CandidateLabels) != len(input.CandidateIDs)) {
+	if strings.TrimSpace(input.RunID) == "" || strings.TrimSpace(input.CorrelationID) == "" || strings.TrimSpace(input.Objective) == "" || len(input.Objective) > 4096 || len(input.CandidateIDs) > 16 || len(input.CandidateLabels) != len(input.CandidateIDs) || len(input.CandidateScores) != len(input.CandidateIDs) {
 		return FreewillCandidateChoice{}, FreewillSelectionEvidence{}, errors.New("multiagent: Freewill choice input is invalid")
 	}
 	if len(input.CandidateIDs) == 0 {
@@ -550,7 +631,7 @@ func (s ChatFreewillSelector) SelectCandidateChoice(ctx context.Context, input F
 	}
 	ids := make([]string, len(input.CandidateIDs))
 	copy(ids, input.CandidateIDs)
-	if _, err := parseFreewillCandidateChoice("NONE", ids); err != nil {
+	if err := validateFreewillChoiceAllowlist(ids); err != nil {
 		return FreewillCandidateChoice{}, FreewillSelectionEvidence{}, err
 	}
 	labels := make([]string, len(input.CandidateLabels))
@@ -561,10 +642,25 @@ func (s ChatFreewillSelector) SelectCandidateChoice(ctx context.Context, input F
 		}
 		labels[i] = label
 	}
-	user, err := json.Marshal(struct {
-		CandidateIDs    []string `json:"candidate_ids"`
-		CandidateLabels []string `json:"candidate_labels,omitempty"`
-	}{ids, labels})
+	scores := append([]int(nil), input.CandidateScores...)
+	for _, score := range scores {
+		if score < 0 || score > 100 {
+			return FreewillCandidateChoice{}, FreewillSelectionEvidence{}, errors.New("multiagent: Freewill choice score is invalid")
+		}
+	}
+	type choiceCandidate struct {
+		ID    string `json:"id"`
+		Title string `json:"title"`
+		Score int    `json:"score"`
+	}
+	choiceContext := struct {
+		Objective  string            `json:"objective"`
+		Candidates []choiceCandidate `json:"candidates"`
+	}{Objective: input.Objective}
+	for i := range ids {
+		choiceContext.Candidates = append(choiceContext.Candidates, choiceCandidate{ID: ids[i], Title: labels[i], Score: scores[i]})
+	}
+	user, err := json.Marshal(choiceContext)
 	if err != nil {
 		return FreewillCandidateChoice{}, FreewillSelectionEvidence{}, errors.New("multiagent: Freewill choice context could not be encoded")
 	}
@@ -577,14 +673,6 @@ func (s ChatFreewillSelector) SelectCandidateChoice(ctx context.Context, input F
 	if err != nil {
 		return FreewillCandidateChoice{}, FreewillSelectionEvidence{}, err
 	}
-	if len(response.ToolCalls) != 0 {
-		return FreewillCandidateChoice{}, FreewillSelectionEvidence{}, errors.New("multiagent: Freewill choice provider requested a tool")
-	}
-	choice, err := parseFreewillCandidateChoice(response.Content, ids)
-	if err != nil {
-		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("choice", response, s.Model, "invalid_choice", 0, 0, true))
-		return FreewillCandidateChoice{}, FreewillSelectionEvidence{}, &SchemaCorrectionError{Role: RolePlanner, Code: "invalid_choice"}
-	}
 	providerName, model := response.Provider, response.Model
 	if providerName == "" {
 		providerName = "configured"
@@ -592,8 +680,16 @@ func (s ChatFreewillSelector) SelectCandidateChoice(ctx context.Context, input F
 	if model == "" {
 		model = s.Model
 	}
-	usage := cost.TokenUsage{PromptTokens: response.PromptTokens, CompletionTokens: response.OutputTokens, TotalTokens: response.PromptTokens + response.OutputTokens}
-	return choice, FreewillSelectionEvidence{Provider: providerName, Model: model, Usage: usage}, nil
+	evidence := FreewillSelectionEvidence{Provider: providerName, Model: model, Usage: cost.TokenUsage{PromptTokens: response.PromptTokens, CompletionTokens: response.OutputTokens, TotalTokens: response.PromptTokens + response.OutputTokens}}
+	if len(response.ToolCalls) != 0 {
+		return FreewillCandidateChoice{}, evidence, errors.New("multiagent: Freewill choice provider requested a tool")
+	}
+	choice, err := parseFreewillCandidateChoice(response.Content, ids)
+	if err != nil {
+		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("choice", response, s.Model, "invalid_choice", 0, 0, true))
+		return FreewillCandidateChoice{}, evidence, &SchemaCorrectionError{Role: RolePlanner, Code: "invalid_choice"}
+	}
+	return choice, evidence, nil
 }
 
 func (s ChatFreewillSelector) SelectFreewill(ctx context.Context, input FreewillSelectionInput) (freewill.Selection, FreewillSelectionEvidence, error) {
@@ -678,23 +774,33 @@ func (s ChatFreewillSelector) SelectFreewill(ctx context.Context, input Freewill
 	var choiceEvidence *FreewillSelectionEvidence
 	if strings.Contains(strings.ToLower(s.Model), "glm-5.3-flash") && proposal.ResumeCandidateID == "" && strings.TrimSpace(proposal.SleepReason) == "" {
 		ids := make([]string, 0, len(selection.Candidates))
+		labels := make([]string, 0, len(selection.Candidates))
+		scores := make([]int, 0, len(selection.Candidates))
 		for _, candidate := range selection.Candidates {
 			ids = append(ids, candidate.CandidateID)
+			labels = append(labels, candidate.Request.Title)
+			scores = append(scores, candidate.Score)
 		}
-		choice, choiceMeta, choiceErr := s.SelectCandidateChoice(ctx, FreewillCandidateChoiceInput{
-			RunID: input.RunID, CorrelationID: input.CorrelationID, AgentID: input.AgentID, CandidateIDs: ids,
-		})
+		choice, choiceMeta, choiceErr := s.SelectCandidateChoice(ctx, FreewillCandidateChoiceInput{RunID: input.RunID, CorrelationID: input.CorrelationID, AgentID: input.AgentID, Objective: input.Objective, CandidateIDs: ids, CandidateLabels: labels, CandidateScores: scores})
 		if choiceErr != nil {
-			return freewill.Selection{}, FreewillSelectionEvidence{}, choiceErr
-		}
-		choiceEvidence = &choiceMeta
-		selection.ReasonSummary = "Host accepted the allowlisted Freewill choice."
-		if choice.Sleep {
-			selection.ChoiceID = ""
-			selection.ReasonSummary = ""
-			selection.SleepReason = "No eligible candidate was selected by the bounded choice phase."
+			var schemaErr *SchemaCorrectionError
+			if errors.As(choiceErr, &schemaErr) && schemaErr.Code == "invalid_choice" {
+				choiceEvidence = &choiceMeta
+				selection.ChoiceID = deterministicFreewillChoiceID(selection.Candidates)
+				selection.ReasonSummary = "Host selected the highest-scoring candidate after rejecting an invalid or incomplete phase-two choice response."
+			} else {
+				return freewill.Selection{}, FreewillSelectionEvidence{}, choiceErr
+			}
 		} else {
-			selection.ChoiceID = choice.ChoiceID
+			choiceEvidence = &choiceMeta
+			if choice.Sleep {
+				selection.ChoiceID = ""
+				selection.ReasonSummary = ""
+				selection.SleepReason = choice.Reason
+			} else {
+				selection.ChoiceID = choice.ChoiceID
+				selection.ReasonSummary = choice.Reason
+			}
 		}
 	}
 	providerName, model := response.Provider, response.Model
@@ -773,19 +879,24 @@ func (s ChatFreewillSelector) selectFreewillFlashIdeas(ctx context.Context, inpu
 	}
 	ids := []string{selection.Candidates[0].CandidateID, selection.Candidates[1].CandidateID, selection.Candidates[2].CandidateID}
 	labels := make([]string, len(selection.Candidates))
+	scores := make([]int, len(selection.Candidates))
 	for i, candidate := range selection.Candidates {
 		labels[i] = candidate.Request.Title
+		scores[i] = candidate.Score
 	}
-	choice, choiceMeta, err := s.SelectCandidateChoice(ctx, FreewillCandidateChoiceInput{RunID: input.RunID, CorrelationID: input.CorrelationID, AgentID: input.AgentID, CandidateIDs: ids, CandidateLabels: labels})
+	choice, choiceMeta, err := s.SelectCandidateChoice(ctx, FreewillCandidateChoiceInput{RunID: input.RunID, CorrelationID: input.CorrelationID, AgentID: input.AgentID, Objective: input.Objective, CandidateIDs: ids, CandidateLabels: labels, CandidateScores: scores})
 	if err != nil {
 		var schemaErr *SchemaCorrectionError
 		if errors.As(err, &schemaErr) && schemaErr.Code == "invalid_choice" {
+			usage.PromptTokens += choiceMeta.Usage.PromptTokens
+			usage.CompletionTokens += choiceMeta.Usage.CompletionTokens
+			usage.TotalTokens += choiceMeta.Usage.TotalTokens
 			selection.ChoiceID = deterministicFreewillChoiceID(selection.Candidates)
 			if selection.ChoiceID == "" {
 				selection.ReasonSummary = "No eligible candidate remained after bounded choice validation."
 				selection.SleepReason = "No eligible candidate remained after bounded choice validation."
 			} else {
-				selection.ReasonSummary = "Host deterministic ranking selected after bounded model choice validation failed."
+				selection.ReasonSummary = "Host selected the highest-scoring candidate after rejecting an invalid or incomplete phase-two choice response."
 			}
 			return selection, FreewillSelectionEvidence{Provider: providerName, Model: model, Usage: usage}, nil
 		}
@@ -796,9 +907,10 @@ func (s ChatFreewillSelector) selectFreewillFlashIdeas(ctx context.Context, inpu
 	usage.TotalTokens += choiceMeta.Usage.TotalTokens
 	if choice.Sleep {
 		selection.ReasonSummary = ""
-		selection.SleepReason = "No eligible candidate was selected by the bounded choice phase."
+		selection.SleepReason = choice.Reason
 	} else {
 		selection.ChoiceID = choice.ChoiceID
+		selection.ReasonSummary = choice.Reason
 	}
 	return selection, FreewillSelectionEvidence{Provider: providerName, Model: model, Usage: usage}, nil
 }

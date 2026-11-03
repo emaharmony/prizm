@@ -189,12 +189,18 @@ func TestServedFreewillP1WakePersistsPolicyOnlyProposalAndHistory(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	raceRuntime, err := openFreewillServeRuntime(cfg, providers, "", filepath.Join(root, "prizm.yaml"))
-	if err != nil { t.Fatalf("compose race-test runtime: %v", err) }
+	if err != nil {
+		t.Fatalf("compose race-test runtime: %v", err)
+	}
 	entered, release := make(chan struct{}), make(chan struct{})
 	raceRuntime.beforeSubscribe = func() { close(entered); <-release }
 	startResult := make(chan error, 1)
 	go func() { startResult <- raceRuntime.Start(ctx, nc, true) }()
-	select { case <-entered: case <-time.After(2 * time.Second): t.Fatal("Start did not reach subscribe barrier") }
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start did not reach subscribe barrier")
+	}
 	closed := make(chan struct{})
 	go func() { raceRuntime.Close(); close(closed) }()
 	closeDeadline := time.Now().Add(2 * time.Second)
@@ -202,13 +208,23 @@ func TestServedFreewillP1WakePersistsPolicyOnlyProposalAndHistory(t *testing.T) 
 		raceRuntime.mu.Lock()
 		isClosed := raceRuntime.closed
 		raceRuntime.mu.Unlock()
-		if isClosed { break }
-		if time.Now().After(closeDeadline) { t.Fatal("Close did not claim runtime before release") }
+		if isClosed {
+			break
+		}
+		if time.Now().After(closeDeadline) {
+			t.Fatal("Close did not claim runtime before release")
+		}
 		time.Sleep(time.Millisecond)
 	}
 	close(release)
-	if err := <-startResult; err == nil { t.Fatal("Start unexpectedly succeeded after concurrent Close") }
-	select { case <-closed: case <-time.After(2 * time.Second): t.Fatal("Close remained blocked after Start race") }
+	if err := <-startResult; err == nil {
+		t.Fatal("Start unexpectedly succeeded after concurrent Close")
+	}
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close remained blocked after Start race")
+	}
 	if err := runtime.Start(ctx, nc, true); err != nil {
 		runtime.Close()
 		t.Fatalf("start Freewill wake service: %v", err)
@@ -436,7 +452,8 @@ func TestServedFreewillP1GLMFlashAnnotatedScoresPersistPolicyOnly(t *testing.T) 
 			return
 		}
 		var maxPredict int
-		if err := json.Unmarshal(request.Options["num_predict"], &maxPredict); err != nil || maxPredict != 1024 {
+		wantMaxPredict := 1024
+		if err := json.Unmarshal(request.Options["num_predict"], &maxPredict); err != nil || maxPredict != wantMaxPredict {
 			requestFailure = "output cap mismatch"
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
@@ -455,18 +472,23 @@ func TestServedFreewillP1GLMFlashAnnotatedScoresPersistPolicyOnly(t *testing.T) 
 				return
 			}
 			content = ideas
-		} else if strings.Contains(request.Messages[0].Content, "Choose one supplied candidate ID") {
+		} else if strings.Contains(request.Messages[0].Content, "Choose the candidate that best fits the objective") {
 			var user struct {
-				CandidateIDs []string `json:"candidate_ids"`
+				Objective  string `json:"objective"`
+				Candidates []struct {
+					ID    string `json:"id"`
+					Title string `json:"title"`
+					Score int    `json:"score"`
+				} `json:"candidates"`
 			}
-			if err := json.Unmarshal([]byte(request.Messages[1].Content), &user); err != nil || len(user.CandidateIDs) != 3 {
-				requestFailure = "choice stage did not provide three host-bound candidate IDs"
+			if err := json.Unmarshal([]byte(request.Messages[1].Content), &user); err != nil || user.Objective != cfgObjective || len(user.Candidates) != 3 || user.Candidates[0].Title == "" || user.Candidates[0].Score != 82 {
+				requestFailure = "choice stage did not provide objective and three scored host-bound candidates"
 				http.Error(w, "invalid request", http.StatusBadRequest)
 				return
 			}
 			// A valid choice is a distinct model judgment from the explanatory score.
 			// The roadmap requires both scoring and choosing, but does not require argmax.
-			content = "choice: " + user.CandidateIDs[0]
+			content = "choice: " + user.Candidates[0].ID + "\nreason: This candidate maps a focused read-only dependency review."
 		} else {
 			requestFailure = "unexpected GLM selector instruction"
 			http.Error(w, "invalid request", http.StatusBadRequest)
