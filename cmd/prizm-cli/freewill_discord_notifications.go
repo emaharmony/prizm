@@ -2,61 +2,50 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/emaharmony/prizm/internal/adapter/builtin/discordbot"
-	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/workflow/multiagent"
-	"github.com/nats-io/nats.go"
 )
 
-// Freewill Discord notifications mirror factory_monitor_notifications.go:
-// subscribe to curated lifecycle events on NATS and relay human-readable
-// summaries to a Discord channel. Proposal formation and lifecycle endings
-// are included; per-attempt chatter (wake.claimed, selection.started) is not.
-func startFreewillDiscordNotifications(nc *nats.Conn, bot discordBotClient, channelID string, allowUserIDs []string, store *multiagent.SQLiteDurableRunStore) {
-	if nc == nil || bot == nil || channelID == "" {
-		return
-	}
-	enricher := &freewillRunEnricher{store: store, allowUserIDs: allowUserIDs}
-	subscribeFreewillEvent(nc, bot, channelID, event.EventFreewillApprovalProposed, enricher)
-	subscribeFreewillEvent(nc, bot, channelID, event.EventFreewillApprovalDecided, enricher)
-	subscribeFreewillEvent(nc, bot, channelID, event.EventFreewillPolicyDenied, enricher)
-	subscribeFreewillEvent(nc, bot, channelID, event.EventFreewillSelectionHalted, enricher)
-}
-
-func subscribeFreewillEvent(nc *nats.Conn, bot discordBotClient, channelID, subject string, e *freewillRunEnricher) {
-	_, err := nc.Subscribe(subject, func(msg *nats.Msg) {
-		content, buttons := formatFreewillEvent(subject, msg.Data, e)
-		if content == "" {
-			return
-		}
-		if err := bot.Send(&discordbot.OutboundMessage{ChannelID: channelID, Content: content, Buttons: buttons}); err != nil {
-			log.Printf("[FREEWILL-NOTIFY] WARN send Discord notification: %v", err)
-		}
-	})
-	if err != nil {
-		log.Printf("[FREEWILL-NOTIFY] WARN subscribe %s: %v", subject, err)
-	}
-}
-
-// freewillRunEnricher loads the durable run record for a run_id so Discord
-// messages show human titles/scores instead of opaque candidate IDs. It also
-// carries the allowlist behind freewillbtn: Approve/Deny buttons.
-type freewillRunEnricher struct {
-	store        *multiagent.SQLiteDurableRunStore
+// freewillDiscordSink renders curated, source-enriched freewill lifecycle
+// notifications as Discord cards. It implements
+// multiagent.FreewillNotificationSink; delivery durability lives in
+// FreewillNotificationService (durable outbox + canonical-event reconciler),
+// so the sink only formats and sends.
+type freewillDiscordSink struct {
+	bot          discordBotClient
+	channelID    string
 	allowUserIDs []string
 }
 
-const discordDenyReason = "denied via Discord freewill button"
+func newFreewillDiscordSink(bot discordBotClient, channelID string, allowUserIDs []string) *freewillDiscordSink {
+	return &freewillDiscordSink{bot: bot, channelID: channelID, allowUserIDs: allowUserIDs}
+}
+
+// NotifyFreewill satisfies multiagent.FreewillNotificationSink.
+func (s *freewillDiscordSink) NotifyFreewill(ctx context.Context, n multiagent.FreewillNotification) error {
+	content, buttons := formatFreewillNotification(n, s.allowUserIDs)
+	if content == "" {
+		return nil
+	}
+	if err := s.bot.Send(&discordbot.OutboundMessage{ChannelID: s.channelID, Content: content, Buttons: buttons}); err != nil {
+		log.Printf("[FREEWILL-NOTIFY] WARN send Discord notification: %v", err)
+		return err // dispatcher retries with backoff
+	}
+	return nil
+}
 
 // Freewill buttons share the Discord custom-ID namespace; prefix mirrors the
 // file-approval scheme ("prizmapprove:<aID>:<runID>:<action>").
-const freewillButtonPrefix = "freewillbtn"
+const (
+	freewillButtonPrefix = "freewillbtn"
+	discordDenyReason    = "denied via Discord freewill button"
+)
 
 func encodeFreewillButtonID(approvalID, runID, action string) string {
 	return strings.Join([]string{freewillButtonPrefix, approvalID, runID, action}, ":")
@@ -74,8 +63,8 @@ func decodeFreewillButtonID(customID string) (approvalID, runID, action string, 
 }
 
 // buttonsFor renders Approve/Deny only when an allowlist is configured.
-func (e *freewillRunEnricher) buttonsFor(approvalID, runID string) []discordbot.MessageButton {
-	if e == nil || len(e.allowUserIDs) == 0 || approvalID == "" || runID == "" {
+func buttonsFor(allowUserIDs []string, approvalID, runID string) []discordbot.MessageButton {
+	if len(allowUserIDs) == 0 || approvalID == "" || runID == "" {
 		return nil
 	}
 	return []discordbot.MessageButton{ // styles: 3 success, 4 danger
@@ -84,91 +73,97 @@ func (e *freewillRunEnricher) buttonsFor(approvalID, runID string) []discordbot.
 	}
 }
 
-func (e *freewillRunEnricher) run(runID string) (multiagent.DurableRun, bool) {
-	if e == nil || runID == "" {
-		return multiagent.DurableRun{}, false
+// formatFreewillNotification renders one enriched notification as a
+// decision-ready brief: project, goal, reasoning, capabilities, score context,
+// and the alternatives the selector considered — everything a human needs
+// before approving, without opening any other surface.
+func formatFreewillNotification(n multiagent.FreewillNotification, allowUserIDs []string) (string, []discordbot.MessageButton) {
+	approvalID, _ := n.Payload["approval_ref"].(string)
+	if approvalID == "" {
+		approvalID, _ = n.Payload["approval_id"].(string)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if e.store != nil {
-		rec, err := e.store.Load(ctx, runID)
-		if err == nil {
-			return rec, true
-		}
-		log.Printf("[FREEWILL-NOTIFY] WARN load run %s: %v", runID, err)
-	}
-	return multiagent.DurableRun{}, false
-}
-
-func (e *freewillRunEnricher) chosen(runID string) (title string, score int, reason string) {
-	rec, ok := e.run(runID)
-	if !ok || rec.Freewill == nil {
-		return "", 0, ""
-	}
-	fw := rec.Freewill
-	for _, c := range fw.Candidates {
-		if c.CandidateID == fw.ChoiceID {
-			r := fw.ReasonSummary
-			if r == "" {
-				r = c.Request.ReasonSummary
-			}
-			return c.Request.Title, c.Score, r
-		}
-	}
-	return "", 0, fw.ReasonSummary
-}
-
-func formatFreewillEvent(subject string, raw []byte, e *freewillRunEnricher) (string, []discordbot.MessageButton) {
-	var p map[string]any
-	if err := json.Unmarshal(raw, &p); err != nil {
-		log.Printf("[FREEWILL-NOTIFY] WARN invalid event on %s: %v", subject, err)
-		return "", nil
-	}
-	runID, _ := p["run_id"].(string)
-	title, score, reason := e.chosen(runID)
-	switch subject {
-	case event.EventFreewillApprovalProposed:
+	runID := n.RunID
+	switch n.EventType {
+	case "prism.freewill.approval.proposed":
+		title, _ := n.Payload["selected_title"].(string)
 		if title == "" {
-			return fmt.Sprintf("🧠 **Freewill proposal** (`%s`)\nRun: `%s` — see dashboard for details", shortID(p["approval_id"]), runID), nil
+			return fmt.Sprintf("🧠 **Freewill proposal** (`%s`)\nRun: `%s` — see dashboard for details", approvalID, runID), nil
 		}
 		var b strings.Builder
-		fmt.Fprintf(&b, "🧠 **Freewill proposal awaits your decision**\n")
-		fmt.Fprintf(&b, "**Idea:** %s\n", title)
-		fmt.Fprintf(&b, "**Score:** %d/100 (advisory, chosen independently)\n", score)
-		if reason != "" {
-			fmt.Fprintf(&b, "**Why:** %s\n", fwTruncate(reason, 240))
+		fmt.Fprintf(&b, "🧠 **Freewill proposal — needs your decision**\n")
+		fmt.Fprintf(&b, "**Project:** `%s`", n.Payload["project_id"])
+		if ws, _ := n.Payload["workspace"].(string); ws != "" {
+			fmt.Fprintf(&b, " · `%s`", ws)
 		}
-		fmt.Fprintf(&b, "Decide at the Freewill dashboard (`/freewill.html`) — approval id `%s`", shortID(p["approval_id"]))
-		return b.String(), e.buttonsFor(shortID(p["approval_id"]), runID)
-	case event.EventFreewillApprovalDecided:
-		decision, _ := p["decision"].(string)
+		b.WriteString("\n")
+		if agent, _ := n.Payload["agent_id"].(string); agent != "" {
+			fmt.Fprintf(&b, "**Proposed by:** `%s`\n", agent)
+		}
+		fmt.Fprintf(&b, "**What:** %s\n", title)
+		if goal, _ := n.Payload["selected_goal"].(string); goal != "" {
+			fmt.Fprintf(&b, "**Goal:** %s\n", goal)
+		}
+		// The chosen candidate's full reasoning, why it was chosen over the
+		// alternatives, and what the alternatives scored — full transparency.
+		cands, _ := n.Payload["candidates"].([]any)
+		choiceID, _ := n.Payload["choice_id"].(string)
+		for _, rc := range cands {
+			c, ok := rc.(map[string]any)
+			if !ok || c["candidate_id"] != choiceID {
+				continue
+			}
+			if reason, _ := c["reason"].(string); reason != "" {
+				fmt.Fprintf(&b, "**Why (selector reasoning):**\n%s\n", fwBullets(reason))
+			}
+			if caps, ok := c["capabilities"].([]any); ok && len(caps) > 0 {
+				parts := make([]string, 0, len(caps))
+				for _, cp := range caps {
+					parts = append(parts, fmt.Sprint(cp))
+				}
+				fmt.Fprintf(&b, "**Requested capabilities:** %s\n", strings.Join(parts, ", "))
+			}
+			break
+		}
+		if len(cands) > 1 {
+			fmt.Fprintf(&b, "**Alternatives considered:**")
+			parts := make([]string, 0, len(cands))
+			for _, rc := range cands {
+				c, ok := rc.(map[string]any)
+				if !ok || c["candidate_id"] == choiceID {
+					continue
+				}
+				t, _ := c["title"].(string)
+				sc, _ := c["score"].(float64)
+				parts = append(parts, fmt.Sprintf("%s (%d)", t, int(sc)))
+			}
+			fmt.Fprintf(&b, " %s\n", strings.Join(parts, " · "))
+		}
+		if score, ok := n.Payload["selected_score"].(float64); ok {
+			fmt.Fprintf(&b, "**Score:** %d/100 (advisory — the human decides)\n", int(score))
+		}
+		fmt.Fprintf(&b, "**Approving:** marks your decision; nothing executes — proposals are decision-only in this runtime.\n")
+		fmt.Fprintf(&b, "Approval id `%s` · dashboard: `/freewill.html`", approvalID)
+		return b.String(), buttonsFor(allowUserIDs, approvalID, runID)
+	case "prism.freewill.approval.decided":
+		decision, _ := n.Payload["decision"].(string)
 		emoji := "✅"
 		if decision == "deny" {
 			emoji = "🚫"
 		}
-		detail := title
+		detail, _ := n.Payload["selected_title"].(string)
 		if detail == "" {
 			detail = runID
 		}
 		return fmt.Sprintf("%s **Freewill proposal %s**\n%s", emoji, decision, detail), nil
-	case event.EventFreewillPolicyDenied:
-		return fmt.Sprintf("🛡️ **Freewill policy denied a proposal**\nRule: `%s`\nRun: `%s`", p["policy_rule_id"], runID), nil
-	case event.EventFreewillSelectionHalted:
+	case "prism.freewill.approval.reconciled":
+		return fmt.Sprintf("♻️ **Freewill decision reconciled** after restart\nRun: `%s`", runID), nil
+	case "prism.freewill.policy.denied":
+		rule, _ := n.Payload["policy_rule_id"].(string)
+		return fmt.Sprintf("🛡️ **Freewill policy denied a proposal**\nRule: `%s`\nRun: `%s`", rule, runID), nil
+	case "prism.freewill.selection.halted":
 		return fmt.Sprintf("⛔ **Freewill selection halted**\nRun: `%s`", runID), nil
 	}
 	return "", nil
-}
-
-func shortID(v any) string {
-	s, _ := v.(string)
-	return s
-}
-
-func fwTruncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n-1] + "…"
 }
 
 // startFreewillButtonHandler registers a Discord button handler that turns
@@ -222,3 +217,53 @@ func startFreewillButtonHandler(bot discordBotClient, allowUserIDs []string, app
 		})
 	}
 }
+
+// fwBullets renders the selector's run-together reasoning clauses as bullets
+// by splitting on sentence-ish boundaries; falls back to wrapped text.
+func fwBullets(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return ""
+	}
+	parts := fwSplitClauses(reason)
+	if len(parts) <= 1 {
+		return "- " + reason
+	}
+	var b strings.Builder
+	for _, p := range parts {
+		b.WriteString("- ")
+		b.WriteString(strings.TrimSpace(p))
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// fwSplitClauses breaks a GLM reasoning blob into sentences where punctuation
+// exists; otherwise splits camel-ish/verb boundaries conservatively on
+// uppercase-letter patterns ("…libraries Requires a small…" → two clauses).
+func fwSplitClauses(s string) []string {
+	var out []string
+	cur := strings.Builder{}
+	runes := []rune(s)
+	for i, r := range runes {
+		cur.WriteRune(r)
+		if r == '.' || r == '!' || r == '?' {
+			if i+1 < len(runes) && runes[i+1] == ' ' {
+				out = append(out, cur.String())
+				cur.Reset()
+			}
+		} else if r == ' ' && i+1 < len(runes) && unicode.IsUpper(runes[i+1]) && len(cur.String()) > 12 {
+			// New clause likely starts ("… Requires …", "… Improves …")
+			text := strings.TrimSpace(cur.String())
+			if text != "" {
+				out = append(out, text)
+			}
+			cur.Reset()
+		}
+	}
+	if strings.TrimSpace(cur.String()) != "" {
+		out = append(out, strings.TrimSpace(cur.String()))
+	}
+	return out
+}
+

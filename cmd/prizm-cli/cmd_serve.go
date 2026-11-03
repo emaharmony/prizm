@@ -1357,19 +1357,24 @@ func executeServe(args []string) {
 			fmt.Println("  Freewill: historical status reader enabled")
 		}
 	}
-	if cfg.Freewill.NotifyChannelID != "" && natsConn != nil {
+	if cfg.Freewill.NotifyChannelID != "" {
 		if len(discordBots) == 0 {
 			log.Printf("[FREEWILL-NOTIFY] WARN notify_channel_id set but no Discord bot is configured")
-		} else {
-			var fwStore *multiagent.SQLiteDurableRunStore
+		} else if freewillRuntime != nil && freewillRuntime.events != nil {
 			var fwApprovals *multiagent.FreewillApprovalService
 			if freewillRuntime != nil {
-				fwStore = freewillRuntime.store
 				fwApprovals = freewillRuntime.approvals
 			}
-			startFreewillDiscordNotifications(natsConn, discordBots[0], cfg.Freewill.NotifyChannelID, cfg.Freewill.NotifyAllowUserIDs, fwStore)
-			startFreewillButtonHandler(discordBots[0], cfg.Freewill.NotifyAllowUserIDs, fwApprovals)
-			fmt.Printf("  Freewill notifications -> Discord channel %s (buttons: %t)\n", cfg.Freewill.NotifyChannelID, len(cfg.Freewill.NotifyAllowUserIDs) > 0)
+			sink := newFreewillDiscordSink(discordBots[0], cfg.Freewill.NotifyChannelID, cfg.Freewill.NotifyAllowUserIDs)
+			fwNotify, nErr := multiagent.NewFreewillNotificationService(freewillRuntime.eventsPath, freewillRuntime.events, sink)
+			if nErr != nil {
+				log.Printf("[FREEWILL-NOTIFY] WARN service init: %v", nErr)
+			} else {
+				fwNotify.Start(ctx)
+				defer fwNotify.Close()
+				startFreewillButtonHandler(discordBots[0], cfg.Freewill.NotifyAllowUserIDs, fwApprovals)
+				fmt.Printf("  Freewill notifications (durable) -> Discord channel %s (buttons: %t)\n", cfg.Freewill.NotifyChannelID, len(cfg.Freewill.NotifyAllowUserIDs) > 0)
+			}
 		}
 	}
 	apiServer := api.NewServer(api.Config{

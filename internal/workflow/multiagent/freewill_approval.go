@@ -566,6 +566,9 @@ func (s *FreewillApprovalService) saveFreewillDecision(ctx context.Context, reco
 	}
 	record.State.UpdatedAt = s.runtime.now().UTC()
 	payload["run_id"] = record.State.RunID
+	for k, v := range freewillEventContext(record) {
+		payload[k] = v
+	}
 	evt := event.NewEvent(eventType, freewillWakeEventSource, payload)
 	evt.Timestamp = record.State.UpdatedAt.Format(time.RFC3339Nano)
 	evt.CorrelationID = record.Freewill.CorrelationID
@@ -578,6 +581,67 @@ func (s *FreewillApprovalService) saveFreewillDecision(ctx context.Context, reco
 		return saved, err
 	}
 	return saved, nil
+}
+
+// freewillEventContext enriches freewill lifecycle events at the source so
+// downstream consumers (notification bridges, dashboards) never need to
+// re-read the durable run store to render human-meaningful cards.
+func freewillEventContext(record DurableRun) map[string]any {
+	ctx := map[string]any{}
+	if record.Freewill == nil {
+		return ctx
+	}
+	fw := record.Freewill
+	ctx["lifecycle"] = string(fw.Lifecycle)
+	if fw.ChoiceID != "" {
+		ctx["choice_id"] = fw.ChoiceID
+	}
+	if fw.ReasonSummary != "" {
+		ctx["reason_summary"] = fw.ReasonSummary
+	}
+	if fw.ApprovalRef != "" {
+		ctx["approval_ref"] = fw.ApprovalRef
+	}
+	if fw.PolicyRuleID != "" {
+		ctx["policy_rule_id"] = fw.PolicyRuleID
+	}
+	ctx["project_id"] = fw.Scope.ProjectID
+	ctx["workspace"] = fw.Scope.Workspace
+	if len(fw.Candidates) > 0 {
+		cands := make([]map[string]any, 0, len(fw.Candidates))
+		for _, c := range fw.Candidates {
+			entry := map[string]any{"candidate_id": c.CandidateID, "title": c.Request.Title, "score": c.Score}
+			if c.Request.Goal != "" && c.Request.Goal != c.Request.Title {
+				entry["goal"] = c.Request.Goal
+			}
+			if c.Request.ReasonSummary != "" {
+				entry["reason"] = c.Request.ReasonSummary
+			}
+			// decision_only is the default; only surface non-default asks.
+			if len(c.Request.RequestedCapabilities) > 0 && !(len(c.Request.RequestedCapabilities) == 1 && c.Request.RequestedCapabilities[0] == "decision_only") {
+				entry["capabilities"] = c.Request.RequestedCapabilities
+			}
+			if c.ScoreRationale != "" {
+				entry["rationale"] = c.ScoreRationale
+			}
+			if c.Request.AgentID != "" {
+				ctx["agent_id"] = c.Request.AgentID
+			}
+			cands = append(cands, entry)
+		}
+		ctx["candidates"] = cands
+		for _, c := range fw.Candidates {
+			if c.CandidateID == fw.ChoiceID {
+				ctx["selected_title"] = c.Request.Title
+				ctx["selected_score"] = c.Score
+				if c.Request.Goal != "" {
+					ctx["selected_goal"] = c.Request.Goal
+				}
+				break
+			}
+		}
+	}
+	return ctx
 }
 
 func freewillApprovalDecision(status string) (FreewillApprovalDecision, bool) {
