@@ -2,8 +2,10 @@ package multiagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -13,6 +15,7 @@ import (
 	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/freewill"
 	"github.com/emaharmony/prizm/internal/provider"
+	"github.com/emaharmony/prizm/internal/provider/ollama"
 )
 
 func TestFreewillAdmissionReusesTerminalRunAndIsIdempotent(t *testing.T) {
@@ -608,5 +611,161 @@ func TestFreewillMalformedLegacyWakeCannotReserveAdmission(t *testing.T) {
 	}
 	if err := store.EnsureFreewillActorAdmission(ctx, "valid", "agent", scope); err != nil {
 		t.Fatalf("valid wake could not reserve slot after malformed target: %v", err)
+	}
+}
+
+type liveFreewillPhaseTwoChat struct {
+	phaseTwo                               provider.ChatProvider
+	ideaResponse                           provider.ChatGenerateResponse
+	ideaCalls, choiceCalls                 int
+	choiceRequest                          *provider.ChatGenerateRequest
+	choicePromptTokens, choiceOutputTokens int
+}
+
+func (s *liveFreewillPhaseTwoChat) ChatGenerate(ctx context.Context, req provider.ChatGenerateRequest) (provider.ChatGenerateResponse, error) {
+	if len(req.Messages) == 0 {
+		return provider.ChatGenerateResponse{}, errors.New("unexpected empty Freewill request")
+	}
+	switch req.Messages[0].Content {
+	case freewillIdeaSystemPrompt:
+		s.ideaCalls++
+		if s.ideaCalls != 1 || len(req.Tools) != 0 {
+			return provider.ChatGenerateResponse{}, errors.New("unexpected phase-one request")
+		}
+		return s.ideaResponse, nil
+	case freewillChoiceSystemPrompt:
+		s.choiceCalls++
+		if s.choiceCalls != 1 || len(req.Tools) != 0 {
+			return provider.ChatGenerateResponse{}, errors.New("unexpected phase-two request")
+		}
+		copyReq := req
+		copyReq.Messages = append([]provider.ChatMessage(nil), req.Messages...)
+		s.choiceRequest = &copyReq
+		response, err := s.phaseTwo.ChatGenerate(ctx, req)
+		if err != nil {
+			return provider.ChatGenerateResponse{}, err
+		}
+		s.choicePromptTokens, s.choiceOutputTokens = response.PromptTokens, response.OutputTokens
+		return response, nil
+	default:
+		return provider.ChatGenerateResponse{}, errors.New("unexpected Freewill prompt")
+	}
+}
+
+// Phase one is scripted so this opt-in test exercises one live phase-two call
+// against synthetic candidates and a temporary SQLite database only.
+func TestFreewillChoiceReasonPersistsWithLiveGLMPhaseTwo(t *testing.T) {
+	if os.Getenv("PRIZM_FREEWILL_LIVE_CONFORMANCE") != "1" {
+		t.Skip("set PRIZM_FREEWILL_LIVE_CONFORMANCE=1 to run the bounded provider conformance call")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	const model = "glm-5.3-flash:cloud"
+	const objective = "Choose the most useful small read-only documentation follow-up."
+	const runID = "freewill-live-phase2-conformance"
+	scored := "IDEA: Map dependency ownership\nSCORE: 72\nFACTORS: scope_fit\nRATIONALE: This maps dependencies and identifies risky coupling for future review.\n" +
+		"IDEA: Document service boundaries\nSCORE: 88\nFACTORS: impact\nRATIONALE: Clear ownership notes help contributors route future work.\n" +
+		"IDEA: Review coverage gaps\nSCORE: 61\nFACTORS: feasibility\nRATIONALE: A focused gap list guides later tests while keeping review scoped."
+	chat := &liveFreewillPhaseTwoChat{phaseTwo: ollama.NewChatProvider("http://127.0.0.1:11434"),
+		ideaResponse: provider.ChatGenerateResponse{Content: scored, Provider: "ollama", Model: model, PromptTokens: 11, OutputTokens: 7}}
+	env := newDurableTestEnvironment(t)
+	clock := func() time.Time { return time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC) }
+	runtime := newDurableRuntimeForTest(t, validDefinition(), &scriptedRunner{}, env.store, env.claimer, env.events, DurableRuntimeOptions{Clock: clock})
+	scope := freewill.Scope{ProjectID: "synthetic-project", Workspace: "synthetic-workspace"}
+	control, err := NewFreewillOperatorControl(env.store, clock)
+	if err != nil {
+		t.Fatal("create isolated operator control")
+	}
+	service, err := NewFreewillWakeService(runtime, env.store, ChatFreewillSelector{Provider: chat, AgentID: "agent", Model: model},
+		FreewillWakeServiceConfig{Enabled: true, SchedulingEnabled: true, AgentID: "agent", Scope: scope, Objective: objective,
+			Owner: "live-phase-two-conformance", LeaseFor: time.Minute, OperatorControl: control}, clock)
+	if err != nil {
+		t.Fatal("create isolated wake service")
+	}
+	wake := FreewillWakeRequest{RunID: runID, AgentID: "agent", Scope: scope, Trigger: "scheduled_tick",
+		DedupeKey: "dedupe-live-phase2-conformance", CorrelationID: "corr-live-phase2-conformance"}
+	accepted, _, err := runtime.AcceptFreewillWake(ctx, wake)
+	if err != nil {
+		t.Fatal("accept synthetic wake")
+	}
+	result, err := service.ProcessWake(ctx, accepted.State.RunID)
+	if err != nil {
+		t.Fatalf("process synthetic wake failed (%T)", err)
+	}
+	if chat.ideaCalls != 1 || chat.choiceCalls != 1 || chat.choiceRequest == nil {
+		t.Fatalf("expected one scripted phase one and one live phase two; got %d and %d", chat.ideaCalls, chat.choiceCalls)
+	}
+	req := chat.choiceRequest
+	if req.Model != model || req.MaxTokens != freewillChoiceMaxOutputTokens || len(req.Tools) != 0 || len(req.Messages) != 2 {
+		t.Fatal("phase-two request violated model, output-cap, or no-tools bounds")
+	}
+	var input map[string]any
+	if err := json.Unmarshal([]byte(req.Messages[1].Content), &input); err != nil {
+		t.Fatal("phase-two request was not bounded JSON context")
+	}
+	if input["objective"] != objective {
+		t.Fatal("phase-two request omitted the objective")
+	}
+	candidates, ok := input["candidates"].([]any)
+	if !ok || len(candidates) != 3 {
+		t.Fatal("phase-two request omitted the three scored candidates")
+	}
+	titles, scores := []string{"Map dependency ownership", "Document service boundaries", "Review coverage gaps"}, []float64{72, 88, 61}
+	allowed := make(map[string]struct{}, len(titles))
+	allowedIDs := make([]string, 0, len(titles))
+	for i, raw := range candidates {
+		candidate, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatal("phase-two candidate had an unexpected shape")
+		}
+		id, idOK := candidate["id"].(string)
+		title, titleOK := candidate["title"].(string)
+		score, scoreOK := candidate["score"].(float64)
+		if !idOK || !titleOK || !scoreOK || id != fmt.Sprintf("candidate-%s-%d", runID, i+1) || title != titles[i] || score != scores[i] {
+			t.Fatal("phase-two request changed a synthetic candidate or advisory score")
+		}
+		allowed[id] = struct{}{}
+		allowedIDs = append(allowedIDs, id)
+	}
+	if chat.choicePromptTokens <= 0 || chat.choiceOutputTokens <= 0 {
+		t.Fatal("provider returned no positive phase-two token metadata")
+	}
+	if _, ok := allowed[result.Freewill.ChoiceID]; !ok {
+		t.Fatal("provider choice was outside the host allowlist")
+	}
+	reason := strings.TrimSpace(result.Freewill.ReasonSummary)
+	if len(reason) == 0 || len(reason) > 500 || !validFreewillChoiceReason(reason, result.Freewill.ChoiceID, allowedIDs) {
+		t.Fatal("persisted reason was empty, unbounded, or failed host validation")
+	}
+	if !result.Freewill.ExecutionDisabled || result.Freewill.Lifecycle != freewill.StateProposed {
+		t.Fatal("selection crossed the execution-disabled proposal boundary")
+	}
+	usage := result.Freewill.SelectionUsage
+	if usage.PromptTokens != 11+chat.choicePromptTokens || usage.CompletionTokens != 7+chat.choiceOutputTokens ||
+		usage.TotalTokens != 18+chat.choicePromptTokens+chat.choiceOutputTokens {
+		t.Fatal("durable token metadata did not include both phases")
+	}
+	replay, err := env.store.Load(ctx, accepted.State.RunID)
+	if err != nil {
+		t.Fatal("reload synthetic durable run")
+	}
+	if replay.Freewill.ChoiceID != result.Freewill.ChoiceID || replay.Freewill.ReasonSummary != reason || !replay.Freewill.ExecutionDisabled {
+		t.Fatal("durable replay changed the decision-only evidence")
+	}
+	events, err := env.events.Query(ctx, event.EventFilter{RunID: wake.RunID, Limit: 100})
+	if err != nil {
+		t.Fatal("query synthetic event metadata")
+	}
+	for _, ev := range events {
+		switch ev.Type {
+		case event.EventFreewillApprovalProposed, event.EventFreewillApprovalDecided, event.EventFreewillApprovalReconciled,
+			event.EventProposalApprovalPending, event.EventProposalApprovalGranted, event.EventProposalApprovalDenied,
+			event.EventInteractionApprovalPaused, event.EventProposalApplyStarted, event.EventProposalApplied,
+			event.EventProposalApplyFailed, event.EventProposalReconciled, event.EventMultiAgentFanoutChildDispatched,
+			event.EventMultiAgentToolDiagnostic, event.V1EventTypes.ToolCalled, event.V1EventTypes.ToolResult,
+			event.V1EventTypes.ToolFailed, event.V3EventTypes.ToolRequested, event.EventInteractionActionValidated,
+			event.EventInteractionActionRejected, event.EventInteractionActionExecuted, event.EventInteractionActionFailed:
+			t.Fatalf("synthetic conformance emitted forbidden event: %s", ev.Type)
+		}
 	}
 }
