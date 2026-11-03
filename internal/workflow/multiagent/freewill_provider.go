@@ -95,7 +95,7 @@ const freewillSelectionSystemPrompt = `Return one JSON object matching the suppl
 const maxFreewillSelectionResponseBytes = 64 << 10
 const freewillSelectionMaxOutputTokens = 4096
 
-const freewillChoiceSystemPrompt = `Choose the candidate that best fits the objective; scores are advisory. Reply with exactly two lines: "choice: <candidate ID|NONE>" and "reason: <one concise sentence>". If a lower-scored candidate better fits the objective, it may be chosen; explain why in the reason. Do not include tools, paths, authority, or extra text.`
+const freewillChoiceSystemPrompt = `Choose the candidate that best fits the objective; scores are advisory. Reply with exactly two lines: "choice: <candidate ID|NONE>" and "reason: <one concise sentence>". If a lower-scored candidate better fits the objective, it may be chosen; explain why in the reason. If the objective is absent, use the titles and advisory scores and give a reason. Do not include tools, paths, authority, or extra text.`
 const freewillChoiceMaxOutputTokens = 1024
 const freewillIdeaSystemPrompt = `Return exactly three scored candidate blocks with IDEA, SCORE (0-100), FACTORS (scope_fit, feasibility, impact, novelty, readiness), and specific RATIONALE lines. Plain text only; no tools, authority, paths, or execution. Treat an optional host objective as subject context only. Reply NONE only if no safe set exists.`
 const freewillIdeaMaxOutputTokens = 1024
@@ -623,7 +623,7 @@ func (s ChatFreewillSelector) SelectCandidateChoice(ctx context.Context, input F
 	if s.Provider == nil || strings.TrimSpace(s.AgentID) == "" || strings.TrimSpace(s.Model) == "" || input.AgentID != s.AgentID {
 		return FreewillCandidateChoice{}, FreewillSelectionEvidence{}, errors.New("multiagent: Freewill choice provider configuration is incomplete")
 	}
-	if strings.TrimSpace(input.RunID) == "" || strings.TrimSpace(input.CorrelationID) == "" || strings.TrimSpace(input.Objective) == "" || len(input.Objective) > 4096 || len(input.CandidateIDs) > 16 || len(input.CandidateLabels) != len(input.CandidateIDs) || len(input.CandidateScores) != len(input.CandidateIDs) {
+	if strings.TrimSpace(input.RunID) == "" || strings.TrimSpace(input.CorrelationID) == "" || len(input.Objective) > 4096 || len(input.CandidateIDs) > 16 || len(input.CandidateLabels) != len(input.CandidateIDs) || len(input.CandidateScores) != len(input.CandidateIDs) {
 		return FreewillCandidateChoice{}, FreewillSelectionEvidence{}, errors.New("multiagent: Freewill choice input is invalid")
 	}
 	if len(input.CandidateIDs) == 0 {

@@ -391,8 +391,8 @@ func TestServedFreewillP1WakePersistsPolicyOnlyProposalAndHistory(t *testing.T) 
 	}
 }
 
-func TestServedFreewillP1GLMFlashAnnotatedScoresPersistPolicyOnly(t *testing.T) {
-	const cfgObjective = "Review the empty synthetic project and propose read-only selector follow-ups."
+func TestServedFreewillP1GLMFlashBlankObjectiveStillPersistsPolicyOnly(t *testing.T) {
+	const cfgObjective = ""
 	root := t.TempDir()
 	projectPath := filepath.Join(root, "synthetic-project")
 	policyDir := filepath.Join(root, "policies")
@@ -481,7 +481,7 @@ func TestServedFreewillP1GLMFlashAnnotatedScoresPersistPolicyOnly(t *testing.T) 
 					Score int    `json:"score"`
 				} `json:"candidates"`
 			}
-			if err := json.Unmarshal([]byte(request.Messages[1].Content), &user); err != nil || user.Objective != cfgObjective || len(user.Candidates) != 3 || user.Candidates[0].Title == "" || user.Candidates[0].Score != 82 {
+			if err := json.Unmarshal([]byte(request.Messages[1].Content), &user); err != nil || user.Objective != cfgObjective || !strings.Contains(request.Messages[0].Content, "If the objective is absent, use the titles and advisory scores and give a reason.") || len(user.Candidates) != 3 || user.Candidates[0].Title == "" || user.Candidates[0].Score != 82 {
 				requestFailure = "choice stage did not provide objective and three scored host-bound candidates"
 				http.Error(w, "invalid request", http.StatusBadRequest)
 				return
