@@ -69,6 +69,7 @@ Pick the path that matches what you're doing:
 *   [Freewill Mode Design](./concepts/PRIZM-FREEWILL-MODE-DESIGN.md) - Agent-initiated intention lifecycle, disabled by default.
 *   [Freewill Implementation Roadmap](./architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md) - FW-slice sequencing alongside the R-series roadmap.
 *   [ADR 0003: Freewill Intention Contracts](./architecture/decisions/0003-freewill-intention-contracts.md) - Authority boundary and threat model for the policy-only contract slice.
+*   [ADR 0004: Freewill Notifications via Durable Outbox](./architecture/decisions/0004-freewill-notifications-durable-outbox.md) - Restart-safe, source-enriched lifecycle notifications; curated visibility and Discord buttons.
 *   [Memory Store Design](./design/memory-store.md) - Scoped memory lifecycle (R2) contract.
 
 ## 🛠️ Reference

@@ -31,6 +31,7 @@ type freewillServeRuntime struct {
 	store             *multiagent.SQLiteDurableRunStore
 	control           *multiagent.FreewillOperatorControl
 	events            *event.SQLiteEventStore
+	eventsPath        string
 	schedulingEnabled bool
 	readOnly          bool
 	mu                sync.Mutex
@@ -188,7 +189,7 @@ func openFreewillServeRuntime(cfg *orchestrator.Config, providers *provider.Prov
 		_ = store.Close()
 		return nil, err
 	}
-	return &freewillServeRuntime{wake: wake, approvals: policyApproval, store: store, control: control, events: events,
+	return &freewillServeRuntime{wake: wake, approvals: policyApproval, store: store, control: control, events: events, eventsPath: dbPath,
 		schedulingEnabled: freewillCfg.Scheduling.Enabled}, nil
 }
 

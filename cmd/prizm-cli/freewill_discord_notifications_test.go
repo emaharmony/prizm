@@ -4,36 +4,56 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
 
-func TestFormatFreewillEventProposedWithoutStore(t *testing.T) {
-	e := &freewillRunEnricher{}
-	out, _ := formatFreewillEvent(event.EventFreewillApprovalProposed, []byte(`{"approval_id":"appr_123","run_id":"freewill_abc"}`), e)
+func TestFormatFreewillNotificationProposedFallback(t *testing.T) {
+	out, btns := formatFreewillNotification(multiagent.FreewillNotification{
+		EventType: "prism.freewill.approval.proposed", RunID: "freewill_abc",
+		Payload: map[string]any{"approval_ref": "appr_123"},
+	}, nil)
 	if !strings.Contains(out, "Freewill proposal") || !strings.Contains(out, "appr_123") {
 		t.Fatalf("expected fallback proposal message, got %q", out)
 	}
+	if btns != nil {
+		t.Fatal("no allowlist -> no buttons")
+	}
 }
 
-func TestFormatFreewillEventDecided(t *testing.T) {
-	e := &freewillRunEnricher{}
-	out, _ := formatFreewillEvent(event.EventFreewillApprovalDecided, []byte(`{"decision":"deny","run_id":"freewill_abc"}`), e)
+func TestFormatFreewillNotificationProposedEnriched(t *testing.T) {
+	out, btns := formatFreewillNotification(multiagent.FreewillNotification{
+		EventType: "prism.freewill.approval.proposed", RunID: "freewill_abc",
+		Payload: map[string]any{
+			"selected_title": "Tag songs", "selected_score": 74.0,
+			"reason_summary": "smallest safe change", "approval_ref": "appr_9",
+			"agent_id": "lumi-selector", "project_id": "bassbook",
+		},
+	}, []string{"164169326142816256"})
+	for _, want := range []string{"Tag songs", "74/100", "lumi-selector", "bassbook", "smallest safe change"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("card missing %q: %q", want, out)
+		}
+	}
+	if len(btns) != 2 {
+		t.Fatalf("allowlist set must render 2 buttons, got %d", len(btns))
+	}
+}
+
+func TestFormatFreewillNotificationDecided(t *testing.T) {
+	out, _ := formatFreewillNotification(multiagent.FreewillNotification{
+		EventType: "prism.freewill.approval.decided", RunID: "freewill_abc",
+		Payload: map[string]any{"decision": "deny", "selected_title": "Tag songs"},
+	}, nil)
 	if !strings.Contains(out, "deny") {
 		t.Fatalf("expected decision message, got %q", out)
 	}
 }
 
-func TestFormatFreewillEventInvalidJSON(t *testing.T) {
-	e := &freewillRunEnricher{}
-	if out, _ := formatFreewillEvent(event.EventFreewillApprovalProposed, []byte(`not-json`), e); out != "" {
-		t.Fatalf("expected empty output for invalid payload, got %q", out)
-	}
-}
-
-func TestFormatFreewillEventUnsubscribeUnknownSubject(t *testing.T) {
-	e := &freewillRunEnricher{}
-	if out, _ := formatFreewillEvent("prism.freewill.wake.claimed", []byte(`{}`), e); out != "" {
-		t.Fatalf("chatty subjects must not notify, got %q", out)
+func TestFormatFreewillNotificationChattyIsEmpty(t *testing.T) {
+	if out, _ := formatFreewillNotification(multiagent.FreewillNotification{
+		EventType: "prism.freewill.wake.claimed", RunID: "r", Payload: map[string]any{},
+	}, nil); out != "" {
+		t.Fatalf("chatty types must not notify, got %q", out)
 	}
 }
 
@@ -52,15 +72,14 @@ func TestFreewillButtonCodec(t *testing.T) {
 }
 
 func TestButtonsOnlyWithAllowlist(t *testing.T) {
-	e := &freewillRunEnricher{}
-	if b := e.buttonsFor("appr_1", "run_1"); b != nil {
+	if b := buttonsFor(nil, "appr_1", "run_1"); b != nil {
 		t.Fatal("empty allowlist must render no buttons")
 	}
-	e2 := &freewillRunEnricher{allowUserIDs: []string{"164169326142816256"}}
-	if b := e2.buttonsFor("appr_1", "run_1"); len(b) != 2 {
+	e2 := []string{"164169326142816256"}
+	if b := buttonsFor(e2, "appr_1", "run_1"); len(b) != 2 {
 		t.Fatalf("allowlist set must render 2 buttons, got %d", len(b))
 	}
-	if b := e2.buttonsFor("", "run_1"); b != nil {
+	if b := buttonsFor(e2, "", "run_1"); b != nil {
 		t.Fatal("missing approval id must render no buttons")
 	}
 }
