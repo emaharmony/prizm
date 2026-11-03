@@ -226,6 +226,60 @@ prizm:
 
 Full cron reference: [docs/SCHEDULER.md](../operations/SCHEDULER.md).
 
+## Freewill YAML
+
+### Purpose
+
+Freewill is Prizm's decision-only autonomous selector: on a schedule it wakes,
+generates scored candidates, picks one, and — after policy review and human
+approval — proposes it. The freewill block lives in `prizm.yaml`.
+
+### Example
+
+```yaml
+freewill:
+  enabled: false
+  agent_id: "lumi-selector"
+  project_id: "bassbook"
+  model: "glm-5.3-flash:cloud"
+  objective: "Consider BassBook improvements; prefer small, safe, reviewable proposals"
+  scheduling:
+    enabled: true
+    schedule: "*/10 * * * *"
+  notify_channel_id: "1493297644821283067"
+  notify_allow_user_ids:
+    - "164169326142816256"
+```
+
+### Fields
+
+| Field | Type | Required? | Description |
+|---|---|---:|---|
+| `enabled` | bool | Yes | Master switch; everything defaults off without it |
+| `agent_id` | string | No | Dedicated selector agent (must have no fallback providers) |
+| `project_id` | string | No | Scope hint passed to the selector |
+| `model` | string | No | Selector model override |
+| `objective` | string | No | Host-authored subject context, ≤512 UTF-8 bytes, one line |
+| `scheduling.enabled` | bool | No | Enables the scheduler wake loop |
+| `scheduling.schedule` | string | No | Cron expression (e.g. `*/10 * * * *`) |
+| `notify_channel_id` | string | No | Discord channel for curated lifecycle notifications; empty = off |
+| `notify_allow_user_ids` | list | No | Discord user IDs allowed to use Approve/Deny buttons; empty = card-only notifications |
+
+### Notification semantics
+
+Notifications are durable: the runtime writes enriched events (title, score,
+reason, scope) into the canonical freewill event store; a dedicated outbox
+(`freewill.db-notifications.db`) drains them to Discord with retry/backoff,
+and a startup reconciler rescans the canonical store after the persisted
+cursor, so **no notification is lost across restarts**. Relay subjects are
+curated: proposals, decisions, decision reconciliation, policy denials, and
+selection halts. Per-attempt chatter (wake claims, selection retries) is
+excluded by design.
+
+Non-loopback API binds additionally require `api.auth_token` (see the API
+section of `prizm.yaml.example`); the loopback-only default is enforced by
+config validation.
+
 ## MCP YAML
 
 ### Example

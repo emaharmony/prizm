@@ -85,6 +85,11 @@ freewill:
   scheduling:
     enabled: false
     schedule: ""
+  # Optional Discord notification bridge (durable, restart-safe). Empty
+  # notify_channel_id = off. Cards render Approve/Deny buttons only when
+  # notify_allow_user_ids lists Discord user IDs; empty = card-only.
+  notify_channel_id: ""
+  notify_allow_user_ids: []
 
 # HTTP API authentication and CORS. Optional when bound to loopback; required
 # when prizm.bind_host is non-loopback.
