@@ -118,6 +118,9 @@ type Server struct {
 	mux         *http.ServeMux
 	editorMu    sync.RWMutex
 	editorWS    *editor.EditorState
+	// freewillDrafts holds validated-but-unconfirmed freewill config drafts
+	// between the preview and confirm requests of the approval gate.
+	freewillDrafts *freewillDraftStore
 	providers   *provider.ProviderRegistry
 	invocations *invocation.Store
 	// invokeIdleTimeout resets a stateful invoke conversation after this idle
@@ -390,6 +393,7 @@ func (s *Server) routes() {
 	// Config + scheduler editors (write prizm.yaml surgically).
 	s.mux.HandleFunc("/api/v1/config", s.handleConfig)
 	s.mux.HandleFunc("/api/v1/config/settings", s.handleConfigSettings)
+	s.mux.HandleFunc("/api/v1/config/freewill", s.handleConfigFreewill)
 	s.mux.HandleFunc("/api/v1/config/scheduler", s.handleConfigScheduler)
 	s.mux.HandleFunc("/api/v1/config/cron/validate", s.handleCronValidate)
 	s.mux.HandleFunc("/api/v1/config/actions", s.handleSchedulerActions)

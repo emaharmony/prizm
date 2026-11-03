@@ -31,6 +31,42 @@
     <div id="pending" class="loading-state" aria-live="polite" aria-busy="true">Checking for pending proposals…</div>
   </section>
 
+  <section aria-labelledby="settings-heading" style="margin-top: var(--space-5);">
+    <div class="section-heading">
+      <div><h2 id="settings-heading" class="section-title">Freewill settings</h2><p class="section-copy">Changes require an approval gate: save produces a preview diff first, and the write only happens after you confirm it.</p></div>
+    </div>
+    <div id="settings" class="card">
+      <div class="grid-2">
+        <label class="field">Enabled
+          <span class="toggle" style="margin-top:6px;"><input type="checkbox" id="fw-enabled"><span class="slider"></span></span>
+        </label>
+        <label class="field">Agent
+          <input id="fw-agent" type="text" autocomplete="off" placeholder="lumi">
+        </label>
+        <label class="field">Project
+          <input id="fw-project" type="text" autocomplete="off" placeholder="bassbook">
+        </label>
+        <label class="field">Model
+          <input id="fw-model" type="text" autocomplete="off" placeholder="glm-5.3-flash:cloud">
+        </label>
+        <label class="field">Wake schedule (cron)
+          <input id="fw-schedule" type="text" autocomplete="off" placeholder="*/10 * * * *">
+        </label>
+        <label class="field">Reasoning effort
+          <input id="fw-effort" type="text" autocomplete="off" placeholder="low / high / max">
+        </label>
+      </div>
+      <label class="field" style="margin-top: var(--space-2);">Objective (shown to the selector as context)
+        <textarea id="fw-objective" rows="2" maxlength="512"></textarea>
+      </label>
+      <div class="actions-row">
+        <button class="btn" id="fw-save" type="button">Save (preview first)</button>
+        <button class="btn secondary" id="fw-revert" type="button">Reload current</button>
+      </div>
+      <div id="fw-gate" style="display:none; margin-top: var(--space-3);"></div>
+    </div>
+  </section>
+
   <section aria-labelledby="recent-heading" style="margin-top: var(--space-5);">
     <div class="section-heading">
       <div><h2 id="recent-heading" class="section-title">Recent runs</h2><p class="section-copy">All Freewill runs, newest first.</p></div>
@@ -178,12 +214,160 @@
     recentList.innerHTML = `<div class="banner banner-err" role="alert">${ui.escape(message)}</div>`;
   }
 
+  // --- Settings (approval-gated) ---
+  let loadedSettings = null;
+  let pendingDraft = null;   // { draft_id, summary, expires_in }
+  let pendingPatch = null;   // the patch body that produced pendingDraft
+
+  async function loadSettings() {
+    const card = $('#settings');
+    card.classList.add('disabled-panel');
+    try {
+      const cfg = await ui.request('/config/freewill');
+      loadedSettings = cfg;
+      $('#fw-enabled').checked = !!cfg.enabled;
+      $('#fw-agent').value = cfg.agent_id || '';
+      $('#fw-project').value = cfg.project_id || '';
+      $('#fw-model').value = cfg.model || '';
+      $('#fw-schedule').value = (cfg.scheduling && cfg.scheduling.schedule) || '';
+      $('#fw-effort').value = cfg.reasoning_effort || '';
+      $('#fw-objective').value = cfg.objective || '';
+      clearGate();
+    } catch (err) {
+      banner(`Settings unavailable: ${err.message}`, 'err');
+    } finally {
+      card.classList.remove('disabled-panel');
+    }
+  }
+
+  function buildPatch() {
+    const c = loadedSettings || {};
+    const patch = {};
+    if ($('#fw-enabled').checked !== !!c.enabled) patch.enabled = $('#fw-enabled').checked;
+    const agent = $('#fw-agent').value.trim();
+    if (agent && agent !== c.agent_id) patch.agent_id = agent;
+    const project = $('#fw-project').value.trim();
+    if (project && project !== c.project_id) patch.project_id = project;
+    const model = $('#fw-model').value.trim();
+    if (model && model !== c.model) patch.model = model;
+    const schedule = $('#fw-schedule').value.trim();
+    const curSched = (c.scheduling && c.scheduling.schedule) || '';
+    const schedEnabled = c.scheduling ? !!c.scheduling.enabled : false;
+    if (schedule !== curSched && schedule) patch.scheduling = { enabled: schedEnabled, schedule };
+    const effort = $('#fw-effort').value.trim();
+    if (effort && effort !== (c.reasoning_effort || '')) patch.reasoning_effort = effort;
+    const objective = $('#fw-objective').value;
+    if (objective !== (c.objective || '')) patch.objective = objective;
+    return patch;
+  }
+
+  function clearGate() {
+    $('#fw-gate').style.display = 'none';
+    $('#fw-gate').innerHTML = '';
+  }
+
+  function showGateError(message) {
+    const el = $('#fw-gate');
+    el.style.display = 'block';
+    el.innerHTML = `<div class="banner banner-err" role="alert">${ui.escape(message)}</div>`;
+  }
+
+  function renderGate(payload, patch) {
+    const el = $('#fw-gate');
+    const rows = Object.entries(payload.summary || {}).map(([key, change]) => {
+      const from = change && typeof change === 'object' && 'from' in change ? change.from : '—';
+      const to = change && typeof change === 'object' && 'to' in change ? change.to : String(change);
+      return `<tr><td data-label="Field">${ui.escape(key)}</td><td data-label="From"><span class="mono">${ui.escape(String(from))}</span></td><td data-label="To"><span class="mono">${ui.escape(String(to))}</span></td></tr>`;
+    }).join('');
+    el.style.display = 'block';
+    el.innerHTML = `
+      <div class="card" style="box-shadow:none;">
+        <h3 style="margin:0 0 var(--space-2); font-size:14px;">Review before saving — nothing is written until you confirm.</h3>
+        <div class="table-wrap"><table class="data-table">${rows || '<tbody><tr><td>No changes detected.</td></tr></tbody>'}</table></div>
+        <p class="hint">Draft expires in ${payload.expires_in || 900} seconds. Confirming writes prizm.yaml and requires a service restart to take effect.</p>
+        <div class="actions-row">
+          <button class="btn" id="fw-confirm" type="button">Confirm and save</button>
+          <button class="btn secondary" id="fw-discard" type="button">Discard</button>
+        </div>
+      </div>`;
+    $('#fw-confirm').addEventListener('click', () => confirmSave(patch));
+    $('#fw-discard').addEventListener('click', () => {
+      pendingDraft = null;
+      pendingPatch = null;
+      clearGate();
+    });
+  }
+
+  async function saveDraft(patch) {
+    const saveBtn = $('#fw-save');
+    saveBtn.disabled = true;
+    banner('');
+    try {
+      const payload = await ui.request('/config/freewill', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch)
+      });
+      if (payload.status !== 'draft') throw new Error(payload.error || 'unexpected response');
+      pendingDraft = payload;
+      pendingPatch = patch;
+      renderGate(payload, patch);
+    } catch (err) {
+      pendingDraft = null;
+      pendingPatch = null;
+      showGateError(err.message);
+    } finally {
+      saveBtn.disabled = false;
+    }
+  }
+
+  async function confirmSave(patch) {
+    if (!pendingDraft) return;
+    const actor = window.prompt('Confirm as (recorded on the write):', 'rhem');
+    if (actor === null) return;
+    const confirmBtn = $('#fw-confirm');
+    confirmBtn.disabled = true;
+    const body = Object.assign({}, patch, { confirm: true, draft_id: pendingDraft.draft_id, actor });
+    try {
+      const result = await ui.request('/config/freewill', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      banner(`Settings saved (confirmed by ${result.confirmed_by || actor}). ${result.restart_required ? 'Restart the Prizm service to apply.' : ''}`, 'ok');
+      pendingDraft = null;
+      pendingPatch = null;
+      clearGate();
+      await loadSettings();
+    } catch (err) {
+      pendingDraft = null;
+      pendingPatch = null;
+      showGateError(err.message + ' — preview again to retry.');
+    }
+  }
+
+  $('#fw-save').addEventListener('click', () => {
+    const patch = buildPatch();
+    if (!Object.keys(patch).length) {
+      banner('No settings changed.', 'warn');
+      return;
+    }
+    saveDraft(patch);
+  });
+  $('#fw-revert').addEventListener('click', () => {
+    pendingDraft = null;
+    pendingPatch = null;
+    clearGate();
+    loadSettings();
+  });
+
   document.addEventListener('click', event => {
     const button = event.target.closest('[data-decision]');
     if (button && !button.disabled) decide(button);
   });
   $('#refresh').addEventListener('click', () => load());
   load();
+  loadSettings();
 })();
 </script>
 </body>
