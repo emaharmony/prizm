@@ -493,44 +493,26 @@ func TestFreewillChoiceReasonPersistsWithDecisionOnlyReplay(t *testing.T) {
 	}
 }
 
-type recoveryAdmissionStore struct {
-	*SQLiteDurableRunStore
-	conflictRunID string
-	conflictErr   error
+type sleepingFreewillSelector struct {
+	calls  int
+	runIDs []string
 }
 
-func (s *recoveryAdmissionStore) EnsureFreewillActorAdmission(ctx context.Context, runID, agentID string, scope freewill.Scope) error {
-	if runID == s.conflictRunID {
-		return s.conflictErr
-	}
-	return s.SQLiteDurableRunStore.EnsureFreewillActorAdmission(ctx, runID, agentID, scope)
-}
-
-type sleepingFreewillSelector struct{ calls int }
-
-func (s *sleepingFreewillSelector) SelectFreewill(context.Context, FreewillSelectionInput) (freewill.Selection, FreewillSelectionEvidence, error) {
+func (s *sleepingFreewillSelector) SelectFreewill(_ context.Context, input FreewillSelectionInput) (freewill.Selection, FreewillSelectionEvidence, error) {
 	s.calls++
+	s.runIDs = append(s.runIDs, input.RunID)
 	return freewill.Selection{SleepReason: "wait"}, FreewillSelectionEvidence{}, nil
 }
 
-func TestFreewillRecoverySkipsVerifiedLegacyConflictAndContinues(t *testing.T) {
-	ctx := context.Background()
-	env := newDurableTestEnvironment(t)
+func newFreewillRecoveryServiceForTest(t *testing.T, env durableTestEnvironment, selector FreewillSelectionProvider) *FreewillWakeService {
+	t.Helper()
 	scope := freewill.Scope{ProjectID: "p", Workspace: "w"}
-	for _, id := range []string{"a-queued", "b-process"} {
-		_, record := freewillWakeAcceptanceFixture(id, "agent", scope, "dedupe-"+id)
-		if _, err := env.store.Create(ctx, record, nil); err != nil {
-			t.Fatal(err)
-		}
-	}
-	store := &recoveryAdmissionStore{SQLiteDurableRunStore: env.store, conflictRunID: "a-queued", conflictErr: ErrFreewillActorAdmissionConflict}
-	runtime := newDurableRuntimeForTest(t, validDefinition(), &scriptedRunner{}, store, env.claimer, env.events)
-	selector := &sleepingFreewillSelector{}
+	runtime := newDurableRuntimeForTest(t, validDefinition(), &scriptedRunner{}, env.store, env.claimer, env.events)
 	control, err := NewFreewillOperatorControl(env.store, time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewFreewillWakeService(runtime, store, selector, FreewillWakeServiceConfig{
+	service, err := NewFreewillWakeService(runtime, env.store, selector, FreewillWakeServiceConfig{
 		Enabled: true, SchedulingEnabled: true, AgentID: "agent", Scope: scope,
 		Objective: "Choose a safe read-only next action.", Owner: "recovery-test", LeaseFor: time.Minute,
 		OperatorControl: control,
@@ -538,52 +520,224 @@ func TestFreewillRecoverySkipsVerifiedLegacyConflictAndContinues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.RecoverPending(ctx, time.Now().Add(time.Minute), 10); err != nil {
-		t.Fatalf("recovery stopped on verified conflict: %v", err)
-	}
-	queued, err := env.store.Load(ctx, "a-queued")
+	return service
+}
+
+func queryFreewillRunEventsForTest(t *testing.T, env durableTestEnvironment, runID string) []event.Event {
+	t.Helper()
+	events, err := env.events.Query(context.Background(), event.EventFilter{RunID: runID, Limit: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
-	processed, err := env.store.Load(ctx, "b-process")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if queued.Freewill.Lifecycle != freewill.StateWaking {
-		t.Fatalf("conflicted legacy row changed to %s", queued.Freewill.Lifecycle)
-	}
-	if processed.Freewill.Lifecycle != freewill.StateSleeping {
-		t.Fatalf("later legacy row lifecycle = %s, want sleeping", processed.Freewill.Lifecycle)
-	}
-	if selector.calls != 1 {
-		t.Fatalf("selector calls = %d, want only later row to be processed", selector.calls)
+	return events
+}
+
+func assertFreewillNoActionEventsForTest(t *testing.T, events []event.Event) {
+	t.Helper()
+	for _, ev := range events {
+		if ev.Type == event.EventMultiAgentToolDiagnostic || ev.Type == event.V1EventTypes.ToolCalled ||
+			ev.Type == event.V3EventTypes.ToolRequested || ev.Type == event.EventFreewillApprovalDecided ||
+			ev.Type == event.EventFreewillApprovalReconciled || ev.Type == event.EventProposalApplied ||
+			ev.Type == event.EventInteractionActionExecuted {
+			t.Fatalf("Freewill reconciliation crossed decision-only boundary: %s", ev.Type)
+		}
 	}
 }
 
-func TestFreewillRecoveryDoesNotSkipAmbiguousLegacyAdmission(t *testing.T) {
+func TestFreewillRecoveryHaltsWakeWithoutActorAdmission(t *testing.T) {
 	ctx := context.Background()
 	env := newDurableTestEnvironment(t)
 	scope := freewill.Scope{ProjectID: "p", Workspace: "w"}
-	_, record := freewillWakeAcceptanceFixture("ambiguous", "agent", scope, "dedupe-ambiguous")
-	if _, err := env.store.Create(ctx, record, nil); err != nil {
-		t.Fatal(err)
-	}
-	store := &recoveryAdmissionStore{SQLiteDurableRunStore: env.store, conflictRunID: "ambiguous", conflictErr: ErrFreewillActorAdmissionAmbiguous}
-	runtime := newDurableRuntimeForTest(t, validDefinition(), &scriptedRunner{}, store, env.claimer, env.events)
-	control, err := NewFreewillOperatorControl(env.store, time.Now)
+	_, orphan := freewillWakeAcceptanceFixture("orphan-missing", "agent", scope, "dedupe-orphan-missing")
+	created, err := env.store.Create(ctx, orphan, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewFreewillWakeService(runtime, store, &sleepingFreewillSelector{}, FreewillWakeServiceConfig{
-		Enabled: true, SchedulingEnabled: true, AgentID: "agent", Scope: scope,
-		Objective: "Choose a safe read-only next action.", Owner: "recovery-test", LeaseFor: time.Minute,
-		OperatorControl: control,
-	}, nil)
+	selector := &sleepingFreewillSelector{}
+	service := newFreewillRecoveryServiceForTest(t, env, selector)
+	if err := service.RecoverPending(ctx, time.Now().Add(time.Minute), 10); err != nil {
+		t.Fatalf("recover orphan: %v", err)
+	}
+	reconciled, err := env.store.Load(ctx, orphan.State.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if reconciled.Freewill.Lifecycle != freewill.StateHalted ||
+		reconciled.Freewill.SelectionFailureClass != freewillAdmissionReconciliationClass ||
+		reconciled.Freewill.SelectionFailureCode != freewillAdmissionMissingCode ||
+		reconciled.Freewill.PauseReason != freewillAdmissionReconciledReason ||
+		!reconciled.Freewill.ExecutionDisabled || reconciled.Freewill.LeaseOwner != "" ||
+		!reconciled.Freewill.LeaseUntil.IsZero() || !reconciled.Freewill.SelectionNextAt.IsZero() {
+		t.Fatalf("orphan reconciliation state = %#v", reconciled.Freewill)
+	}
+	if reconciled.Revision != created.Revision+1 {
+		t.Fatalf("reconciled revision = %d, want one atomic checkpoint after %d", reconciled.Revision, created.Revision)
+	}
+	if selector.calls != 0 {
+		t.Fatalf("orphan provider calls = %d, want 0", selector.calls)
+	}
+	events := queryFreewillRunEventsForTest(t, env, orphan.State.RunID)
+	halted := 0
+	for _, ev := range events {
+		if ev.Type == event.EventFreewillSelectionHalted {
+			halted++
+			if ev.Payload["failure_code"] != freewillAdmissionMissingCode ||
+				ev.Payload["failure_class"] != freewillAdmissionReconciliationClass ||
+				ev.Payload["reason"] != freewillAdmissionReconciledReason {
+				t.Fatalf("reconciliation event metadata = %#v", ev.Payload)
+			}
+		}
+		if ev.Type == event.EventFreewillWakeClaimed || ev.Type == event.EventFreewillSelectionStarted ||
+			ev.Type == event.EventFreewillSelectionCommitted {
+			t.Fatalf("orphan advanced past reconciliation: %s", ev.Type)
+		}
+	}
+	if halted != 1 {
+		t.Fatalf("selection halted events = %d, want exactly 1", halted)
+	}
+	assertFreewillNoActionEventsForTest(t, events)
+}
+
+func TestFreewillRecoveryHaltsOrphanOwnedByOtherRunAndNeverReplaysAfterRelease(t *testing.T) {
+	ctx := context.Background()
+	env := newDurableTestEnvironment(t)
+	scope := freewill.Scope{ProjectID: "p", Workspace: "w"}
+	_, orphan := freewillWakeAcceptanceFixture("a-orphan", "agent", scope, "dedupe-a-orphan")
+	if _, err := env.store.Create(ctx, orphan, nil); err != nil {
+		t.Fatal(err)
+	}
+	wake, owner := freewillWakeAcceptanceFixture("b-owner", "agent", scope, "dedupe-b-owner")
+	if _, _, err := env.store.AcceptFreewillWake(ctx, owner, nil, wake); err != nil {
+		t.Fatalf("accept slot owner: %v", err)
+	}
+	selector := &sleepingFreewillSelector{}
+	service := newFreewillRecoveryServiceForTest(t, env, selector)
+	if err := service.RecoverPending(ctx, time.Now().Add(time.Minute), 10); err != nil {
+		t.Fatalf("recover orphan and valid owner: %v", err)
+	}
+	reconciled, err := env.store.Load(ctx, orphan.State.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	processed, err := env.store.Load(ctx, owner.State.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciled.Freewill.Lifecycle != freewill.StateHalted ||
+		reconciled.Freewill.SelectionFailureCode != freewillAdmissionOtherOwnerCode {
+		t.Fatalf("conflicting orphan state = %#v", reconciled.Freewill)
+	}
+	if processed.Freewill.Lifecycle != freewill.StateSleeping {
+		t.Fatalf("same-run admitted crash recovery lifecycle = %s, want sleeping", processed.Freewill.Lifecycle)
+	}
+	if selector.calls != 1 || len(selector.runIDs) != 1 || selector.runIDs[0] != owner.State.RunID {
+		t.Fatalf("selector calls for runs = %#v, want only %q", selector.runIDs, owner.State.RunID)
+	}
+	var slotOwner string
+	if err := env.store.db.QueryRowContext(ctx, "SELECT run_id FROM multiagent_freewill_admissions WHERE actor_key = ?", freewillActorAdmissionKey("agent")).Scan(&slotOwner); err != nil {
+		t.Fatal(err)
+	}
+	if slotOwner != owner.State.RunID {
+		t.Fatalf("reconciliation changed another run's actor slot to %q", slotOwner)
+	}
+	if _, err := env.store.Create(ctx, freewillAdmissionRecord("c-terminal", "agent", scope, freewill.StateSleeping), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.store.EnsureFreewillActorAdmission(ctx, "c-terminal", "agent", scope); err != nil {
+		t.Fatalf("release old slot by admitting terminal replacement: %v", err)
+	}
+	if err := service.RecoverPending(ctx, time.Now().Add(2*time.Minute), 10); err != nil {
+		t.Fatalf("recover after slot release: %v", err)
+	}
+	if selector.calls != 1 {
+		t.Fatalf("orphan replayed after slot release; selector calls = %d", selector.calls)
+	}
+	assertFreewillNoActionEventsForTest(t, queryFreewillRunEventsForTest(t, env, orphan.State.RunID))
+}
+
+func TestFreewillRecoveryLeavesMalformedAdmissionAmbiguousWithoutRewrite(t *testing.T) {
+	ctx := context.Background()
+	env := newDurableTestEnvironment(t)
+	scope := freewill.Scope{ProjectID: "p", Workspace: "w"}
+	_, orphan := freewillWakeAcceptanceFixture("ambiguous-orphan", "agent", scope, "dedupe-ambiguous-orphan")
+	created, err := env.store.Create(ctx, orphan, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.store.ensureFreewillTables(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, err = env.store.db.ExecContext(ctx, `INSERT INTO multiagent_freewill_admissions(actor_key,run_id,agent_id,project_id,workspace,updated_at) VALUES(?,?,?,?,?,?)`,
+		freewillActorAdmissionKey("agent"), "missing-owner", "agent", scope.ProjectID, scope.Workspace, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatal(err)
+	}
+	selector := &sleepingFreewillSelector{}
+	service := newFreewillRecoveryServiceForTest(t, env, selector)
 	if err := service.RecoverPending(ctx, time.Now().Add(time.Minute), 10); !errors.Is(err, ErrFreewillActorAdmissionAmbiguous) {
-		t.Fatalf("ambiguous recovery result = %v", err)
+		t.Fatalf("malformed owner result = %v, want ambiguous admission", err)
+	}
+	unchanged, err := env.store.Load(ctx, orphan.State.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Freewill.Lifecycle != freewill.StateWaking || unchanged.Revision != created.Revision {
+		t.Fatalf("ambiguous orphan was rewritten: lifecycle=%s revision=%d", unchanged.Freewill.Lifecycle, unchanged.Revision)
+	}
+	if selector.calls != 0 {
+		t.Fatalf("ambiguous orphan provider calls = %d, want 0", selector.calls)
+	}
+	if events := queryFreewillRunEventsForTest(t, env, orphan.State.RunID); len(events) != 0 {
+		t.Fatalf("ambiguous orphan emitted events: %v", events)
+	}
+}
+
+func TestFreewillAdmissionReconciliationRollsBackStateAndHistoryTogether(t *testing.T) {
+	ctx := context.Background()
+	env := newDurableTestEnvironment(t)
+	scope := freewill.Scope{ProjectID: "p", Workspace: "w"}
+	_, orphan := freewillWakeAcceptanceFixture("orphan-atomic", "agent", scope, "dedupe-orphan-atomic")
+	created, err := env.store.Create(ctx, orphan, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = env.store.db.ExecContext(ctx, `CREATE TRIGGER fail_freewill_reconciliation_event BEFORE INSERT ON multiagent_outbox
+WHEN NEW.run_id = 'orphan-atomic'
+BEGIN SELECT RAISE(ABORT, 'synthetic reconciliation event failure'); END;`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selector := &sleepingFreewillSelector{}
+	service := newFreewillRecoveryServiceForTest(t, env, selector)
+	if err := service.RecoverPending(ctx, time.Now().Add(time.Minute), 10); err == nil {
+		t.Fatal("expected transactional event failure")
+	}
+	unchanged, err := env.store.Load(ctx, orphan.State.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Freewill.Lifecycle != freewill.StateWaking || unchanged.Revision != created.Revision {
+		t.Fatalf("failed reconciliation changed run state: lifecycle=%s revision=%d", unchanged.Freewill.Lifecycle, unchanged.Revision)
+	}
+	if events := queryFreewillRunEventsForTest(t, env, orphan.State.RunID); len(events) != 0 {
+		t.Fatalf("failed reconciliation published history: %v", events)
+	}
+	if _, err := env.store.db.ExecContext(ctx, "DROP TRIGGER fail_freewill_reconciliation_event"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RecoverPending(ctx, time.Now().Add(2*time.Minute), 10); err != nil {
+		t.Fatalf("recover after removing synthetic failure: %v", err)
+	}
+	reconciled, err := env.store.Load(ctx, orphan.State.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciled.Freewill.Lifecycle != freewill.StateHalted || selector.calls != 0 {
+		t.Fatalf("recovered state=%s selector calls=%d", reconciled.Freewill.Lifecycle, selector.calls)
+	}
+	events := queryFreewillRunEventsForTest(t, env, orphan.State.RunID)
+	if len(events) != 1 || events[0].Type != event.EventFreewillSelectionHalted {
+		t.Fatalf("atomic reconciliation history = %v", events)
 	}
 }
 
