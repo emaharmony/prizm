@@ -12,6 +12,7 @@ import (
 
 	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/freewill"
+	"github.com/emaharmony/prizm/internal/provider"
 )
 
 func TestFreewillAdmissionReusesTerminalRunAndIsIdempotent(t *testing.T) {
@@ -430,6 +431,62 @@ func TestFreewillCategoryFeedbackPersistsAcrossDurableRetry(t *testing.T) {
 	if succeeded.Freewill.Lifecycle != freewill.StateSleeping || !succeeded.Freewill.ExecutionDisabled ||
 		succeeded.Freewill.SelectionRecoveryNumber != 1 || succeeded.Freewill.SelectionFailureCode != "" {
 		t.Fatalf("successful retry crossed safety or lost recovery state: %#v", succeeded.Freewill)
+	}
+}
+
+func TestFreewillChoiceReasonPersistsWithDecisionOnlyReplay(t *testing.T) {
+	ctx := context.Background()
+	env := newDurableTestEnvironment(t)
+	now := time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	runtime := newDurableRuntimeForTest(t, validDefinition(), &scriptedRunner{}, env.store, env.claimer, env.events, DurableRuntimeOptions{Clock: clock})
+	scope := freewill.Scope{ProjectID: "p", Workspace: "w"}
+	control, err := NewFreewillOperatorControl(env.store, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scored := "IDEA: Map dependencies\nSCORE: 72\nFACTORS: scope_fit\nRATIONALE: This maps direct dependencies and identifies risky coupling for review.\n" +
+		"IDEA: Document service boundaries\nSCORE: 88\nFACTORS: impact\nRATIONALE: Clear ownership notes help contributors route future work.\n" +
+		"IDEA: Review test coverage gaps\nSCORE: 61\nFACTORS: feasibility\nRATIONALE: A focused gap list guides later tests while keeping review scoped."
+	chat := &scoredFreewillChatStub{responses: []provider.ChatGenerateResponse{
+		{Content: scored, Provider: "ollama", Model: "glm-5.3-flash:cloud", PromptTokens: 11, OutputTokens: 7},
+		{Content: "choice: candidate-freewill-choice-reason-1\nreason: Write a README to explain the service boundaries.", Provider: "ollama", Model: "glm-5.3-flash:cloud", PromptTokens: 5, OutputTokens: 3},
+	}}
+	selector := ChatFreewillSelector{Provider: chat, AgentID: "agent", Model: "glm-5.3-flash:cloud"}
+	service, err := NewFreewillWakeService(runtime, env.store, selector, FreewillWakeServiceConfig{Enabled: true, SchedulingEnabled: true, AgentID: "agent", Scope: scope, Objective: "Choose a useful read-only follow-up.", Owner: "choice-reason-test", LeaseFor: time.Minute, OperatorControl: control}, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wake := FreewillWakeRequest{RunID: "freewill-choice-reason", AgentID: "agent", Scope: scope, Trigger: "scheduled_tick", DedupeKey: "dedupe-choice-reason", CorrelationID: "corr-choice-reason"}
+	accepted, _, err := runtime.AcceptFreewillWake(ctx, wake)
+	if err != nil {
+		t.Fatalf("accept wake: %v", err)
+	}
+	result, err := service.ProcessWake(ctx, accepted.State.RunID)
+	if err != nil {
+		t.Fatalf("process wake: %v", err)
+	}
+	if result.Freewill.ChoiceID != "candidate-freewill-choice-reason-1" || result.Freewill.ReasonSummary != "Write a README to explain the service boundaries." {
+		t.Fatalf("model choice/reason not retained: %#v", result.Freewill)
+	}
+	if !result.Freewill.ExecutionDisabled || result.Freewill.SelectionUsage.PromptTokens != 16 || result.Freewill.SelectionUsage.CompletionTokens != 10 || result.Freewill.SelectionUsage.TotalTokens != 26 {
+		t.Fatalf("safety or combined phase usage lost: %#v", result.Freewill)
+	}
+	replay, err := env.store.Load(ctx, accepted.State.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replay.Freewill.ChoiceID != result.Freewill.ChoiceID || replay.Freewill.ReasonSummary != result.Freewill.ReasonSummary || !replay.Freewill.ExecutionDisabled {
+		t.Fatalf("durable reload changed decision evidence: %#v", replay.Freewill)
+	}
+	events, err := env.events.Query(ctx, event.EventFilter{RunID: wake.RunID, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range events {
+		if ev.Type == event.EventMultiAgentToolDiagnostic || ev.Type == event.V1EventTypes.ToolCalled || ev.Type == event.V3EventTypes.ToolRequested || ev.Type == event.EventFreewillApprovalDecided || ev.Type == event.EventFreewillApprovalReconciled {
+			t.Fatalf("choice phase crossed decision-only boundary: %s", ev.Type)
+		}
 	}
 }
 
