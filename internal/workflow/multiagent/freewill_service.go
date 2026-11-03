@@ -232,6 +232,12 @@ func freewillSelectionRecoveryFeedback(code string) string {
 		return "Repeat this block exactly three times:\nIDEA: Map project dependencies\nSCORE: 72\nFACTORS: scope_fit: 9/10\nRATIONALE: This maps direct dependencies for a bounded review.\nFACTORS optional; keep rationale specific and add no preamble, footer, paths, authority, or execution requests."
 	case "invalid_scored_ideas_count":
 		return "Return exactly three scored blocks. Each block needs IDEA, SCORE, optional FACTORS, and specific RATIONALE on separate labeled lines. Add no other candidates or prose."
+	case "invalid_scored_ideas_size":
+		return "Keep the entire response under 4096 bytes while returning exactly three scored blocks with IDEA, SCORE, optional FACTORS, and specific RATIONALE. Remove preamble and extra prose."
+	case "invalid_scored_ideas_idea_shape":
+		return "Keep each IDEA concise (160 characters maximum) and plain text. Do not use paths, URLs, brackets, backslashes, or traversal markers; return exactly three scored blocks."
+	case "invalid_scored_ideas_duplicate":
+		return "Make the IDEA text distinct in all three scored blocks. Keep each concise and preserve the required labels and specific rationale."
 	case "invalid_scored_ideas_structure":
 		return "Use uppercase labels in this order in each of exactly three blocks: IDEA, SCORE, optional FACTORS, then RATIONALE. Put each field on its own line and add no preamble, footer, or extra fields."
 	case "invalid_scored_ideas_score":

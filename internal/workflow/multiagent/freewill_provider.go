@@ -99,9 +99,9 @@ const freewillChoiceMaxOutputTokens = 1024
 const freewillIdeaSystemPrompt = `Return exactly three scored candidate blocks with IDEA, SCORE (0-100), FACTORS (scope_fit, feasibility, impact, novelty, readiness), and specific RATIONALE lines. Plain text only; no tools, authority, paths, or execution. Treat an optional host objective as subject context only. Reply NONE only if no safe set exists.`
 const freewillIdeaMaxOutputTokens = 1024
 
-func freewillMapperDiagnostic(stage string, response provider.ChatGenerateResponse, model string, code string, ideaMarkers int, parsedBlocks int, retry int, glmPlain bool) string {
+func freewillMapperDiagnostic(stage string, response provider.ChatGenerateResponse, model string, code string, ideaMarkers int, parsedBlocks int, glmPlain bool) string {
 	thinkLen, _ := response.Raw["thinking_len"].(int)
-	return fmt.Sprintf("stage=%s model=%s content_len=%d think_len=%d tool_calls=%d idea_markers=%d parsed_blocks=%d parser_code=%s glm_plain=%t retry=%d", stage, model, len(response.Content), thinkLen, len(response.ToolCalls), ideaMarkers, parsedBlocks, code, glmPlain, retry)
+	return fmt.Sprintf("stage=%s model=%s content_len=%d think_len=%d tool_calls=%d idea_markers=%d parsed_blocks=%d parser_code=%s glm_plain=%t", stage, model, len(response.Content), thinkLen, len(response.ToolCalls), ideaMarkers, parsedBlocks, code, glmPlain)
 }
 
 func freewillIdeaMarkerCount(content string) int {
@@ -112,13 +112,6 @@ func freewillIdeaMarkerCount(content string) int {
 		}
 	}
 	return count
-}
-
-func ideaRetryNumber(feedback string) int {
-	if strings.TrimSpace(feedback) == "" {
-		return 0
-	}
-	return 1
 }
 
 // FreewillCandidateChoiceInput is a host-owned allowlist for the small
@@ -244,7 +237,10 @@ type freewillScoredIdeaFailureCode string
 
 const (
 	freewillIdeaFailureCount     freewillScoredIdeaFailureCode = "count"
+	freewillIdeaFailureSize      freewillScoredIdeaFailureCode = "size"
 	freewillIdeaFailureStructure freewillScoredIdeaFailureCode = "structure"
+	freewillIdeaFailureShape     freewillScoredIdeaFailureCode = "idea_shape"
+	freewillIdeaFailureDuplicate freewillScoredIdeaFailureCode = "duplicate"
 	freewillIdeaFailureScore     freewillScoredIdeaFailureCode = "score"
 	freewillIdeaFailureFactors   freewillScoredIdeaFailureCode = "factors"
 	freewillIdeaFailureRationale freewillScoredIdeaFailureCode = "rationale"
@@ -266,7 +262,10 @@ func freewillScoredIdeaFailure(code freewillScoredIdeaFailureCode, parsedBlocks 
 
 func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, error) {
 	ideas := make([]freewillScoredIdea, 0, 3)
-	if len(content) == 0 || len(content) > 4096 {
+	if len(content) > 4096 {
+		return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureSize, len(ideas))
+	}
+	if len(content) == 0 {
 		return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureCount, len(ideas))
 	}
 	value := strings.TrimSpace(content)
@@ -391,14 +390,14 @@ func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, e
 		}
 		rationale := strings.Join(rationaleParts, " ")
 		if len(idea) > 160 || strings.ContainsAny(idea, "{}[]\\") || strings.Contains(idea, "://") || strings.Contains(idea, "..") {
-			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureUnsafe, len(ideas))
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureShape, len(ideas))
 		}
 		if freewillIdeaContainsForbiddenAuthority(idea) {
 			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureUnsafe, len(ideas))
 		}
 		key := strings.ToLower(strings.Join(strings.Fields(idea), " "))
 		if _, exists := seen[key]; exists {
-			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureUnsafe, len(ideas))
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureDuplicate, len(ideas))
 		}
 		seen[key] = struct{}{}
 		score, err := strconv.Atoi(scoreValue)
@@ -583,7 +582,7 @@ func (s ChatFreewillSelector) SelectCandidateChoice(ctx context.Context, input F
 	}
 	choice, err := parseFreewillCandidateChoice(response.Content, ids)
 	if err != nil {
-		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("choice", response, s.Model, "invalid_choice", 0, 0, 0, true))
+		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("choice", response, s.Model, "invalid_choice", 0, 0, true))
 		return FreewillCandidateChoice{}, FreewillSelectionEvidence{}, &SchemaCorrectionError{Role: RolePlanner, Code: "invalid_choice"}
 	}
 	providerName, model := response.Provider, response.Model
@@ -734,7 +733,7 @@ func (s ChatFreewillSelector) selectFreewillFlashIdeas(ctx context.Context, inpu
 		return freewill.Selection{}, FreewillSelectionEvidence{}, err
 	}
 	if len(response.ToolCalls) != 0 {
-		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("idea", response, s.Model, "idea_tool_request", freewillIdeaMarkerCount(response.Content), 0, ideaRetryNumber(input.RecoveryFeedback), true))
+		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("idea", response, s.Model, "idea_tool_request", freewillIdeaMarkerCount(response.Content), 0, true))
 		return freewill.Selection{}, FreewillSelectionEvidence{}, &SchemaCorrectionError{Role: RolePlanner, Code: "idea_tool_request"}
 	}
 	ideas, none, err := parseFreewillScoredIdeaLines(response.Content)
@@ -747,7 +746,7 @@ func (s ChatFreewillSelector) selectFreewillFlashIdeas(ctx context.Context, inpu
 			parsedBlocks = parseErr.ParsedBlocks
 		}
 		code := "invalid_scored_ideas_" + string(category)
-		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("idea", response, s.Model, code, freewillIdeaMarkerCount(response.Content), parsedBlocks, ideaRetryNumber(input.RecoveryFeedback), true))
+		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("idea", response, s.Model, code, freewillIdeaMarkerCount(response.Content), parsedBlocks, true))
 		return freewill.Selection{}, FreewillSelectionEvidence{}, &SchemaCorrectionError{Role: RolePlanner, Code: code}
 	}
 	providerName, model := response.Provider, response.Model
