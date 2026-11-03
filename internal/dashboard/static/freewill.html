@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Prizm Freewill approvals">
+<title>Freewill · Prizm</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<a class="skip-link" href="#main-content">Skip to content</a>
+<nav class="nav"></nav>
+
+<main id="main-content" class="container" tabindex="-1">
+  <header class="page-header">
+    <div>
+      <p class="eyebrow">Freewill decision loop</p>
+      <h1 class="page-title">Freewill proposals</h1>
+      <p class="page-sub">Autonomous intention proposals awaiting operator decisions. Grants and denials are recorded with your actor name; decision-only mode never executes an intention.</p>
+    </div>
+    <button class="btn secondary" id="refresh" type="button">Refresh</button>
+  </header>
+
+  <div id="banner" class="banner" role="alert"></div>
+
+  <section aria-labelledby="pending-heading">
+    <div class="section-heading">
+      <div><h2 id="pending-heading" class="section-title">Awaiting decision</h2><p class="section-copy">Approve or deny each intention. A grant pauses the run (execution stays disabled); a denial closes it.</p></div>
+      <span id="pending-count" class="meta" aria-live="polite"></span>
+    </div>
+    <div id="pending" class="loading-state" aria-live="polite" aria-busy="true">Checking for pending proposals…</div>
+  </section>
+
+  <section aria-labelledby="recent-heading" style="margin-top: var(--space-5);">
+    <div class="section-heading">
+      <div><h2 id="recent-heading" class="section-title">Recent runs</h2><p class="section-copy">All Freewill runs, newest first.</p></div>
+      <span id="run-count" class="meta" aria-live="polite"></span>
+    </div>
+    <div id="recent" class="loading-state" aria-live="polite" aria-busy="true">Loading run history…</div>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+<script>
+(() => {
+  const ui = window.PrizmUI;
+  const $ = selector => document.querySelector(selector);
+
+  function banner(message, kind) {
+    const el = $('#banner');
+    if (!message) { el.className = 'banner'; el.textContent = ''; return; }
+    el.className = `banner ${kind === 'err' ? 'banner-err' : 'banner-warn'}`;
+    el.textContent = message;
+  }
+
+  function candidateCard(candidate, options = {}) {
+    const chosen = options.chosen;
+    const factors = (candidate.score_factors || []).join(', ');
+    const caps = (candidate.requested_capabilities || []).join(', ');
+    return `<article class="card" style="margin-bottom: var(--space-3);">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; gap:var(--space-2);">
+        <h3 style="margin:0; font-size:15px;">${chosen ? '★ ' : ''}${ui.escape(candidate.title || 'Untitled candidate')}</h3>
+        <span class="meta mono">${ui.escape(String(candidate.score ?? '—'))}/100</span>
+      </div>
+      <p class="section-copy">${ui.escape(candidate.reason_summary || '')}</p>
+      <p class="hint">capabilities: ${ui.escape(caps || '—')} | factors: ${ui.escape(factors || '—')}</p>
+      ${options.actions ? `<div class="actions-row">
+        <button class="btn small" data-decision="grant" data-run="${ui.escape(options.runId)}" data-approval="${ui.escape(options.approvalId)}" type="button">Approve</button>
+        <button class="btn small danger" data-decision="deny" data-run="${ui.escape(options.runId)}" data-approval="${ui.escape(options.approvalId)}" type="button">Deny</button>
+      </div>` : ''}
+    </article>`;
+  }
+
+  function decisionControls(status) {
+    if (status.lifecycle !== 'approval_pending') return { chosen: true, actions: false, note: '' };
+    const approvalId = status.approval_id || '';
+    const runId = status.run_id || '';
+    if (!runId || !approvalId) return { chosen: true, actions: false, note: '<p class="hint err">Approval reference missing — decision endpoint unavailable for this run.</p>' };
+    return { chosen: true, actions: true, note: '' };
+  }
+
+  function runCard(status) {
+    const selected = status.selected || {};
+    const alternatives = status.alternatives || [];
+    const decision = decisionControls(status);
+    const usage = status.usage || {};
+    const tokens = usage.total_tokens ? `${usage.total_tokens} tokens` : '';
+    const metaBits = [status.model, tokens, status.selection_recoveries ? `${status.selection_recoveries} recoveries` : ''].filter(Boolean).join(' · ');
+    const approvalLine = (status.approval_status && status.approval_status !== 'pending')
+      ? `<p class="hint">decision: ${ui.escape(status.approval_status)}${status.pause_reason ? ` (${ui.escape(status.pause_reason)})` : ''}</p>` : '';
+    return `<article class="card" style="margin-bottom: var(--space-4);">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; gap:var(--space-2); flex-wrap:wrap;">
+        <span>${ui.badge(status.lifecycle || 'unknown')}</span>
+        <span class="meta mono">${ui.escape(status.run_id || '')}</span>
+      </div>
+      <h3 style="margin:var(--space-2) 0 0; font-size:15px;">${ui.escape(selected.title || 'No selection recorded')}</h3>
+      <p class="section-copy">${ui.escape(selected.reason_summary || status.reason_summary || '')}</p>
+      <p class="hint">${ui.escape(metaBits || '—')}</p>
+      ${approvalLine}
+      ${alternatives.length || selected.title ? `<details><summary>Candidates considered (${alternatives.length + (selected.title ? 1 : 0)})</summary><div style="margin-top: var(--space-2);">${candidateCard(selected, { chosen: true })}${(alternatives || []).map(a => candidateCard(a)).join('')}</div></details>` : ''}
+      ${decision.note}
+      ${decision.actions ? `<div class="actions-row" id="actions-${ui.escape(runId)}">
+        <button class="btn small" data-decision="grant" data-run="${ui.escape(runId)}" data-approval="${ui.escape(approvalId)}" type="button">Approve</button>
+        <button class="btn small danger" data-decision="deny" data-run="${ui.escape(runId)}" data-approval="${ui.escape(approvalId)}" type="button">Deny</button>
+      </div>` : ''}
+    </article>`;
+  }
+
+  function renderRuns(runs) {
+    const pendingList = $('#pending');
+    const recentList = $('#recent');
+    const pending = runs.filter(r => r.lifecycle === 'approval_pending' || r.lifecycle === 'proposed');
+    const recent = runs;
+    $('#pending-count').textContent = `${pending.length} pending`;
+    $('#run-count').textContent = `${recent.length} run${recent.length === 1 ? '' : 's'}`;
+    pendingList.classList.remove('loading-state');
+    recentList.classList.remove('loading-state');
+    if (!recent.length) {
+      pendingList.innerHTML = '<p class="section-copy">No Freewill runs recorded yet.</p>';
+      recentList.innerHTML = '';
+      return;
+    }
+    pendingList.innerHTML = pending.length ? pending.map(runCard).join('') : '<p class="section-copy">Nothing awaiting a decision. Next wake arrives on the scheduled tick.</p>';
+    recentList.innerHTML = recent.map(runCard).join('');
+  }
+
+  async function decide(button) {
+    const runId = button.dataset.run;
+    const approvalId = button.dataset.approval;
+    const decision = button.dataset.decision;
+    const actor = window.prompt('Decision actor (recorded with the receipt):', 'rhem');
+    if (actor === null) return;
+    const reason = window.prompt(`Reason for ${decision} (optional):`, '') || '';
+    const body = JSON.stringify({ decision, reason });
+    button.disabled = true;
+    banner('');
+    try {
+      await ui.request(`/freewill/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}/decision?by=${encodeURIComponent(actor)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body
+      });
+      banner(`Decision recorded: ${decision} for ${runId}`, 'ok');
+      await load({ quiet: true });
+    } catch (err) {
+      banner(`Decision failed: ${err.message}`, 'err');
+      button.disabled = false;
+    }
+  }
+
+  let loading = false;
+  async function load({ quiet } = {}) {
+    if (loading) return;
+    loading = true;
+    const target = $('#recent');
+    if (!quiet) {
+      target.className = 'loading-state';
+      target.textContent = 'Loading runs…';
+      banner('');
+    }
+    try {
+      const payload = await ui.request('/freewill/runs');
+      renderRuns(Array.isArray(payload && payload.runs) ? payload.runs : []);
+    } catch (err) {
+      if (quiet && $('#run-count').textContent.trim()) banner('Refresh failed. The last results remain visible; retry in a moment.', 'warn');
+      else renderError(err.message);
+    } finally {
+      loading = false;
+    }
+  }
+
+  function renderError(message) {
+    const pendingList = $('#pending');
+    const recentList = $('#recent');
+    pendingList.classList.remove('loading-state');
+    recentList.classList.remove('loading-state');
+    pendingList.innerHTML = '<p class="section-copy">Freewill history is unavailable.</p>';
+    recentList.innerHTML = `<div class="banner banner-err" role="alert">${ui.escape(message)}</div>`;
+  }
+
+  document.addEventListener('click', event => {
+    const button = event.target.closest('[data-decision]');
+    if (button && !button.disabled) decide(button);
+  });
+  $('#refresh').addEventListener('click', () => load());
+  load();
+})();
+</script>
+</body>
+</html>

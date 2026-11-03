@@ -363,6 +363,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/v1/autopatch", s.handleAutoPatch)
 	s.mux.HandleFunc("/api/v1/approvals", s.handleApprovals)
 	s.mux.HandleFunc("/api/v1/approvals/", s.handleApprovalAction)
+	s.mux.HandleFunc("/api/v1/freewill/runs", s.handleFreewillApproval)
 	s.mux.HandleFunc("/api/v1/freewill/runs/", s.handleFreewillApproval)
 	s.mux.HandleFunc("/api/v1/freewill/control", s.handleFreewillControl)
 	s.mux.HandleFunc("/api/v1/events/stream", s.handleEventStream)

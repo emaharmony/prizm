@@ -5,7 +5,7 @@
     '/index.html': 'Overview', '/': 'Overview', '/v2.html': 'Operations',
     '/usage.html': 'Usage', '/workflow-editor.html': 'Workflow', '/editor.html': 'Agents',
     '/workspace.html': 'Workspace', '/scheduler.html': 'Scheduler', '/config.html': 'Settings',
-    '/multiagent-runs.html': 'Multi-Agent Runs'
+    '/multiagent-runs.html': 'Multi-Agent Runs', '/freewill.html': 'Freewill'
   };
 
   function escape(value) {
