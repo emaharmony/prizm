@@ -118,6 +118,9 @@ type Server struct {
 	mux         *http.ServeMux
 	editorMu    sync.RWMutex
 	editorWS    *editor.EditorState
+	// freewillDrafts holds validated-but-unconfirmed freewill config drafts
+	// between the preview and confirm requests of the approval gate.
+	freewillDrafts *freewillDraftStore
 	providers   *provider.ProviderRegistry
 	invocations *invocation.Store
 	// invokeIdleTimeout resets a stateful invoke conversation after this idle
@@ -363,6 +366,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/v1/autopatch", s.handleAutoPatch)
 	s.mux.HandleFunc("/api/v1/approvals", s.handleApprovals)
 	s.mux.HandleFunc("/api/v1/approvals/", s.handleApprovalAction)
+	s.mux.HandleFunc("/api/v1/freewill/runs", s.handleFreewillApproval)
 	s.mux.HandleFunc("/api/v1/freewill/runs/", s.handleFreewillApproval)
 	s.mux.HandleFunc("/api/v1/freewill/control", s.handleFreewillControl)
 	s.mux.HandleFunc("/api/v1/events/stream", s.handleEventStream)
@@ -389,6 +393,7 @@ func (s *Server) routes() {
 	// Config + scheduler editors (write prizm.yaml surgically).
 	s.mux.HandleFunc("/api/v1/config", s.handleConfig)
 	s.mux.HandleFunc("/api/v1/config/settings", s.handleConfigSettings)
+	s.mux.HandleFunc("/api/v1/config/freewill", s.handleConfigFreewill)
 	s.mux.HandleFunc("/api/v1/config/scheduler", s.handleConfigScheduler)
 	s.mux.HandleFunc("/api/v1/config/cron/validate", s.handleCronValidate)
 	s.mux.HandleFunc("/api/v1/config/actions", s.handleSchedulerActions)

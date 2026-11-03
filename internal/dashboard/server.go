@@ -39,7 +39,12 @@ func StaticFileServer() (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dashboard: sub filesystem: %w", err)
 	}
-	return http.FileServer(http.FS(subFS)), nil
+	// Static UI assets ship inside the binary, so a stale browser cache can
+	// serve old JavaScript against a new API. Force revalidation on every load.
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+		http.FileServer(http.FS(subFS)).ServeHTTP(w, r)
+	}), nil
 }
 
 // Server serves the Prizm dashboard over HTTP.

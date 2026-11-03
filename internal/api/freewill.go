@@ -1,12 +1,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/emaharmony/prizm/internal/freewill"
+	multiagent "github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
 
 type freewillControlRequest struct {
@@ -72,6 +74,30 @@ type freewillDecisionRequest struct {
 func (s *Server) handleFreewillApproval(w http.ResponseWriter, r *http.Request) {
 	if s.freewillApprovals == nil {
 		writeJSONError(w, "Freewill approval service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if r.URL.Path == "/api/v1/freewill/runs" || r.URL.Path == "/api/v1/freewill/runs/" {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		lister, ok := s.freewillApprovals.(interface {
+			List(context.Context, int) ([]multiagent.FreewillApprovalStatus, error)
+		})
+		if !ok {
+			writeJSONError(w, "Freewill run listing is unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		runs, err := lister.List(r.Context(), 500)
+		if err != nil {
+			writeJSONError(w, "Freewill run listing failed", http.StatusInternalServerError)
+			return
+		}
+		if runs == nil {
+			runs = []multiagent.FreewillApprovalStatus{}
+		}
+		writeJSON(w, map[string]any{"runs": runs})
 		return
 	}
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/freewill/runs/"), "/"), "/")

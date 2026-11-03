@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Prizm Freewill approvals">
+<title>Freewill · Prizm</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<a class="skip-link" href="#main-content">Skip to content</a>
+<nav class="nav"></nav>
+
+<main id="main-content" class="container" tabindex="-1">
+  <header class="page-header">
+    <div>
+      <p class="eyebrow">Freewill decision loop</p>
+      <h1 class="page-title">Freewill proposals</h1>
+      <p class="page-sub">Autonomous intention proposals awaiting operator decisions. Grants and denials are recorded with your actor name; decision-only mode never executes an intention.</p>
+    </div>
+    <button class="btn secondary" id="refresh" type="button">Refresh</button>
+  </header>
+
+  <div id="banner" class="banner" role="alert"></div>
+
+  <section aria-labelledby="pending-heading">
+    <div class="section-heading">
+      <div><h2 id="pending-heading" class="section-title">Awaiting decision</h2><p class="section-copy">Approve or deny each intention. A grant pauses the run (execution stays disabled); a denial closes it.</p></div>
+      <span id="pending-count" class="meta" aria-live="polite"></span>
+    </div>
+    <div id="pending" class="loading-state" aria-live="polite" aria-busy="true">Checking for pending proposals…</div>
+  </section>
+
+  <section aria-labelledby="settings-heading" style="margin-top: var(--space-5);">
+    <div class="section-heading">
+      <div><h2 id="settings-heading" class="section-title">Freewill settings</h2><p class="section-copy">Changes require an approval gate: save produces a preview diff first, and the write only happens after you confirm it.</p></div>
+    </div>
+    <div id="settings" class="card">
+      <div class="grid-2">
+        <label class="field">Enabled
+          <span class="toggle" style="margin-top:6px;"><input type="checkbox" id="fw-enabled"><span class="slider"></span></span>
+        </label>
+        <label class="field">Agent
+          <input id="fw-agent" type="text" autocomplete="off" placeholder="lumi">
+        </label>
+        <label class="field">Project
+          <input id="fw-project" type="text" autocomplete="off" placeholder="bassbook">
+        </label>
+        <label class="field">Model
+          <input id="fw-model" type="text" autocomplete="off" placeholder="glm-5.3-flash:cloud">
+        </label>
+        <label class="field">Wake schedule (cron)
+          <input id="fw-schedule" type="text" autocomplete="off" placeholder="*/10 * * * *">
+        </label>
+        <label class="field">Reasoning effort
+          <input id="fw-effort" type="text" autocomplete="off" placeholder="low / high / max">
+        </label>
+      </div>
+      <label class="field" style="margin-top: var(--space-2);">Objective (shown to the selector as context)
+        <textarea id="fw-objective" rows="2" maxlength="512"></textarea>
+      </label>
+      <div class="actions-row">
+        <button class="btn" id="fw-save" type="button">Save (preview first)</button>
+        <button class="btn secondary" id="fw-revert" type="button">Reload current</button>
+      </div>
+      <div id="fw-gate" style="display:none; margin-top: var(--space-3);"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="recent-heading" style="margin-top: var(--space-5);">
+    <div class="section-heading">
+      <div><h2 id="recent-heading" class="section-title">Recent runs</h2><p class="section-copy">All Freewill runs, newest first.</p></div>
+      <span id="run-count" class="meta" aria-live="polite"></span>
+    </div>
+    <div id="recent" class="loading-state" aria-live="polite" aria-busy="true">Loading run history…</div>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+<script>
+(() => {
+  const ui = window.PrizmUI;
+  const $ = selector => document.querySelector(selector);
+
+  function banner(message, kind) {
+    const el = $('#banner');
+    if (!message) { el.className = 'banner'; el.textContent = ''; return; }
+    el.className = `banner ${kind === 'err' ? 'banner-err' : 'banner-warn'}`;
+    el.textContent = message;
+  }
+
+  function candidateCard(candidate, options = {}) {
+    const chosen = options.chosen;
+    const factors = (candidate.score_factors || []).join(', ');
+    const caps = (candidate.requested_capabilities || []).join(', ');
+    return `<article class="card" style="margin-bottom: var(--space-3);">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; gap:var(--space-2);">
+        <h3 style="margin:0; font-size:15px;">${chosen ? '★ ' : ''}${ui.escape(candidate.title || 'Untitled candidate')}</h3>
+        <span class="meta mono">${ui.escape(String(candidate.score ?? '—'))}/100</span>
+      </div>
+      <p class="section-copy">${ui.escape(candidate.reason_summary || '')}</p>
+      <p class="hint">capabilities: ${ui.escape(caps || '—')} | factors: ${ui.escape(factors || '—')}</p>
+      ${options.actions ? `<div class="actions-row">
+        <button class="btn small" data-decision="grant" data-run="${ui.escape(options.runId)}" data-approval="${ui.escape(options.approvalId)}" type="button">Approve</button>
+        <button class="btn small danger" data-decision="deny" data-run="${ui.escape(options.runId)}" data-approval="${ui.escape(options.approvalId)}" type="button">Deny</button>
+      </div>` : ''}
+    </article>`;
+  }
+
+  function decisionControls(status) {
+    if (status.lifecycle !== 'approval_pending') return { chosen: true, actions: false, note: '' };
+    const approvalId = status.approval_id || '';
+    const runId = status.run_id || '';
+    if (!runId || !approvalId) return { chosen: true, actions: false, note: '<p class="hint err">Approval reference missing — decision endpoint unavailable for this run.</p>' };
+    return { chosen: true, actions: true, note: '' };
+  }
+
+  function runCard(status) {
+    const selected = status.selected || {};
+    const alternatives = status.alternatives || [];
+    const decision = decisionControls(status);
+    const usage = status.usage || {};
+    const tokens = usage.total_tokens ? `${usage.total_tokens} tokens` : '';
+    const metaBits = [status.model, tokens, status.selection_recoveries ? `${status.selection_recoveries} recoveries` : ''].filter(Boolean).join(' · ');
+    const approvalLine = (status.approval_status && status.approval_status !== 'pending')
+      ? `<p class="hint">decision: ${ui.escape(status.approval_status)}${status.pause_reason ? ` (${ui.escape(status.pause_reason)})` : ''}</p>` : '';
+    return `<article class="card" style="margin-bottom: var(--space-4);">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; gap:var(--space-2); flex-wrap:wrap;">
+        <span>${ui.badge(status.lifecycle || 'unknown')}</span>
+        <span class="meta mono">${ui.escape(status.run_id || '')}</span>
+      </div>
+      <h3 style="margin:var(--space-2) 0 0; font-size:15px;">${ui.escape(selected.title || 'No selection recorded')}</h3>
+      <p class="section-copy">${ui.escape(selected.reason_summary || status.reason_summary || '')}</p>
+      <p class="hint">${ui.escape(metaBits || '—')}</p>
+      ${approvalLine}
+      ${alternatives.length || selected.title ? `<details><summary>Candidates considered (${alternatives.length + (selected.title ? 1 : 0)})</summary><div style="margin-top: var(--space-2);">${candidateCard(selected, { chosen: true })}${(alternatives || []).map(a => candidateCard(a)).join('')}</div></details>` : ''}
+      ${decision.note}
+      ${decision.actions ? `<div class="actions-row" id="actions-${ui.escape(runId)}">
+        <button class="btn small" data-decision="grant" data-run="${ui.escape(runId)}" data-approval="${ui.escape(approvalId)}" type="button">Approve</button>
+        <button class="btn small danger" data-decision="deny" data-run="${ui.escape(runId)}" data-approval="${ui.escape(approvalId)}" type="button">Deny</button>
+      </div>` : ''}
+    </article>`;
+  }
+
+  function renderRuns(runs) {
+    const pendingList = $('#pending');
+    const recentList = $('#recent');
+    const pending = runs.filter(r => r.lifecycle === 'approval_pending' || r.lifecycle === 'proposed');
+    const recent = runs;
+    $('#pending-count').textContent = `${pending.length} pending`;
+    $('#run-count').textContent = `${recent.length} run${recent.length === 1 ? '' : 's'}`;
+    pendingList.classList.remove('loading-state');
+    recentList.classList.remove('loading-state');
+    if (!recent.length) {
+      pendingList.innerHTML = '<p class="section-copy">No Freewill runs recorded yet.</p>';
+      recentList.innerHTML = '';
+      return;
+    }
+    pendingList.innerHTML = pending.length ? pending.map(runCard).join('') : '<p class="section-copy">Nothing awaiting a decision. Next wake arrives on the scheduled tick.</p>';
+    recentList.innerHTML = recent.map(runCard).join('');
+  }
+
+  async function decide(button) {
+    const runId = button.dataset.run;
+    const approvalId = button.dataset.approval;
+    const decision = button.dataset.decision;
+    const actor = window.prompt('Decision actor (recorded with the receipt):', 'rhem');
+    if (actor === null) return;
+    const reason = window.prompt(`Reason for ${decision} (optional):`, '') || '';
+    const body = JSON.stringify({ decision, reason });
+    button.disabled = true;
+    banner('');
+    try {
+      await ui.request(`/freewill/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}/decision?by=${encodeURIComponent(actor)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body
+      });
+      banner(`Decision recorded: ${decision} for ${runId}`, 'ok');
+      await load({ quiet: true });
+    } catch (err) {
+      banner(`Decision failed: ${err.message}`, 'err');
+      button.disabled = false;
+    }
+  }
+
+  let loading = false;
+  async function load({ quiet } = {}) {
+    if (loading) return;
+    loading = true;
+    const target = $('#recent');
+    if (!quiet) {
+      target.className = 'loading-state';
+      target.textContent = 'Loading runs…';
+      banner('');
+    }
+    try {
+      const payload = await ui.request('/freewill/runs');
+      renderRuns(Array.isArray(payload && payload.runs) ? payload.runs : []);
+    } catch (err) {
+      if (quiet && $('#run-count').textContent.trim()) banner('Refresh failed. The last results remain visible; retry in a moment.', 'warn');
+      else renderError(err.message);
+    } finally {
+      loading = false;
+    }
+  }
+
+  function renderError(message) {
+    const pendingList = $('#pending');
+    const recentList = $('#recent');
+    pendingList.classList.remove('loading-state');
+    recentList.classList.remove('loading-state');
+    pendingList.innerHTML = '<p class="section-copy">Freewill history is unavailable.</p>';
+    recentList.innerHTML = `<div class="banner banner-err" role="alert">${ui.escape(message)}</div>`;
+  }
+
+  // --- Settings (approval-gated) ---
+  let loadedSettings = null;
+  let pendingDraft = null;   // { draft_id, summary, expires_in }
+  let pendingPatch = null;   // the patch body that produced pendingDraft
+
+  async function loadSettings() {
+    const card = $('#settings');
+    card.classList.add('disabled-panel');
+    try {
+      const cfg = await ui.request('/config/freewill');
+      loadedSettings = cfg;
+      $('#fw-enabled').checked = !!cfg.enabled;
+      $('#fw-agent').value = cfg.agent_id || '';
+      $('#fw-project').value = cfg.project_id || '';
+      $('#fw-model').value = cfg.model || '';
+      $('#fw-schedule').value = (cfg.scheduling && cfg.scheduling.schedule) || '';
+      $('#fw-effort').value = cfg.reasoning_effort || '';
+      $('#fw-objective').value = cfg.objective || '';
+      clearGate();
+    } catch (err) {
+      banner(`Settings unavailable: ${err.message}`, 'err');
+    } finally {
+      card.classList.remove('disabled-panel');
+    }
+  }
+
+  function buildPatch() {
+    const c = loadedSettings || {};
+    const patch = {};
+    if ($('#fw-enabled').checked !== !!c.enabled) patch.enabled = $('#fw-enabled').checked;
+    const agent = $('#fw-agent').value.trim();
+    if (agent && agent !== c.agent_id) patch.agent_id = agent;
+    const project = $('#fw-project').value.trim();
+    if (project && project !== c.project_id) patch.project_id = project;
+    const model = $('#fw-model').value.trim();
+    if (model && model !== c.model) patch.model = model;
+    const schedule = $('#fw-schedule').value.trim();
+    const curSched = (c.scheduling && c.scheduling.schedule) || '';
+    const schedEnabled = c.scheduling ? !!c.scheduling.enabled : false;
+    if (schedule !== curSched && schedule) patch.scheduling = { enabled: schedEnabled, schedule };
+    const effort = $('#fw-effort').value.trim();
+    if (effort && effort !== (c.reasoning_effort || '')) patch.reasoning_effort = effort;
+    const objective = $('#fw-objective').value;
+    if (objective !== (c.objective || '')) patch.objective = objective;
+    return patch;
+  }
+
+  function clearGate() {
+    $('#fw-gate').style.display = 'none';
+    $('#fw-gate').innerHTML = '';
+  }
+
+  function showGateError(message) {
+    const el = $('#fw-gate');
+    el.style.display = 'block';
+    el.innerHTML = `<div class="banner banner-err" role="alert">${ui.escape(message)}</div>`;
+  }
+
+  function renderGate(payload, patch) {
+    const el = $('#fw-gate');
+    const rows = Object.entries(payload.summary || {}).map(([key, change]) => {
+      const from = change && typeof change === 'object' && 'from' in change ? change.from : '—';
+      const to = change && typeof change === 'object' && 'to' in change ? change.to : String(change);
+      return `<tr><td data-label="Field">${ui.escape(key)}</td><td data-label="From"><span class="mono">${ui.escape(String(from))}</span></td><td data-label="To"><span class="mono">${ui.escape(String(to))}</span></td></tr>`;
+    }).join('');
+    el.style.display = 'block';
+    el.innerHTML = `
+      <div class="card" style="box-shadow:none;">
+        <h3 style="margin:0 0 var(--space-2); font-size:14px;">Review before saving — nothing is written until you confirm.</h3>
+        <div class="table-wrap"><table class="data-table">${rows || '<tbody><tr><td>No changes detected.</td></tr></tbody>'}</table></div>
+        <p class="hint">Draft expires in ${payload.expires_in || 900} seconds. Confirming writes prizm.yaml and requires a service restart to take effect.</p>
+        <div class="actions-row">
+          <button class="btn" id="fw-confirm" type="button">Confirm and save</button>
+          <button class="btn secondary" id="fw-discard" type="button">Discard</button>
+        </div>
+      </div>`;
+    $('#fw-confirm').addEventListener('click', () => confirmSave(patch));
+    $('#fw-discard').addEventListener('click', () => {
+      pendingDraft = null;
+      pendingPatch = null;
+      clearGate();
+    });
+  }
+
+  async function saveDraft(patch) {
+    const saveBtn = $('#fw-save');
+    saveBtn.disabled = true;
+    banner('');
+    try {
+      const payload = await ui.request('/config/freewill', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch)
+      });
+      if (payload.status !== 'draft') throw new Error(payload.error || 'unexpected response');
+      pendingDraft = payload;
+      pendingPatch = patch;
+      renderGate(payload, patch);
+    } catch (err) {
+      pendingDraft = null;
+      pendingPatch = null;
+      showGateError(err.message);
+    } finally {
+      saveBtn.disabled = false;
+    }
+  }
+
+  async function confirmSave(patch) {
+    if (!pendingDraft) return;
+    const actor = window.prompt('Confirm as (recorded on the write):', 'rhem');
+    if (actor === null) return;
+    const confirmBtn = $('#fw-confirm');
+    confirmBtn.disabled = true;
+    const body = Object.assign({}, patch, { confirm: true, draft_id: pendingDraft.draft_id, actor });
+    try {
+      const result = await ui.request('/config/freewill', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      banner(`Settings saved (confirmed by ${result.confirmed_by || actor}). ${result.restart_required ? 'Restart the Prizm service to apply.' : ''}`, 'ok');
+      pendingDraft = null;
+      pendingPatch = null;
+      clearGate();
+      await loadSettings();
+    } catch (err) {
+      pendingDraft = null;
+      pendingPatch = null;
+      showGateError(err.message + ' — preview again to retry.');
+    }
+  }
+
+  $('#fw-save').addEventListener('click', () => {
+    const patch = buildPatch();
+    if (!Object.keys(patch).length) {
+      banner('No settings changed.', 'warn');
+      return;
+    }
+    saveDraft(patch);
+  });
+  $('#fw-revert').addEventListener('click', () => {
+    pendingDraft = null;
+    pendingPatch = null;
+    clearGate();
+    loadSettings();
+  });
+
+  document.addEventListener('click', event => {
+    const button = event.target.closest('[data-decision]');
+    if (button && !button.disabled) decide(button);
+  });
+  $('#refresh').addEventListener('click', () => load());
+  load();
+  loadSettings();
+})();
+</script>
+</body>
+</html>
