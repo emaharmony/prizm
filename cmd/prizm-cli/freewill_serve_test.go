@@ -282,18 +282,29 @@ func TestServedFreewillP1WakePersistsPolicyOnlyProposalAndHistory(t *testing.T) 
 	}
 	mu.Unlock()
 
-	storedEvents, err := runtime.events.Query(ctx, event.EventFilter{RunID: run.State.RunID, Limit: 100})
-	if err != nil {
-		t.Fatal(err)
-	}
+	var storedEvents []event.Event
 	seenSelection, seenDenied := false, false
+	eventDeadline := time.Now().Add(time.Second)
+	for time.Now().Before(eventDeadline) && ctx.Err() == nil {
+		storedEvents, err = runtime.events.Query(ctx, event.EventFilter{RunID: run.State.RunID, Limit: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		seenSelection, seenDenied = false, false
+		for _, e := range storedEvents {
+			if e.Type == event.EventFreewillSelectionCommitted {
+				seenSelection = true
+			}
+			if e.Type == event.EventFreewillPolicyDenied {
+				seenDenied = true
+			}
+		}
+		if seenSelection && seenDenied {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	for _, e := range storedEvents {
-		if e.Type == event.EventFreewillSelectionCommitted {
-			seenSelection = true
-		}
-		if e.Type == event.EventFreewillPolicyDenied {
-			seenDenied = true
-		}
 		if e.Type == event.EventFreewillApprovalProposed || e.Type == event.EventFreewillApprovalDecided {
 			t.Fatalf("default-deny proposal emitted approval event %q", e.Type)
 		}
