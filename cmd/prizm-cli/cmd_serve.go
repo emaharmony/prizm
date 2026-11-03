@@ -1362,11 +1362,14 @@ func executeServe(args []string) {
 			log.Printf("[FREEWILL-NOTIFY] WARN notify_channel_id set but no Discord bot is configured")
 		} else {
 			var fwStore *multiagent.SQLiteDurableRunStore
+			var fwApprovals *multiagent.FreewillApprovalService
 			if freewillRuntime != nil {
 				fwStore = freewillRuntime.store
+				fwApprovals = freewillRuntime.approvals
 			}
-			startFreewillDiscordNotifications(natsConn, discordBots[0], cfg.Freewill.NotifyChannelID, fwStore)
-			fmt.Printf("  Freewill notifications -> Discord channel %s\n", cfg.Freewill.NotifyChannelID)
+			startFreewillDiscordNotifications(natsConn, discordBots[0], cfg.Freewill.NotifyChannelID, cfg.Freewill.NotifyAllowUserIDs, fwStore)
+			startFreewillButtonHandler(discordBots[0], cfg.Freewill.NotifyAllowUserIDs, fwApprovals)
+			fmt.Printf("  Freewill notifications -> Discord channel %s (buttons: %t)\n", cfg.Freewill.NotifyChannelID, len(cfg.Freewill.NotifyAllowUserIDs) > 0)
 		}
 	}
 	apiServer := api.NewServer(api.Config{
