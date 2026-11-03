@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/emaharmony/prizm/internal/adapter/builtin/discordbot"
 	"github.com/emaharmony/prizm/internal/workflow/multiagent"
@@ -72,10 +73,10 @@ func buttonsFor(allowUserIDs []string, approvalID, runID string) []discordbot.Me
 	}
 }
 
-// formatFreewillNotification renders one enriched notification. Enrichment
-// (selected_title, selected_score, reason_summary, agent/project scope) is
-// written into the canonical event payload at the emit point, so cards never
-// require run-store lookups.
+// formatFreewillNotification renders one enriched notification as a
+// decision-ready brief: project, goal, reasoning, capabilities, score context,
+// and the alternatives the selector considered — everything a human needs
+// before approving, without opening any other surface.
 func formatFreewillNotification(n multiagent.FreewillNotification, allowUserIDs []string) (string, []discordbot.MessageButton) {
 	approvalID, _ := n.Payload["approval_ref"].(string)
 	if approvalID == "" {
@@ -89,22 +90,59 @@ func formatFreewillNotification(n multiagent.FreewillNotification, allowUserIDs 
 			return fmt.Sprintf("🧠 **Freewill proposal** (`%s`)\nRun: `%s` — see dashboard for details", approvalID, runID), nil
 		}
 		var b strings.Builder
-		fmt.Fprintf(&b, "🧠 **Freewill proposal awaits your decision**\n")
-		fmt.Fprintf(&b, "**Idea:** %s\n", title)
-		if score, ok := n.Payload["selected_score"].(float64); ok {
-			fmt.Fprintf(&b, "**Score:** %d/100 (advisory, chosen independently)\n", int(score))
+		fmt.Fprintf(&b, "🧠 **Freewill proposal — needs your decision**\n")
+		fmt.Fprintf(&b, "**Project:** `%s`", n.Payload["project_id"])
+		if ws, _ := n.Payload["workspace"].(string); ws != "" {
+			fmt.Fprintf(&b, " · `%s`", ws)
 		}
+		b.WriteString("\n")
 		if agent, _ := n.Payload["agent_id"].(string); agent != "" {
-			fmt.Fprintf(&b, "**Agent:** `%s`", agent)
-			if project, _ := n.Payload["project_id"].(string); project != "" {
-				fmt.Fprintf(&b, " · project `%s`", project)
+			fmt.Fprintf(&b, "**Proposed by:** `%s`\n", agent)
+		}
+		fmt.Fprintf(&b, "**What:** %s\n", title)
+		if goal, _ := n.Payload["selected_goal"].(string); goal != "" {
+			fmt.Fprintf(&b, "**Goal:** %s\n", goal)
+		}
+		// The chosen candidate's full reasoning, why it was chosen over the
+		// alternatives, and what the alternatives scored — full transparency.
+		cands, _ := n.Payload["candidates"].([]any)
+		choiceID, _ := n.Payload["choice_id"].(string)
+		for _, rc := range cands {
+			c, ok := rc.(map[string]any)
+			if !ok || c["candidate_id"] != choiceID {
+				continue
 			}
-			b.WriteString("\n")
+			if reason, _ := c["reason"].(string); reason != "" {
+				fmt.Fprintf(&b, "**Why (selector reasoning):**\n%s\n", fwBullets(reason))
+			}
+			if caps, ok := c["capabilities"].([]any); ok && len(caps) > 0 {
+				parts := make([]string, 0, len(caps))
+				for _, cp := range caps {
+					parts = append(parts, fmt.Sprint(cp))
+				}
+				fmt.Fprintf(&b, "**Requested capabilities:** %s\n", strings.Join(parts, ", "))
+			}
+			break
 		}
-		if reason, _ := n.Payload["reason_summary"].(string); reason != "" {
-			fmt.Fprintf(&b, "**Why:** %s\n", fwTruncate(reason, 240))
+		if len(cands) > 1 {
+			fmt.Fprintf(&b, "**Alternatives considered:**")
+			parts := make([]string, 0, len(cands))
+			for _, rc := range cands {
+				c, ok := rc.(map[string]any)
+				if !ok || c["candidate_id"] == choiceID {
+					continue
+				}
+				t, _ := c["title"].(string)
+				sc, _ := c["score"].(float64)
+				parts = append(parts, fmt.Sprintf("%s (%d)", t, int(sc)))
+			}
+			fmt.Fprintf(&b, " %s\n", strings.Join(parts, " · "))
 		}
-		fmt.Fprintf(&b, "Decide at the Freewill dashboard (`/freewill.html`) — approval id `%s`", approvalID)
+		if score, ok := n.Payload["selected_score"].(float64); ok {
+			fmt.Fprintf(&b, "**Score:** %d/100 (advisory — the human decides)\n", int(score))
+		}
+		fmt.Fprintf(&b, "**Approving:** marks your decision; nothing executes — proposals are decision-only in this runtime.\n")
+		fmt.Fprintf(&b, "Approval id `%s` · dashboard: `/freewill.html`", approvalID)
 		return b.String(), buttonsFor(allowUserIDs, approvalID, runID)
 	case "prism.freewill.approval.decided":
 		decision, _ := n.Payload["decision"].(string)
@@ -180,9 +218,52 @@ func startFreewillButtonHandler(bot discordBotClient, allowUserIDs []string, app
 	}
 }
 
-func fwTruncate(s string, n int) string {
-	if len(s) <= n {
-		return s
+// fwBullets renders the selector's run-together reasoning clauses as bullets
+// by splitting on sentence-ish boundaries; falls back to wrapped text.
+func fwBullets(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return ""
 	}
-	return s[:n-1] + "…"
+	parts := fwSplitClauses(reason)
+	if len(parts) <= 1 {
+		return "- " + reason
+	}
+	var b strings.Builder
+	for _, p := range parts {
+		b.WriteString("- ")
+		b.WriteString(strings.TrimSpace(p))
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
+
+// fwSplitClauses breaks a GLM reasoning blob into sentences where punctuation
+// exists; otherwise splits camel-ish/verb boundaries conservatively on
+// uppercase-letter patterns ("…libraries Requires a small…" → two clauses).
+func fwSplitClauses(s string) []string {
+	var out []string
+	cur := strings.Builder{}
+	runes := []rune(s)
+	for i, r := range runes {
+		cur.WriteRune(r)
+		if r == '.' || r == '!' || r == '?' {
+			if i+1 < len(runes) && runes[i+1] == ' ' {
+				out = append(out, cur.String())
+				cur.Reset()
+			}
+		} else if r == ' ' && i+1 < len(runes) && unicode.IsUpper(runes[i+1]) && len(cur.String()) > 12 {
+			// New clause likely starts ("… Requires …", "… Improves …")
+			text := strings.TrimSpace(cur.String())
+			if text != "" {
+				out = append(out, text)
+			}
+			cur.Reset()
+		}
+	}
+	if strings.TrimSpace(cur.String()) != "" {
+		out = append(out, strings.TrimSpace(cur.String()))
+	}
+	return out
+}
+

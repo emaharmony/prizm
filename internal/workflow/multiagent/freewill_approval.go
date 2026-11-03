@@ -611,6 +611,19 @@ func freewillEventContext(record DurableRun) map[string]any {
 		cands := make([]map[string]any, 0, len(fw.Candidates))
 		for _, c := range fw.Candidates {
 			entry := map[string]any{"candidate_id": c.CandidateID, "title": c.Request.Title, "score": c.Score}
+			if c.Request.Goal != "" && c.Request.Goal != c.Request.Title {
+				entry["goal"] = c.Request.Goal
+			}
+			if c.Request.ReasonSummary != "" {
+				entry["reason"] = c.Request.ReasonSummary
+			}
+			// decision_only is the default; only surface non-default asks.
+			if len(c.Request.RequestedCapabilities) > 0 && !(len(c.Request.RequestedCapabilities) == 1 && c.Request.RequestedCapabilities[0] == "decision_only") {
+				entry["capabilities"] = c.Request.RequestedCapabilities
+			}
+			if c.ScoreRationale != "" {
+				entry["rationale"] = c.ScoreRationale
+			}
 			if c.Request.AgentID != "" {
 				ctx["agent_id"] = c.Request.AgentID
 			}
@@ -621,6 +634,9 @@ func freewillEventContext(record DurableRun) map[string]any {
 			if c.CandidateID == fw.ChoiceID {
 				ctx["selected_title"] = c.Request.Title
 				ctx["selected_score"] = c.Score
+				if c.Request.Goal != "" {
+					ctx["selected_goal"] = c.Request.Goal
+				}
 				break
 			}
 		}

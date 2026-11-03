@@ -25,17 +25,34 @@ func TestFormatFreewillNotificationProposedEnriched(t *testing.T) {
 		EventType: "prism.freewill.approval.proposed", RunID: "freewill_abc",
 		Payload: map[string]any{
 			"selected_title": "Tag songs", "selected_score": 74.0,
-			"reason_summary": "smallest safe change", "approval_ref": "appr_9",
 			"agent_id": "lumi-selector", "project_id": "bassbook",
+			"workspace":    "/Users/ema/projects/repos/BassBook",
+			"approval_ref": "appr_9", "choice_id": "cand-3",
+			"candidates": []any{
+				map[string]any{"candidate_id": "cand-1", "title": "Practice timer", "score": 82.0},
+				map[string]any{"candidate_id": "cand-3", "title": "Tag songs", "score": 74.0,
+					"reason": "Improves navigation Requires a small schema migration Moderately reviewable"},
+			},
 		},
 	}, []string{"164169326142816256"})
-	for _, want := range []string{"Tag songs", "74/100", "lumi-selector", "bassbook", "smallest safe change"} {
+	for _, want := range []string{
+		"Tag songs", "74/100", "lumi-selector", "bassbook",
+		"Project:", "Why (selector reasoning)", "Improves navigation",
+		"Alternatives considered", "Practice timer (82)", "decision-only",
+	} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("card missing %q: %q", want, out)
+			t.Fatalf("card missing %q:\n%s", want, out)
 		}
 	}
 	if len(btns) != 2 {
 		t.Fatalf("allowlist set must render 2 buttons, got %d", len(btns))
+	}
+}
+
+func TestFwBulletsSplitsClauses(t *testing.T) {
+	got := fwBullets("Improves navigation for libraries Requires a small migration but is backward-compatible Moderate scope")
+	if !strings.Contains(got, "- Improves navigation") || !strings.Contains(got, "- Requires a small migration") || !strings.Contains(got, "- Moderate scope") {
+		t.Fatalf("expected clause bullets, got:\n%s", got)
 	}
 }
 
