@@ -119,6 +119,9 @@ type FreewillConfig struct {
 	ReasoningEffort string                   `yaml:"reasoning_effort,omitempty"`
 	PolicyDir       string                   `yaml:"policy_dir,omitempty"`
 	Scheduling      FreewillSchedulingConfig `yaml:"scheduling"`
+	// NotifyChannelID optionally relays curated Freewill lifecycle events
+	// (proposals, decisions, denials, halts) to a Discord channel. Empty = off.
+	NotifyChannelID string `yaml:"notify_channel_id,omitempty"`
 }
 
 // FreewillSchedulingConfig is a separate opt-in switch for future wake work.

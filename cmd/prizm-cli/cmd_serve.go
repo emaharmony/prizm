@@ -1357,6 +1357,18 @@ func executeServe(args []string) {
 			fmt.Println("  Freewill: historical status reader enabled")
 		}
 	}
+	if cfg.Freewill.NotifyChannelID != "" && natsConn != nil {
+		if len(discordBots) == 0 {
+			log.Printf("[FREEWILL-NOTIFY] WARN notify_channel_id set but no Discord bot is configured")
+		} else {
+			var fwStore *multiagent.SQLiteDurableRunStore
+			if freewillRuntime != nil {
+				fwStore = freewillRuntime.store
+			}
+			startFreewillDiscordNotifications(natsConn, discordBots[0], cfg.Freewill.NotifyChannelID, fwStore)
+			fmt.Printf("  Freewill notifications -> Discord channel %s\n", cfg.Freewill.NotifyChannelID)
+		}
+	}
 	apiServer := api.NewServer(api.Config{
 		Addr:               cfg.BindAddr(apiPort),
 		Orch:               orch,
