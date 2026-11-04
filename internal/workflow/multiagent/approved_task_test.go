@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/emaharmony/prizm/internal/approval"
 	"github.com/emaharmony/prizm/internal/event"
@@ -108,10 +110,12 @@ func (l actualPatchLifecycle) Reconcile(ctx context.Context, op ProposalOperatio
 }
 
 func TestDurableApprovedTaskRealAtomicPatchRestartThroughValidation(t *testing.T) {
-	workspace := filepath.Join(t.TempDir(), "repo")
+	tempRoot := t.TempDir()
+	workspace := filepath.Join(tempRoot, "repo")
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { restoreTempGitObjectWriteBits(t, tempRoot, workspace) })
 	ctx := context.Background()
 	for _, args := range [][]string{{"init", "-b", "main"}, {"config", "user.email", "test@prizm.local"}, {"config", "user.name", "Prizm Test"}} {
 		if _, err := gitx.RunCommand(ctx, workspace, "", "git", args...); err != nil {
@@ -178,10 +182,12 @@ func TestDurableApprovedTaskRealAtomicPatchRestartThroughValidation(t *testing.T
 }
 
 func TestDurableApprovedTaskReconcilesWorkerLossAfterRealApply(t *testing.T) {
-	workspace := filepath.Join(t.TempDir(), "repo")
+	tempRoot := t.TempDir()
+	workspace := filepath.Join(tempRoot, "repo")
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { restoreTempGitObjectWriteBits(t, tempRoot, workspace) })
 	ctx := context.Background()
 	for _, args := range [][]string{{"init", "-b", "main"}, {"config", "user.email", "test@prizm.local"}, {"config", "user.name", "Prizm Test"}} {
 		if _, err := gitx.RunCommand(ctx, workspace, "", "git", args...); err != nil {
@@ -361,12 +367,367 @@ func TestDurableApprovedTaskReconcilesWorkerLossAfterRealApply(t *testing.T) {
 	}
 }
 
+const (
+	processDeathHelperEnv = "PRIZM_G1_PROCESS_DEATH_HELPER"
+	processDeathExitCode  = 86
+)
+
+func TestDurableApprovedTaskReconcilesAfterProcessDeathWithFileClaimer(t *testing.T) {
+	if os.Getenv(processDeathHelperEnv) == "exit-after-apply" {
+		runProcessDeathApplyHelper(t)
+		return
+	}
+
+	ctx := context.Background()
+	tempRoot := t.TempDir()
+	workspace := filepath.Join(tempRoot, "repo")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { restoreTempGitObjectWriteBits(t, tempRoot, workspace) })
+	for _, args := range [][]string{{"init", "-b", "main"}, {"config", "user.email", "test@prizm.local"}, {"config", "user.name", "Prizm Test"}} {
+		if _, err := gitx.RunCommand(ctx, workspace, "", "git", args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitx.RunCommand(ctx, workspace, "", "git", "add", "."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitx.RunCommand(ctx, workspace, "", "git", "commit", "-m", "base"); err != nil {
+		t.Fatal(err)
+	}
+	base, err := gitx.CurrentSHA(ctx, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch := "diff --git a/base.txt b/base.txt\n--- a/base.txt\n+++ b/base.txt\n@@ -1 +1 @@\n-base\n+changed\n" +
+		"diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+new\n"
+	const runID = "run-real-patch-process-death"
+	approvalDir := t.TempDir()
+	approvalStore := approval.NewStore(approvalDir)
+	registry := tool.NewRegistry()
+	tool.RegisterBuiltinsV4(registry, workspace, 1024*1024, "", workspace)
+	cfg := tool.PolicyConfig{WorkspaceRoot: workspace, AllowedPaths: []string{workspace}, MaxFileSize: 1024 * 1024}
+	toolExecutor := tool.NewExecutor(registry, &cfg)
+	toolExecutor.SetApprovalStore(approvalStore)
+	proposal, err := toolExecutor.ExecuteWithPolicy(ctx, "apply_patch_proposal", "developer", "prizm", "execution-real-patch", map[string]any{
+		"_run_id": runID, "patch": patch, "base_sha": base,
+	})
+	if err != nil || !proposal.Success {
+		t.Fatalf("proposal=%#v err=%v", proposal, err)
+	}
+	approvalID, _ := proposal.Output["approval_id"].(string)
+	proposalID, _ := proposal.Output["proposal_id"].(string)
+	if approvalID == "" || proposalID == "" {
+		t.Fatalf("proposal omitted durable identifiers: %#v", proposal.Output)
+	}
+
+	request := testRunRequest()
+	request.RunID = runID
+	dbPath := filepath.Join(t.TempDir(), "runtime.db")
+	claimRoot := t.TempDir()
+	markerPath := filepath.Join(t.TempDir(), "applied.marker")
+	var store *SQLiteDurableRunStore
+	var events *event.SQLiteEventStore
+	openStores := func() {
+		t.Helper()
+		var openErr error
+		events, openErr = event.NewSQLiteEventStore(dbPath)
+		if openErr != nil {
+			t.Fatalf("open event store: %v", openErr)
+		}
+		store, openErr = NewSQLiteDurableRunStore(dbPath)
+		if openErr != nil {
+			_ = events.Close()
+			events = nil
+			t.Fatalf("open run store: %v", openErr)
+		}
+	}
+	closeStores := func() {
+		t.Helper()
+		if store != nil {
+			if closeErr := store.Close(); closeErr != nil {
+				t.Errorf("close run store: %v", closeErr)
+			}
+			store = nil
+		}
+		if events != nil {
+			if closeErr := events.Close(); closeErr != nil {
+				t.Errorf("close event store: %v", closeErr)
+			}
+			events = nil
+		}
+	}
+	openStores()
+	t.Cleanup(closeStores)
+
+	runner, baseRunner := configuredProcessDeathRunner(t, proposalID, approvalID, workspace, events)
+	lifecycle := actualPatchLifecycle{store: approvalStore, executor: mutation.NewExecutor(workspace, approvalStore, workspace), workspace: workspace}
+	runtime := newDurableRuntimeForTest(t, validDefinition(), runner, store, FileRunClaimer{Root: claimRoot}, events, DurableRuntimeOptions{Proposals: lifecycle})
+	state, err := runtime.Run(ctx, request)
+	var waiting *RunWaitingError
+	if !errors.As(err, &waiting) || state.Status != RunStatusPaused {
+		t.Fatalf("pre-approval state=%q err=%v", state.Status, err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "new.txt")); !os.IsNotExist(err) {
+		t.Fatalf("proposal mutated workspace before approval: stat err=%v", err)
+	}
+	approved, err := approvalStore.Load(runID, approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved.ProposalID != proposalID || approved.RunID != runID || approved.Status != approval.StatusPending ||
+		approved.PatchPlan == nil || approved.PatchPlan.BaseSHA != base || len(approved.PatchPlan.Paths) != 2 {
+		t.Fatalf("approval identity/scope mismatch: run=%q proposal=%q status=%q patch_plan_present=%t", approved.RunID, approved.ProposalID, approved.Status, approved.PatchPlan != nil)
+	}
+	if err := approved.Approve("operator"); err != nil {
+		t.Fatal(err)
+	}
+	if err := approvalStore.Save(approved); err != nil {
+		t.Fatal(err)
+	}
+	closeStores()
+
+	helperCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	helper := exec.CommandContext(helperCtx, os.Args[0], "-test.run=^TestDurableApprovedTaskReconcilesAfterProcessDeathWithFileClaimer$")
+	helper.Env = processDeathHelperEnvironment(os.Environ(), map[string]string{
+		processDeathHelperEnv:                 "exit-after-apply",
+		"PRIZM_G1_PROCESS_DEATH_DB":           dbPath,
+		"PRIZM_G1_PROCESS_DEATH_APPROVAL_DIR": approvalDir,
+		"PRIZM_G1_PROCESS_DEATH_WORKSPACE":    workspace,
+		"PRIZM_G1_PROCESS_DEATH_CLAIM_ROOT":   claimRoot,
+		"PRIZM_G1_PROCESS_DEATH_MARKER":       markerPath,
+		"PRIZM_G1_PROCESS_DEATH_RUN_ID":       runID,
+		"PRIZM_G1_PROCESS_DEATH_APPROVAL_ID":  approvalID,
+		"PRIZM_G1_PROCESS_DEATH_PROPOSAL_ID":  proposalID,
+	})
+	childOutput, childErr := helper.CombinedOutput()
+	var exitErr *exec.ExitError
+	if !errors.As(childErr, &exitErr) || exitErr.ExitCode() != processDeathExitCode {
+		t.Fatalf("worker helper did not exit at the apply boundary: err=%v output=%q", childErr, strings.TrimSpace(string(childOutput)))
+	}
+	if marker, err := os.ReadFile(markerPath); err != nil || string(marker) != "applied\n" {
+		t.Fatalf("post-apply process-death marker=%q err=%v", marker, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(workspace, "new.txt")); err != nil || strings.TrimSpace(string(data)) != "new" {
+		t.Fatalf("child mutation data=%q err=%v", data, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(workspace, "base.txt")); err != nil || strings.TrimSpace(string(data)) != "changed" {
+		t.Fatalf("child base data=%q err=%v", data, err)
+	}
+
+	openStores()
+	runner.events = events
+	checkpoint, err := store.Load(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.ApprovedTask == nil || len(checkpoint.ApprovedTask.Proposals) != 1 {
+		t.Fatalf("process-death checkpoint lost approved task: %#v", checkpoint.ApprovedTask)
+	}
+	progress := checkpoint.ApprovedTask.Proposals[0]
+	if progress.Phase != "applying" || progress.Result != nil || progress.RunID != runID || progress.ProposalID != proposalID ||
+		progress.ApprovalID != approvalID || progress.ApplyKey != proposalApplyKey(runID, proposalID) || progress.Role != RoleDeveloper ||
+		progress.WorkspaceID == "" || progress.WorkspaceID != checkpoint.State.WorkspaceID || progress.ExecutionKey == "" {
+		t.Fatalf("process-death checkpoint scope/phase mismatch: %#v", progress)
+	}
+	runner.workspaceChanged = true // The exact approved tree was verified above.
+	applyCallsAfterRestart := 0
+	lifecycle = actualPatchLifecycle{store: approvalStore, executor: mutation.NewExecutor(workspace, approvalStore, workspace), workspace: workspace,
+		onApply: func() { applyCallsAfterRestart++ }}
+	restarted := newDurableRuntimeForTest(t, validDefinition(), runner, store, FileRunClaimer{Root: claimRoot}, events, DurableRuntimeOptions{Proposals: lifecycle})
+	state, err = restarted.Resume(ctx, runID)
+	if err != nil || state.Status != RunStatusCompleted || runner.validationCalls != 1 || applyCallsAfterRestart != 0 {
+		t.Fatalf("recovered state=%q validation=%d reapply_calls=%d err=%v", state.Status, runner.validationCalls, applyCallsAfterRestart, err)
+	}
+	if got := runnerCalls(baseRunner); !reflect.DeepEqual(got, []Role{RolePlanner, RoleDeveloper, RoleTester, RoleReviewer}) {
+		t.Fatalf("recovered role sequence=%v", got)
+	}
+	record, err := store.Load(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.ApprovedTask != nil || len(record.ProposalResults) != 1 {
+		t.Fatalf("approval result not finalized: task=%#v results=%#v", record.ApprovedTask, record.ProposalResults)
+	}
+	result := record.ProposalResults[0]
+	if result.RunID != runID || result.ProposalID != proposalID || result.ApprovalID != approvalID || result.Role != RoleDeveloper ||
+		result.ApplyKey != proposalApplyKey(runID, proposalID) || result.WorkspaceID != progress.WorkspaceID || result.ExecutionKey != progress.ExecutionKey ||
+		result.Phase != "applied" || result.Result == nil || !result.Result.Success || result.Result.ReconcileCode != ProposalReconcileExpectedTree {
+		t.Fatalf("recovered approved result lost identity/scope: %#v", result)
+	}
+	ordered, err := events.QueryInInsertionOrder(ctx, event.EventFilter{RunID: runID, Limit: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	countType := func(typ string) int {
+		count := 0
+		for _, evt := range ordered {
+			if evt.Type == typ {
+				count++
+			}
+		}
+		return count
+	}
+	for _, check := range []struct {
+		typ  string
+		want int
+	}{
+		{event.EventProposalApprovalGranted, 1},
+		{event.EventProposalApplyStarted, 1},
+		{event.EventProposalReconciled, 1},
+		{event.EventProposalApplied, 0},
+		{event.EventProposalApplyFailed, 0},
+		{event.EventValidationCompleted, 1},
+		{event.EventMultiAgentRunResumed, 1},
+		{event.EventMultiAgentRunCompleted, 1},
+	} {
+		if got := countType(check.typ); got != check.want {
+			t.Fatalf("event %q count=%d want %d", check.typ, got, check.want)
+		}
+	}
+	roleCompleted := map[Role]int{}
+	for _, evt := range ordered {
+		if evt.Type == event.EventMultiAgentRoleCompleted {
+			roleCompleted[Role(payloadString(evt.Payload, "role"))]++
+		}
+	}
+	for _, role := range []Role{RolePlanner, RoleDeveloper, RoleTester, RoleReviewer} {
+		if roleCompleted[role] != 1 {
+			t.Fatalf("role %q completion count=%d want 1", role, roleCompleted[role])
+		}
+	}
+	report := BuildReferenceRunReport(ReferenceWorkflowInput{Objective: request.Task.Description}, state, ordered)
+	if report.FinalStatus != RunStatusCompleted || report.TestOutcome != "passed" || report.ReviewOutcome != OutcomeReviewApproved || report.TerminalOutcome == nil {
+		t.Fatalf("final report=%#v, want completed validation/test/review evidence", report)
+	}
+}
+
+func configuredProcessDeathRunner(t *testing.T, proposalID, approvalID, workspace string, events *event.SQLiteEventStore) (*postApplyValidationRunner, *scriptedRunner) {
+	t.Helper()
+	baseRunner := approvedTaskRunner()
+	tester := baseRunner.scripts[RoleTester][0].result
+	tester.Metadata.ValidationStatus = "passed"
+	tester.OutgoingHandoff.ValidationResults = []validation.Result{{
+		Profile: "post_apply", Status: "passed", ExitCode: 0,
+		Command: "go", Args: []string{"test", "./internal/workflow/multiagent"}, WorkingDir: workspace,
+	}}
+	baseRunner.scripts[RoleTester][0].result = tester
+	developer := baseRunner.scripts[RoleDeveloper][0].result
+	developer.Proposals = []ProposalReference{{ProposalID: proposalID, ApprovalID: approvalID, Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "base.txt"}, {Kind: ArtifactFile, URI: "new.txt"}}}}
+	baseRunner.scripts[RoleDeveloper][0].result = developer
+	return &postApplyValidationRunner{scriptedRunner: baseRunner, events: events}, baseRunner
+}
+
+func restoreTempGitObjectWriteBits(t *testing.T, tempRoot, repo string) {
+	t.Helper()
+	resolvedRoot, err := filepath.EvalSymlinks(tempRoot)
+	if err != nil {
+		t.Errorf("resolve temporary test root: %v", err)
+		return
+	}
+	resolvedRepo, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		t.Errorf("resolve temporary test repository: %v", err)
+		return
+	}
+	rel, err := filepath.Rel(resolvedRoot, resolvedRepo)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		t.Errorf("refuse to change Git object attributes outside the test temp root")
+		return
+	}
+	objects := filepath.Join(resolvedRepo, ".git", "objects")
+	resolvedObjects, err := filepath.EvalSymlinks(objects)
+	if err != nil {
+		return
+	}
+	objectRel, err := filepath.Rel(resolvedRoot, resolvedObjects)
+	if err != nil || objectRel == "." || objectRel == ".." || strings.HasPrefix(objectRel, ".."+string(os.PathSeparator)) {
+		t.Errorf("refuse to change Git object attributes outside the test temp root")
+		return
+	}
+	err = filepath.Walk(resolvedObjects, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if info.Mode().Perm()&0o200 != 0 {
+			return nil
+		}
+		return os.Chmod(path, info.Mode().Perm()|0o200)
+	})
+	if err != nil {
+		t.Errorf("restore temporary Git object write bits before cleanup: %v", err)
+	}
+}
+
+func processDeathHelperEnvironment(existing []string, additions map[string]string) []string {
+	result := make([]string, 0, len(existing)+len(additions))
+	for _, entry := range existing {
+		name, _, _ := strings.Cut(entry, "=")
+		if _, replaced := additions[name]; !replaced {
+			result = append(result, entry)
+		}
+	}
+	for name, value := range additions {
+		result = append(result, name+"="+value)
+	}
+	return result
+}
+
+func runProcessDeathApplyHelper(t *testing.T) {
+	t.Helper()
+	get := func(name string) string {
+		value := os.Getenv("PRIZM_G1_PROCESS_DEATH_" + name)
+		if value == "" {
+			t.Fatalf("process-death helper missing %s", name)
+		}
+		return value
+	}
+	dbPath, approvalDir, workspace := get("DB"), get("APPROVAL_DIR"), get("WORKSPACE")
+	claimRoot, markerPath := get("CLAIM_ROOT"), get("MARKER")
+	runID, approvalID, proposalID := get("RUN_ID"), get("APPROVAL_ID"), get("PROPOSAL_ID")
+	events, err := event.NewSQLiteEventStore(dbPath)
+	if err != nil {
+		t.Fatalf("helper event store open failed: %v", err)
+	}
+	store, err := NewSQLiteDurableRunStore(dbPath)
+	if err != nil {
+		_ = events.Close()
+		t.Fatalf("helper run store open failed: %v", err)
+	}
+	defer func() {
+		_ = store.Close()
+		_ = events.Close()
+	}()
+	approvalStore := approval.NewStore(approvalDir)
+	runner, _ := configuredProcessDeathRunner(t, proposalID, approvalID, workspace, events)
+	lifecycle := actualPatchLifecycle{store: approvalStore, executor: mutation.NewExecutor(workspace, approvalStore, workspace), workspace: workspace,
+		onApply: func() {
+			if err := os.WriteFile(markerPath, []byte("applied\n"), 0o600); err != nil {
+				os.Exit(processDeathExitCode + 1)
+			}
+			os.Exit(processDeathExitCode)
+		}}
+	runtime := newDurableRuntimeForTest(t, validDefinition(), runner, store, FileRunClaimer{Root: claimRoot}, events, DurableRuntimeOptions{Proposals: lifecycle})
+	_, err = runtime.Resume(context.Background(), runID)
+	t.Fatalf("helper resume returned without process exit after apply: %v", err)
+}
+
 func TestDurableFailedValidationRetainsReceiptForSeparatelyApprovedCorrection(t *testing.T) {
 	const runID = "run-validation-failure-correction"
-	source := filepath.Join(t.TempDir(), "source")
+	tempRoot := t.TempDir()
+	source := filepath.Join(tempRoot, "source")
 	if err := os.MkdirAll(source, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { restoreTempGitObjectWriteBits(t, tempRoot, source) })
 	// Canonicalize before verification: macOS temp roots live behind the
 	// /var → /private/var symlink, which the strict canonical-directory check
 	// in WithVerifiedRunWorktree rejects.
