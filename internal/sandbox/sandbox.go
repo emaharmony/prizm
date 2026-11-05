@@ -345,17 +345,16 @@ func (s *Session) Execute(ctx context.Context, command string) (string, int, err
 		return "", -1, errors.New("sandbox transfer directory could not be created")
 	}
 	defer os.RemoveAll(transferRoot)
-	readyPath := filepath.Join(transferRoot, "ready")
-	if err := copyContainerFile(ctx, s.config, name, sandboxReadyPath, readyPath); err != nil {
+	if err := waitForContainerFile(ctx, s.config, name, sandboxReadyPath); err != nil {
 		return "", -1, err
 	}
 	tarPath := filepath.Join(transferRoot, "workspace.tar")
 	statusPath := filepath.Join(transferRoot, "status")
-	if err := runDocker(ctx, s.config, "cp", name+":"+sandboxArchivePath, tarPath); err != nil {
-		return "", -1, errors.New("sandbox archive could not be copied from container")
+	if err := streamContainerFile(ctx, s.config, name, sandboxArchivePath, tarPath, archiveLimit(s.config)); err != nil {
+		return "", -1, errors.New("sandbox archive could not be streamed from container")
 	}
-	if err := runDocker(ctx, s.config, "cp", name+":"+sandboxStatusPath, statusPath); err != nil {
-		return "", -1, errors.New("sandbox exit status could not be copied from container")
+	if err := streamContainerFile(ctx, s.config, name, sandboxStatusPath, statusPath, 4); err != nil {
+		return "", -1, errors.New("sandbox exit status could not be streamed from container")
 	}
 	var out cappedBuffer
 	out.limit = s.config.MaxOutput
@@ -854,18 +853,16 @@ func verifySandboxImage(ctx context.Context, c Config) error {
 		"--cap-drop=ALL", "--security-opt=no-new-privileges", "--memory=64m",
 		"--user=1000:1000", "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=1m",
 		"--env=PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
-		c.Image, "/bin/sh", "-c", `command -v cp >/dev/null && command -v rm >/dev/null && command -v tar >/dev/null && command -v timeout >/dev/null && command -v sleep >/dev/null && command -v grep >/dev/null && timeout --help 2>&1 | grep -q -- --kill-after`)
+		c.Image, "/bin/sh", "-c", `command -v cp >/dev/null && command -v cat >/dev/null && command -v rm >/dev/null && command -v tar >/dev/null && command -v timeout >/dev/null && command -v sleep >/dev/null && command -v grep >/dev/null && timeout --help 2>&1 | grep -q -- --kill-after`)
 }
 
-func copyContainerFile(ctx context.Context, c Config, name, source, destination string) error {
+func waitForContainerFile(ctx context.Context, c Config, name, source string) error {
+	if source != sandboxReadyPath {
+		return errors.New("sandbox readiness path is invalid")
+	}
 	for {
-		_ = os.Remove(destination)
-		if err := runDocker(ctx, c, "cp", name+":"+source, destination); err == nil {
-			info, statErr := os.Lstat(destination)
-			if statErr == nil && info.Mode().IsRegular() && info.Size() <= 16 {
-				return nil
-			}
-			return errors.New("sandbox protocol marker is not a regular file")
+		if err := runDocker(ctx, c, "exec", name, "/bin/sh", "-c", `test -f "$1"`, "prizm-ready-check", source); err == nil {
+			return nil
 		}
 		state, err := dockerOutput(ctx, c, "inspect", "--format", `{{.State.Running}}`, name)
 		if err != nil || strings.TrimSpace(string(state)) != "true" {
@@ -879,6 +876,34 @@ func copyContainerFile(ctx context.Context, c Config, name, source, destination 
 		case <-timer.C:
 		}
 	}
+}
+
+func streamContainerFile(ctx context.Context, c Config, name, source, destination string, limit int64) error {
+	if (source != sandboxArchivePath && source != sandboxStatusPath) || limit <= 0 {
+		return errors.New("sandbox stream limit is invalid")
+	}
+	destinationFile, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return errors.New("sandbox private transfer file could not be created")
+	}
+	writer := boundedWriter{destination: destinationFile, remaining: limit}
+	var stderr cappedBuffer
+	stderr.limit = 1024
+	cmd := dockerCommand(ctx, c, "exec", name, "/bin/cat", source)
+	cmd.Stdout = &writer
+	cmd.Stderr = &stderr
+	commandErr := cmd.Run()
+	closeErr := destinationFile.Close()
+	if commandErr != nil || closeErr != nil || writer.exceeded {
+		_ = os.Remove(destination)
+		return errors.New("sandbox container stream failed or exceeded its bound")
+	}
+	info, err := os.Lstat(destination)
+	if err != nil || !info.Mode().IsRegular() || isReparsePoint(info) || info.Size() > limit {
+		_ = os.Remove(destination)
+		return errors.New("sandbox private transfer file is missing or exceeds its bound")
+	}
+	return nil
 }
 
 func cleanupSandboxContainer(ctx context.Context, c Config, name string) error {
@@ -1327,6 +1352,25 @@ func replaceWorkspace(current, next string) error {
 type cappedBuffer struct {
 	bytes.Buffer
 	limit int
+}
+
+type boundedWriter struct {
+	destination io.Writer
+	remaining   int64
+	exceeded    bool
+}
+
+func (w *boundedWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > w.remaining {
+		w.exceeded = true
+		return 0, errors.New("sandbox container output exceeds its byte limit")
+	}
+	n, err := w.destination.Write(p)
+	w.remaining -= int64(n)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
+	return n, err
 }
 
 func (b *cappedBuffer) Write(p []byte) (int, error) {

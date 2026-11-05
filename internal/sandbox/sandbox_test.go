@@ -211,6 +211,31 @@ func TestRunArgsEnforceContainerBoundary(t *testing.T) {
 	}
 }
 
+func TestBoundedWriterRejectsOverflowWithoutPartialWrite(t *testing.T) {
+	var output strings.Builder
+	writer := boundedWriter{destination: &output, remaining: 4}
+	if n, err := writer.Write([]byte("four")); err != nil || n != 4 {
+		t.Fatalf("exact-limit write failed: n=%d err=%v", n, err)
+	}
+	if n, err := writer.Write([]byte("x")); err == nil || n != 0 {
+		t.Fatalf("overflow write was not rejected: n=%d err=%v", n, err)
+	}
+	if got := output.String(); got != "four" || !writer.exceeded {
+		t.Fatalf("overflow changed bounded destination: output=%q exceeded=%v", got, writer.exceeded)
+	}
+}
+
+func TestBoundedWriterPropagatesCopyFailure(t *testing.T) {
+	writer := boundedWriter{destination: failingWriter{}, remaining: 4}
+	if n, err := writer.Write([]byte("copy")); err == nil || n != 0 {
+		t.Fatalf("destination failure was not propagated: n=%d err=%v", n, err)
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("synthetic copy failure") }
+
 func TestExtractBoundedTarRejectsLinksTraversalAndOversize(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
