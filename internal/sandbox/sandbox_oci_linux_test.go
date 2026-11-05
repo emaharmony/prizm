@@ -159,7 +159,8 @@ if timeout 3s /bin/bash -c 'printf x > /dev/tcp/1.1.1.1/80' >/dev/null 2>&1; the
 printf 'isolated\n'`, shellQuote(sentinel), shellQuote(sentinel), listenerPort)
 	output, code, err := session.Execute(ctx, command)
 	if err != nil || code != 0 {
-		t.Fatalf("isolated write/read/network probe failed (code=%d err=%v output=%q)", code, err, output)
+		diagnostic := conformanceLaunchDiagnostic(ctx, config, session)
+		t.Fatalf("isolated write/read/network probe failed (code=%d err=%v output=%q; launch diagnostic=%q)", code, err, output, diagnostic)
 	}
 	if got, err := os.ReadFile(filepath.Join(session.workspace, "created.txt")); err != nil || string(got) != "created-inside-container\n" {
 		t.Fatalf("writable tmpfs result was not returned: %q, %v", got, err)
@@ -223,6 +224,37 @@ printf 'isolated\n'`, shellQuote(sentinel), shellQuote(sentinel), listenerPort)
 		t.Fatal("sandbox execution did not return after caller cancellation")
 	}
 	assertNoNewManagedContainers(t, ctx, baseConfig, before)
+}
+
+// conformanceLaunchDiagnostic reruns a harmless command synchronously when the
+// production path cannot start its detached container. The bounded Docker
+// output identifies daemon/CLI option failures without changing production
+// error handling or logging model-supplied command text.
+func conformanceLaunchDiagnostic(ctx context.Context, config Config, session *Session) string {
+	name, err := randomContainerName()
+	if err != nil {
+		return "could not allocate diagnostic container name"
+	}
+	args := session.runArgs(name, "true")
+	filtered := args[:0]
+	for _, arg := range args {
+		if arg != "--detach" {
+			filtered = append(filtered, arg)
+		}
+	}
+	args = filtered
+	if len(args) < 3 {
+		return "sandbox launch arguments were malformed"
+	}
+	scriptIndex := len(args) - 3
+	args[scriptIndex] = strings.Replace(args[scriptIndex], "sleep 120", "sleep 1", 1)
+	var output cappedBuffer
+	output.limit = 2048
+	cmd := dockerCommand(ctx, config, args...)
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	err = cmd.Run()
+	return fmt.Sprintf("exit=%v output=%q", err, output.String())
 }
 
 func inspectSandboxMounts(ctx context.Context, config Config, id string, session *Session) error {

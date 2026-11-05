@@ -1271,7 +1271,7 @@ func extractBoundedTar(archivePath, destination string, c Config) error {
 			if err := os.MkdirAll(path, 0755); err != nil {
 				return errors.New("sandbox archive directory could not be staged")
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg, 0: // zero is the historical regular-file typeflag.
 			if header.Size < 0 || header.Size > c.MaxBytes-total {
 				return errors.New("sandbox archive exceeds its uncompressed size limit")
 			}
