@@ -43,6 +43,7 @@ const (
 	maxArtifactBytes      = int64(2 << 30)
 	artifactRetention     = 7 * 24 * time.Hour
 	reservationRetention  = 24 * time.Hour
+	artifactQuotaLockName = ".quota.lock"
 )
 
 var imageDigestPattern = regexp.MustCompile(`^.+@sha256:[0-9a-f]{64}$`)
@@ -135,7 +136,33 @@ func cleanupExpiredArtifacts(root string) error {
 	}
 	artifactStoreMu.Lock()
 	defer artifactStoreMu.Unlock()
+	quotaLease, err := lockArtifactQuota(canonical)
+	if err != nil {
+		return errors.New("sandbox artifact quota lock could not be acquired")
+	}
+	defer quotaLease.Close()
 	return enforceArtifactQuota(canonical, "", 0)
+}
+
+func lockArtifactQuota(root string) (*os.File, error) {
+	path := filepath.Join(root, artifactQuotaLockName)
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() || isReparsePoint(info) {
+			return nil, errors.New("sandbox artifact quota lock is not a regular file")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	lease, err := lockSandboxLease(path, false)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || isReparsePoint(info) {
+		_ = lease.Close()
+		return nil, errors.New("sandbox artifact quota lock path changed")
+	}
+	return lease, nil
 }
 
 func withDefaults(c Config) Config {
@@ -870,11 +897,14 @@ func cleanupSandboxContainer(ctx context.Context, c Config, name string) error {
 }
 
 func reapStaleSandboxContainers(ctx context.Context, c Config) error {
+	return reapStaleSandboxContainersBefore(ctx, c, time.Now().Add(-sandboxStaleAfter))
+}
+
+func reapStaleSandboxContainersBefore(ctx context.Context, c Config, cutoff time.Time) error {
 	ids, err := dockerOutput(ctx, c, "ps", "-aq", "--filter", "label="+sandboxManagedLabel+"=true")
 	if err != nil {
 		return err
 	}
-	cutoff := time.Now().Add(-sandboxStaleAfter)
 	for _, id := range strings.Fields(string(ids)) {
 		state, err := dockerOutput(ctx, c, "inspect", "--format", `{{.Created}}|{{.State.Status}}|{{.Name}}|{{ index .Config.Labels "`+sandboxOwnerLabel+`" }}`, id)
 		if err != nil {
@@ -933,6 +963,11 @@ func reserveArtifactQuota(root string, reserve int64) (*artifactReservation, err
 	if err != nil {
 		return nil, err
 	}
+	quotaLease, err := lockArtifactQuota(root)
+	if err != nil {
+		return nil, errors.New("sandbox artifact quota lock could not be acquired")
+	}
+	defer quotaLease.Close()
 	reservation := filepath.Join(root, "reserve-"+token)
 	f, err := os.OpenFile(reservation, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
 	if err != nil {
@@ -978,6 +1013,10 @@ func enforceArtifactQuota(root string, ownReservation string, ownBytes int64) er
 			return errors.New("sandbox artifact store contains an unreadable or linked entry")
 		}
 		switch {
+		case entry.Name() == artifactQuotaLockName:
+			if !info.Mode().IsRegular() {
+				return errors.New("sandbox artifact quota lock is not a regular file")
+			}
 		case strings.HasPrefix(entry.Name(), "review-"):
 			if !info.IsDir() {
 				return errors.New("sandbox artifact store contains a non-directory review entry")
