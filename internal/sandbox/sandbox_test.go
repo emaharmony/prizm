@@ -198,7 +198,7 @@ func TestRunArgsEnforceContainerBoundary(t *testing.T) {
 			t.Errorf("bounded tmpfs configuration missing %q", required)
 		}
 	}
-	for _, required := range []string{"run", "--rm", "--detach", "--log-driver=local", "--log-opt=max-size=64k", "--log-opt=max-file=1", "--label=" + sandboxManagedLabel + "=true", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=2g", "--cpus=2", "--user=1000:1000", "nr_inodes=80100", "nr_inodes=1024", "target=/source,readonly", "--workdir=/workspace", s.config.Image, "/bin/sh", "-c", "prizm-wrapper", "readonly PATH", `/bin/sh -c "$1"`, "timeout --signal=TERM --kill-after=5s", "tar -cf /tmp/prizm-workspace.tar", "sleep 120", "make test"} {
+	for _, required := range []string{"run", "--rm", "--detach", "--log-driver=local", "--log-opt=max-size=64k", "--log-opt=max-file=1", "--log-opt=compress=false", "--label=" + sandboxManagedLabel + "=true", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=2g", "--cpus=2", "--user=1000:1000", "nr_inodes=80100", "nr_inodes=1024", "target=/source,readonly", "--workdir=/workspace", s.config.Image, "/bin/sh", "-c", "prizm-wrapper", "readonly PATH", `/bin/sh -c "$1"`, "timeout --signal=TERM --kill-after=5s", "tar -cf /tmp/prizm-workspace.tar", "sleep 120", "make test"} {
 		if !strings.Contains(args, required) {
 			t.Errorf("container argv missing %q", required)
 		}

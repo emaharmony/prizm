@@ -422,7 +422,7 @@ exit "$command_status"`
 	return []string{
 		"run", "--rm", "--detach", "--pull=never", "--init", "--name", name,
 		"--label=" + sandboxManagedLabel + "=true", "--label=" + sandboxOwnerLabel + "=" + name,
-		"--log-driver=local", "--log-opt=max-size=64k", "--log-opt=max-file=1",
+		"--log-driver=local", "--log-opt=max-size=64k", "--log-opt=max-file=1", "--log-opt=compress=false",
 		"--network=none", "--read-only", "--cap-drop=ALL",
 		"--security-opt=no-new-privileges", "--pids-limit=128",
 		"--memory=2g", "--cpus=2", "--user=1000:1000",
