@@ -232,6 +232,39 @@ func TestBoundedWriterPropagatesCopyFailure(t *testing.T) {
 	}
 }
 
+func TestCappedBufferReaderFromEnforcesLimit(t *testing.T) {
+	var output cappedBuffer
+	output.limit = 4096
+	source := io.LimitReader(strings.NewReader(strings.Repeat("x", 1<<20)), 1<<20)
+	if _, err := io.Copy(&output, source); err != nil {
+		t.Fatal(err)
+	}
+	if got := output.Len(); got != output.limit {
+		t.Fatalf("ReaderFrom bypassed the output cap: got %d bytes, want %d", got, output.limit)
+	}
+}
+
+func TestCappedBufferBoundsExecPipeOutput(t *testing.T) {
+	const helperEnv = "PRIZM_TEST_CAPPED_BUFFER_HELPER"
+	if os.Getenv(helperEnv) == "1" {
+		_, _ = os.Stdout.Write([]byte(strings.Repeat("o", 1<<20)))
+		_, _ = os.Stderr.Write([]byte(strings.Repeat("e", 1<<20)))
+		os.Exit(0)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestCappedBufferBoundsExecPipeOutput$")
+	cmd.Env = append(os.Environ(), helperEnv+"=1")
+	var output cappedBuffer
+	output.limit = 4096
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if got := output.Len(); got != output.limit {
+		t.Fatalf("exec pipe output exceeded its cap: got %d bytes, want %d", got, output.limit)
+	}
+}
+
 type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("synthetic copy failure") }

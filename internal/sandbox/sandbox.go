@@ -1385,6 +1385,39 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 	return original, nil
 }
 
+// ReadFrom overrides bytes.Buffer's promoted fast path so io.Copy cannot write
+// directly into the embedded buffer without passing through the byte limit.
+func (b *cappedBuffer) ReadFrom(r io.Reader) (int64, error) {
+	buffer := make([]byte, 32<<10)
+	var total int64
+	emptyReads := 0
+	for {
+		n, readErr := r.Read(buffer)
+		if n > 0 {
+			emptyReads = 0
+			written, writeErr := b.Write(buffer[:n])
+			total += int64(written)
+			if writeErr != nil {
+				return total, writeErr
+			}
+			if written != n {
+				return total, io.ErrShortWrite
+			}
+		} else if readErr == nil {
+			emptyReads++
+			if emptyReads >= 100 {
+				return total, io.ErrNoProgress
+			}
+		}
+		if readErr == io.EOF {
+			return total, nil
+		}
+		if readErr != nil {
+			return total, readErr
+		}
+	}
+}
+
 func randomContainerName() (string, error) {
 	token, err := randomToken()
 	if err != nil {
