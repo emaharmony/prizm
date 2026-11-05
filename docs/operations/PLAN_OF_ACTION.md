@@ -1,3 +1,29 @@
+## Current Handoff: FW-G2 opt-in OCI subagent execution slice (2026-11-05)
+
+**Roadmap IDs:** FW-G2, dependent on the still-open R1/G1 execution acceptance. Isolated branch `codex/g2-container-execution-slice` is based on staging `905dee6ec050b048783bc8c5e714d18b43bfe8d6`; keep the primary checkout untouched. This opt-in `PRIZM_SUBAGENT_SANDBOX=oci` lane exposes only `sandbox_exec` to code-capable subagents. It snapshots clean tracked regular files, rejects hidden Git index flags and non-portable paths (including Windows device basenames, forbidden punctuation, ASCII controls and trailing dot/space aliases), and runs commands in a locally available digest-pinned image with a read-only root, network disabled, dropped capabilities, and byte/inode-limited tmpfs. The only host bind is a sanitized read-only source snapshot; output returns as a single tar file validated and extracted into private staging before an atomic workspace swap. Logs use bounded local rotation. Containers have a timeout, auto-removal, owner labels, and stale-container reaping. Review artifacts are never applied and are retained for seven days within a fixed count/byte quota. Freewill remains decision-only and the default executor is unchanged.
+
+**Package justification (for any PR description introducing `internal/sandbox`):**
+
+```text
+Package: internal/sandbox
+Domain statement: Own the local OCI execution boundary for disposable code workspaces.
+Invariants owned: Clean tracked-source snapshot only; reject hidden index flags, linked/non-regular paths, Windows path aliases and device names; locally pinned image and local daemon only; no network; read-only host source mount plus byte/inode-limited writable tmpfs; validated tar return; bounded command/log/artifact storage and cleanup; review-only export.
+Primary callers: cmd/prizm-cli opt-in code-capable subagent composition.
+Allowed dependencies: Go standard library, Git and Docker CLI as host boundary processes.
+Responsibilities explicitly excluded: Agent capability assignment, policy/approval authority, task lifecycle, validation, applying artifacts, provider/model calls.
+Existing packages considered: internal/subagent, internal/tool, cmd/prizm-cli.
+Why those packages do not own this domain: subagent owns delegation contracts, tool owns generic dispatch/policy integration, and cmd is composition; none should own OCI isolation and filesystem snapshot invariants.
+Test boundary: internal/sandbox unit tests with synthetic Git worktrees, index flags, bounded tar parsing, path safety, quotas and Docker argv; cmd/prizm-cli tests for tool registry isolation. Real OCI conformance remains a separate required gate when a local engine and pinned image are available.
+```
+
+**Retention/lifecycle limits:** Active task snapshots hold cross-process OS lease locks; the startup/periodic cleanup removes only expired direct `task-*` roots that are not leased. Artifact expiration runs when the provider opens and hourly while a process is alive; cross-process reservation files use OS locks and a pessimistic quota scan so competing exports fail closed. Stale reservations are eligible after 24 hours. Cleanup cannot run while every Prizm process is stopped, so data may exceed its TTL until the next open. Secret filtering is filename-based, not content classification.
+
+**Validation and limits:** After the final code edits, `go test -count=1 ./internal/sandbox`, `go test -race -count=1 ./internal/sandbox`, the two sandbox lane CLI tests, `TestCapabilityToolScope`, native and Linux amd64 CLI builds, `go vet ./internal/sandbox ./internal/subagent ./cmd/prizm-cli ./internal/tool`, and `git diff --check` pass. Both builds emit a non-fatal global Go module stat-cache permission warning. A broader subagent suite previously hit loopback restrictions in two NATS E2E tests and a Windows temp-Git cleanup permission error. Local Ollama is unavailable. Fresh `docker info` failed because `npipe:////./pipe/dockerDesktopLinuxEngine` does not exist; no OCI engine execution/conformance is claimed. No Mac service, provider, approval flow, or deployment was changed.
+
+**Next action:** independent review remains open. Keep the change unpublished and unmerged until review and a real OCI integration run pass; retain R1/G1 and the broader execution-safety acceptance as explicit open gates.
+
+---
+
 ## Current Handoff: FW-P1 GLM-5.3-Flash bounded response normalization
 
 **Roadmap IDs:** FW-P1 / FW-002–FW-004 reliability. Isolated snapshot based on live staging head `813305c729b163a22cc5c44800f0cc1e41b056f6`. The Flash parser accepts absent FACTORS, bounded inert preamble/footer text, exact optional BLOCK 1–3 markers, and observed allowlisted `label: N/10` factor annotations (inline or bullet form), while preserving exactly three candidates, model SCORE/RATIONALE, host-bound labels/IDs/scope, and decision-only/no-tools behavior. Factor values and explanations are validated but only canonical labels persist. A concise `invalid_scored_ideas` correction gives a concrete example. The candidate-choice path already forwarded host-bounded CandidateLabels; this was verified and left unchanged.
