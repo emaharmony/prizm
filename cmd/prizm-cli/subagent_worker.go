@@ -79,6 +79,7 @@ type subAgentBackend struct {
 	approvalStore        tool.ApprovalStorer
 	worktreeRoot         string // canonical <repo>/.prizm/worktrees root for native-tool providers
 	toolEventSinkFactory subagent.ToolEventSinkFactory
+	sandboxMode          bool
 }
 
 // SetToolEventSinkFactory wires a durable per-task event sink into this worker
@@ -142,7 +143,16 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 
 	// Per-run executor: rooted at the task's worktree when isolated, so all
 	// file + git tools (not just git) operate inside it.
-	ex := b.executorFor(rt.WorkDir)
+	var ex *tool.Executor
+	if b.sandboxMode && hasSubAgentCapability(rt, "code") {
+		var err error
+		ex, err = b.sandboxExecutor(rt.WorkDir)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	} else {
+		ex = b.executorFor(rt.WorkDir)
+	}
 
 	llm := func(ctx stdcontext.Context, msgs []v2.Message, allowance subagent.ReplyAllowance) (subagent.Turn, error) {
 		replyMaxTokens := allowance.MaxTokens
@@ -477,7 +487,7 @@ func startSubAgentWorker(nc *nats.Conn, providers *provider.ProviderRegistry, ex
 	if root != "" {
 		worktreeRoot = filepath.Join(root, ".prizm", "worktrees")
 	}
-	backend := &subAgentBackend{providers: providers, exec: exec, toolReg: toolReg, protectedBranch: cfg.ProtectedBranch(), worktreeRoot: worktreeRoot}
+	backend := &subAgentBackend{providers: providers, exec: exec, toolReg: toolReg, protectedBranch: cfg.ProtectedBranch(), worktreeRoot: worktreeRoot, sandboxMode: os.Getenv("PRIZM_SUBAGENT_SANDBOX") == "oci"}
 	if len(eventSinkFactory) > 0 {
 		backend.SetToolEventSinkFactory(eventSinkFactory[0])
 	}
@@ -494,7 +504,12 @@ func startSubAgentWorker(nc *nats.Conn, providers *provider.ProviderRegistry, ex
 			if workspace == "" {
 				workspace = "."
 			}
-			return charter + agent.BuildToolPromptSuffix(toolInfos, workspace, workspace)
+			availableTools := toolInfos
+			if backend.sandboxMode && hasSubAgentCapability(rt, "code") {
+				charter += " Code changes run only in the isolated, network-disabled sandbox. The returned archive is for review; you cannot apply it to the host repository."
+				availableTools = sandboxToolInfos()
+			}
+			return charter + agent.BuildToolPromptSuffix(availableTools, workspace, workspace)
 		},
 	})
 	worker := subagent.NewWorker(resolver, runner, 0)

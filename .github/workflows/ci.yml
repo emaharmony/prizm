@@ -42,6 +42,22 @@ jobs:
           name: coverage-report
           path: coverage.out
 
+  test-sandbox-oci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: Verify local Docker daemon
+        run: docker info --format '{{.ServerVersion}}'
+      - name: Run real OCI sandbox conformance
+        env:
+          PRIZM_SANDBOX_OCI_CONFORMANCE: "1"
+        run: go test ./internal/sandbox -run '^TestSandboxOCIConformance$' -count=1 -v
+
   test-windows:
     runs-on: windows-latest
     steps:

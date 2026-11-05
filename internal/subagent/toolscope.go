@@ -21,6 +21,7 @@ type ToolScope interface {
 // research tools, cross-agent messaging, planning tools) — the policy engine
 // still gates anything genuinely dangerous.
 var roleGatedTools = map[string]string{
+	"sandbox_exec":              "code",
 	"write_file":                "code",
 	"write_file_proposal":       "code",
 	"apply_patch_proposal":      "code",

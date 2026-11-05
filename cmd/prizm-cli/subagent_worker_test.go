@@ -89,6 +89,30 @@ func TestSubAgentResolver_MapsAgents(t *testing.T) {
 	}
 }
 
+func TestSandboxCodeLaneExposesNoHostTools(t *testing.T) {
+	backend := &subAgentBackend{exec: tool.NewExecutor(tool.NewRegistry(), &tool.PolicyConfig{})}
+	executor, err := backend.sandboxExecutor(filepath.Join(t.TempDir(), "isolated-worktree"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := executor.Registry.List()
+	if len(got) != 1 || got[0] != subAgentSandboxToolName {
+		t.Fatalf("sandbox lane registry = %#v, want only %q", got, subAgentSandboxToolName)
+	}
+	for _, forbidden := range []string{"read_file", "write_file", "write_file_proposal", "apply_patch_proposal", "shell", "git_commit", "mcp_build", "create_pr"} {
+		if _, err := executor.Registry.Resolve(forbidden); err == nil {
+			t.Errorf("host tool %q leaked into sandbox lane", forbidden)
+		}
+	}
+}
+
+func TestSandboxCodeLaneRequiresIsolatedWorktree(t *testing.T) {
+	backend := &subAgentBackend{exec: tool.NewExecutor(tool.NewRegistry(), &tool.PolicyConfig{})}
+	if _, err := backend.sandboxExecutor(" "); err == nil {
+		t.Fatal("sandbox lane must fail closed without a per-task worktree")
+	}
+}
+
 // executorFor must root the file/builtin tools at the worktree (V58 4d), so a
 // sub-agent's reads/writes are isolated to its own worktree, not the shared root.
 func TestSubAgentBackend_ExecutorRootedAtWorktree(t *testing.T) {

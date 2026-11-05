@@ -194,6 +194,12 @@ func EvaluatePolicyForAgent(cfg PolicyConfig, toolName, agentID string, input ma
 	case "write_file_dry_run":
 		return PolicyResult{Decision: PolicyApproved, Reason: "write_file_dry_run is a read-only preview, no mutation"}
 
+	case "sandbox_exec":
+		// This tool exists only in the opt-in sub-agent executor. Its implementation
+		// runs the command in a fail-closed, network-disabled OCI container and
+		// returns a review artifact without applying it to the host worktree.
+		return PolicyResult{Decision: PolicyApproved, Reason: "sandbox_exec is isolated code execution with review-only output"}
+
 	case "write_file_proposal":
 		if frozenPath, reason := cfg.checkFrozenPath(input); frozenPath != "" {
 			return PolicyResult{Decision: PolicyDenied, Reason: fmt.Sprintf("governance: %s (frozen path: %s)", reason, frozenPath)}

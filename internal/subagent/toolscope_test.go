@@ -20,7 +20,7 @@ func TestCapabilityToolScope(t *testing.T) {
 		}
 	}
 	// Mutation / git-write: coder yes, researcher no.
-	for _, tool := range []string{"write_file", "git_commit", "git_push", "create_directory"} {
+	for _, tool := range []string{"sandbox_exec", "write_file", "git_commit", "git_push", "create_directory"} {
 		if !scope.Allowed(coder, tool) {
 			t.Errorf("coder should be allowed %q", tool)
 		}
