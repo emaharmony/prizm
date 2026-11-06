@@ -2,11 +2,16 @@ package approval
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
+	"time"
+
+	"github.com/gofrs/flock"
 )
 
 // Store provides file-based persistence for approvals under
@@ -41,6 +46,14 @@ func (s *Store) Save(a *Approval) error {
 	defer s.mu.Unlock()
 
 	dir := s.approvalDir(a.RunID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create approvals directory: %w", err)
+	}
+	lock, err := acquireApprovalStoreLock(dir)
+	if err != nil {
+		return err
+	}
+	defer lock.Unlock()
 	path := s.approvalPath(a.RunID, a.ApprovalID)
 	if priorBytes, err := os.ReadFile(path); err == nil {
 		var prior Approval
@@ -55,10 +68,6 @@ func (s *Store) Save(a *Approval) error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("failed to inspect existing approval: %w", err)
 	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create approvals directory: %w", err)
-	}
-
 	data, err := json.MarshalIndent(a, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal approval: %w", err)
@@ -68,6 +77,130 @@ func (s *Store) Save(a *Approval) error {
 		return fmt.Errorf("failed to write approval file: %w", err)
 	}
 
+	return nil
+}
+
+// SaveIdempotent atomically creates a host-keyed approval or returns the
+// existing immutable record. Unlike Save, it never replaces a decision.
+// Publication uses a per-run interprocess lock and same-directory atomic
+// rename so crashes cannot leave a partially written final approval file.
+func (s *Store) SaveIdempotent(a *Approval) (*Approval, bool, error) {
+	if a == nil || strings.TrimSpace(a.IdempotencyKey) == "" || len(a.IdempotencyKey) > 256 {
+		return nil, false, errors.New("approval idempotency key is required")
+	}
+	if err := a.ValidateSubject(); err != nil {
+		return nil, false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	dir := s.approvalDir(a.RunID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, false, fmt.Errorf("failed to create approvals directory: %w", err)
+	}
+	lock, err := acquireApprovalStoreLock(dir)
+	if err != nil {
+		return nil, false, err
+	}
+	defer lock.Unlock()
+	if err := removeStaleIdempotentTemps(dir); err != nil {
+		return nil, false, err
+	}
+	path := s.approvalPath(a.RunID, a.ApprovalID)
+	if prior, err := readApproval(path); err == nil {
+		if err := sameIdempotentRequest(prior, a); err != nil {
+			return nil, false, err
+		}
+		return prior, false, nil
+	} else if !os.IsNotExist(err) {
+		return nil, false, err
+	}
+
+	data, err := json.MarshalIndent(a, "", "  ")
+	if err != nil {
+		return nil, false, err
+	}
+	tmp, err := os.CreateTemp(dir, ".approval-idempotent-*.tmp")
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to stage approval: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		_ = tmp.Close()
+		return nil, false, fmt.Errorf("failed to write staged approval: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return nil, false, fmt.Errorf("failed to sync staged approval: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, false, fmt.Errorf("failed to close staged approval: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return nil, false, fmt.Errorf("failed to publish idempotent approval: %w", err)
+	}
+	return a, true, nil
+}
+
+func acquireApprovalStoreLock(dir string) (*flock.Flock, error) {
+	lock := flock.New(filepath.Join(dir, ".approval-store.lock"))
+	if err := lock.Lock(); err != nil {
+		return nil, fmt.Errorf("failed to lock approval store: %w", err)
+	}
+	return lock, nil
+}
+
+func removeStaleIdempotentTemps(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("failed to inspect approval staging files: %w", err)
+	}
+	cutoff := time.Now().Add(-24 * time.Hour)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), ".approval-idempotent-") || !strings.HasSuffix(entry.Name(), ".tmp") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil {
+			return fmt.Errorf("failed to inspect approval staging file: %w", err)
+		}
+		if !info.Mode().IsRegular() || info.ModTime().After(cutoff) {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("failed to remove stale approval staging file: %w", err)
+		}
+	}
+	return nil
+}
+
+func readApproval(path string) (*Approval, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var prior Approval
+	if err := json.Unmarshal(data, &prior); err != nil {
+		return nil, fmt.Errorf("existing approval record is invalid")
+	}
+	if err := prior.ValidateSubject(); err != nil {
+		return nil, fmt.Errorf("existing approval record is invalid")
+	}
+	return &prior, nil
+}
+
+func sameIdempotentRequest(prior, next *Approval) error {
+	if prior.IdempotencyKey != next.IdempotencyKey || prior.ApprovalID != next.ApprovalID ||
+		prior.ProposalID != next.ProposalID || prior.RunID != next.RunID ||
+		prior.CorrelationID != next.CorrelationID || prior.RequestedBy != next.RequestedBy ||
+		prior.Project != next.Project || prior.MutationType != next.MutationType ||
+		prior.TargetPath != next.TargetPath || prior.Content != next.Content ||
+		prior.ToolName != next.ToolName || !reflect.DeepEqual(prior.Input, next.Input) ||
+		!reflect.DeepEqual(prior.PatchPlan, next.PatchPlan) || !reflect.DeepEqual(prior.SandboxBinding, next.SandboxBinding) {
+		return errors.New("idempotent approval key is already bound to a different proposal")
+	}
 	return nil
 }
 

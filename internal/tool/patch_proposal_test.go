@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -17,6 +18,7 @@ import (
 func patchProposalRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
+	cleanPatchTestGitObjects(t, root)
 	ctx := context.Background()
 	for _, args := range [][]string{{"init", "-b", "main"}, {"config", "user.email", "test@prizm.local"}, {"config", "user.name", "Prizm Test"}} {
 		if _, err := gitx.RunCommand(ctx, root, "", "git", args...); err != nil {
@@ -33,6 +35,26 @@ func patchProposalRepo(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return root
+}
+
+func cleanPatchTestGitObjects(t *testing.T, root string) {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		return
+	}
+	objects := filepath.Join(root, ".git", "objects")
+	t.Cleanup(func() {
+		_ = filepath.WalkDir(objects, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil || entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+				return walkErr
+			}
+			info, err := os.Lstat(path)
+			if err != nil || !info.Mode().IsRegular() {
+				return err
+			}
+			return os.Chmod(path, 0600)
+		})
+	})
 }
 
 func TestApplyPatchProposalPersistsOneExactApprovalWithoutMutation(t *testing.T) {
@@ -69,6 +91,71 @@ func TestApplyPatchProposalPersistsOneExactApprovalWithoutMutation(t *testing.T)
 	}
 	if err := gitx.EnsureClean(ctx, root); err != nil {
 		t.Fatalf("proposal mutated repo: %v", err)
+	}
+}
+
+func TestApplyPatchProposalHostIdempotencyPreservesDecisionAndRejectsChangedArtifact(t *testing.T) {
+	root := patchProposalRepo(t)
+	runs := t.TempDir()
+	ctx := context.Background()
+	base, err := gitx.CurrentSHA(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch := "diff --git a/base.txt b/base.txt\n--- a/base.txt\n+++ b/base.txt\n@@ -1 +1 @@\n-base\n+changed\n"
+	plan, err := gitx.PlanPatch(ctx, root, patch, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := NewRegistry()
+	if err := reg.Register(&ApplyPatchProposal{WorkspaceRoot: root, AllowedPaths: []string{root}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := PolicyConfig{WorkspaceRoot: root, AllowedPaths: []string{root}, WriteRoots: []string{root}, WriteAgents: map[string]bool{"coder": true}, MaxFileSize: 1024 * 1024}
+	store := approval.NewStore(runs)
+	executor := NewExecutor(reg, &cfg)
+	executor.SetApprovalStore(store)
+	key := strings.Repeat("a", 64)
+	binding := approval.SandboxProposalBinding{TaskID: "task-1", ExecutionKey: "exec-1", AgentID: "coder", WorkspaceID: "workspace-1", WorkspacePath: root, BaseSHA: plan.BaseSHA, BaseTree: plan.BaseTree, ArtifactDigest: strings.Repeat("b", 64)}
+	requestCtx := WithApprovalSandboxBinding(WithApprovalIdempotencyKey(ctx, key), binding)
+	input := map[string]any{"_run_id": "run-1", "patch": patch, "base_sha": base}
+	first, err := executor.ExecuteWithPolicy(requestCtx, "apply_patch_proposal", "coder", "multiagent", "exec-1", input)
+	if err != nil || !first.Success || first.Output["status"] != "pending_approval" {
+		t.Fatalf("first=%#v err=%v", first, err)
+	}
+	approvalID := first.Output["approval_id"].(string)
+	item, err := store.Load("run-1", approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.IdempotencyKey != key || item.SandboxBinding == nil || item.SandboxBinding.ArtifactDigest != binding.ArtifactDigest {
+		t.Fatalf("host binding=%#v", item.SandboxBinding)
+	}
+	if err := item.Approve("reviewer"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(item); err != nil {
+		t.Fatal(err)
+	}
+	replay, err := executor.ExecuteWithPolicy(requestCtx, "apply_patch_proposal", "coder", "multiagent", "exec-1", input)
+	if err != nil || !replay.Success || replay.Output["approval_id"] != approvalID || replay.Output["status"] != approval.StatusApproved {
+		t.Fatalf("replay=%#v err=%v", replay, err)
+	}
+	if items, err := store.List("run-1"); err != nil || len(items) != 1 {
+		t.Fatalf("approvals=%d err=%v", len(items), err)
+	}
+
+	changedPatch := strings.Replace(patch, "+changed", "+different", 1)
+	changedBinding := binding
+	changedBinding.ArtifactDigest = strings.Repeat("c", 64)
+	changedCtx := WithApprovalSandboxBinding(WithApprovalIdempotencyKey(ctx, key), changedBinding)
+	changed, err := executor.ExecuteWithPolicy(changedCtx, "apply_patch_proposal", "coder", "multiagent", "exec-1", map[string]any{"_run_id": "run-1", "patch": changedPatch, "base_sha": base})
+	if err != nil || changed.Success {
+		t.Fatalf("changed artifact reused approval: result=%#v err=%v", changed, err)
+	}
+	after, err := store.Load("run-1", approvalID)
+	if err != nil || after.Status != approval.StatusApproved {
+		t.Fatalf("changed replay altered decision: %#v err=%v", after, err)
 	}
 }
 

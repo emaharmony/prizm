@@ -28,6 +28,22 @@ type Executor struct {
 	Emit func(eventType, source string, payload map[string]any)
 }
 
+type approvalIdempotencyContextKey struct{}
+type approvalSandboxBindingContextKey struct{}
+
+// WithApprovalIdempotencyKey attaches a trusted host-generated key to an
+// approval request. Tool input cannot set or override this value.
+func WithApprovalIdempotencyKey(ctx context.Context, key string) context.Context {
+	return context.WithValue(ctx, approvalIdempotencyContextKey{}, key)
+}
+
+// WithApprovalSandboxBinding attaches a host-captured artifact binding to a
+// proposal. The value is kept in context and cannot come from tool input.
+func WithApprovalSandboxBinding(ctx context.Context, binding approval.SandboxProposalBinding) context.Context {
+	copy := binding
+	return context.WithValue(ctx, approvalSandboxBindingContextKey{}, copy)
+}
+
 // ApprovalStorer is the persistence interface used for approval-gated tools.
 type ApprovalStorer interface {
 	Save(a *approval.Approval) error
@@ -432,29 +448,62 @@ func (e *Executor) persistApproval(ctx context.Context, toolName, agent, project
 			return fmt.Errorf("persist patch approval: incomplete patch plan")
 		}
 	}
-	if err := e.ApprovalStore.Save(a); err != nil {
+	created := true
+	if key, _ := ctx.Value(approvalIdempotencyContextKey{}).(string); key != "" {
+		a.IdempotencyKey = key
+		if binding, ok := ctx.Value(approvalSandboxBindingContextKey{}).(approval.SandboxProposalBinding); ok {
+			a.SandboxBinding = &binding
+		}
+		// IDs are deterministic within this host-trusted namespace. Store
+		// publication remains exclusive and validates the immutable payload.
+		sum := sha256.Sum256([]byte(key))
+		id := fmt.Sprintf("%x", sum[:20])
+		a.ApprovalID = "appr_sb_" + id
+		a.ProposalID = "prop_sb_" + id
+		if storer, ok := e.ApprovalStore.(interface {
+			SaveIdempotent(*approval.Approval) (*approval.Approval, bool, error)
+		}); ok {
+			var saved *approval.Approval
+			var saveErr error
+			saved, created, saveErr = storer.SaveIdempotent(a)
+			if saveErr != nil {
+				return saveErr
+			}
+			a = saved
+			approvalID, proposalID = a.ApprovalID, a.ProposalID
+			result.Output["approval_id"] = approvalID
+			result.Output["proposal_id"] = proposalID
+		} else {
+			return fmt.Errorf("approval store does not support idempotent sandbox proposals")
+		}
+	} else if err := e.ApprovalStore.Save(a); err != nil {
 		return err
 	}
 
 	result.Output["run_id"] = runID
 	result.Output["correlation_id"] = correlationID
 	result.Output["status"] = "pending_approval"
+	if a.Status != approval.StatusPending {
+		result.Output["status"] = a.Status
+	}
 	result.Output["instruction"] = fmt.Sprintf("Use 'prizm approval approve %s --run %s --by <name>' or 'prizm approval deny %s --run %s --by <name>' to proceed.", approvalID, runID, approvalID, runID)
 
 	// Emit event for Discord notification (approval card with buttons)
-	e.emitEvent("prizm.approval.file_requested", map[string]any{
-		"proposal_id":    proposalID,
-		"approval_id":    approvalID,
-		"run_id":         runID,
-		"agent":          agent,
-		"project":        project,
-		"target_path":    targetPath,
-		"mutation_type":  mutationType,
-		"tool_name":      toolName,
-		"preview":        preview,
-		"content_length": len(a.Content),
-		"_channel_id":    channelID,
-	})
+	if created {
+		e.emitEvent("prizm.approval.file_requested", map[string]any{
+			"proposal_id":    proposalID,
+			"approval_id":    approvalID,
+			"run_id":         runID,
+			"agent":          agent,
+			"project":        project,
+			"target_path":    targetPath,
+			"mutation_type":  mutationType,
+			"tool_name":      toolName,
+			"preview":        preview,
+			"content_length": len(a.Content),
+			"_channel_id":    channelID,
+		})
+	}
 
 	return nil
 }
