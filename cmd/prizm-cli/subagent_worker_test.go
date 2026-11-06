@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/emaharmony/prizm/internal/approval"
 	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/provider"
 	"github.com/emaharmony/prizm/internal/subagent"
@@ -110,6 +111,57 @@ func TestSandboxCodeLaneRequiresIsolatedWorktree(t *testing.T) {
 	backend := &subAgentBackend{exec: tool.NewExecutor(tool.NewRegistry(), &tool.PolicyConfig{})}
 	if _, err := backend.sandboxExecutor(" "); err == nil {
 		t.Fatal("sandbox lane must fail closed without a per-task worktree")
+	}
+}
+
+func TestSandboxApprovalLaneRegistersOnlyExecAndPathlessProposal(t *testing.T) {
+	root := t.TempDir()
+	shared := tool.NewRegistry()
+	_ = shared.Register(&tool.ApplyPatchProposal{WorkspaceRoot: root, AllowedPaths: []string{root}})
+	policy := tool.DefaultPolicyConfig()
+	sharedExec := tool.NewExecutor(shared, &policy)
+	sharedExec.SetApprovalStore(approval.NewStore(t.TempDir()))
+	backend := &subAgentBackend{exec: sharedExec, sandboxApprovalMode: true}
+	executor, err := backend.sandboxApprovalExecutor(subagent.AgentRuntime{
+		AgentID: "developer", RunID: "run-1", TaskID: "task-1", ExecutionKey: "run-1:developer:1",
+		WorkspaceID: "workspace-1", WorkDir: root, Capabilities: []string{"code"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{subAgentSandboxToolName: true, subAgentSandboxProposalToolName: true}
+	for _, name := range executor.Registry.List() {
+		delete(want, name)
+	}
+	if len(want) != 0 {
+		t.Fatalf("sandbox approval lane missing expected tools: %v", want)
+	}
+	for _, forbidden := range []string{"apply_patch_proposal", "write_file", "write_file_proposal", "shell", "git_commit"} {
+		if _, err := executor.Registry.Resolve(forbidden); err == nil {
+			t.Errorf("sandbox model could call host tool %q directly", forbidden)
+		}
+	}
+	proposal, err := executor.Registry.Resolve(subAgentSandboxProposalToolName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proposal.Schema().Input) != 0 {
+		t.Fatalf("proposal tool accepts model input: %#v", proposal.Schema().Input)
+	}
+}
+
+func TestSandboxApprovalPromptOmitsHostApplyAlias(t *testing.T) {
+	got := sandboxApprovalPromptToolInfos([]tool.ToolInfo{
+		{Name: "read_file"},
+		{Name: "apply_patch_proposal"},
+	})
+	if len(got) != 1 || got[0].Name != "read_file" {
+		t.Fatalf("sandbox approval prompt tools=%v", got)
+	}
+	for _, info := range sandboxApprovalToolInfos() {
+		if info.Name == "apply_patch_proposal" {
+			t.Fatalf("sandbox approval prompt reintroduced host apply tool: %#v", info)
+		}
 	}
 }
 

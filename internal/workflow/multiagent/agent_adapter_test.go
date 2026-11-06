@@ -14,7 +14,9 @@ import (
 	"github.com/emaharmony/prizm/internal/agent"
 	"github.com/emaharmony/prizm/internal/cost"
 	"github.com/emaharmony/prizm/internal/event"
+	"github.com/emaharmony/prizm/internal/subagent"
 	"github.com/emaharmony/prizm/internal/validation"
+	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
 )
 
 type profileResolverFunc func(string) (AgentProfile, error)
@@ -161,6 +163,160 @@ func TestAgentRoleRunnerSetsFinalizationPrerequisiteOnlyWithProposalResolver(t *
 				}
 			}
 		})
+	}
+}
+
+type sandboxProposalLoopBackend struct {
+	proposed    bool
+	toolCalls   []string
+	allowedTool []string
+}
+
+func (b *sandboxProposalLoopBackend) Bind(runtime subagent.AgentRuntime) (subagent.LLMFunc, subagent.Parser, subagent.ToolExec, error) {
+	b.allowedTool = append([]string(nil), runtime.AllowedTools...)
+	turn := 0
+	llm := func(context.Context, []v2.Message, subagent.ReplyAllowance) (subagent.Turn, error) {
+		turn++
+		if turn == 1 {
+			return subagent.Turn{Text: "propose", PromptTokens: 10, CompletionTokens: 2}, nil
+		}
+		return subagent.Turn{Text: "final", PromptTokens: 10, CompletionTokens: 2}, nil
+	}
+	parse := func(text string) subagent.Action {
+		if text == "propose" {
+			return subagent.Action{Tool: "sandbox_propose_artifact", Input: map[string]any{}}
+		}
+		if text == "final" {
+			return subagent.Action{Final: true, Content: `{"schema_version":1,"summary":"implemented","changed_artifacts":[],"handoff":{"objective":"Implement the requested change","reason":"proposal recorded"}}`}
+		}
+		return subagent.Action{}
+	}
+	exec := func(_ context.Context, toolName string, input map[string]any) (string, error) {
+		b.toolCalls = append(b.toolCalls, toolName)
+		if toolName != "sandbox_propose_artifact" || len(input) != 0 {
+			return "", fmt.Errorf("unexpected bridge tool request %q with %v", toolName, input)
+		}
+		b.proposed = true
+		return "pending proposal recorded", nil
+	}
+	return llm, parse, exec, nil
+}
+
+func TestSandboxApprovalBridgeCompletesPrerequisiteAndResolvesProposal(t *testing.T) {
+	backend := &sandboxProposalLoopBackend{}
+	var packet v2.TaskPacket
+	loop := subagent.NewLoopRunner(subagent.LoopRunnerConfig{
+		Backend: backend,
+		Scope:   subagent.DefaultToolScope(),
+		SystemPrompt: func(task v2.TaskPacket, _ subagent.AgentRuntime) string {
+			packet = task
+			return "system"
+		},
+	})
+	profile := profileResolverFunc(func(ref string) (AgentProfile, error) {
+		return AgentProfile{ID: ref, Provider: "mock", Model: "test", Capabilities: []string{"developer", "code"}}, nil
+	})
+	var resolvedQuery ProposalQuery
+	runner, err := NewAgentRoleRunner(AgentRoleRunnerOptions{
+		Profiles: profile,
+		Executor: SubagentExecutor{Runner: loop, SandboxApprovalBridge: true},
+		Workspaces: WorkspaceResolverFunc(func(context.Context, string) (Workspace, error) {
+			return Workspace{ID: "workspace-run-phase1-test", Path: t.TempDir()}, nil
+		}),
+		Proposals: ProposalResolverFunc(func(_ context.Context, query ProposalQuery) ([]ProposalReference, error) {
+			resolvedQuery = query
+			if !backend.proposed {
+				return nil, nil
+			}
+			return []ProposalReference{{ProposalID: "proposal-bridge", ApprovalID: "approval-bridge", Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "feature.txt"}}}}, nil
+		}),
+		SandboxApprovalBridge: true,
+		PatchBase: func(context.Context, string) (string, error) {
+			t.Fatal("sandbox bridge must not ask the model-facing role runner for a patch base")
+			return "", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := adapterRoleRequest(RoleDeveloper)
+	request.Run.ExecutionKey = "run-phase1-test:developer:1"
+	request.Run.WorkspaceID = "workspace-run-phase1-test"
+	request.RoleConfig.AllowedTools = append(request.RoleConfig.AllowedTools, "apply_patch_proposal")
+	result, err := runner.RunRole(context.Background(), request)
+	if err != nil {
+		t.Fatalf("run role: %v", err)
+	}
+	if result.Outcome != OutcomeImplementationReady || len(result.Proposals) != 1 || result.Proposals[0].ProposalID != "proposal-bridge" {
+		t.Fatalf("role result did not resolve the persisted proposal: %#v", result)
+	}
+	if packet.FinalizationPrerequisiteTool != "sandbox_propose_artifact" || !strings.Contains(packet.ExpectedDeliverable, "empty input object") {
+		t.Fatalf("loop packet finalization contract = %q / %q", packet.FinalizationPrerequisiteTool, packet.ExpectedDeliverable)
+	}
+	if got, want := strings.Join(backend.toolCalls, ","), "sandbox_propose_artifact"; got != want {
+		t.Fatalf("tool calls=%q, want %q", got, want)
+	}
+	if containsString(backend.allowedTool, "apply_patch_proposal") || !containsString(backend.allowedTool, "sandbox_propose_artifact") {
+		t.Fatalf("loop allowed tools exposed wrong proposal tool: %v", backend.allowedTool)
+	}
+	if !strings.Contains(packet.Description, "empty input object") || strings.Contains(packet.Description, "apply_patch_proposal") {
+		t.Fatalf("developer prompt contains the wrong bridge contract: %s", packet.Description)
+	}
+	if resolvedQuery.RunID != request.Run.RunID || resolvedQuery.ExecutionKey != request.Run.ExecutionKey || resolvedQuery.AgentID != "developer-agent" {
+		t.Fatalf("proposal resolver query=%#v", resolvedQuery)
+	}
+}
+
+func TestSandboxApprovalBridgeCorrectiveTurnUsesOnlyPathlessProposalTool(t *testing.T) {
+	var calls int
+	var captured []AgentExecutionRequest
+	runner := newAdapterForTest(t, agentExecutorFunc(func(_ context.Context, request AgentExecutionRequest) (AgentExecutionResult, error) {
+		calls++
+		captured = append(captured, request)
+		return AgentExecutionResult{
+			Output:          `{"schema_version":1,"summary":"implemented","changed_artifacts":[],"handoff":{"objective":"Implement the requested change","reason":"proposal recorded"}}`,
+			LocalIterations: 1,
+			Usage:           cost.TokenUsage{TotalTokens: 1},
+		}, nil
+	}), nil, nil)
+	runner.sandboxApprovalBridge = true
+	var patchBaseCalls int
+	runner.patchBase = func(context.Context, string) (string, error) {
+		patchBaseCalls++
+		return "unexpected", nil
+	}
+	resolverCalls := 0
+	runner.proposals = ProposalResolverFunc(func(context.Context, ProposalQuery) ([]ProposalReference, error) {
+		resolverCalls++
+		if resolverCalls < 2 {
+			return nil, nil
+		}
+		return []ProposalReference{{ProposalID: "proposal-corrective", ApprovalID: "approval-corrective", Artifacts: []ArtifactRef{{Kind: ArtifactFile, URI: "feature.txt"}}}}, nil
+	})
+	request := adapterRoleRequest(RoleDeveloper)
+	request.RoleConfig.AllowedTools = append(request.RoleConfig.AllowedTools, "apply_patch_proposal")
+	result, err := runner.RunRole(context.Background(), request)
+	if err != nil {
+		t.Fatalf("run role: %v", err)
+	}
+	if result.Outcome != OutcomeImplementationReady || len(result.Proposals) != 1 || calls != 2 || result.Retries != 1 {
+		t.Fatalf("calls=%d result=%#v err=%v", calls, result, err)
+	}
+	if patchBaseCalls != 0 {
+		t.Fatalf("sandbox bridge requested model-facing patch base %d times", patchBaseCalls)
+	}
+	for index, execution := range captured {
+		if execution.FinalizationPrerequisiteTool != "sandbox_propose_artifact" ||
+			containsString(execution.AllowedTools, "apply_patch_proposal") ||
+			!containsString(execution.AllowedTools, "sandbox_propose_artifact") {
+			t.Fatalf("execution %d has wrong proposal contract: %#v", index, execution)
+		}
+		if strings.Contains(execution.Prompt, "apply_patch_proposal") || strings.Contains(execution.Prompt, "complete unified diff") || strings.Contains(execution.Prompt, "TRUSTED PATCH BASE") {
+			t.Fatalf("execution %d prompt contains host patch authority: %s", index, execution.Prompt)
+		}
+	}
+	if !strings.Contains(captured[1].Prompt, "CORRECTION:") || !strings.Contains(captured[1].Prompt, "sandbox_propose_artifact with an empty input object") {
+		t.Fatalf("corrective prompt omitted the pathless bridge contract: %s", captured[1].Prompt)
 	}
 }
 

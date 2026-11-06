@@ -646,6 +646,9 @@ func prerequisiteInstruction(tool string) string {
 	if tool == "apply_patch_proposal" {
 		return "The remaining task budget is reserved for the required governance action and final response. Request exactly the \"apply_patch_proposal\" tool now. Return exactly one JSON object with this envelope and no Markdown or prose: {\"type\":\"tool_request\",\"tool\":\"apply_patch_proposal\",\"input\":{\"patch\":\"<complete unified diff>\",\"base_sha\":\"<exact current git HEAD SHA>\"}}. The input object must contain exactly the non-empty string fields \"patch\" and \"base_sha\". Do not request another tool or return the final answer yet."
 	}
+	if tool == "sandbox_propose_artifact" {
+		return "The remaining task budget is reserved for the required governance action and final response. Request exactly the \"sandbox_propose_artifact\" tool now. Return exactly one JSON object with this envelope and no Markdown or prose: {\"type\":\"tool_request\",\"tool\":\"sandbox_propose_artifact\",\"input\":{}}. The input object must be empty. Do not provide a host path, artifact path, patch, or base_sha. Do not request another tool or return the final answer yet."
+	}
 	return fmt.Sprintf("The remaining task budget is reserved for the required governance action and final response. Request exactly the %q tool now. Do not request another tool or return the final answer yet.", tool)
 }
 

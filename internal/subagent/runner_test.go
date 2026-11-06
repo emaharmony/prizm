@@ -706,6 +706,15 @@ func TestPrerequisiteInstructionDefinesAtomicPatchEnvelope(t *testing.T) {
 	}
 }
 
+func TestPrerequisiteInstructionDefinesPathlessSandboxProposalEnvelope(t *testing.T) {
+	instruction := prerequisiteInstruction("sandbox_propose_artifact")
+	for _, required := range []string{`"type":"tool_request"`, `"tool":"sandbox_propose_artifact"`, `"input":{}`, "input object must be empty", "Do not provide a host path, artifact path, patch, or base_sha"} {
+		if !strings.Contains(instruction, required) {
+			t.Fatalf("instruction missing %q: %s", required, instruction)
+		}
+	}
+}
+
 func TestLoopRunnerAlreadySatisfiedPrerequisiteUsesNormalFinalization(t *testing.T) {
 	backend := &scriptBackend{parse: lineParser, turns: []Turn{
 		{Text: "TOOL write_file_proposal", PromptTokens: 4000, CompletionTokens: 100},

@@ -33,6 +33,7 @@ type AgentRuntime struct {
 	TaskID              string
 	CorrelationID       string
 	ExecutionKey        string
+	WorkspaceID         string
 	AllowedTools        []string
 	EnforceAllowedTools bool
 	MaxIterations       int

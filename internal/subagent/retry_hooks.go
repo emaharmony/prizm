@@ -198,7 +198,7 @@ func progressKind(tool string) string {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
 	case "read_file", "list_directory", "search", "grep", "git_status", "git_diff":
 		return "evidence"
-	case "write_file", "write_file_proposal", "apply_patch_proposal", "create_directory", "git_add", "git_commit":
+	case "write_file", "write_file_proposal", "apply_patch_proposal", "sandbox_propose_artifact", "create_directory", "git_add", "git_commit":
 		return "state"
 	default:
 		return "observation"

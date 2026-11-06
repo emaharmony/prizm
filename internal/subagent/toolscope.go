@@ -22,6 +22,7 @@ type ToolScope interface {
 // still gates anything genuinely dangerous.
 var roleGatedTools = map[string]string{
 	"sandbox_exec":              "code",
+	"sandbox_propose_artifact":  "code",
 	"write_file":                "code",
 	"write_file_proposal":       "code",
 	"apply_patch_proposal":      "code",

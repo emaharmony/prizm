@@ -17,7 +17,8 @@ import (
 // production LoopRunner backend continues to own provider and governed tool
 // execution.
 type SubagentExecutor struct {
-	Runner subagent.TaskRunner
+	Runner                subagent.TaskRunner
+	SandboxApprovalBridge bool
 }
 
 // ExecuteAgent implements AgentExecutor.
@@ -43,7 +44,14 @@ func (e SubagentExecutor) ExecuteAgent(
 	expectedDeliverable := "one strict JSON object matching the role schema"
 	finalizationPrerequisiteTool := strings.TrimSpace(request.FinalizationPrerequisiteTool)
 	if finalizationPrerequisiteTool != "" {
-		expectedDeliverable = "first emit one apply_patch_proposal tool_request JSON containing the complete unified diff and exact base_sha; after its result, emit one strict developer role-schema JSON"
+		switch finalizationPrerequisiteTool {
+		case "apply_patch_proposal":
+			expectedDeliverable = "first emit one apply_patch_proposal tool_request JSON containing the complete unified diff and exact base_sha; after its result, emit one strict developer role-schema JSON"
+		case "sandbox_propose_artifact":
+			expectedDeliverable = "first emit one sandbox_propose_artifact tool_request JSON with an empty input object; after its result, emit one strict developer role-schema JSON"
+		default:
+			expectedDeliverable = fmt.Sprintf("first satisfy the required %s tool prerequisite; after its result, emit one strict role-schema JSON", finalizationPrerequisiteTool)
+		}
 	}
 	if finalizationPrerequisiteTool != "" {
 		allowed := false
@@ -56,6 +64,10 @@ func (e SubagentExecutor) ExecuteAgent(
 		if !allowed {
 			return AgentExecutionResult{}, fmt.Errorf("multiagent: finalization prerequisite tool %q is not allowed for role %q", finalizationPrerequisiteTool, request.Role)
 		}
+	}
+	allowedTools := append([]string(nil), request.AllowedTools...)
+	if e.SandboxApprovalBridge && request.Role == RoleDeveloper && hasCapability(request.Profile.Capabilities, "code") {
+		allowedTools = appendUnique(allowedTools, "sandbox_exec", "sandbox_propose_artifact")
 	}
 	result, err := e.Runner.Run(ctx, v2.TaskPacket{
 		Type:                         "task_delegation",
@@ -80,8 +92,9 @@ func (e SubagentExecutor) ExecuteAgent(
 		RunID:               request.RunID,
 		TaskID:              request.TaskID,
 		ExecutionKey:        request.ExecutionKey,
-		AllowedTools:        append([]string(nil), request.AllowedTools...),
+		AllowedTools:        allowedTools,
 		EnforceAllowedTools: true,
+		WorkspaceID:         request.Workspace.ID,
 		MaxIterations:       int(request.MaxIterations),
 		Role:                string(request.Role),
 		RetryHooks:          subagentRetryHooks{handle: request.RetryHandle},
@@ -110,6 +123,31 @@ func (e SubagentExecutor) ExecuteAgent(
 		return executionResult, err
 	}
 	return executionResult, nil
+}
+
+func hasCapability(capabilities []string, want string) bool {
+	for _, capability := range capabilities {
+		if capability == want {
+			return true
+		}
+	}
+	return false
+}
+
+func appendUnique(values []string, additions ...string) []string {
+	for _, addition := range additions {
+		found := false
+		for _, value := range values {
+			if value == addition {
+				found = true
+				break
+			}
+		}
+		if !found {
+			values = append(values, addition)
+		}
+	}
+	return values
 }
 
 type subagentRetryHooks struct{ handle RoleVisitRetryHandle }

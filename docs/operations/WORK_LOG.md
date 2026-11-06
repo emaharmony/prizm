@@ -2830,3 +2830,23 @@ Review identified cross-platform path hazards: backslashes, trailing dots/spaces
 **Next action:** review the second commit and exact branch diff before publishing. Require the Linux OCI job to pass; keep R1/G1 and broader execution-safety acceptance open.
 
 **Next action:** hold this unpublished, unmerged worktree for independent rereview and a real OCI engine run. Do not claim G2 conformance or proceed to R1/G1 acceptance until that boundary is exercised.
+
+## 2026-11-05 — FW-G2 reference-workflow approval bridge
+
+**Roadmap IDs:** FW-G2; R1/G1 remains an upstream acceptance dependency. Candidate branch `codex/g2-sandbox-approval-bridge` is isolated on staging base `c76f0ca2b6b9de6d88ce7b23e001125554cf2182`; the dirty primary checkout and prior G2 worktree were preserved.
+
+- Added a default-off `PRIZM_MULTIAGENT_SANDBOX=oci-approval` bridge for the reference multiagent workflow. The pathless proposal tool is scoped to the opted-in code lane. Host-owned run/task/execution/agent/workspace identity, clean base commit/tree, and artifact digest bind the generated bounded patch to an immutable idempotent approval record. Pending/denied proposals do not write; approved changes use the existing lifecycle and verified run worktree. NATS remains export-only. No new package or authority path was introduced.
+- Focused approval/sandbox/tool/subagent/workflow/CLI tests, targeted durable restart/reconcile tests, and race tests for approval/sandbox/tool/CLI passed. `git diff --check` passed. Native CLI build, Linux compile, and targeted vet are unverified locally: the global module-cache metadata write was denied and an isolated cache could not resolve transitive dependencies because proxy DNS was unavailable. No code error was produced by those blocked validations.
+- Review coverage includes concurrent idempotent proposal creation, replay without resetting pending/denied state, conflicting artifact binding, foreign runtime/workspace identity rejection, dirty or changed base rejection, model path/argument rejection, freeze after proposal, zero writes before approval, approved single apply/reconcile, and restart recovery before and after the effect. No service, Mac, Freewill approval, or deployment was touched.
+
+**Risk/next action:** the candidate remains uncommitted and unpublished pending independent security/architecture review. Follow with exact-head CI and retain the existing real OCI conformance gate. R1/G1 and served Freewill acceptance remain open; no end-to-end served G2 claim is made.
+
+## 2026-11-05 — FW-G2 review fixes for text safety and proposal finalization
+
+**Roadmap IDs:** FW-G2; R1/G1 remains an upstream acceptance dependency. Work is on the isolated, locally committed `codex/g2-sandbox-approval-bridge` branch and remains unpublished.
+
+- Hardened bounded patch review to reject invalid UTF-8 and control characters except tab, CR, and LF. Regression cases reject NUL, invalid UTF-8 without NUL, and a non-whitespace control byte before JSON/patch generation.
+- Aligned the opted-in reference workflow's host-authored proposal protocol end to end: `AgentRoleRunner` selects the pathless sandbox proposal tool, removes the host patch tool from the developer allowlist, initial prompt, and corrective turn; `SubagentExecutor` sets the matching finalization prerequisite/deliverable; LoopRunner documents the exact empty-input envelope; CLI removes `apply_patch_proposal` from sandbox-mode tool descriptions. The default apply-patch workflow remains unchanged and NATS remains export-only.
+- Focused checks passed: sandbox `TestReviewPatchRejectsBinaryChanges`; subagent `TestPrerequisiteInstructionDefinesPathlessSandboxProposalEnvelope`; workflow `TestSandboxApprovalBridgeCompletesPrerequisiteAndResolvesProposal`, `TestSandboxApprovalBridgeCorrectiveTurnUsesOnlyPathlessProposalTool`, and default prerequisite coverage; CLI bridge prompt, registry, and proposal lifecycle/identity tests. `git diff --check` passed. No Mac, service, Freewill approval, or deployment action was taken.
+
+**Next action:** independent rereview found no actionable P1/P2 findings. Prepare the exact PR for coordinator authorization; after publication, require exact-head CI. Native build/Linux compile/`go vet` limits documented in the preceding handoff remain.

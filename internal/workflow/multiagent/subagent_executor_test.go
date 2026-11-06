@@ -54,6 +54,7 @@ func TestSubagentExecutorMapsRuntimeAndResult(t *testing.T) {
 			t.Errorf("packet = %#v", packet)
 		}
 		if runtime.WorkDir != "/workspace/run-1" ||
+			runtime.WorkspaceID != "workspace-run-1" ||
 			!runtime.EnforceAllowedTools ||
 			len(runtime.AllowedTools) != 2 ||
 			runtime.MaxIterations != 4 ||
@@ -105,5 +106,47 @@ func TestSubagentExecutorMapsRuntimeAndResult(t *testing.T) {
 	}
 	if len(result.Artifacts) != 3 {
 		t.Errorf("artifacts = %v", result.Artifacts)
+	}
+}
+
+func TestSubagentExecutorAddsOnlyPathlessSandboxToolsWhenBridgeEnabled(t *testing.T) {
+	called := false
+	executor := SubagentExecutor{SandboxApprovalBridge: true, Runner: subagentTaskRunnerFunc(func(_ context.Context, _ v2.TaskPacket, runtime subagent.AgentRuntime) (subagent.RunResult, error) {
+		called = true
+		want := map[string]bool{"read_file": true, "sandbox_exec": true, "sandbox_propose_artifact": true}
+		for _, name := range runtime.AllowedTools {
+			delete(want, name)
+		}
+		if len(want) != 0 {
+			t.Fatalf("sandbox tool scope missing %v: %v", want, runtime.AllowedTools)
+		}
+		if runtime.WorkspaceID != "canonical-workspace" {
+			t.Fatalf("workspace identity=%q", runtime.WorkspaceID)
+		}
+		return subagent.RunResult{}, nil
+	})}
+	_, err := executor.ExecuteAgent(context.Background(), AgentExecutionRequest{
+		RunID: "run", TaskID: "task", ExecutionKey: "exec", Role: RoleDeveloper,
+		Profile:   AgentProfile{ID: "agent", Capabilities: []string{"code"}},
+		Workspace: Workspace{ID: "canonical-workspace", Path: t.TempDir()}, AllowedTools: []string{"read_file"},
+	})
+	if err != nil || !called {
+		t.Fatalf("called=%v err=%v", called, err)
+	}
+
+	called = false
+	noCode := SubagentExecutor{SandboxApprovalBridge: true, Runner: subagentTaskRunnerFunc(func(_ context.Context, _ v2.TaskPacket, runtime subagent.AgentRuntime) (subagent.RunResult, error) {
+		called = true
+		if len(runtime.AllowedTools) != 1 || runtime.AllowedTools[0] != "read_file" {
+			t.Fatalf("non-code role gained sandbox authority: %v", runtime.AllowedTools)
+		}
+		return subagent.RunResult{}, nil
+	})}
+	_, err = noCode.ExecuteAgent(context.Background(), AgentExecutionRequest{
+		Role: RoleDeveloper, Profile: AgentProfile{ID: "agent", Capabilities: []string{"research"}},
+		Workspace: Workspace{ID: "canonical-workspace", Path: t.TempDir()}, AllowedTools: []string{"read_file"},
+	})
+	if err != nil || !called {
+		t.Fatalf("non-code execute called=%v err=%v", called, err)
 	}
 }
