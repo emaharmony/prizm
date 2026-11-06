@@ -65,19 +65,23 @@ type Approval struct {
 	// SubjectType separates ordinary mutation authorization from proposal-only
 	// Freewill intention authorization. Empty is accepted only for legacy
 	// mutation records written before this discriminator existed.
-	SubjectType   string                `json:"subject_type,omitempty"`
-	Intention     *IntentionApprovalRef `json:"intention,omitempty"`
-	ProposalID    string                `json:"proposal_id,omitempty"`
-	ApprovalID    string                `json:"approval_id"`
-	RunID         string                `json:"run_id"`
-	CorrelationID string                `json:"correlation_id"`
-	Status        string                `json:"status"` // pending, approved, denied, expired
-	RequestedBy   string                `json:"requested_by"`
-	Project       string                `json:"project"`
-	MutationType  string                `json:"mutation_type"` // write_file, create_directory, apply_patch, tool_call
-	TargetPath    string                `json:"target_path"`
-	Content       string                `json:"content,omitempty"`
-	Preview       string                `json:"preview,omitempty"`
+	SubjectType string                `json:"subject_type,omitempty"`
+	Intention   *IntentionApprovalRef `json:"intention,omitempty"`
+	ProposalID  string                `json:"proposal_id,omitempty"`
+	// IdempotencyKey binds a host-created proposal request to one immutable
+	// sandbox artifact. It is never accepted from tool input.
+	IdempotencyKey string                  `json:"idempotency_key,omitempty"`
+	SandboxBinding *SandboxProposalBinding `json:"sandbox_binding,omitempty"`
+	ApprovalID     string                  `json:"approval_id"`
+	RunID          string                  `json:"run_id"`
+	CorrelationID  string                  `json:"correlation_id"`
+	Status         string                  `json:"status"` // pending, approved, denied, expired
+	RequestedBy    string                  `json:"requested_by"`
+	Project        string                  `json:"project"`
+	MutationType   string                  `json:"mutation_type"` // write_file, create_directory, apply_patch, tool_call
+	TargetPath     string                  `json:"target_path"`
+	Content        string                  `json:"content,omitempty"`
+	Preview        string                  `json:"preview,omitempty"`
 	// ToolName and Input preserve the original tool call for MutationToolCall
 	// approvals, so mutation.Executor can re-invoke the exact same tool with
 	// the exact same input after a human approves it.
@@ -92,6 +96,19 @@ type Approval struct {
 	DeniedAt     *time.Time     `json:"denied_at,omitempty"`
 	DenialReason string         `json:"denial_reason,omitempty"`
 	Policy       PolicyDecision `json:"policy"`
+}
+
+// SandboxProposalBinding records trusted host identity and a review-only
+// artifact digest. It does not grant mutation authority.
+type SandboxProposalBinding struct {
+	TaskID         string `json:"task_id"`
+	ExecutionKey   string `json:"execution_key"`
+	AgentID        string `json:"agent_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	WorkspacePath  string `json:"workspace_path"`
+	BaseSHA        string `json:"base_sha"`
+	BaseTree       string `json:"base_tree"`
+	ArtifactDigest string `json:"artifact_digest"`
 }
 
 // IntentionApprovalRef binds an approval to one canonical, workflow-owned
@@ -134,6 +151,21 @@ func (a *Approval) ValidateSubject() error {
 	case "", SubjectMutation:
 		if a.Intention != nil {
 			return fmt.Errorf("mutation approval cannot contain an intention subject")
+		}
+		if a.IdempotencyKey != "" {
+			b := a.SandboxBinding
+			keyBytes, keyErr := hex.DecodeString(a.IdempotencyKey)
+			artifactBytes, artifactErr := []byte(nil), error(nil)
+			if b != nil {
+				artifactBytes, artifactErr = hex.DecodeString(b.ArtifactDigest)
+			}
+			if len(a.IdempotencyKey) != 64 || b == nil || a.MutationType != MutationApplyPatch || a.PatchPlan == nil ||
+				keyErr != nil || len(keyBytes) != 32 || artifactErr != nil || len(artifactBytes) != 32 ||
+				b.TaskID == "" || b.ExecutionKey == "" || b.ExecutionKey != a.CorrelationID || b.AgentID == "" ||
+				b.AgentID != a.RequestedBy || b.WorkspaceID == "" || b.WorkspacePath == "" || b.BaseSHA == "" ||
+				b.BaseTree == "" || b.ArtifactDigest == "" || b.BaseSHA != a.PatchPlan.BaseSHA || b.BaseTree != a.PatchPlan.BaseTree {
+				return fmt.Errorf("sandbox proposal approval binding is invalid")
+			}
 		}
 	case SubjectIntention:
 		if a.Intention == nil || a.MutationType != "" || a.TargetPath != "" || a.Content != "" || a.ToolName != "" || len(a.Input) != 0 || a.PatchPlan != nil {

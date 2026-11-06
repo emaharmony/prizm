@@ -28,6 +28,7 @@ import (
 )
 
 const referenceManifestSchemaVersion = 2
+const multiAgentSandboxApprovalEnv = "PRIZM_MULTIAGENT_SANDBOX"
 
 // referenceWorkflowManifest is the on-disk shape of every durable multiagent
 // run this package starts, whether via the legacy `prism workflow run`
@@ -382,9 +383,14 @@ func buildLiveReferenceComponents(runDir, configPath string, manifest referenceW
 	backend := &subAgentBackend{
 		providers: providerRegistry, exec: toolExecutor, toolReg: toolRegistry,
 		protectedBranch: cfg.ProtectedBranch(), approvalStore: approvalStore,
-		worktreeRoot: filepath.Join(manifest.SourceWorkspacePath, ".prizm", "worktrees"),
+		worktreeRoot:        filepath.Join(manifest.SourceWorkspacePath, ".prizm", "worktrees"),
+		sandboxApprovalMode: os.Getenv(multiAgentSandboxApprovalEnv) == "oci-approval",
 	}
 	toolInfos := toolRegistry.ListWithDescriptions()
+	if backend.sandboxApprovalMode {
+		toolInfos = sandboxApprovalPromptToolInfos(toolInfos)
+		toolInfos = append(toolInfos, sandboxApprovalToolInfos()...)
+	}
 	loop := subagent.NewLoopRunner(subagent.LoopRunnerConfig{
 		Backend:                 backend,
 		Scope:                   subagent.DefaultToolScope(),
@@ -403,12 +409,13 @@ func buildLiveReferenceComponents(runDir, configPath string, manifest referenceW
 	}
 	roleRunner, err := multiagent.NewAgentRoleRunner(multiagent.AgentRoleRunnerOptions{
 		Profiles: multiagent.RegistryProfileResolver{Registry: agentRegistry},
-		Executor: multiagent.SubagentExecutor{Runner: loop},
+		Executor: multiagent.SubagentExecutor{Runner: loop, SandboxApprovalBridge: backend.sandboxApprovalMode},
 		Workspaces: multiagent.WorkspaceResolverFunc(func(context.Context, string) (multiagent.Workspace, error) {
 			return multiagent.Workspace{ID: manifest.WorkspaceID, Path: manifest.WorkspacePath}, nil
 		}),
-		Validation: validationRunner,
-		Proposals:  approvalProposalResolver{store: approvalStore, workspace: manifest.WorkspacePath},
+		Validation:            validationRunner,
+		Proposals:             approvalProposalResolver{store: approvalStore, workspace: manifest.WorkspacePath},
+		SandboxApprovalBridge: backend.sandboxApprovalMode,
 	})
 	if err != nil {
 		return nil, err

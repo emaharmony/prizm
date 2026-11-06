@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/emaharmony/prizm/internal/gitx"
 )
 
 func TestSnapshotTrackedCopiesOnlyAllowlistedRegularSource(t *testing.T) {
@@ -598,6 +600,174 @@ func TestPinnedImageRequiredBeforeRuntime(t *testing.T) {
 	p := NewProvider(Config{Image: "latest"})
 	if _, err := p.Open(context.Background(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "sha256 digest") {
 		t.Fatalf("unpinned image should be rejected before runtime access, got %v", err)
+	}
+}
+
+func TestBuildReviewPatchPlansAddModifyDeleteFromCleanBase(t *testing.T) {
+	root := t.TempDir()
+	baseline := filepath.Join(root, "baseline")
+	workspace := filepath.Join(root, "workspace")
+	repo := filepath.Join(root, "repo")
+	for _, dir := range []string{baseline, workspace, repo} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cleanTempGitObjectsOnWindows(t, repo)
+	for path, content := range map[string]string{"edit.txt": "before\n", "delete.txt": "gone\n"} {
+		if err := os.WriteFile(filepath.Join(baseline, path), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "edit.txt"), []byte("after\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "add.txt"), []byte("new\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "edit.txt"), []byte("before\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "delete.txt"), []byte("gone\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "init", "--quiet")
+	git(t, repo, "-c", "user.name=Sandbox Test", "-c", "user.email=sandbox@example.invalid", "add", "--all")
+	git(t, repo, "-c", "user.name=Sandbox Test", "-c", "user.email=sandbox@example.invalid", "commit", "--quiet", "-m", "baseline")
+	baseSHA, err := gitx.CurrentSHA(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineHashes, err := hashWorkspace(baseline, withDefaults(Config{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentHashes, err := hashWorkspace(workspace, withDefaults(Config{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch, err := buildReviewPatch(context.Background(), root, baseline, workspace, baselineHashes, currentHashes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := gitx.PlanPatch(context.Background(), repo, patch, baseSHA)
+	if err != nil {
+		t.Fatalf("generated patch did not plan against its clean base: %v\n%s", err, patch)
+	}
+	want := map[string]bool{"add.txt": true, "delete.txt": true, "edit.txt": true}
+	if len(plan.Paths) != len(want) {
+		t.Fatalf("patch paths=%v", plan.Paths)
+	}
+	for _, path := range plan.Paths {
+		if !want[path] {
+			t.Fatalf("unexpected patch path %q", path)
+		}
+	}
+}
+
+func TestReviewPatchRejectsBinaryChanges(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		data []byte
+	}{
+		{name: "nul", data: []byte{'a', 0, 'b'}},
+		{name: "invalid UTF-8", data: []byte{'a', 0xff, 'b'}},
+		{name: "control byte", data: []byte{'a', 0x01, 'b'}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			baseline := filepath.Join(root, "baseline")
+			workspace := filepath.Join(root, "workspace")
+			if err := os.MkdirAll(baseline, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(workspace, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(workspace, "change.txt"), test.data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			baselineHashes, err := hashWorkspace(baseline, withDefaults(Config{}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			currentHashes, err := hashWorkspace(workspace, withDefaults(Config{}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries := changeEntries(baselineHashes, currentHashes)
+			if err := validateTextChanges(entries, baseline, workspace); err == nil {
+				t.Fatal("binary or control-bearing patch must fail closed")
+			}
+		})
+	}
+}
+
+func TestBoundedReviewOutputStopsRetainingBytesPastLimit(t *testing.T) {
+	writer := &boundedReviewOutput{limit: 4}
+	if n, err := writer.Write([]byte("123456789")); err != nil || n != 9 {
+		t.Fatalf("write n=%d err=%v", n, err)
+	}
+	if !writer.exceeded || writer.buf.Len() != 5 {
+		t.Fatalf("bounded writer retained %d bytes, exceeded=%v", writer.buf.Len(), writer.exceeded)
+	}
+}
+
+func TestReviewPatchBindsOnlyOriginalCleanSourceBase(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	baselineRoot := filepath.Join(root, "baseline")
+	workspace := filepath.Join(root, "workspace")
+	for _, dir := range []string{source, baselineRoot, workspace} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cleanTempGitObjectsOnWindows(t, source)
+	if err := os.WriteFile(filepath.Join(source, "base.txt"), []byte("base\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git(t, source, "init", "--quiet")
+	git(t, source, "-c", "user.name=Sandbox Test", "-c", "user.email=sandbox@example.invalid", "add", "--all")
+	git(t, source, "-c", "user.name=Sandbox Test", "-c", "user.email=sandbox@example.invalid", "commit", "--quiet", "-m", "base")
+	baseline, err := snapshotTracked(ctx, source, baselineRoot, withDefaults(Config{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "base.txt"), []byte("sandbox change\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	baseSHA, baseTree, err := captureGitBase(ctx, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Session{root: root, sourceRoot: source, workspace: workspace, baselineRoot: baselineRoot, baseline: baseline, baseSHA: baseSHA, baseTree: baseTree, config: withDefaults(Config{})}
+	firstPatch, firstSHA, firstTree, firstDigest, err := s.ReviewPatch(ctx)
+	if err != nil || firstPatch == "" || firstSHA != baseSHA || firstTree != baseTree || len(firstDigest) != 64 {
+		t.Fatalf("review patch sha=%q tree=%q digest=%q err=%v", firstSHA, firstTree, firstDigest, err)
+	}
+	secondPatch, _, _, secondDigest, err := s.ReviewPatch(ctx)
+	if err != nil || secondDigest != firstDigest || secondPatch != firstPatch {
+		t.Fatalf("review replay changed immutable patch: err=%v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "base.txt"), []byte("uncommitted\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, err := s.ReviewPatch(ctx); err == nil {
+		t.Fatal("dirty source workspace was accepted")
+	}
+	if err := os.WriteFile(filepath.Join(source, "base.txt"), []byte("base\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git(t, source, "-c", "user.name=Sandbox Test", "-c", "user.email=sandbox@example.invalid", "add", "--all")
+	if err := os.WriteFile(filepath.Join(source, "other.txt"), []byte("new base\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git(t, source, "-c", "user.name=Sandbox Test", "-c", "user.email=sandbox@example.invalid", "add", "--all")
+	git(t, source, "-c", "user.name=Sandbox Test", "-c", "user.email=sandbox@example.invalid", "commit", "--quiet", "-m", "advanced")
+	if _, _, _, _, err := s.ReviewPatch(ctx); err == nil {
+		t.Fatal("advanced source base was accepted")
 	}
 }
 

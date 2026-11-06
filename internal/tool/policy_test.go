@@ -175,6 +175,18 @@ func TestPolicyV4_ApplyPatchProposalRequiresApproval(t *testing.T) {
 	}
 }
 
+func TestPolicySandboxArtifactProposalIsOnlyAReviewSubmission(t *testing.T) {
+	cfg := DefaultPolicyConfig()
+	result := EvaluatePolicy(cfg, "sandbox_propose_artifact", map[string]any{})
+	if result.Decision != PolicyApproved {
+		t.Fatalf("pathless review submission decision=%s", result.Decision)
+	}
+	patch := EvaluatePolicy(cfg, "apply_patch_proposal", map[string]any{"patch": "diff", "base_sha": "base"})
+	if patch.Decision != PolicyRequiresApproval {
+		t.Fatalf("underlying patch decision=%s", patch.Decision)
+	}
+}
+
 func TestPolicyV4_ShellDenied(t *testing.T) {
 	cfg := DefaultPolicyConfig()
 	result := EvaluatePolicy(cfg, "shell", map[string]any{

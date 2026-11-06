@@ -17,15 +17,16 @@ import (
 
 // AgentRoleRunner adapts Prism's bounded agent execution seam to RoleRunner.
 type AgentRoleRunner struct {
-	profiles   AgentProfileResolver
-	executor   AgentExecutor
-	workspaces WorkspaceResolver
-	approvals  ApprovalChecker
-	validation ValidationRunner
-	proposals  ProposalResolver
-	patchBase  func(context.Context, string) (string, error)
-	events     EventSink
-	now        func() time.Time
+	profiles              AgentProfileResolver
+	executor              AgentExecutor
+	workspaces            WorkspaceResolver
+	approvals             ApprovalChecker
+	validation            ValidationRunner
+	proposals             ProposalResolver
+	patchBase             func(context.Context, string) (string, error)
+	sandboxApprovalBridge bool
+	events                EventSink
+	now                   func() time.Time
 }
 
 // SetEventSink connects validation lifecycle events to the durable runtime's
@@ -35,14 +36,15 @@ func (r *AgentRoleRunner) SetEventSink(sink EventSink) { r.events = sink }
 // AgentRoleRunnerOptions supplies the existing governance and workspace
 // authorities used by the adapter.
 type AgentRoleRunnerOptions struct {
-	Profiles   AgentProfileResolver
-	Executor   AgentExecutor
-	Workspaces WorkspaceResolver
-	Approvals  ApprovalChecker
-	Validation ValidationRunner
-	Proposals  ProposalResolver
-	PatchBase  func(context.Context, string) (string, error)
-	Clock      func() time.Time
+	Profiles              AgentProfileResolver
+	Executor              AgentExecutor
+	Workspaces            WorkspaceResolver
+	Approvals             ApprovalChecker
+	Validation            ValidationRunner
+	Proposals             ProposalResolver
+	PatchBase             func(context.Context, string) (string, error)
+	SandboxApprovalBridge bool
+	Clock                 func() time.Time
 }
 
 // NewAgentRoleRunner creates the real Prism agent adapter.
@@ -65,14 +67,15 @@ func NewAgentRoleRunner(options AgentRoleRunnerOptions) (*AgentRoleRunner, error
 		patchBase = gitx.CurrentSHA
 	}
 	return &AgentRoleRunner{
-		profiles:   options.Profiles,
-		executor:   options.Executor,
-		workspaces: options.Workspaces,
-		approvals:  options.Approvals,
-		validation: options.Validation,
-		proposals:  options.Proposals,
-		patchBase:  patchBase,
-		now:        now,
+		profiles:              options.Profiles,
+		executor:              options.Executor,
+		workspaces:            options.Workspaces,
+		approvals:             options.Approvals,
+		validation:            options.Validation,
+		proposals:             options.Proposals,
+		patchBase:             patchBase,
+		sandboxApprovalBridge: options.SandboxApprovalBridge,
+		now:                   now,
 	}, nil
 }
 
@@ -129,7 +132,11 @@ func (r *AgentRoleRunner) RunRole(
 		return RoleRunResult{}, err
 	}
 
-	prompt, err := BuildRolePrompt(request)
+	proposalTool := "apply_patch_proposal"
+	if request.Run.CurrentRole == RoleDeveloper && r.sandboxApprovalBridge {
+		proposalTool = "sandbox_propose_artifact"
+	}
+	prompt, err := buildRolePromptForProposalTool(request, proposalTool)
 	if err != nil {
 		return RoleRunResult{}, err
 	}
@@ -164,13 +171,17 @@ func (r *AgentRoleRunner) RunRole(
 		ToolEventSink:         request.ToolEventSink,
 	}
 	if request.Run.CurrentRole == RoleDeveloper && r.proposals != nil {
-		baseSHA, baseErr := r.patchBase(ctx, workspace.Path)
-		if baseErr != nil {
-			return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "resolve trusted patch base: " + baseErr.Error()}
+		if proposalTool == "apply_patch_proposal" {
+			baseSHA, baseErr := r.patchBase(ctx, workspace.Path)
+			if baseErr != nil {
+				return RoleRunResult{}, &GovernanceError{Kind: "proposal", Reason: "resolve trusted patch base: " + baseErr.Error()}
+			}
+			executionRequest.Prompt += fmt.Sprintf("\n\nTRUSTED PATCH BASE: Use this exact base_sha in apply_patch_proposal: %s", baseSHA)
+		} else {
+			executionRequest.Prompt += "\n\nSANDBOX PROPOSAL: Request sandbox_propose_artifact with an empty input object. Do not supply a host path, artifact path, patch, or base_sha; the host derives the bounded patch from this execution's active sandbox session."
 		}
-		executionRequest.Prompt += fmt.Sprintf("\n\nTRUSTED PATCH BASE: Use this exact base_sha in apply_patch_proposal: %s", baseSHA)
-		executionRequest.AllowedTools = governedDeveloperTools(executionRequest.AllowedTools)
-		executionRequest.FinalizationPrerequisiteTool = "apply_patch_proposal"
+		executionRequest.AllowedTools = governedDeveloperTools(executionRequest.AllowedTools, proposalTool)
+		executionRequest.FinalizationPrerequisiteTool = proposalTool
 	}
 	execution, err := r.executor.ExecuteAgent(executionContext, executionRequest)
 	if err != nil {
@@ -214,7 +225,11 @@ func (r *AgentRoleRunner) RunRole(
 		}
 		executionRequest.MaxIterations = remainingIterations
 		executionRequest.MaxTokens = remainingTokens
-		executionRequest.Prompt += fmt.Sprintf("\n\nCORRECTION: Your previous response did not persist a mutation proposal. Previous output follows:\n%s\n\nYour NEXT response must be ONLY one JSON tool_request for apply_patch_proposal containing the complete unified diff and exact base_sha. Do not include the developer role JSON in that response. After the tool result, return ONLY the required developer role JSON. This is your only corrective turn.", execution.Output)
+		correction := "Your NEXT response must be ONLY one JSON tool_request for apply_patch_proposal containing the complete unified diff and exact base_sha."
+		if proposalTool == "sandbox_propose_artifact" {
+			correction = "Your NEXT response must be ONLY one JSON tool_request for sandbox_propose_artifact with an empty input object. Do not include a host path, artifact path, patch, or base_sha."
+		}
+		executionRequest.Prompt += fmt.Sprintf("\n\nCORRECTION: Your previous response did not persist a mutation proposal. Previous output follows:\n%s\n\n%s Do not include the developer role JSON in that response. After the tool result, return ONLY the required developer role JSON. This is your only corrective turn.", execution.Output, correction)
 		correctiveRetries = 1
 		corrected, correctErr := r.executor.ExecuteAgent(executionContext, executionRequest)
 		if correctErr != nil {
@@ -317,27 +332,30 @@ func (r *AgentRoleRunner) RunRole(
 	}, nil
 }
 
-func governedDeveloperTools(configured []string) []string {
+func governedDeveloperTools(configured []string, proposalTool string) []string {
 	allowed := map[string]bool{
 		"echo": true, "list_dir": true, "read_file": true, "read_project": true,
 		"search_files": true, "project_overview": true, "git_status": true,
 		"git_log": true, "git_diff": true, "git_branch_list": true,
 		"write_file_dry_run": true, "web_search": true, "memory_search": true,
-		"use_skill": true, "apply_patch_proposal": true,
+		"use_skill": true, "apply_patch_proposal": true, "sandbox_propose_artifact": true,
 	}
 	out := make([]string, 0, len(configured)+1)
-	seenPatch := false
+	seenProposalTool := false
 	for _, name := range configured {
 		if !allowed[name] {
 			continue
 		}
-		if name == "apply_patch_proposal" {
-			seenPatch = true
+		if (name == "apply_patch_proposal" || name == "sandbox_propose_artifact") && name != proposalTool {
+			continue
+		}
+		if name == proposalTool {
+			seenProposalTool = true
 		}
 		out = append(out, name)
 	}
-	if !seenPatch {
-		out = append(out, "apply_patch_proposal")
+	if !seenProposalTool {
+		out = append(out, proposalTool)
 	}
 	return out
 }
@@ -416,6 +434,10 @@ func (r *AgentRoleRunner) Reflect(ctx context.Context, request ReflectionRequest
 // BuildRolePrompt renders only the current task, limited run accounting,
 // incoming structured handoff, and the role's strict JSON contract.
 func BuildRolePrompt(request RoleRunRequest) (string, error) {
+	return buildRolePromptForProposalTool(request, "apply_patch_proposal")
+}
+
+func buildRolePromptForProposalTool(request RoleRunRequest, proposalTool string) (string, error) {
 	handoffJSON := "null"
 	if request.Run.IncomingHandoff != nil {
 		data, err := json.Marshal(request.Run.IncomingHandoff)
@@ -455,7 +477,11 @@ func BuildRolePrompt(request RoleRunRequest) (string, error) {
 		schema,
 	)
 	if request.Run.CurrentRole == RoleDeveloper {
-		prompt += "\n\nDEVELOPER TOOL PROTOCOL: Before returning the developer role-schema JSON, emit exactly one separate JSON tool_request for apply_patch_proposal. Its input must contain the complete unified diff in patch and the exact observed git HEAD in base_sha. Do not combine the tool request with the role-schema JSON. After Prizm returns the tool result, return only the developer role-schema JSON."
+		if proposalTool == "sandbox_propose_artifact" {
+			prompt += "\n\nDEVELOPER TOOL PROTOCOL: Before returning the developer role-schema JSON, emit exactly one separate JSON tool_request for sandbox_propose_artifact with an empty input object. Do not include a host path, artifact path, patch, or base_sha. Do not combine the tool request with the role-schema JSON. After Prizm returns the tool result, return only the developer role-schema JSON."
+		} else {
+			prompt += "\n\nDEVELOPER TOOL PROTOCOL: Before returning the developer role-schema JSON, emit exactly one separate JSON tool_request for apply_patch_proposal. Its input must contain the complete unified diff in patch and the exact observed git HEAD in base_sha. Do not combine the tool request with the role-schema JSON. After Prizm returns the tool result, return only the developer role-schema JSON."
+		}
 	}
 	if feedback := boundedRecoveryFeedback(request.RecoveryFeedback); feedback != "" {
 		prompt += "\n\nRECOVERY CORRECTION: " + feedback
