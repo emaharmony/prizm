@@ -59,6 +59,7 @@ runs/*
 tmp_natspub/
 tmp/
 .tmp/
+/.tmp*
 dist/
 build/
 coverage/
