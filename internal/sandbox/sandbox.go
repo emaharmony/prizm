@@ -24,6 +24,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/emaharmony/prizm/internal/gitx"
 )
 
 const (
@@ -41,6 +45,7 @@ const (
 	sandboxStaleAfter     = 10 * time.Minute
 	maxArtifactFiles      = 100
 	maxArtifactBytes      = int64(2 << 30)
+	maxReviewPatchBytes   = 1 << 20
 	artifactRetention     = 7 * 24 * time.Hour
 	reservationRetention  = 24 * time.Hour
 	artifactQuotaLockName = ".quota.lock"
@@ -196,9 +201,13 @@ func withDefaults(c Config) Config {
 type Session struct {
 	config       Config
 	root         string
+	sourceRoot   string
 	workspace    string
+	baselineRoot string
 	artifactRoot string
 	baseline     map[string]string
+	baseSHA      string
+	baseTree     string
 	lease        *os.File
 	closed       bool
 }
@@ -299,7 +308,25 @@ func (p *Provider) Open(ctx context.Context, sourceRoot string) (*Session, error
 		_ = os.RemoveAll(root)
 		return nil, err
 	}
-	return &Session{config: c, root: root, workspace: workspace, artifactRoot: c.ArtifactRoot, baseline: baseline, lease: lease}, nil
+	baselineRoot := filepath.Join(root, "baseline")
+	if err := os.Mkdir(baselineRoot, 0700); err != nil {
+		_ = lease.Close()
+		_ = os.RemoveAll(root)
+		return nil, fmt.Errorf("create sandbox review baseline: %w", err)
+	}
+	baselineCopy, err := snapshotTracked(ctx, sourceRoot, baselineRoot, c)
+	if err != nil || !sameHashMap(baseline, baselineCopy) {
+		_ = lease.Close()
+		_ = os.RemoveAll(root)
+		return nil, errors.New("sandbox source changed while the baseline was captured")
+	}
+	baseSHA, baseTree, err := captureGitBase(ctx, sourceRoot)
+	if err != nil {
+		_ = lease.Close()
+		_ = os.RemoveAll(root)
+		return nil, errors.New("sandbox source base could not be verified")
+	}
+	return &Session{config: c, root: root, sourceRoot: sourceRoot, workspace: workspace, baselineRoot: baselineRoot, artifactRoot: c.ArtifactRoot, baseline: baseline, baseSHA: baseSHA, baseTree: baseTree, lease: lease}, nil
 }
 
 // Execute runs one bounded command inside the pinned image. Only a validated
@@ -465,18 +492,7 @@ func (s *Session) ExportArtifact() (string, error) {
 		return "", err
 	}
 	defer reservation.release()
-	changed := make([]manifestEntry, 0)
-	for path, digest := range current {
-		if old, ok := s.baseline[path]; !ok || old != digest {
-			changed = append(changed, manifestEntry{Path: path, Status: statusFor(s.baseline, path), SHA256: digest})
-		}
-	}
-	for path := range s.baseline {
-		if _, ok := current[path]; !ok {
-			changed = append(changed, manifestEntry{Path: path, Status: "deleted"})
-		}
-	}
-	sort.Slice(changed, func(i, j int) bool { return changed[i].Path < changed[j].Path })
+	changed := changeEntries(s.baseline, current)
 	artifactDir, err := os.MkdirTemp(s.artifactRoot, "review-")
 	if err != nil {
 		return "", fmt.Errorf("create sandbox artifact directory: %w", err)
@@ -542,6 +558,306 @@ func (s *Session) ExportArtifact() (string, error) {
 	}
 	reservation.release()
 	return artifact, nil
+}
+
+// ReviewPatch returns a host-generated patch for the current sandbox state.
+// It is bound to the clean source commit captured at Open and never accepts a
+// host path from the model.
+func (s *Session) ReviewPatch(ctx context.Context) (patch, baseSHA, baseTree, changeDigest string, err error) {
+	if s.closed {
+		return "", "", "", "", errors.New("sandbox session is closed")
+	}
+	sha, tree, err := captureGitBase(ctx, s.sourceRoot)
+	if err != nil || sha != s.baseSHA || tree != s.baseTree {
+		return "", "", "", "", errors.New("sandbox source base changed after session open")
+	}
+	verified := filepath.Join(s.root, "verify-source")
+	if err := os.Mkdir(verified, 0700); err != nil {
+		return "", "", "", "", err
+	}
+	defer os.RemoveAll(verified)
+	verifiedHashes, err := snapshotTracked(ctx, s.sourceRoot, verified, s.config)
+	if err != nil || !sameHashMap(verifiedHashes, s.baseline) {
+		return "", "", "", "", errors.New("sandbox source no longer matches the captured clean baseline")
+	}
+	current, err := hashWorkspace(s.workspace, s.config)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	entries := changeEntries(s.baseline, current)
+	if len(entries) == 0 {
+		return "", "", "", "", errors.New("sandbox has no changes to propose")
+	}
+	if err := validateTextChanges(entries, s.baselineRoot, s.workspace); err != nil {
+		return "", "", "", "", err
+	}
+	digestInput, err := json.Marshal(struct {
+		BaseSHA  string          `json:"base_sha"`
+		BaseTree string          `json:"base_tree"`
+		Files    []manifestEntry `json:"files"`
+	}{BaseSHA: s.baseSHA, BaseTree: s.baseTree, Files: entries})
+	if err != nil {
+		return "", "", "", "", err
+	}
+	digest := sha256.Sum256(digestInput)
+	patch, err = buildReviewPatch(ctx, s.root, s.baselineRoot, s.workspace, s.baseline, current)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	if len(patch) == 0 || len(patch) > maxReviewPatchBytes {
+		return "", "", "", "", errors.New("sandbox patch exceeds its review bound")
+	}
+	return patch, s.baseSHA, s.baseTree, hex.EncodeToString(digest[:]), nil
+}
+
+func changeEntries(baseline, current map[string]string) []manifestEntry {
+	changed := make([]manifestEntry, 0)
+	for path, digest := range current {
+		if old, ok := baseline[path]; !ok || old != digest {
+			changed = append(changed, manifestEntry{Path: path, Status: statusFor(baseline, path), SHA256: digest})
+		}
+	}
+	for path := range baseline {
+		if _, ok := current[path]; !ok {
+			changed = append(changed, manifestEntry{Path: path, Status: "deleted"})
+		}
+	}
+	sort.Slice(changed, func(i, j int) bool { return changed[i].Path < changed[j].Path })
+	return changed
+}
+
+func validateTextChanges(entries []manifestEntry, baselineRoot, workspace string) error {
+	for _, entry := range entries {
+		for _, root := range []string{baselineRoot, workspace} {
+			path := filepath.Join(root, filepath.FromSlash(entry.Path))
+			data, err := os.ReadFile(path)
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil || !utf8.Valid(data) || containsDisallowedControl(data) {
+				return errors.New("sandbox patch contains an unreadable or binary file")
+			}
+		}
+	}
+	return nil
+}
+
+func containsDisallowedControl(data []byte) bool {
+	for _, r := range string(data) {
+		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
+			return true
+		}
+	}
+	return false
+}
+
+func sameHashMap(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for path, hash := range a {
+		if b[path] != hash {
+			return false
+		}
+	}
+	return true
+}
+
+func captureGitBase(ctx context.Context, root string) (string, string, error) {
+	read := func(args ...string) (string, error) {
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
+		cmd.Env = trustedGitEnv()
+		out, err := cmd.Output()
+		return strings.TrimSpace(string(out)), err
+	}
+	if err := gitx.EnsureClean(ctx, root); err != nil {
+		return "", "", err
+	}
+	sha, err := read("rev-parse", "HEAD")
+	if err != nil {
+		return "", "", err
+	}
+	tree, err := read("rev-parse", "HEAD^{tree}")
+	if err != nil {
+		return "", "", err
+	}
+	if err := gitx.EnsureClean(ctx, root); err != nil {
+		return "", "", err
+	}
+	sha2, err := read("rev-parse", "HEAD")
+	if err != nil || sha2 != sha {
+		return "", "", errors.New("source HEAD changed")
+	}
+	tree2, err := read("rev-parse", "HEAD^{tree}")
+	if err != nil || tree2 != tree {
+		return "", "", errors.New("source tree changed")
+	}
+	return sha, tree, nil
+}
+
+func buildReviewPatch(ctx context.Context, parent, baselineRoot, workspace string, baseline, current map[string]string) (string, error) {
+	scratch, err := os.MkdirTemp(parent, "review-patch-")
+	if err != nil {
+		return "", err
+	}
+	defer removeReviewPatchDir(scratch)
+	emptyConfig := filepath.Join(scratch, ".git", "prizm-empty-config")
+	git := func(args ...string) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", scratch}, args...)...)
+		cmd.Env = append(trustedGitEnv(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+emptyConfig)
+		return cmd.Output()
+	}
+	if _, err := git("init", "-q"); err != nil {
+		return "", errors.New("could not initialize private patch workspace")
+	}
+	info := filepath.Join(scratch, ".git", "info")
+	if err := os.MkdirAll(info, 0700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(emptyConfig, nil, 0600); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(info, "attributes"), []byte("* -filter -diff -merge\n"), 0600); err != nil {
+		return "", err
+	}
+	hooks := filepath.Join(scratch, ".git", "empty-hooks")
+	if err := os.Mkdir(hooks, 0700); err != nil {
+		return "", err
+	}
+	if err := copyReviewTree(baselineRoot, scratch); err != nil {
+		return "", err
+	}
+	if _, err := git("add", "-f", "--all"); err != nil {
+		return "", errors.New("could not stage private patch baseline")
+	}
+	if _, err := git("-c", "user.name=Prizm", "-c", "user.email=prizm@localhost", "-c", "commit.gpgsign=false", "-c", "core.hooksPath="+hooks, "commit", "-q", "--no-verify", "-m", "baseline"); err != nil {
+		return "", errors.New("could not commit private patch baseline")
+	}
+	for rel := range baseline {
+		if err := os.Remove(filepath.Join(scratch, filepath.FromSlash(rel))); err != nil && !os.IsNotExist(err) {
+			return "", err
+		}
+	}
+	if err := copyReviewTree(workspace, scratch); err != nil {
+		return "", err
+	}
+	if _, err := git("add", "-f", "--all"); err != nil {
+		return "", errors.New("could not stage sandbox changes")
+	}
+	patchCommand := exec.CommandContext(ctx, "git", "-C", scratch, "-c", "core.hooksPath="+hooks, "diff", "--cached", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", "--no-renames", "HEAD", "--")
+	patchCommand.Env = append(trustedGitEnv(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+emptyConfig)
+	bounded := &boundedReviewOutput{limit: maxReviewPatchBytes}
+	patchCommand.Stdout = bounded
+	patchCommand.Stderr = io.Discard
+	if err := patchCommand.Run(); err != nil {
+		return "", errors.New("could not create sandbox review patch")
+	}
+	if bounded.exceeded {
+		return "", errors.New("sandbox patch exceeds its review bound")
+	}
+	return bounded.buf.String(), nil
+}
+
+type boundedReviewOutput struct {
+	buf      bytes.Buffer
+	limit    int
+	exceeded bool
+}
+
+func (w *boundedReviewOutput) Write(p []byte) (int, error) {
+	remaining := w.limit + 1 - w.buf.Len()
+	if remaining > 0 {
+		if remaining > len(p) {
+			remaining = len(p)
+		}
+		_, _ = w.buf.Write(p[:remaining])
+	}
+	if remaining < len(p) {
+		w.exceeded = true
+	}
+	if w.buf.Len() > w.limit {
+		w.exceeded = true
+	}
+	return len(p), nil
+}
+
+func removeReviewPatchDir(root string) {
+	objects := filepath.Join(root, ".git", "objects")
+	_ = filepath.WalkDir(objects, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			return err
+		}
+		return os.Chmod(path, 0600)
+	})
+	_ = os.RemoveAll(root)
+}
+
+func copyReviewTree(source, destination string) error {
+	return filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == source {
+			return nil
+		}
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		portable := filepath.ToSlash(rel)
+		if excludedPath(portable) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !validPortableRelativePath(portable) {
+			return errors.New("review patch contains a non-portable path")
+		}
+		info, err := os.Lstat(path)
+		if err != nil || isReparsePoint(info) {
+			return errors.New("review patch contains a linked path")
+		}
+		target := filepath.Join(destination, filepath.FromSlash(portable))
+		if info.IsDir() {
+			return os.MkdirAll(target, 0700)
+		}
+		if !info.Mode().IsRegular() {
+			return errors.New("review patch contains a non-regular file")
+		}
+		in, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+			return err
+		}
+		mode := os.FileMode(0600)
+		if info.Mode()&0111 != 0 {
+			mode = 0700
+		}
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(out, in)
+		inCloseErr := in.Close()
+		closeErr := out.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if inCloseErr != nil {
+			return inCloseErr
+		}
+		return closeErr
+	})
 }
 
 func statusFor(baseline map[string]string, path string) string {

@@ -80,6 +80,7 @@ type subAgentBackend struct {
 	worktreeRoot         string // canonical <repo>/.prizm/worktrees root for native-tool providers
 	toolEventSinkFactory subagent.ToolEventSinkFactory
 	sandboxMode          bool
+	sandboxApprovalMode  bool
 }
 
 // SetToolEventSinkFactory wires a durable per-task event sink into this worker
@@ -144,7 +145,13 @@ func (b *subAgentBackend) Bind(rt subagent.AgentRuntime) (subagent.LLMFunc, suba
 	// Per-run executor: rooted at the task's worktree when isolated, so all
 	// file + git tools (not just git) operate inside it.
 	var ex *tool.Executor
-	if b.sandboxMode && hasSubAgentCapability(rt, "code") {
+	if b.sandboxApprovalMode && hasSubAgentCapability(rt, "code") {
+		var err error
+		ex, err = b.sandboxApprovalExecutor(rt)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	} else if b.sandboxMode && hasSubAgentCapability(rt, "code") {
 		var err error
 		ex, err = b.sandboxExecutor(rt.WorkDir)
 		if err != nil {
