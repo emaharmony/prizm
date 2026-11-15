@@ -8,7 +8,9 @@
 
 **Open gates and next action:** Exact-model Cloud compatibility and CTX-05 semantic acceptance remain unverified. Publish only to `codex/freewill-integration`; wait for exact-head required CI and blocking review clearance before merging. Do not promote to staging or deploy.
 
----## Current Handoff: FW-P2 approved-reference child-dispatch PR1 candidate (2026-11-13)
+---
+
+## Current Handoff: FW-P2 approved-reference child-dispatch PR1 candidate (2026-11-13)
 
 **Roadmap IDs:** FW-P2 and FW-G2; R1/G1 remains a prerequisite for served or unattended FW-P2. Candidate branch `codex/freewill-p2-staging-pr1` is local and starts at `947afe43738c72a98f862c49a3f678109e73dff9`, whose merge base is the supplied staging head `4083cb803f6b4ab83cd93d6cc27ef64281f1701e`. The implementation slice is 43 files (`+5915/-303`) covering approved reference-child dispatch, approval, recovery, halt, and reporting. No remote operation was performed.
 
