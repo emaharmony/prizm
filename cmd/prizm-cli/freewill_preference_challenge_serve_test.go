@@ -339,6 +339,45 @@ func TestE40StandalonePreferenceChallengeSurvivesServeRestart(t *testing.T) {
 		t.Fatal("serve recovery did not expire the due preference evidence")
 	}
 	waitExpired()
+	retentionStore := memory.NewMarkdownStore(filepath.Join(dataDir, "freewill-terminal-facts", facts.workspaceID, "memory"))
+	retentionScope := memory.Scope{UserID: ownerID, IncludeUserScope: true, ProjectID: projectID, TaskID: scopeID, AgentID: agentID, CorrelationID: scopeID}
+	waitDerivedRowsExpired := func() {
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			// Reading challenges also runs retention recovery. The preference
+			// hypothesis can expire before the separately created challenge's
+			// one-second fallback deadline, so keep polling until both rows are
+			// physically compacted.
+			request, _ := http.NewRequest(http.MethodGet, base+path+"?"+q.Encode(), nil)
+			request.Header.Set("Authorization", "Bearer "+ownerToken)
+			response, requestErr := (&http.Client{Timeout: 2 * time.Second}).Do(request)
+			if requestErr == nil {
+				_, _ = io.Copy(io.Discard, response.Body)
+				_ = response.Body.Close()
+				if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusNotFound {
+					t.Fatalf("challenge expiry status=%d", response.StatusCode)
+				}
+			}
+			rows, listErr := retentionStore.ListScopedRecords(ctx, retentionScope)
+			if listErr != nil {
+				t.Fatalf("list retained preference rows: %v", listErr)
+			}
+			pending := false
+			for _, row := range rows {
+				if row.Source == freewillPreferenceHypothesisSource && (row.Category == "preference_hypothesis" || row.Category == "preference_revision") ||
+					row.Source == freewillPreferenceChallengeSource && row.Category == "preference_challenge" {
+					pending = true
+					break
+				}
+			}
+			if !pending {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		t.Fatal("serve recovery did not compact due derived preference rows")
+	}
+	waitDerivedRowsExpired()
 	if _, reason, eligible = influenceSink.CurrentPreferenceInfluence(ctx, ownerID, projectID, workspace, agentID); eligible || reason == "" {
 		t.Fatalf("expired preference remained eligible: reason=%s eligible=%t", reason, eligible)
 	}
@@ -347,8 +386,6 @@ func TestE40StandalonePreferenceChallengeSurvivesServeRestart(t *testing.T) {
 	// Inspect physical local rows before any withdrawal request. The served
 	// restart must have compacted only derived preference rows while preserving
 	// the cited task outcomes and self-reports.
-	retentionStore := memory.NewMarkdownStore(filepath.Join(dataDir, "freewill-terminal-facts", facts.workspaceID, "memory"))
-	retentionScope := memory.Scope{UserID: ownerID, IncludeUserScope: true, ProjectID: projectID, TaskID: scopeID, AgentID: agentID, CorrelationID: scopeID}
 	retainedRows, err := retentionStore.ListScopedRecords(ctx, retentionScope)
 	if err != nil {
 		t.Fatal(err)

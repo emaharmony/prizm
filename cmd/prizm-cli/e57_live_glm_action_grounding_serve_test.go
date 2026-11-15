@@ -333,6 +333,17 @@ func e57MinimalProcessEnvironment(workDir string) []string {
 	return env
 }
 
+func e57BuildProcessEnvironment(workDir string) ([]string, error) {
+	env := e57MinimalProcessEnvironment(workDir)
+	for _, key := range []string{"GOCACHE", "GOMODCACHE", "GOPATH", "GOROOT"} {
+		value, err := exec.Command("go", "env", key).Output()
+		if err != nil || strings.TrimSpace(string(value)) == "" {
+			return nil, fmt.Errorf("resolve Go build environment variable %s", key)
+		}
+		env = append(env, key+"="+strings.TrimSpace(string(value)))
+	}
+	return env, nil
+}
 func e57MinimalServeEnvironment(workDir, apiKey string) []string {
 	env := e57MinimalProcessEnvironment(workDir)
 	return append(env, "OLLAMA_API_KEY="+apiKey, "PRIZM_FREEWILL_OLLAMA_CLOUD_DIRECT=1", "PRIZM_FREEWILL_EVENT_DIAGNOSTICS=1")
@@ -819,7 +830,11 @@ func e57RunStandaloneEventAdmission(t *testing.T, directCloud bool) {
 	}
 	binaryPath := filepath.Join(work, "prizm.exe")
 	build := exec.CommandContext(ctx, "go", "build", "-o", binaryPath, "./cmd/prizm-cli")
-	build.Dir, build.Env = repo, e57MinimalProcessEnvironment(work)
+	buildEnv, err := e57BuildProcessEnvironment(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	build.Dir, build.Env = repo, buildEnv
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build standalone CLI failed (output bytes=%d): %v", len(output), err)
 	}
