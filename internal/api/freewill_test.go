@@ -2,11 +2,14 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/emaharmony/prizm/internal/freewill"
 	"github.com/emaharmony/prizm/internal/workflow/multiagent"
@@ -173,6 +176,7 @@ func TestFreewillDecisionEndpointRejectsUnknownAuthorityAndUsesAuthenticatedActo
 
 type fakeFreewillChildApprovals struct {
 	listedParent, listedChild, parent, child, approvalID, decision, actor, reason string
+	historyParent, historyChild                                                   string
 }
 
 func (f *fakeFreewillChildApprovals) ListChildApprovals(_ context.Context, parent, child string) ([]FreewillChildApproval, error) {
@@ -185,6 +189,22 @@ func (f *fakeFreewillChildApprovals) ListChildApprovals(_ context.Context, paren
 func (f *fakeFreewillChildApprovals) DecideChildApproval(_ context.Context, parent, child, approvalID, decision, actor, reason string) (FreewillChildApproval, error) {
 	f.parent, f.child, f.approvalID, f.decision, f.actor, f.reason = parent, child, approvalID, decision, actor, reason
 	return FreewillChildApproval{ParentRunID: parent, ChildRunID: child, ApprovalID: approvalID, Status: decision + "ed"}, nil
+}
+
+func (f *fakeFreewillChildApprovals) ListChildApprovalHistory(_ context.Context, parent, child string) ([]FreewillChildApprovalDecision, error) {
+	f.historyParent, f.historyChild = parent, child
+	decisions := make([]FreewillChildApprovalDecision, 25)
+	for i := range decisions {
+		decision, status, actor, reason := "grant", "approved", "reviewer", "approved after review"
+		if i%2 == 1 {
+			decision, status, actor, reason = "deny", "denied", "reviewer-2", "changes exceeded agreed scope"
+		}
+		decisions[i] = FreewillChildApprovalDecision{ParentRunID: parent, ChildRunID: child,
+			ApprovalID: "approval-" + strconv.Itoa(i), ProposalID: "proposal-1", Decision: decision, Status: status,
+			Actor: actor, Reason: reason, DecidedAt: time.Date(2026, 11, 9, 12, 0, i, 0, time.UTC),
+			Paths: []string{"approved.txt"}, PatchSHA256: "aabbcc"}
+	}
+	return decisions, nil
 }
 
 func TestFreewillChildPatchApprovalIsAuthenticatedAndBoundToChild(t *testing.T) {
@@ -220,5 +240,45 @@ func TestFreewillChildPatchApprovalIsAuthenticatedAndBoundToChild(t *testing.T) 
 	h.ServeHTTP(decided, post)
 	if decided.Code != http.StatusOK || controller.parent != "parent-1" || controller.child != "child-1" || controller.approvalID != "patch-1" || controller.decision != "grant" || controller.actor != "owner" || controller.reason != "reviewed" {
 		t.Fatalf("decision status=%d controller=%+v body=%s", decided.Code, controller, decided.Body.String())
+	}
+}
+
+func TestFreewillChildApprovalHistoryIsAuthenticatedBoundedAndReplayable(t *testing.T) {
+	controller := &fakeFreewillChildApprovals{}
+	s := NewServer(Config{Addr: ":0", AuthToken: "secret", FreewillChildApprovals: controller})
+	h := s.authMiddleware(s.mux)
+	path := "/api/v1/freewill/runs/parent-1/children/child-1/approvals/history"
+	unauth := httptest.NewRecorder()
+	h.ServeHTTP(unauth, httptest.NewRequest(http.MethodGet, path, nil))
+	if unauth.Code != http.StatusUnauthorized || controller.historyParent != "" || controller.historyChild != "" {
+		t.Fatalf("unauthorized history status=%d controller=%+v", unauth.Code, controller)
+	}
+	request := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		response := httptest.NewRecorder()
+		h.ServeHTTP(response, req)
+		return response
+	}
+	first := request()
+	if first.Code != http.StatusOK || controller.historyParent != "parent-1" || controller.historyChild != "child-1" {
+		t.Fatalf("history status=%d controller=%+v body=%s", first.Code, controller, first.Body.String())
+	}
+	var body struct {
+		Decisions []FreewillChildApprovalDecision `json:"decisions"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Decisions) != maxFreewillChildApprovalHistory {
+		t.Fatalf("history length=%d want cap=%d", len(body.Decisions), maxFreewillChildApprovalHistory)
+	}
+	if body.Decisions[0].Decision != "grant" || body.Decisions[0].Actor != "reviewer" || body.Decisions[0].Reason != "approved after review" ||
+		body.Decisions[1].Decision != "deny" || body.Decisions[1].Actor != "reviewer-2" || body.Decisions[1].Reason != "changes exceeded agreed scope" {
+		t.Fatalf("history omitted final grant/deny receipt fields: %+v", body.Decisions[:2])
+	}
+	second := request()
+	if second.Code != http.StatusOK || second.Body.String() != first.Body.String() {
+		t.Fatalf("history replay changed response: first=%s second=%s", first.Body.String(), second.Body.String())
 	}
 }

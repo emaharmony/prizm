@@ -235,10 +235,27 @@ type FreewillChildPatchPlan struct {
 	Paths        []string `json:"paths"`
 }
 
+// FreewillChildApprovalDecision is a bounded read-only projection of a final
+// child patch decision receipt. It deliberately omits patch content.
+type FreewillChildApprovalDecision struct {
+	ParentRunID string    `json:"parent_run_id"`
+	ChildRunID  string    `json:"child_run_id"`
+	ApprovalID  string    `json:"approval_id"`
+	ProposalID  string    `json:"proposal_id"`
+	Decision    string    `json:"decision"`
+	Status      string    `json:"status"`
+	Actor       string    `json:"actor"`
+	Reason      string    `json:"reason,omitempty"`
+	DecidedAt   time.Time `json:"decided_at"`
+	Paths       []string  `json:"paths"`
+	PatchSHA256 string    `json:"patch_sha256"`
+}
+
 // FreewillChildApprovalController binds patch review to the durable parent
 // dispatch and its one admitted child run.
 type FreewillChildApprovalController interface {
 	ListChildApprovals(contextctx.Context, string, string) ([]FreewillChildApproval, error)
+	ListChildApprovalHistory(contextctx.Context, string, string) ([]FreewillChildApprovalDecision, error)
 	DecideChildApproval(contextctx.Context, string, string, string, string, string, string) (FreewillChildApproval, error)
 }
 

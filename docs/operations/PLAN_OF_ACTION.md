@@ -165,6 +165,16 @@ publication; do not start write-capable Freewill or claim full R1/G1.
 
 # Prizm Plan of Action
 
+## Current Handoff: FW-P2 PR2 child approval history (2026-11-14)
+
+**Roadmap:** FW-P2 and FW-G2; R1/G1 remains an upstream dependency for served or unattended FW-P2 acceptance.
+
+PR1 (#145) merged into `codex/freewill-integration` at `441207fbde631b06ebd5b28dafb3b284fc7a6ab8`. PR2 is being prepared from that exact base as `codex/freewill-child-approval-history-pr2-restack`; it adds durable, bounded, read-only child patch decision history and persists grant reasons. It is intended to target `codex/freewill-integration`, not `staging`.
+
+**Verification:** focused API, approval, dashboard, and one-cycle CLI tests passed; `go build ./...`, `staticcheck ./...`, and `git diff --check` passed. The local diff is limited to the approval history feature and sanitized plan/work-log updates.
+
+**Next action:** finish independent review, then publish through the GitHub API and require exact-head CI before merging into the Freewill integration branch. Do not promote to staging until R1/G1 and FW-P2 acceptance gates are satisfied.
+
 ## Current Handoff: R1 acceptance blocked after approved apply (2026-10-22)
 
 **Roadmap:** R1 remains incomplete. PR #91 is open and draft on `staging` at

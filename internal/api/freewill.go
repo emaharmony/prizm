@@ -11,6 +11,8 @@ import (
 	multiagent "github.com/emaharmony/prizm/internal/workflow/multiagent"
 )
 
+const maxFreewillChildApprovalHistory = 20
+
 type freewillControlRequest struct {
 	AgentID   string `json:"agent_id"`
 	ProjectID string `json:"project_id"`
@@ -160,7 +162,7 @@ func (s *Server) handleFreewillChildApproval(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/freewill/runs/"), "/"), "/")
-	if (len(parts) != 4 && len(parts) != 6) || !validMultiAgentRunID(parts[0]) || parts[1] != "children" ||
+	if (len(parts) != 4 && len(parts) != 5 && len(parts) != 6) || !validMultiAgentRunID(parts[0]) || parts[1] != "children" ||
 		!validMultiAgentRunID(parts[2]) || parts[3] != "approvals" {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -180,6 +182,30 @@ func (s *Server) handleFreewillChildApproval(w http.ResponseWriter, r *http.Requ
 			approvals = []FreewillChildApproval{}
 		}
 		writeJSON(w, map[string]any{"approvals": approvals})
+		return
+	}
+	if len(parts) == 5 {
+		if parts[4] != "history" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		decisions, err := s.freewillChildApprovals.ListChildApprovalHistory(r.Context(), parts[0], parts[2])
+		if err != nil {
+			writeJSONError(w, "Freewill child approval history unavailable", http.StatusConflict)
+			return
+		}
+		if len(decisions) > maxFreewillChildApprovalHistory {
+			decisions = decisions[:maxFreewillChildApprovalHistory]
+		}
+		if decisions == nil {
+			decisions = []FreewillChildApprovalDecision{}
+		}
+		writeJSON(w, map[string]any{"decisions": decisions})
 		return
 	}
 	if parts[5] != "decision" || strings.TrimSpace(parts[4]) == "" {

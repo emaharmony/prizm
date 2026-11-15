@@ -151,6 +151,9 @@ func TestFreewillDashboardExposesTerminalExecutionOutcomes(t *testing.T) {
 		"/multiagent/runs/${encodeURIComponent(childRunID)}/report",
 		"report.artifacts", "Changed files:", "Validation checks:", "Full terminal report",
 		"ui.escape(JSON.stringify(report, null, 2))",
+		"data-freewill-approval-history", "/approvals/history", "Load child patch decisions",
+		"childApprovalDecisionDetails", "ui.escape(decision.actor || 'unknown')",
+		"ui.escape(decision.reason || 'No reason recorded.')", "ui.escape(decision.patch_sha256 || 'not recorded')",
 	} {
 		if !strings.Contains(body, contract) {
 			t.Errorf("Freewill dashboard is missing terminal outcome contract %q", contract)

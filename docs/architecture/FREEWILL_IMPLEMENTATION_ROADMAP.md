@@ -209,11 +209,13 @@ Freewill dashboard now surfaces completed and failed child outcomes, denied
 intention decisions, child validation summary, report reference and SHA-256,
 execution failure code, and selector retry state. Operators can load the
 existing authenticated child report to inspect its terminal status, changed
-artifact paths, checks, and full evidence. The existing child-approval read API
-lists pending patches only, so the final child patch grant/denial receipt and
-its actor/reason are not yet shown after that approval leaves the pending state.
-The dashboard adds no decision authority and leaves the decision-only default
-and child approval binding unchanged.
+artifact paths, checks, and full evidence. The authenticated read-only child
+approval history route is bound to a granted parent and its exact accepted
+child manifest, returns at most 20 final patch decisions, and exposes grant or
+denial, actor, reason, timestamp, paths, and patch digest without returning the
+patch content. Grant reasons are persisted with the approval receipt. The
+dashboard adds no decision authority and leaves the decision-only default and
+child approval binding unchanged.
 
 **GLM Cloud selector contract (2026-11-09, local implementation):** Ollama's
 [official structured-output documentation](https://docs.ollama.com/capabilities/structured-outputs)

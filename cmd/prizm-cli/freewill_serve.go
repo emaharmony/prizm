@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -336,6 +337,83 @@ func (r *freewillServeRuntime) ListChildApprovals(ctx context.Context, parentRun
 	return result, nil
 }
 
+func (r *freewillServeRuntime) ListChildApprovalHistory(ctx context.Context, parentRunID, childRunID string) ([]api.FreewillChildApprovalDecision, error) {
+	if r == nil || r.readOnly || !r.executionEnabled || r.store == nil || r.childApprovals == nil ||
+		strings.TrimSpace(parentRunID) == "" || strings.TrimSpace(childRunID) == "" ||
+		parentRunID == "." || parentRunID == ".." || childRunID == "." || childRunID == ".." ||
+		strings.ContainsAny(parentRunID+childRunID, `/\\`) {
+		return nil, errors.New("freewill: child approval history is unavailable")
+	}
+	parent, err := r.store.Load(ctx, parentRunID)
+	if err != nil {
+		return nil, err
+	}
+	if parent.Freewill == nil || parent.Freewill.ApprovalReceipt == nil || parent.Freewill.ApprovalReceipt.Decision != multiagent.FreewillApprovalGranted ||
+		parent.Freewill.ExecutionDispatch == nil || parent.Freewill.ExecutionDispatch.ChildRunID != childRunID ||
+		(parent.Freewill.ExecutionDispatch.Status != "accepted" && parent.Freewill.ExecutionDispatch.Status != "completed" &&
+			parent.Freewill.ExecutionDispatch.Status != "execution_failed" && parent.Freewill.ExecutionDispatch.Status != "execution_cancelled") {
+		return nil, multiagent.ErrFreewillApprovalStale
+	}
+	manifest, err := loadReferenceManifest(r.runDir, childRunID)
+	if err != nil || manifest.RunID != childRunID || !manifest.SandboxApprovalMode || manifest.FreewillSandboxConfig == nil ||
+		manifest.SourceWorkspacePath == "" || manifest.WorkspacePath == "" ||
+		filepath.Clean(manifest.SourceWorkspacePath) != filepath.Clean(parent.Freewill.Scope.Workspace) {
+		return nil, multiagent.ErrFreewillApprovalStale
+	}
+	items, err := r.childApprovals.List(childRunID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]api.FreewillChildApprovalDecision, 0, len(items))
+	for _, item := range items {
+		if item == nil || item.RunID != childRunID || item.MutationType != approval.MutationApplyPatch || item.IdempotencyKey == "" || item.ValidateSubject() != nil ||
+			(item.Status != approval.StatusApproved && item.Status != approval.StatusDenied) || item.PatchPlan == nil ||
+			item.SandboxBinding == nil || item.SandboxBinding.AgentID != item.RequestedBy ||
+			item.SandboxBinding.ExecutionKey != item.CorrelationID || item.SandboxBinding.WorkspacePath != manifest.WorkspacePath ||
+			item.SandboxBinding.WorkspaceID != manifest.WorkspaceID || item.SandboxBinding.ArtifactDigest == "" ||
+			len(item.PatchPlan.Paths) == 0 || len(item.PatchPlan.Paths) > 32 || len(item.PatchPlan.PatchSHA256) > 128 {
+			continue
+		}
+		decision := api.FreewillChildApprovalDecision{ParentRunID: parentRunID, ChildRunID: childRunID,
+			ApprovalID: item.ApprovalID, ProposalID: item.ProposalID, Status: string(item.Status),
+			Paths: append([]string(nil), item.PatchPlan.Paths...), PatchSHA256: item.PatchPlan.PatchSHA256}
+		if item.Status == approval.StatusApproved {
+			decision.Decision, decision.Actor, decision.Reason = "grant", strings.TrimSpace(item.ApprovedBy), item.DecisionReason
+			if item.ApprovedAt != nil {
+				decision.DecidedAt = *item.ApprovedAt
+			}
+		} else {
+			decision.Decision, decision.Actor, decision.Reason = "deny", strings.TrimSpace(item.DeniedBy), item.DenialReason
+			if item.DeniedAt != nil {
+				decision.DecidedAt = *item.DeniedAt
+			}
+		}
+		if decision.Actor == "" || decision.DecidedAt.IsZero() || len(decision.Actor) > 128 || len(decision.Reason) > 256 {
+			continue
+		}
+		validPaths := true
+		for _, path := range decision.Paths {
+			if strings.TrimSpace(path) == "" || len(path) > 512 {
+				validPaths = false
+				break
+			}
+		}
+		if validPaths {
+			result = append(result, decision)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].DecidedAt.Equal(result[j].DecidedAt) {
+			return result[i].ApprovalID < result[j].ApprovalID
+		}
+		return result[i].DecidedAt.After(result[j].DecidedAt)
+	})
+	if len(result) > 20 {
+		result = result[:20]
+	}
+	return result, nil
+}
+
 func (r *freewillServeRuntime) DecideChildApproval(ctx context.Context, parentRunID, childRunID, approvalID, decision, actor, reason string) (api.FreewillChildApproval, error) {
 	if !r.executionEnabled || r.readOnly || r.childApprovals == nil || strings.TrimSpace(actor) == "" ||
 		(decision != "grant" && decision != "deny") {
@@ -351,7 +429,7 @@ func (r *freewillServeRuntime) DecideChildApproval(ctx context.Context, parentRu
 		return api.FreewillChildApproval{}, errors.New("freewill: child approval is no longer pending")
 	}
 	if decision == "grant" {
-		if err := item.Approve(actor); err != nil {
+		if err := item.ApproveWithReason(actor, safeFreewillApprovalReason(reason)); err != nil {
 			return api.FreewillChildApproval{}, err
 		}
 	} else if err := item.Deny(actor, safeFreewillApprovalReason(reason)); err != nil {
