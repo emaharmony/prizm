@@ -7,6 +7,16 @@ the next contributor.
 > Prizm is source-available under an all-rights-reserved [license](../../LICENSE)
 > and is preview-stage.
 
+## 2026-11-14 — FW-P2 PR2 child approval history restack
+
+**Roadmap IDs:** FW-P2 and FW-G2; R1/G1 remains an upstream acceptance dependency.
+
+Verified PR #145 merged into `codex/freewill-integration` at `441207fbde631b06ebd5b28dafb3b284fc7a6ab8`. Replayed only source commit `0aeccef2151c520d9ba9affc1b2780abcddb9e19` onto that merge commit in branch `codex/freewill-child-approval-history-pr2-restack`. The feature exposes a bounded read-only projection of final child patch decisions, persists grant reasons, and adds dashboard visibility; it does not expose patch contents or add decision authority. The intended PR target is `codex/freewill-integration`.
+
+**Verification:** focused `TestFreewillChildApprovalHistoryIsAuthenticatedBoundedAndReplayable`, approval grant, dashboard terminal-outcome, and `TestFreewillOneCycleRequiresTwoApprovalsAndProjectsDurableReport` tests passed. `go build ./...`, `staticcheck ./...`, and `git diff --check` passed. The exact feature diff contains nine source/test/roadmap paths (+300/-22) before this sanitized handoff entry; no package was added. Independent review and exact-head CI remain outstanding.
+
+**Risks and next action:** R1/G1 and served/unattended FW-P2 acceptance remain open. Complete local checks and review, then publish and merge PR2 into the Freewill integration branch only after all required exact-head checks pass. No staging merge or deployment is part of this step.
+
 ## 2026-10-02 — R2 Scope Isolation and Serve Wiring
 
 **Roadmap IDs:** R2, R6
