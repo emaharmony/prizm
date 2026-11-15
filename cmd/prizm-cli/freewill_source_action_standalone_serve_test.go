@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -45,12 +46,13 @@ func TestE56StandaloneServeBindsSourceBackedActionAcrossRestart(t *testing.T) {
 	const projectID, agentID = "e56-synthetic-project", "e56-synthetic-agent"
 	const model = "glm-5.3-flash"
 	const actionID = "project:roadmap:M2"
-	const actionText = "Improve artist listings and venue booking discovery"
-	readme := "# Synthetic Music Platform\n\n## Milestone Roadmap\n\n| Milestone | Scope | Status |\n| --- | --- | --- |\n| M2 | " + actionText + " | In progress |\n"
+	const actionTextA = "Improve synthetic artist listings and venue booking discovery"
+	const actionTextB = "Clarify synthetic artist profile verification for venues"
+	readme := "# Synthetic Music Platform\n\n## Milestone Roadmap\n\n| Milestone | Scope | Status |\n| --- | --- | --- |\n| M2 | " + actionTextA + " | In progress |\n"
 	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte(readme), 0600); err != nil {
 		t.Fatal(err)
 	}
-	profileURL, profileCommit := "https://github.com/example/e56-synthetic", strings.Repeat("e", 40)
+	profileURL, profileCommitA, profileCommitB := "https://github.com/example/e56-synthetic", strings.Repeat("e", 40), strings.Repeat("f", 40)
 	profileFacts := freewill.ProjectContextProfile{
 		Identity:     freewill.ProjectContextFact{Status: freewill.ProjectContextFactObserved, Value: projectID, SourceIDs: []string{"github:profile"}},
 		Purpose:      freewill.ProjectContextFact{Status: freewill.ProjectContextFactObserved, Value: "Synthetic talent-first music discovery and booking.", SourceIDs: []string{"github:profile"}},
@@ -67,29 +69,37 @@ func TestE56StandaloneServeBindsSourceBackedActionAcrossRestart(t *testing.T) {
 		},
 		Conflicts: []freewill.ProjectContextConflict{{ID: "synthetic-scope-disagreement", ClaimIDs: []string{"synthetic-booking-capability", "synthetic-instrument-exclusion"}}},
 	}
-	profileBody, err := json.Marshal(struct {
-		ProjectID     string                         `json:"project_id"`
-		RepositoryURL string                         `json:"repository_url"`
-		CommitSHA     string                         `json:"commit_sha"`
-		Facts         freewill.ProjectContextProfile `json:"facts"`
-	}{projectID, profileURL, profileCommit, profileFacts})
-	if err != nil {
-		t.Fatal(err)
-	}
-	profileDigest := sha256.Sum256(profileBody)
-	profile := freewill.ImportedProjectProfile{Version: 1, ProjectID: projectID, RepositoryURL: profileURL, CommitSHA: profileCommit,
-		ProfileDigest: hex.EncodeToString(profileDigest[:]), Facts: profileFacts}
+	profileFactsB := profileFacts
+	profileFactsB.Purpose.Value = "Synthetic revision B describes artist profile verification and venue discovery."
+	profileFactsB.Goals.Value = "Clarify synthetic artist profile verification for venues."
 	profilePath := filepath.Join(workspace, ".codex", "private-context", projectID+".json")
 	if err := os.MkdirAll(filepath.Dir(profilePath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	profileBytes, err := json.Marshal(profile)
-	if err != nil {
-		t.Fatal(err)
+	writeProfile := func(commitSHA string, facts freewill.ProjectContextProfile) string {
+		t.Helper()
+		profileBody, err := json.Marshal(struct {
+			ProjectID     string                         `json:"project_id"`
+			RepositoryURL string                         `json:"repository_url"`
+			CommitSHA     string                         `json:"commit_sha"`
+			Facts         freewill.ProjectContextProfile `json:"facts"`
+		}{projectID, profileURL, commitSHA, facts})
+		if err != nil {
+			t.Fatal(err)
+		}
+		profileDigest := sha256.Sum256(profileBody)
+		profile := freewill.ImportedProjectProfile{Version: 1, ProjectID: projectID, RepositoryURL: profileURL, CommitSHA: commitSHA,
+			ProfileDigest: hex.EncodeToString(profileDigest[:]), Facts: facts}
+		profileBytes, err := json.Marshal(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(profilePath, profileBytes, 0600); err != nil {
+			t.Fatal(err)
+		}
+		return hex.EncodeToString(profileDigest[:])
 	}
-	if err := os.WriteFile(profilePath, profileBytes, 0600); err != nil {
-		t.Fatal(err)
-	}
+	profileDigestA := writeProfile(profileCommitA, profileFacts)
 	policy := "policies:\n  - id: e56-owner-review-required\n    description: Synthetic proposal-only policy.\n    match:\n      action: intention.propose\n      resource.type: intention\n      resource.name: freewill_candidate\n    decision: requires_approval\n    reason: Owner review is required for this synthetic proposal.\n"
 	if err := os.WriteFile(filepath.Join(policyDir, "e56.yaml"), []byte(policy), 0600); err != nil {
 		t.Fatal(err)
@@ -125,6 +135,10 @@ func TestE56StandaloneServeBindsSourceBackedActionAcrossRestart(t *testing.T) {
 			return
 		}
 		var content string
+		expectedCommit, expectedActionText, expectedPurpose := profileCommitA, actionTextA, profileFacts.Purpose.Value
+		if call >= 3 {
+			expectedCommit, expectedActionText, expectedPurpose = profileCommitB, actionTextB, profileFactsB.Purpose.Value
+		}
 		var phaseInput map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(request.Messages[1].Content), &phaseInput); err != nil {
 			providerFailure <- "E56 malformed local selector phase input"
@@ -145,10 +159,21 @@ func TestE56StandaloneServeBindsSourceBackedActionAcrossRestart(t *testing.T) {
 			}
 			if err := json.Unmarshal([]byte(request.Messages[1].Content), &input); err != nil || input.ProjectContext.ProjectID != projectID ||
 				len(input.ProjectContext.RoadmapActions) != 1 || input.ProjectContext.RoadmapActions[0].ID != actionID ||
-				input.ProjectContext.RoadmapActions[0].Text != actionText || input.ProjectContext.RoadmapActions[0].SourceID != "project:readme" ||
-				input.ProjectContext.Profile.Domain.Value == "" || len(input.ProjectContext.Profile.Claims) != 2 || len(input.ProjectContext.Profile.Conflicts) != 1 {
+				input.ProjectContext.RoadmapActions[0].Text != expectedActionText || input.ProjectContext.RoadmapActions[0].SourceID != "project:readme" ||
+				input.ProjectContext.Profile.Domain.Value == "" || input.ProjectContext.Profile.Purpose.Value != expectedPurpose || len(input.ProjectContext.Profile.Claims) != 2 || len(input.ProjectContext.Profile.Conflicts) != 1 {
 				providerFailure <- "E56 selector did not receive the synthetic profile and exact host action"
 				http.Error(w, "synthetic context mismatch", http.StatusBadRequest)
+				return
+			}
+			profileCommit := ""
+			for _, source := range input.ProjectContext.Sources {
+				if source.ID == "github:profile" {
+					profileCommit = source.CommitSHA
+				}
+			}
+			if profileCommit != expectedCommit {
+				providerFailure <- "E66 selector did not receive the host-pinned profile revision"
+				http.Error(w, "profile revision mismatch", http.StatusBadRequest)
 				return
 			}
 			secondWake := call == 3
@@ -176,7 +201,7 @@ func TestE56StandaloneServeBindsSourceBackedActionAcrossRestart(t *testing.T) {
 			if call == 4 {
 				selectedID = ""
 				for _, candidate := range input.Candidates {
-					if candidate.Title == actionText && candidate.Goal == actionText {
+					if candidate.Title == expectedActionText && candidate.Goal == expectedActionText {
 						if selectedID != "" {
 							providerFailure <- "E56 host action was duplicated in choice context"
 							http.Error(w, "duplicate bound action", http.StatusBadRequest)
@@ -221,7 +246,7 @@ func TestE56StandaloneServeBindsSourceBackedActionAcrossRestart(t *testing.T) {
 	cfg.Prizm.ContextCompression = &agent.CompressionConfig{Enabled: false}
 	cfg.API.AuthToken, cfg.API.AuthTokenEnv = "e56-synthetic-api-token", ""
 	cfg.Freewill = orchestrator.FreewillConfig{Enabled: true, AgentID: agentID, ProjectID: projectID, Model: model, PolicyDir: policyDir,
-		ProjectProfileRepositoryURL: profileURL, ProjectProfileCommitSHA: profileCommit,
+		ProjectProfileRepositoryURL: profileURL, ProjectProfileCommitSHA: profileCommitA,
 		Scheduling: orchestrator.FreewillSchedulingConfig{Enabled: true, Schedule: "* * * * *"}}
 	cfg.Agents = []orchestrator.AgentConfig{{ID: agentID, Role: "researcher", Provider: "ollama", Model: model, Primary: true}}
 	cfg.Projects = []orchestrator.ProjectConfig{{ID: projectID, RepoPath: workspace}}
@@ -365,7 +390,64 @@ func TestE56StandaloneServeBindsSourceBackedActionAcrossRestart(t *testing.T) {
 		}
 		return runs
 	}
+	manifestSource := func(manifest *freewill.ProjectContextManifest, id string) *freewill.ProjectContextSourceEntry {
+		t.Helper()
+		if manifest == nil {
+			return nil
+		}
+		for i := range manifest.Sources {
+			if manifest.Sources[i].ID == id {
+				return &manifest.Sources[i]
+			}
+		}
+		return nil
+	}
+	workspaceSnapshot := func() map[string]string {
+		t.Helper()
+		files := make(map[string]string)
+		var visit func(string)
+		visit = func(dir string) {
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range entries {
+				path := filepath.Join(dir, entry.Name())
+				if entry.Type()&os.ModeSymlink != 0 {
+					t.Fatalf("synthetic project workspace contains symlink: %s", path)
+				}
+				if entry.IsDir() {
+					visit(path)
+					continue
+				}
+				body, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rel, err := filepath.Rel(workspace, path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				files[filepath.ToSlash(rel)] = string(body)
+			}
+		}
+		visit(workspace)
+		return files
+	}
+	assertWorkspaceSnapshot := func(expected map[string]string) {
+		t.Helper()
+		actual := workspaceSnapshot()
+		if len(actual) != len(expected) {
+			t.Fatalf("Freewill changed synthetic workspace file set: before=%v after=%v", expected, actual)
+		}
+		for path, body := range expected {
+			if actual[path] != body {
+				t.Fatalf("Freewill changed synthetic workspace file %q", path)
+			}
+		}
+	}
 
+	workspaceA := workspaceSnapshot()
 	first := startServe()
 	publishWake()
 	waitProviderCalls(2)
@@ -387,7 +469,37 @@ func TestE56StandaloneServeBindsSourceBackedActionAcrossRestart(t *testing.T) {
 			t.Fatalf("source citation alone became a roadmap action: %#v", candidate)
 		}
 	}
+	manifestA := sleeping.Freewill.ProjectContextManifest
+	profileSourceA := manifestSource(manifestA, "github:profile")
+	roadmapSourceA := manifestSource(manifestA, "project:readme")
+	if manifestA == nil || manifestA.Validate() != nil || profileSourceA == nil || profileSourceA.SourceURL != profileURL ||
+		profileSourceA.CommitSHA != profileCommitA || profileSourceA.Digest != profileDigestA || roadmapSourceA == nil ||
+		roadmapSourceA.Digest == "" || roadmapSourceA.Revision == "" {
+		t.Fatalf("revision A source provenance was not persisted: manifest=%#v profile=%#v roadmap=%#v", manifestA, profileSourceA, roadmapSourceA)
+	}
+	manifestAJSON, err := json.Marshal(manifestA)
+	if err != nil {
+		t.Fatalf("marshal revision A manifest: %v", err)
+	}
 	assertE51NoApprovalOrEffects(t, ctx, filepath.Join(dataDir, "freewill.db"), false)
+	assertWorkspaceSnapshot(workspaceA)
+
+	// Refresh only the host-owned synthetic import and configured commit pin.
+	// The running Freewill service remains stopped while the next process starts.
+	readmeB := "# Synthetic Music Platform\n\n## Milestone Roadmap\n\n| Milestone | Scope | Status |\n| --- | --- | --- |\n| M2 | " + actionTextB + " | In progress |\n"
+	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte(readmeB), 0600); err != nil {
+		t.Fatal(err)
+	}
+	profileDigestB := writeProfile(profileCommitB, profileFactsB)
+	cfg.Freewill.ProjectProfileCommitSHA = profileCommitB
+	configBytes, err = yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, configBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	workspaceB := workspaceSnapshot()
 
 	// Scheduled wake IDs are deduplicated by UTC minute. The restarted service
 	// must exercise a new minute so this second wake is independently admitted.
@@ -406,7 +518,8 @@ func TestE56StandaloneServeBindsSourceBackedActionAcrossRestart(t *testing.T) {
 	waitEventCount(event.EventFreewillSelectionCommitted, 2)
 	stopServe(second)
 	var proposed *multiagent.DurableRun
-	for _, run := range listRuns() {
+	runsAfterRefresh := listRuns()
+	for _, run := range runsAfterRefresh {
 		if run.Freewill != nil && run.Freewill.Lifecycle == freewill.StateApprovalPending {
 			copy := run
 			proposed = &copy
@@ -427,32 +540,62 @@ func TestE56StandaloneServeBindsSourceBackedActionAcrossRestart(t *testing.T) {
 		}
 	}
 	if selected == nil || selected.ProjectGrounding != "roadmap_action" || selected.ProjectActionID != actionID ||
-		selected.Request.Title != actionText || selected.Request.Goal != actionText || strings.Contains(strings.ToLower(selected.Request.Title), "guitar") ||
-		len(selected.BasisRefs) != 1 || selected.BasisRefs[0] != "project:readme" || strings.TrimSpace(selected.Uncertainty) == "" {
+		selected.Request.Title != actionTextB || selected.Request.Goal != actionTextB || strings.Contains(strings.ToLower(selected.Request.Title), "guitar") ||
+		len(selected.BasisRefs) != 2 || !e56HasBasisRef(selected.BasisRefs, "project:readme") || !e56HasBasisRef(selected.BasisRefs, "github:profile") || strings.TrimSpace(selected.Uncertainty) == "" {
 		t.Fatalf("selected candidate was not rebound to exact source-backed action: %#v", selected)
 	}
 	manifest := proposed.Freewill.ProjectContextManifest
 	if manifest == nil || manifest.Version != freewill.ProjectContextSourceManifestVersion || manifest.ProjectID != projectID || manifest.Validate() != nil {
 		t.Fatalf("proposal did not persist valid v2 source manifest: %#v", manifest)
 	}
-	var profileSource *freewill.ProjectContextSourceEntry
-	var roadmapSource *freewill.ProjectContextSourceEntry
-	for i := range manifest.Sources {
-		switch manifest.Sources[i].ID {
-		case "github:profile":
-			profileSource = &manifest.Sources[i]
-		case "project:readme":
-			roadmapSource = &manifest.Sources[i]
-		}
-	}
-	if profileSource == nil || profileSource.SourceURL != profileURL || profileSource.CommitSHA != profileCommit || profileSource.Confidence != "host_reviewed_uncertain_import" || profileSource.Digest == "" ||
-		len(manifest.Profile.Claims) != 2 || len(manifest.Profile.Conflicts) != 1 {
+	profileSource := manifestSource(manifest, "github:profile")
+	roadmapSource := manifestSource(manifest, "project:readme")
+	if profileSource == nil || profileSource.SourceURL != profileURL || profileSource.CommitSHA != profileCommitB || profileSource.Digest != profileDigestB || profileSource.Confidence != "host_reviewed_uncertain_import" ||
+		manifest.Profile.Purpose.Value != profileFactsB.Purpose.Value || len(manifest.Profile.Claims) != 2 || len(manifest.Profile.Conflicts) != 1 {
 		t.Fatalf("persisted manifest omitted the synthetic reviewed profile provenance: %#v", profileSource)
 	}
-	if roadmapSource == nil || roadmapSource.Path != "README.md" || roadmapSource.SourceType != "local_file" || roadmapSource.Digest == "" || roadmapSource.Revision == "" {
+	if roadmapSource == nil || roadmapSource.Path != "README.md" || roadmapSource.SourceType != "local_file" || roadmapSource.Digest == "" || roadmapSource.Digest == roadmapSourceA.Digest || roadmapSource.Revision == "" {
 		t.Fatalf("persisted manifest omitted exact synthetic README provenance: %#v", roadmapSource)
 	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal revision B manifest: %v", err)
+	}
+	for _, sourceBody := range []string{readme, readmeB} {
+		bodyLines := strings.Split(sourceBody, "\n")
+		for _, bodyLine := range bodyLines {
+			if bodyLine == "" {
+				continue
+			}
+			encodedLine, err := json.Marshal(bodyLine)
+			if err != nil {
+				t.Fatalf("marshal README line for content-free check: %v", err)
+			}
+			if bytes.Contains(manifestBytes, encodedLine) || strings.Contains(string(manifestBytes), bodyLine) {
+				t.Fatalf("content-free manifest persisted a README body line %q", bodyLine)
+			}
+		}
+	}
+	var persistedA *multiagent.DurableRun
+	for _, run := range runsAfterRefresh {
+		if run.State.RunID == sleeping.State.RunID {
+			copy := run
+			persistedA = &copy
+			break
+		}
+	}
+	if persistedA == nil || persistedA.Freewill == nil {
+		t.Fatal("revision A run disappeared after revision B process restart")
+	}
+	persistedManifestAJSON, err := json.Marshal(persistedA.Freewill.ProjectContextManifest)
+	if err != nil {
+		t.Fatalf("marshal persisted revision A manifest: %v", err)
+	}
+	if !bytes.Equal(persistedManifestAJSON, manifestAJSON) {
+		t.Fatalf("revision A persisted manifest changed after revision B refresh: before=%s after=%s", manifestAJSON, persistedManifestAJSON)
+	}
 	assertE51NoApprovalOrEffects(t, ctx, filepath.Join(dataDir, "freewill.db"), true)
+	assertWorkspaceSnapshot(workspaceB)
 	if providerCalls.Load() != 4 || ideaCalls.Load() != 2 || choiceCalls.Load() != 2 {
 		t.Fatalf("bounded local fake calls mismatch: total=%d idea=%d choice=%d; want 4/2/2", providerCalls.Load(), ideaCalls.Load(), choiceCalls.Load())
 	}
@@ -461,11 +604,20 @@ func TestE56StandaloneServeBindsSourceBackedActionAcrossRestart(t *testing.T) {
 func e56IdeaResponse(secondWake bool, actionID string) string {
 	first := "IDEA: Summarize synthetic platform capabilities\nSCORE: 90\nFACTORS: scope_fit\nRATIONALE: This bounded review follows from the synthetic project context and avoids changing repository state.\nBASIS_REFS: project:readme\nUNCERTAINTY: The synthetic README may omit current capabilities.\n"
 	second := "IDEA: Explore candidate matching\nSCORE: 70\nFACTORS: feasibility\nRATIONALE: This bounded review follows from the synthetic project context and avoids changing repository state.\nBASIS_REFS: project:readme\nUNCERTAINTY: The synthetic README may omit current capabilities.\n" +
-		"IDEA: Compare guitar string gauges\nSCORE: 99\nFACTORS: impact\nRATIONALE: This adversarial freeform suggestion tests host rebinding and does not authorize any repository change.\nACTION_ID: " + actionID + "\nBASIS_REFS: project:readme\nUNCERTAINTY: The synthetic README may omit current capabilities.\n" +
+		"IDEA: Compare guitar string gauges\nSCORE: 99\nFACTORS: impact\nRATIONALE: This adversarial freeform suggestion tests host rebinding and does not authorize any repository change.\nACTION_ID: " + actionID + "\nBASIS_REFS: project:readme,github:profile\nUNCERTAINTY: The synthetic README may omit current capabilities.\n" +
 		"IDEA: Review general software architecture\nSCORE: 60\nFACTORS: readiness\nRATIONALE: This bounded review follows from the synthetic project context and avoids changing repository state.\nBASIS_REFS: project:readme\nUNCERTAINTY: The synthetic README may omit current capabilities.\n"
 	if secondWake {
 		return second
 	}
 	return first + strings.Replace(first, "Summarize synthetic platform capabilities", "Map synthetic project boundaries", 1) +
 		strings.Replace(first, "Summarize synthetic platform capabilities", "Review synthetic venue workflows", 1)
+}
+
+func e56HasBasisRef(refs []string, expected string) bool {
+	for _, ref := range refs {
+		if ref == expected {
+			return true
+		}
+	}
+	return false
 }
