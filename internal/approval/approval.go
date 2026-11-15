@@ -85,17 +85,18 @@ type Approval struct {
 	// ToolName and Input preserve the original tool call for MutationToolCall
 	// approvals, so mutation.Executor can re-invoke the exact same tool with
 	// the exact same input after a human approves it.
-	ToolName     string         `json:"tool_name,omitempty"`
-	Input        map[string]any `json:"input,omitempty"`
-	PatchPlan    *PatchPlan     `json:"patch_plan,omitempty"`
-	CreatedAt    time.Time      `json:"created_at"`
-	ExpiresAt    *time.Time     `json:"expires_at,omitempty"`
-	ApprovedBy   string         `json:"approved_by,omitempty"`
-	ApprovedAt   *time.Time     `json:"approved_at,omitempty"`
-	DeniedBy     string         `json:"denied_by,omitempty"`
-	DeniedAt     *time.Time     `json:"denied_at,omitempty"`
-	DenialReason string         `json:"denial_reason,omitempty"`
-	Policy       PolicyDecision `json:"policy"`
+	ToolName       string         `json:"tool_name,omitempty"`
+	Input          map[string]any `json:"input,omitempty"`
+	PatchPlan      *PatchPlan     `json:"patch_plan,omitempty"`
+	CreatedAt      time.Time      `json:"created_at"`
+	ExpiresAt      *time.Time     `json:"expires_at,omitempty"`
+	ApprovedBy     string         `json:"approved_by,omitempty"`
+	ApprovedAt     *time.Time     `json:"approved_at,omitempty"`
+	DecisionReason string         `json:"decision_reason,omitempty"`
+	DeniedBy       string         `json:"denied_by,omitempty"`
+	DeniedAt       *time.Time     `json:"denied_at,omitempty"`
+	DenialReason   string         `json:"denial_reason,omitempty"`
+	Policy         PolicyDecision `json:"policy"`
 }
 
 // SandboxProposalBinding records trusted host identity and a review-only
@@ -249,6 +250,11 @@ func NewApproval(runID, correlationID, requestedBy, project, mutationType, targe
 // Approve transitions the approval from pending to approved.
 // Returns an error if the status is not pending or is already denied.
 func (a *Approval) Approve(approvedBy string) error {
+	return a.ApproveWithReason(approvedBy, "")
+}
+
+// ApproveWithReason records the operator's grant reason with the durable decision.
+func (a *Approval) ApproveWithReason(approvedBy, reason string) error {
 	if strings.TrimSpace(approvedBy) == "" {
 		return fmt.Errorf("approved_by is required")
 	}
@@ -269,6 +275,7 @@ func (a *Approval) Approve(approvedBy string) error {
 	a.Status = StatusApproved
 	a.ApprovedBy = approvedBy
 	a.ApprovedAt = &now
+	a.DecisionReason = reason
 	return nil
 }
 

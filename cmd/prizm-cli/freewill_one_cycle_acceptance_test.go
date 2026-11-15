@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/emaharmony/prizm/internal/freewill"
 	"github.com/emaharmony/prizm/internal/gitx"
 	"github.com/emaharmony/prizm/internal/policy"
+	"github.com/emaharmony/prizm/internal/sandbox"
 	"github.com/emaharmony/prizm/internal/subagent"
 	"github.com/emaharmony/prizm/internal/tool"
 	"github.com/emaharmony/prizm/internal/validation"
@@ -122,9 +124,15 @@ type oneCycleChildDispatcher struct {
 	workspace      string
 	runner         *oneCycleRoleRunner
 	starts         int
+	startError     string
 }
 
-func (d *oneCycleChildDispatcher) Start(ctx context.Context, request multiagent.FreewillExecutionRequest) (multiagent.FreewillExecutionResult, error) {
+func (d *oneCycleChildDispatcher) Start(ctx context.Context, request multiagent.FreewillExecutionRequest) (result multiagent.FreewillExecutionResult, returnedErr error) {
+	defer func() {
+		if returnedErr != nil {
+			d.startError = returnedErr.Error()
+		}
+	}()
 	d.starts++
 	if d.runtime != nil {
 		return multiagent.FreewillExecutionResult{RunID: request.RunID, ReportRef: "multiagent_report.json"}, nil
@@ -151,7 +159,8 @@ func (d *oneCycleChildDispatcher) Start(ctx context.Context, request multiagent.
 	}
 	manifest := referenceWorkflowManifest{SchemaVersion: referenceManifestSchemaVersion, RunID: request.RunID,
 		WorkflowID: multiagent.ReferenceWorkflowID, Input: input, Definition: definition, WorkspaceID: workspaceID,
-		WorkspacePath: workspace, SourceWorkspacePath: sourceWorkspace, SandboxApprovalMode: true}
+		WorkspacePath: workspace, SourceWorkspacePath: sourceWorkspace, SandboxApprovalMode: true,
+		FreewillSandboxConfig: &sandbox.Config{Image: "synthetic@sha256:" + strings.Repeat("a", 64)}}
 	if err := writeReferenceManifest(d.runDir, manifest); err != nil {
 		return multiagent.FreewillExecutionResult{}, err
 	}
@@ -282,7 +291,13 @@ func TestFreewillOneCycleRequiresTwoApprovalsAndProjectsDurableReport(t *testing
 	childID := granted.Freewill.ExecutionDispatch.ChildRunID
 	childPending, err := childApprovals.List(childID)
 	if err != nil || len(childPending) != 1 || childPending[0].Status != approval.StatusPending {
-		t.Fatalf("patch approval=%#v err=%v", childPending, err)
+		files, _ := filepath.Glob(filepath.Join(runsDir, childID, "approvals", "*.json"))
+		proposalCalls := 0
+		if dispatcher.runner != nil {
+			proposalCalls = dispatcher.runner.proposalCalls
+		}
+		t.Fatalf("patch approval=%#v err=%v dispatch=%+v child=%s starts=%d proposals=%d workspace=%s files=%v start_error=%s", childPending, err,
+			granted.Freewill.ExecutionDispatch, childID, dispatcher.starts, proposalCalls, dispatcher.workspace, files, dispatcher.startError)
 	}
 	childBefore, err := os.ReadFile(filepath.Join(dispatcher.workspace, "base.txt"))
 	if err != nil {
@@ -298,7 +313,7 @@ func TestFreewillOneCycleRequiresTwoApprovalsAndProjectsDurableReport(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := patchApproval.Approve("patch-owner"); err != nil {
+	if err := patchApproval.ApproveWithReason("patch-owner", "reviewed requested scope"); err != nil {
 		t.Fatal(err)
 	}
 	if err := childApprovals.Save(patchApproval); err != nil {
@@ -354,5 +369,34 @@ func TestFreewillOneCycleRequiresTwoApprovalsAndProjectsDurableReport(t *testing
 	childAfterReplay, err := dispatcher.runtime.runtime.Inspect(ctx, childID)
 	if err != nil || childAfterReplay.Revision != terminalChildRecord.Revision || dispatcher.starts != 1 || dispatcher.runner.proposalCalls != 1 {
 		t.Fatalf("child replay was not idempotent: revision=%d prior=%d starts=%d proposals=%d err=%v", childAfterReplay.Revision, terminalChildRecord.Revision, dispatcher.starts, dispatcher.runner.proposalCalls, err)
+	}
+	deniedReceipt := approval.NewApproval(childID, patchApproval.CorrelationID, patchApproval.RequestedBy, patchApproval.Project,
+		approval.MutationApplyPatch, "base.txt", patchApproval.Content,
+		approval.PolicyDecision{Decision: approval.DecisionRequiresApproval, Reason: "separate fixture receipt"})
+	deniedReceipt.PatchPlan = patchApproval.PatchPlan
+	deniedReceipt.SandboxBinding = patchApproval.SandboxBinding
+	deniedKey := sha256.Sum256([]byte("denied-history-" + patchApproval.ApprovalID))
+	deniedReceipt.IdempotencyKey = hex.EncodeToString(deniedKey[:])
+	if err := deniedReceipt.Deny("second-reviewer", "follow-up patch declined"); err != nil {
+		t.Fatal(err)
+	}
+	if err := childApprovals.Save(deniedReceipt); err != nil {
+		t.Fatal(err)
+	}
+	historyRuntime := &freewillServeRuntime{store: store, childApprovals: childApprovals, runDir: runsDir, executionEnabled: true}
+	history, err := historyRuntime.ListChildApprovalHistory(ctx, woken.State.RunID, childID)
+	if err != nil || len(history) != 2 {
+		t.Fatalf("terminal child decision history=%+v err=%v", history, err)
+	}
+	if history[0].Decision != "deny" || history[0].Actor != "second-reviewer" || history[0].Reason != "follow-up patch declined" ||
+		history[1].Decision != "grant" || history[1].Actor != "patch-owner" || history[1].Reason != "reviewed requested scope" || history[1].PatchSHA256 == "" {
+		t.Fatalf("terminal child decision receipts are incomplete: %+v", history)
+	}
+	replayedHistory, err := historyRuntime.ListChildApprovalHistory(ctx, woken.State.RunID, childID)
+	if err != nil || !reflect.DeepEqual(history, replayedHistory) {
+		t.Fatalf("terminal child history replay changed receipts: first=%+v replay=%+v err=%v", history, replayedHistory, err)
+	}
+	if _, err := historyRuntime.ListChildApprovalHistory(ctx, woken.State.RunID, childID+"-other"); err == nil {
+		t.Fatal("history accepted a child not bound to the granted parent")
 	}
 }

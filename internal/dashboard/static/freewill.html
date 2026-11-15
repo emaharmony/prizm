@@ -191,6 +191,10 @@
     const reportControl = reportAvailable
       ? `<button class="btn small secondary" data-freewill-report="true" data-child="${ui.escape(status.child_run_id)}" type="button">Load child report</button><div data-freewill-report-body="true" aria-live="polite"></div>`
       : '<p class="hint">No terminal child report is available.</p>';
+    const historyAvailable = status.run_id && status.child_run_id && ['completed', 'failed', 'cancelled'].includes(executionStatus);
+    const historyControl = historyAvailable
+      ? `<button class="btn small secondary" data-freewill-approval-history="true" data-parent="${ui.escape(status.run_id)}" data-child="${ui.escape(status.child_run_id)}" type="button">Load child patch decisions</button><div data-freewill-approval-history-body="true" aria-live="polite"></div>`
+      : '';
     return `<article class="card" style="margin-bottom: var(--space-3);">
       <div style="display:flex; justify-content:space-between; align-items:baseline; gap:var(--space-2); flex-wrap:wrap;">
         <span>${ui.badge(executionStatus)}</span><span class="meta mono">${ui.escape(status.run_id || '')}</span>
@@ -201,6 +205,7 @@
       <p class="hint">Report: ${ui.escape(status.execution_report_ref || '—')} · SHA-256 ${ui.escape(status.execution_report_sha256 || 'not available')}</p>
       ${retry}
       ${reportControl}
+      ${historyControl}
     </article>`;
   }
 
@@ -244,6 +249,40 @@
     } catch (_) {
       body.innerHTML = '<p class="banner banner-warn" role="status">Child report is unavailable. Refresh and retry later.</p>';
       button.textContent = 'Retry child report';
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function childApprovalDecisionDetails(decisions) {
+    if (!decisions.length) return '<p class="hint">No final child patch decisions were recorded.</p>';
+    return decisions.map(decision => {
+      const paths = Array.isArray(decision.paths) ? decision.paths : [];
+      return `<section class="card" style="margin-top:var(--space-2);">
+        <div>${ui.badge(decision.decision || decision.status || 'unknown')} <span class="meta">${ui.escape(decision.status || '')}</span></div>
+        <p class="hint">Actor: ${ui.escape(decision.actor || 'unknown')} · ${ui.escape(ui.formatTime(decision.decided_at || ''))}</p>
+        <p class="section-copy">Reason: ${ui.escape(decision.reason || 'No reason recorded.')}</p>
+        <p class="hint">Paths: ${paths.length ? paths.map(path => ui.escape(path)).join(', ') : 'not recorded'} · patch SHA-256 ${ui.escape(decision.patch_sha256 || 'not recorded')}</p>
+      </section>`;
+    }).join('');
+  }
+
+  async function loadChildApprovalHistory(button) {
+    const parentRunID = button.dataset.parent;
+    const childRunID = button.dataset.child;
+    const card = button.closest('article');
+    const body = card && card.querySelector('[data-freewill-approval-history-body]');
+    if (!parentRunID || !childRunID || !body) return;
+    button.disabled = true;
+    button.textContent = 'Loading child decisions…';
+    try {
+      const response = await ui.request(`/freewill/runs/${encodeURIComponent(parentRunID)}/children/${encodeURIComponent(childRunID)}/approvals/history`);
+      const decisions = Array.isArray(response && response.decisions) ? response.decisions : [];
+      body.innerHTML = childApprovalDecisionDetails(decisions);
+      button.textContent = 'Reload child patch decisions';
+    } catch (_) {
+      body.innerHTML = '<p class="banner banner-warn" role="status">Child patch decisions are unavailable. Refresh and retry later.</p>';
+      button.textContent = 'Retry child patch decisions';
     } finally {
       button.disabled = false;
     }
@@ -545,6 +584,8 @@
     if (childButton && !childButton.disabled) decideChild(childButton);
     const reportButton = event.target.closest('[data-freewill-report]');
     if (reportButton && !reportButton.disabled) loadExecutionReport(reportButton);
+    const historyButton = event.target.closest('[data-freewill-approval-history]');
+    if (historyButton && !historyButton.disabled) loadChildApprovalHistory(historyButton);
   });
   $('#refresh').addEventListener('click', () => load());
   load();
