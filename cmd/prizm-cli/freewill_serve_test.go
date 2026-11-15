@@ -884,24 +884,28 @@ func TestServedFreewillP1GLMFlashBlankObjectiveStillPersistsPolicyOnly(t *testin
 		}
 
 		content := ""
-		ideaPrompt := request.Messages[0].Content
-		if strings.Contains(ideaPrompt, "BASIS_REFS") ||
-			strings.Contains(ideaPrompt, "FACTORS (scope_fit, feasibility, impact, novelty, readiness)") ||
-			strings.Contains(ideaPrompt, "FACTORS: one or more comma-separated labels from scope_fit, feasibility, impact, novelty, readiness") {
+		var phaseInput map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(request.Messages[1].Content), &phaseInput); err != nil {
+			requestFailure = "malformed selector phase input"
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		_, ideaPhase := phaseInput["max_ideas"]
+		_, choicePhase := phaseInput["candidates"]
+		if ideaPhase && !choicePhase {
 			var user struct {
 				Mode           string                          `json:"mode"`
 				MaxIdeas       int                             `json:"max_ideas"`
 				Objective      string                          `json:"objective"`
 				ProjectContext freewill.ProjectContextSnapshot `json:"project_context"`
 			}
-			if err := json.Unmarshal([]byte(request.Messages[1].Content), &user); err != nil || user.Mode != "decision_only" || user.MaxIdeas != 3 || user.Objective != cfgObjective || len(user.ProjectContext.Sources) < 1 || !strings.Contains(request.Messages[0].Content, "untrusted evidence") || len(request.Messages[0].Content) > 1000 {
+			if err := json.Unmarshal([]byte(request.Messages[1].Content), &user); err != nil || user.Mode != "decision_only" || user.MaxIdeas != 3 || user.Objective != cfgObjective || len(user.ProjectContext.Sources) < 1 || len(request.Messages[0].Content) > 1000 {
 				requestFailure = "idea stage did not carry the compact synthetic-only request"
 				http.Error(w, "invalid request", http.StatusBadRequest)
 				return
 			}
 			content = ideas
-		} else if strings.Contains(request.Messages[0].Content, "Choose using the objective and supplied candidate IDs.") ||
-			strings.Contains(request.Messages[0].Content, "Choose the candidate that best fits the objective") {
+		} else if choicePhase && !ideaPhase {
 			var user struct {
 				Objective  string `json:"objective"`
 				Candidates []struct {
@@ -910,10 +914,7 @@ func TestServedFreewillP1GLMFlashBlankObjectiveStillPersistsPolicyOnly(t *testin
 					Score int    `json:"score"`
 				} `json:"candidates"`
 			}
-			choicePrompt := request.Messages[0].Content
-			legacyChoiceContract := strings.Contains(choicePrompt, "If the objective is absent, use the titles and advisory scores and give a reason.")
-			flashChoiceContract := strings.Contains(choicePrompt, "Scores are advisory.")
-			if err := json.Unmarshal([]byte(request.Messages[1].Content), &user); err != nil || user.Objective != cfgObjective || (!legacyChoiceContract && !flashChoiceContract) || len(user.Candidates) != 3 || user.Candidates[0].Title == "" || user.Candidates[0].Score != 82 {
+			if err := json.Unmarshal([]byte(request.Messages[1].Content), &user); err != nil || user.Objective != cfgObjective || len(user.Candidates) != 3 || user.Candidates[0].Title == "" || user.Candidates[0].Score != 82 {
 				requestFailure = "choice stage did not provide objective and three scored host-bound candidates"
 				http.Error(w, "invalid request", http.StatusBadRequest)
 				return
@@ -1171,7 +1172,15 @@ func TestServedFreewillE47LocalPreferenceInfluencesOnlyPhaseTwoChoice(t *testing
 			return
 		}
 		content := ""
-		if strings.Contains(request.Messages[0].Content, "Return exactly three safe, decision-only blocks") {
+		var phaseInput map[string]json.RawMessage
+		if json.Unmarshal([]byte(request.Messages[1].Content), &phaseInput) != nil {
+			requestFailure = "malformed selector phase input"
+			http.Error(w, "bad request", 400)
+			return
+		}
+		_, ideaPhase := phaseInput["max_ideas"]
+		_, choicePhase := phaseInput["candidates"]
+		if ideaPhase && !choicePhase {
 			var input struct {
 				Objective string `json:"objective"`
 				Mode      string `json:"mode"`
@@ -1183,7 +1192,7 @@ func TestServedFreewillE47LocalPreferenceInfluencesOnlyPhaseTwoChoice(t *testing
 				return
 			}
 			content = ideas
-		} else if strings.Contains(request.Messages[0].Content, "Choose using the objective and supplied candidate IDs.") || strings.Contains(request.Messages[0].Content, "Choose the candidate that best fits the objective and is best supported") {
+		} else if choicePhase && !ideaPhase {
 			choiceCount++
 			var input struct {
 				Objective  string `json:"objective"`

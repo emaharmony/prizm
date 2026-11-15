@@ -2894,3 +2894,29 @@ A four-file follow-up removes only the unreferenced wrappers/schema builders, di
 **Validation:** The focused preference read-auth test passed. The post-review full go test ./... -count=1 run passed with exit code zero. Staticcheck, go build, go vet, git diff --check, and the added-line privacy scan passed.
 
 **Remaining gates and next action:** Provider-backed R1/G1 acceptance, Linux OCI execution, exact-head CI, and independent review remain open. Keep the candidate local and unpublished until review clears.
+
+## 2026-11-15 — CTX-05 GLM schema and feedback PR4 review candidate
+
+**Roadmap IDs:** FW-003; CTX-01–05. Prepared the local `codex/freewill-ctx05-pr4-prep` branch from PR3 candidate commit `cbe632945138b8bfd38a3db4570177d3e2c12381` (tree `79a0b4c78d90688a8bd82b3abb5a3f4020eebc2f`). The patch contains only `cmd/prizm-cli/e57_live_glm_action_grounding_serve_test.go` and the multiagent Freewill provider, provider tests, and service files. It uses the existing `internal/workflow/multiagent` owner; no package or authority path was added.
+
+GLM Flash idea and choice calls now carry native output schemas, while non-GLM selection retains the plain-text contract. GLM retry feedback matches the emitted Flash validation/parser/action failures; `invalid_choice` asks for the idea-stage schema because recovery restarts idea selection. Host code continues to bind source IDs, project action text, candidate IDs, and capabilities.
+
+**Validation:** `go test -count=1 ./internal/workflow/multiagent -run '^(TestFreewillFlash.*|TestFreewillScoredIdeaRecoveryFeedbackIsCategorySpecificAndLegacyCompatible)$'` passed. `go test -count=1 ./cmd/prizm-cli -run '^(TestE57SyntheticCloudContextRequiresExactHostBinding|TestE57StandaloneFakeProviderEventAdmission|TestE57SafeFailureDiagnosticSummaries)$'` passed. `git diff --check` passed. The tests used synthetic data and no live provider call was made.
+
+**Risks/next action:** Provider schema compatibility and CTX-05 semantic acceptance remain unverified. Obtain independent review and exact-head CI before publication; no remote operation occurred, and the candidate remains local.
+
+## 2026-11-15 — CTX-05 Cloud schema transport and host-constraint correction
+
+**Roadmap IDs:** FW-003; CTX-01–05. Corrected the local PR4 review candidate after independent findings. `internal/provider/ollama` retains the compatibility omission for the local Ollama route but now sends caller `OutputSchema` on the explicit direct Cloud route for exact `glm-5.3-flash:cloud`. The wire regression checks the full synthetic schema, model alias, and existing credential-redaction behavior. The idea schema now pairs exactly-three candidates with `sleep=false`, pairs an empty list with `sleep=true`, and states 160-character idea and 30–500-character rationale bounds. Parser checks for byte length, six-word minimum, unsafe content, basis provenance, and host action binding remain fail-closed. No package or authority path was added.
+
+**Validation:** Focused `go test -count=1 ./internal/provider/ollama -run '^(TestDirectCloudChatProviderUsesBearerAndDirectFlashWireModel|TestLocalChatProviderKeepsLocalModelAndNoCloudAuthorization|TestChatProviderGLM53CloudRetainsOutputSchemaFormat)$'` passed. Focused multiagent schema, feedback, and no-op tests passed. `gofmt` and `git diff --check` passed. No live Cloud request was made: the process-scoped key and explicit Cloud opt-ins were absent.
+
+**Risks/next action:** No provider-backed schema acceptance or CTX-05 semantic proof is available. Obtain independent review and exact-head CI; keep the candidate local and unpublished.
+
+## 2026-11-15 — CTX-05 PR4 restacked onto PR3 integration merge
+
+**Roadmap IDs:** FW-003; CTX-01–05. Restacked the six independently reviewed logical PR4 commits onto exact PR3 integration merge `46f42596275091b2b734344afe6bc8c5102bf9cf` (tree `8b63bd28dc54358b30e016487af2fbdd168512fc`), verified as the current `codex/freewill-integration` head through the GitHub connector. `git range-diff` showed all six logical commit patches unchanged. The resulting code delta retains the original reviewed selector/schema/retry changes plus the direct Cloud transport correction and wire test; the PR3 E57 merge adjustments remain in the base. No package or authority path was added.
+
+**Validation:** Full `go test -count=1 ./internal/provider/ollama ./internal/workflow/multiagent` passed (including the 114-second multiagent suite). Focused `go test -count=1 ./cmd/prizm-cli -run '^(TestE57SyntheticCloudContextRequiresExactHostBinding|TestE57StandaloneFakeProviderEventAdmission|TestE57SafeFailureDiagnosticSummaries)$'` passed. `gofmt` and `git diff --check` passed. No live Cloud request was made; process-scoped key and opt-in flags were absent.
+
+**Risks/next action:** Exact-model Cloud schema compatibility and CTX-05 semantic acceptance remain unverified. Publish only to `codex/freewill-integration`, wait for exact-head required CI and blocking review clearance, and merge only into the Freewill integration branch. Staging and deployment remain out of scope.
