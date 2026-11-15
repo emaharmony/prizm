@@ -125,7 +125,15 @@ func TestE56StandaloneServeBindsSourceBackedActionAcrossRestart(t *testing.T) {
 			return
 		}
 		var content string
-		if strings.Contains(request.Messages[0].Content, "exactly three safe, decision-only blocks") {
+		var phaseInput map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(request.Messages[1].Content), &phaseInput); err != nil {
+			providerFailure <- "E56 malformed local selector phase input"
+			http.Error(w, "invalid phase input", http.StatusBadRequest)
+			return
+		}
+		_, hasProjectContext := phaseInput["project_context"]
+		_, hasCandidates := phaseInput["candidates"]
+		if hasProjectContext && !hasCandidates {
 			if call != 1 && call != 3 {
 				providerFailure <- "E56 unexpected idea/choice phase order"
 				http.Error(w, "unexpected phase", http.StatusBadRequest)
@@ -145,7 +153,7 @@ func TestE56StandaloneServeBindsSourceBackedActionAcrossRestart(t *testing.T) {
 			}
 			secondWake := call == 3
 			content = e56IdeaResponse(secondWake, actionID)
-		} else {
+		} else if hasCandidates && !hasProjectContext {
 			if call != 2 && call != 4 {
 				providerFailure <- "E56 unexpected idea/choice phase order"
 				http.Error(w, "unexpected phase", http.StatusBadRequest)
@@ -184,6 +192,10 @@ func TestE56StandaloneServeBindsSourceBackedActionAcrossRestart(t *testing.T) {
 				}
 			}
 			content = "CHOICE: " + selectedID + "\nREASON: The host-observed project action best fits this bounded review."
+		} else {
+			providerFailure <- "E56 selector request omitted phase-specific context fields"
+			http.Error(w, "unknown selector phase", http.StatusBadRequest)
+			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"model": model, "done": true,
 			"message": map[string]any{"role": "assistant", "content": content}})
