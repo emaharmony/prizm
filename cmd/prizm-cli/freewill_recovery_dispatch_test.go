@@ -79,7 +79,6 @@ func TestFreewillRecoverPendingResumesAcceptedTerminalChildAndRebuildsReport(t *
 	fingerprintSum := sha256.Sum256(fingerprintBytes)
 	fingerprint := hex.EncodeToString(fingerprintSum[:])
 	now := time.Now().UTC()
-	approvalID := approval.NewApprovalID()
 	approvalStore := approval.NewStore(runDir)
 	approvalRecord, err := approval.NewIntentionApproval("run_freewill_recovery_parent", request.CorrelationID, request.AgentID, request.Scope.ProjectID,
 		approval.IntentionApprovalRef{RequestID: request.RequestID, RequestFingerprint: fingerprint, ScopeSummary: "project-recovery workspace",
@@ -87,7 +86,7 @@ func TestFreewillRecoverPendingResumesAcceptedTerminalChildAndRebuildsReport(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	approvalID = approvalRecord.ApprovalID
+	approvalID := approvalRecord.ApprovalID
 	approvalRecord.Status, approvalRecord.ApprovedBy, approvalRecord.ApprovedAt = approval.StatusApproved, "owner", &now
 	if err := approvalStore.Save(approvalRecord); err != nil {
 		t.Fatal(err)

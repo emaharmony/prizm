@@ -2860,3 +2860,15 @@ Prepared local branch `codex/freewill-p2-staging-pr1` from `947afe43738c72a98f86
 **Validation:** Eight focused CLI dispatch/approval/recovery/halt tests passed; 16 selected multiagent approval/control/provider tests passed; focused API, dashboard, Ollama provider, and orchestrator Freewill tests passed; the sandbox package passed; the Windows CLI build passed; `git diff --check` passed. The full suite was not run.
 
 **Risks and next action:** The Linux-only production-cycle OCI test requires Linux OCI CI. Exact-head CI and independent review remain required before publication. R1/G1 and real OCI execution-safety acceptance remain open; this candidate does not claim served or unattended P2 acceptance.
+
+## 2026-11-14 — FW-P2 PR1 Staticcheck correction
+
+**Roadmap IDs:** FW-P2 and FW-G2; R1/G1 remains an upstream acceptance dependency.
+
+Published PR #145 from `codex/freewill-p2-staging-pr1` into the staging-based `codex/freewill-integration`. Its reviewed head is `c6aa6cb6a147240548bf5157cf6f51e49a1a3d0e`; the diff is 44 paths (+5,928/-307). Exact-head CI run #285 passed Python, Windows, Linux tests/race, and Linux sandbox OCI conformance. The Linux lint job found six Staticcheck findings: two unused resume wrappers, two unused schema builders, a test approval-ID initialize-then-overwrite, and an unused already-persisted cancellation reason value.
+
+A four-file follow-up removes only the unreferenced wrappers/schema builders, directly uses the constructed approval record ID in the recovery fixture, and scopes the cancellation reason to the branch that creates a cancellation request. No authority or runtime behavior change is intended. `gofmt`, `git diff --check`, and local `staticcheck ./...` pass after the correction. Independent review and a fresh exact-head CI run remain outstanding; no merge has occurred.
+
+**Open gates:** R1/G1, served/unattended FW-P2, and final promotion to staging remain pending. The successful OCI job is exact-run engine evidence for this PR, but does not satisfy the broader execution-safety acceptance.
+
+**Next action:** obtain independent review, publish the correction with an expected-head guard, and merge PR #145 into the Freewill integration branch only after fresh required checks pass. Do not merge the final staging PR until R1/G1 and FW-P2 gates are accepted.

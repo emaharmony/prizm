@@ -1387,12 +1387,12 @@ func (r *DurableRuntime) checkpointPreparedRole(ctx context.Context, prepared Du
 		r.buffer.reset()
 		return latest, nil
 	}
-	reason, requested, err := r.store.CancellationRequest(safeCtx, latest.State.RunID)
+	_, requested, err := r.store.CancellationRequest(safeCtx, latest.State.RunID)
 	if err != nil {
 		return latest, errors.Join(checkpointErr, err)
 	}
 	if !requested {
-		reason = checkpointErr.Error()
+		reason := checkpointErr.Error()
 		if ctx.Err() != nil {
 			reason = ctx.Err().Error()
 		}

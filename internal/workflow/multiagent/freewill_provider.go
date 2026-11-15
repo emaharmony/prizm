@@ -135,39 +135,6 @@ type freewillStrictJSONError struct{ Code string }
 
 func (e *freewillStrictJSONError) Error() string { return e.Code }
 
-func freewillFlashIdeaSchema() map[string]any {
-	return map[string]any{"type": "object", "additionalProperties": false,
-		"required": []string{"candidates", "sleep"},
-		"properties": map[string]any{
-			"candidates": map[string]any{"type": "array", "anyOf": []any{
-				map[string]any{"minItems": 3, "maxItems": 3},
-				map[string]any{"maxItems": 0},
-			},
-				"items": map[string]any{"type": "object", "additionalProperties": false,
-					"required": []string{"idea", "score", "factors", "rationale"},
-					"properties": map[string]any{
-						"idea":      map[string]any{"type": "string", "minLength": 1},
-						"score":     map[string]any{"type": "integer", "minimum": 0, "maximum": 100},
-						"factors":   map[string]any{"type": "array", "minItems": 1, "items": map[string]any{"type": "string", "enum": []string{"scope_fit", "feasibility", "impact", "novelty", "readiness"}}},
-						"rationale": map[string]any{"type": "string", "minLength": 1},
-					}},
-			},
-			"sleep": map[string]any{"type": "boolean"},
-		},
-	}
-}
-
-func freewillFlashChoiceSchema(ids []string) map[string]any {
-	choices := append(append([]string(nil), ids...), "NONE")
-	return map[string]any{"type": "object", "additionalProperties": false,
-		"required": []string{"choice_id", "reason"},
-		"properties": map[string]any{
-			"choice_id": map[string]any{"type": "string", "enum": choices},
-			"reason":    map[string]any{"type": "string", "minLength": 1},
-		},
-	}
-}
-
 func decodeFreewillStrictJSON(content string, target any, maxBytes int) error {
 	if len(content) == 0 || len(content) > maxBytes || !utf8.ValidString(content) {
 		return &freewillStrictJSONError{Code: "size_or_encoding"}

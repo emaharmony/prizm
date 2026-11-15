@@ -280,14 +280,6 @@ func freewillAdmissionConfirmedAbsent(inspectErr error, inspectedRunID string) b
 	return inspectErr == nil && inspectedRunID == ""
 }
 
-func resumeFreewillReferenceChild(runDir, configPath, runID string) error {
-	return resumeFreewillReferenceChildWithCallbacks(runDir, configPath, runID, nil, nil)
-}
-
-func resumeFreewillReferenceChildWithCallbacks(runDir, configPath, runID string, reconcile freewillChildTerminalReconciler, finished func()) error {
-	return resumeFreewillReferenceChildWithExecutionControl(runDir, configPath, runID, reconcile, finished, nil, "", freewill.Scope{}, 0)
-}
-
 func resumeFreewillReferenceChildWithExecutionControl(runDir, configPath, runID string, reconcile freewillChildTerminalReconciler, finished func(),
 	control *multiagent.FreewillOperatorControl, agentID string, scope freewill.Scope, generation uint64) error {
 	ctx := context.Background()
