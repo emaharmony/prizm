@@ -1,4 +1,4 @@
-﻿# Prizm YAML Reference
+# Prizm YAML Reference
 
 Field-by-field reference for the YAML files Prizm reads. Use it as a manual: find
 your file type in the index, copy the example, and edit fields with confidence.
@@ -230,9 +230,10 @@ Full cron reference: [docs/SCHEDULER.md](../operations/SCHEDULER.md).
 
 ### Purpose
 
-Freewill is Prizm's decision-only autonomous selector: on a schedule it wakes,
-generates scored candidates, picks one, and — after policy review and human
-approval — proposes it. The freewill block lives in `prizm.yaml`.
+Freewill is Prizm's decision-only autonomous selector. It can wake on a schedule
+or a configured event trigger, generate scored candidates, and pick one to
+propose after policy review and human approval. The freewill block lives in
+`prizm.yaml`.
 
 ### Example
 
@@ -240,15 +241,17 @@ approval — proposes it. The freewill block lives in `prizm.yaml`.
 freewill:
   enabled: false
   agent_id: "lumi-selector"
-  project_id: "bassbook"
+  project_id: "example-project"
   model: "glm-5.3-flash:cloud"
-  objective: "Consider BassBook improvements; prefer small, safe, reviewable proposals"
+  objective: "Consider bounded workflow improvements; prefer small, safe, reviewable proposals"
   scheduling:
     enabled: true
     schedule: "*/10 * * * *"
-  notify_channel_id: "1493297644821283067"
+    event_kinds:
+      - "prizm.task.completed"
+  notify_channel_id: "example-channel-id"
   notify_allow_user_ids:
-    - "164169326142816256"
+    - "example-user-id"
 ```
 
 ### Fields
@@ -260,8 +263,9 @@ freewill:
 | `project_id` | string | No | Scope hint passed to the selector |
 | `model` | string | No | Selector model override |
 | `objective` | string | No | Host-authored subject context, ≤512 UTF-8 bytes, one line |
-| `scheduling.enabled` | bool | No | Enables the scheduler wake loop |
+| `scheduling.enabled` | bool | No | Enables the cron timer wake source |
 | `scheduling.schedule` | string | No | Cron expression (e.g. `*/10 * * * *`) |
+| `scheduling.event_kinds` | list | No | Exact event kinds that may wake Freewill; empty by default, works independently of the timer flag, no NATS wildcards, at most 16 |
 | `notify_channel_id` | string | No | Discord channel for curated lifecycle notifications; empty = off |
 | `notify_allow_user_ids` | list | No | Discord user IDs allowed to use Approve/Deny buttons; empty = card-only notifications |
 

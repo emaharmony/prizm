@@ -329,6 +329,182 @@ func TestFreewillAcceptedChildResumeFailsClosedAfterOperatorHalt(t *testing.T) {
 	}
 }
 
+func TestFreewillAcceptedChildResumeRejectsNonacceptedDispatch(t *testing.T) {
+	_, _, service, record, _ := newFreewillApprovalTestService(t, policy.DecisionRequiresApproval)
+	dispatcher := &freewillExecutionDispatcherStub{}
+	service.SetExecutionDispatcher(dispatcher)
+	pending, err := service.RequestApproval(context.Background(), record.State.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Decide(context.Background(), record.State.RunID, pending.Freewill.ApprovalRef, "grant", "owner", ""); err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := service.store.Load(context.Background(), record.State.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted.Freewill.ExecutionDispatch.Status = "dispatching"
+	if _, err := service.store.Checkpoint(context.Background(), accepted.Revision, accepted, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ValidateAcceptedExecutionResume(context.Background(), record.State.RunID); !errors.Is(err, ErrFreewillApprovalStale) {
+		t.Fatalf("nonaccepted dispatch resume=%v, want ErrFreewillApprovalStale", err)
+	}
+}
+
+func TestFreewillRecoveryQuarantineIsDurableAndFencedAcrossRuntimeAttempts(t *testing.T) {
+	ctx := context.Background()
+	env, firstRuntime, first, record, _ := newFreewillApprovalTestService(t, policy.DecisionRequiresApproval)
+	claimRoot := filepath.Join(t.TempDir(), "claims")
+	firstRuntime.claimer = FileRunClaimer{Root: claimRoot}
+	dispatcher := &freewillExecutionDispatcherStub{}
+	first.SetExecutionDispatcher(dispatcher)
+	pending, err := first.RequestApproval(ctx, record.State.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := first.Decide(ctx, record.State.RunID, pending.Freewill.ApprovalRef, "grant", "owner", "")
+	if err != nil || accepted.Freewill.ExecutionDispatch == nil || accepted.Freewill.ExecutionDispatch.Status != "accepted" {
+		t.Fatalf("create accepted dispatch: dispatch=%#v err=%v", accepted.Freewill.ExecutionDispatch, err)
+	}
+
+	secondEvents, err := event.NewSQLiteEventStore(env.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondEvents.Close()
+	secondStore, err := NewSQLiteDurableRunStore(env.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondStore.Close()
+	secondRuntime := newDurableRuntimeForTest(t, validDefinition(), &scriptedRunner{}, secondStore,
+		FileRunClaimer{Root: claimRoot}, secondEvents)
+	second, err := NewFreewillApprovalService(secondRuntime, secondStore, first.approvals,
+		freewillApprovalEvaluatorStub{decision: policy.PolicyDecision{Decision: policy.DecisionRequiresApproval}}, "freewill-policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		record DurableRun
+		err    error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	for _, service := range []*FreewillApprovalService{first, second} {
+		go func(service *FreewillApprovalService) {
+			<-start
+			quarantined, quarantineErr := service.QuarantineExecutionRecovery(ctx, record.State.RunID, "child_mutation_possible")
+			results <- result{record: quarantined, err: quarantineErr}
+		}(service)
+	}
+	close(start)
+	firstResult, secondResult := <-results, <-results
+	if firstResult.err != nil && !errors.Is(firstResult.err, ErrRunClaimed) {
+		t.Fatalf("first runtime quarantine: %v", firstResult.err)
+	}
+	if secondResult.err != nil && !errors.Is(secondResult.err, ErrRunClaimed) {
+		t.Fatalf("second runtime quarantine: %v", secondResult.err)
+	}
+	if firstResult.err != nil && secondResult.err != nil {
+		t.Fatalf("both runtime attempts were fenced without a quarantine: first=%v second=%v", firstResult.err, secondResult.err)
+	}
+	// A process that lost the first claim observes the durable transition and
+	// treats the exact replay as an idempotent no-op.
+	if _, err := second.QuarantineExecutionRecovery(ctx, record.State.RunID, "child_mutation_possible"); err != nil {
+		t.Fatalf("replay quarantine after claim handoff: %v", err)
+	}
+	projected, err := secondStore.Load(ctx, record.State.RunID)
+	if err != nil || projected.Freewill.ExecutionDispatch.Status != "recovery_uncertain" ||
+		projected.Freewill.ExecutionDispatch.RecoveryReason != "child_mutation_possible" ||
+		projected.Freewill.ExecutionDispatch.ChildRunID != accepted.Freewill.ExecutionDispatch.ChildRunID ||
+		projected.Freewill.ApprovalReceipt == nil || projected.Freewill.ApprovalReceipt.ApprovalID != accepted.Freewill.ApprovalReceipt.ApprovalID {
+		t.Fatalf("quarantine changed approval/child identity or was not durable: dispatch=%#v approval=%#v err=%v",
+			projected.Freewill.ExecutionDispatch, projected.Freewill.ApprovalReceipt, err)
+	}
+	events, err := secondEvents.Query(ctx, event.EventFilter{RunID: record.State.RunID, Type: event.EventFreewillExecutionRecoveryUncertain, Limit: 10})
+	if err != nil || len(events) != 1 {
+		t.Fatalf("quarantine audit event count=%d err=%v want=1", len(events), err)
+	}
+	if err := secondStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := secondEvents.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopenedStore, err := NewSQLiteDurableRunStore(env.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopenedStore.Close()
+	reopenedEvents, err := event.NewSQLiteEventStore(env.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopenedEvents.Close()
+	reopened, err := reopenedStore.Load(ctx, record.State.RunID)
+	if err != nil || reopened.Freewill.ExecutionDispatch.Status != "recovery_uncertain" ||
+		reopened.Freewill.ExecutionDispatch.RecoveryReason != "child_mutation_possible" ||
+		reopened.Freewill.ExecutionDispatch.ChildRunID != accepted.Freewill.ExecutionDispatch.ChildRunID {
+		t.Fatalf("quarantine did not survive SQLite reopen: dispatch=%#v err=%v", reopened.Freewill.ExecutionDispatch, err)
+	}
+	reopenedAudit, err := reopenedEvents.Query(ctx, event.EventFilter{RunID: record.State.RunID, Type: event.EventFreewillExecutionRecoveryUncertain, Limit: 10})
+	if err != nil || len(reopenedAudit) != 1 {
+		t.Fatalf("quarantine audit after SQLite reopen count=%d err=%v want=1", len(reopenedAudit), err)
+	}
+}
+
+func TestFreewillRecoveryQuarantineRepairsOnlyWithHostTerminalEvidence(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		reason         string
+		wantResolution bool
+	}{
+		{name: "report evidence can be repaired", reason: "terminal_report_invalid", wantResolution: true},
+		{name: "possible external mutation remains unresolved", reason: "child_mutation_possible", wantResolution: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			_, _, service, record, _ := newFreewillApprovalTestService(t, policy.DecisionRequiresApproval)
+			dispatcher := &freewillExecutionDispatcherStub{}
+			service.SetExecutionDispatcher(dispatcher)
+			pending, err := service.RequestApproval(ctx, record.State.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			accepted, err := service.Decide(ctx, record.State.RunID, pending.Freewill.ApprovalRef, "grant", "owner", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			quarantined, err := service.QuarantineExecutionRecovery(ctx, record.State.RunID, test.reason)
+			if err != nil || quarantined.Freewill.ExecutionDispatch.Status != "recovery_uncertain" {
+				t.Fatalf("quarantine: dispatch=%#v err=%v", quarantined.Freewill.ExecutionDispatch, err)
+			}
+			result := FreewillExecutionTerminalResult{ChildRunID: accepted.Freewill.ExecutionDispatch.ChildRunID,
+				ChildStatus: RunStatusFailed, ReportRef: "multiagent_report.json", ReportSHA256: strings.Repeat("a", 64),
+				ValidationSummary: "failed", FailureCode: "validation_failed"}
+			resolved, err := service.ReconcileExecutionTerminal(ctx, record.State.RunID, result)
+			if !test.wantResolution {
+				if err == nil || resolved.Freewill.ExecutionDispatch.Status != "recovery_uncertain" ||
+					resolved.Revision != quarantined.Revision {
+					t.Fatalf("terminal report cleared mutation quarantine: dispatch=%#v revision=%d want=%d err=%v",
+						resolved.Freewill.ExecutionDispatch, resolved.Revision, quarantined.Revision, err)
+				}
+				return
+			}
+			if err != nil || resolved.Freewill.ExecutionDispatch.Status != "execution_failed" ||
+				resolved.Freewill.ExecutionDispatch.RecoveryReason != "" || resolved.Freewill.ExecutionDispatch.ReportSHA256 != result.ReportSHA256 {
+				t.Fatalf("valid host evidence did not repair quarantine: dispatch=%#v err=%v", resolved.Freewill.ExecutionDispatch, err)
+			}
+			if len(dispatcher.calls) != 1 {
+				t.Fatalf("repair restarted child dispatch: calls=%d want=1", len(dispatcher.calls))
+			}
+		})
+	}
+}
+
 func TestFreewillTerminalChildProjectionIsVisibleAndIdempotent(t *testing.T) {
 	for _, test := range []struct {
 		name              string
@@ -398,6 +574,57 @@ func TestFreewillTerminalChildProjectionIsVisibleAndIdempotent(t *testing.T) {
 				t.Fatalf("terminal outcome was redispatched: calls=%d", len(dispatcher.calls))
 			}
 		})
+	}
+}
+
+type freewillTerminalFactSinkStub struct {
+	attempts []FreewillTerminalFact
+	err      error
+}
+
+func (s *freewillTerminalFactSinkStub) CaptureFreewillTerminalFact(_ context.Context, fact FreewillTerminalFact) error {
+	s.attempts = append(s.attempts, fact)
+	return s.err
+}
+
+func TestFreewillTerminalFactSinkRetriesAfterDurableTerminalWithoutDuplicateEvent(t *testing.T) {
+	env, _, service, record, _ := newFreewillApprovalTestService(t, policy.DecisionRequiresApproval)
+	dispatcher := &freewillExecutionDispatcherStub{}
+	service.SetExecutionDispatcher(dispatcher)
+	pending, err := service.RequestApproval(context.Background(), record.State.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := service.Decide(context.Background(), record.State.RunID, pending.Freewill.ApprovalRef, "grant", "owner", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := FreewillExecutionTerminalResult{ChildRunID: accepted.Freewill.ExecutionDispatch.ChildRunID,
+		ChildStatus: RunStatusCompleted, ReportRef: "multiagent_report.json", ReportSHA256: strings.Repeat("c", 64),
+		ValidationSummary: "passed"}
+	sink := &freewillTerminalFactSinkStub{err: errors.New("local store temporarily unavailable")}
+	service.SetTerminalFactSink(sink)
+	terminal, err := service.ReconcileExecutionTerminal(context.Background(), record.State.RunID, result)
+	if err == nil || terminal.Freewill.ExecutionDispatch.Status != "completed" {
+		t.Fatalf("capture failure changed terminal outcome: status=%q err=%v", terminal.Freewill.ExecutionDispatch.Status, err)
+	}
+	persisted, err := env.store.Load(context.Background(), record.State.RunID)
+	if err != nil || persisted.Freewill.ExecutionDispatch.ReportSHA256 != result.ReportSHA256 {
+		t.Fatalf("terminal record not durable before sink retry: record=%#v err=%v", persisted.Freewill.ExecutionDispatch, err)
+	}
+	sink.err = nil
+	if _, err := service.ReconcileExecutionTerminal(context.Background(), record.State.RunID, result); err != nil {
+		t.Fatalf("identical terminal replay did not retry fact capture: %v", err)
+	}
+	if err := service.RetryTerminalFactCapture(context.Background(), record.State.RunID); err != nil {
+		t.Fatalf("startup replay did not retry durable fact capture: %v", err)
+	}
+	if len(sink.attempts) != 2 || sink.attempts[0] != sink.attempts[1] {
+		t.Fatalf("fact retry changed binding/evidence: %#v", sink.attempts)
+	}
+	events, err := env.events.Query(context.Background(), event.EventFilter{RunID: record.State.RunID, Type: event.EventFreewillExecutionCompleted, Limit: 10})
+	if err != nil || len(events) != 1 {
+		t.Fatalf("terminal event count=%d err=%v want=1", len(events), err)
 	}
 }
 

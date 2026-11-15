@@ -2882,3 +2882,15 @@ A four-file follow-up removes only the unreferenced wrappers/schema builders, di
 **Open gates:** R1/G1, served/unattended FW-P2, and final promotion to staging remain pending. The successful OCI job is exact-run engine evidence for this PR, but does not satisfy the broader execution-safety acceptance.
 
 **Next action:** obtain independent review, publish the correction with an expected-head guard, and merge PR #145 into the Freewill integration branch only after fresh required checks pass. Do not merge the final staging PR until R1/G1 and FW-P2 gates are accepted.
+
+## 2026-11-15 — Freewill POC PR3 review corrections
+
+**Roadmap IDs:** FW-P2, FW-P3, FW-G2, and the 73-item Freewill feature inventory. R1/G1 remains a prerequisite for served or unattended FW-P2.
+
+**Security correction:** Review found that preference evidence and challenge GET routes accepted an owner_id without requiring a configured service bearer when local principal auth was absent. The API auth middleware now protects GET requests under the preference route. The router-level regression verifies both read paths return 401 without the bearer, return 200 with the configured bearer, and do not reach the controller before authentication. It also verifies unauthenticated preference challenge POST remains 401 and authenticated POST still succeeds.
+
+**Work-log integrity:** The existing 2026-11-14 FW-P2/G2 child approval history entry was restored unchanged from the PR2 baseline. This PR3 review entry is appended after the existing history.
+
+**Validation:** The focused preference read-auth test passed. The post-review full go test ./... -count=1 run passed with exit code zero. Staticcheck, go build, go vet, git diff --check, and the added-line privacy scan passed.
+
+**Remaining gates and next action:** Provider-backed R1/G1 acceptance, Linux OCI execution, exact-head CI, and independent review remain open. Keep the candidate local and unpublished until review clears.

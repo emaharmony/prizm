@@ -51,20 +51,21 @@ const multiAgentSandboxApprovalEnv = "PRIZM_MULTIAGENT_SANDBOX"
 // the same discriminator applied to the RunLocator-based read paths
 // (ListRuns/OpenInspection).
 type referenceWorkflowManifest struct {
-	SchemaVersion                 int                               `json:"schema_version"`
-	RunID                         string                            `json:"run_id"`
-	WorkflowID                    string                            `json:"workflow_id"`
-	Input                         multiagent.ReferenceWorkflowInput `json:"input"`
-	Definition                    multiagent.Definition             `json:"definition"`
-	WorkspaceID                   string                            `json:"workspace_id"`
-	WorkspacePath                 string                            `json:"workspace_path"`
-	SourceWorkspacePath           string                            `json:"source_workspace_path,omitempty"`
-	WorkspaceCleaned              bool                              `json:"workspace_cleaned,omitempty"`
-	WorkflowVersion               int64                             `json:"workflow_version,omitempty"`
-	DefinitionDBPath              string                            `json:"definition_db_path,omitempty"`
-	ValidationProfileFingerprints map[string]string                 `json:"validation_profile_fingerprints,omitempty"`
-	SandboxApprovalMode           bool                              `json:"sandbox_approval_mode,omitempty"`
-	FreewillSandboxConfig         *sandbox.Config                   `json:"freewill_sandbox_config,omitempty"`
+	SchemaVersion                 int                                   `json:"schema_version"`
+	RunID                         string                                `json:"run_id"`
+	WorkflowID                    string                                `json:"workflow_id"`
+	Input                         multiagent.ReferenceWorkflowInput     `json:"input"`
+	Definition                    multiagent.Definition                 `json:"definition"`
+	WorkspaceID                   string                                `json:"workspace_id"`
+	WorkspacePath                 string                                `json:"workspace_path"`
+	SourceWorkspacePath           string                                `json:"source_workspace_path,omitempty"`
+	WorkspaceCleaned              bool                                  `json:"workspace_cleaned,omitempty"`
+	WorkflowVersion               int64                                 `json:"workflow_version,omitempty"`
+	DefinitionDBPath              string                                `json:"definition_db_path,omitempty"`
+	ValidationProfileFingerprints map[string]string                     `json:"validation_profile_fingerprints,omitempty"`
+	SandboxApprovalMode           bool                                  `json:"sandbox_approval_mode,omitempty"`
+	FreewillSandboxConfig         *sandbox.Config                       `json:"freewill_sandbox_config,omitempty"`
+	ResourceNegotiation           *multiagent.ResourceNegotiationConfig `json:"resource_negotiation,omitempty"`
 }
 
 // registryBacked reports whether m describes a PR6 `graph run`-started run
@@ -163,9 +164,25 @@ func startFreewillReferenceRunWithExecutionControl(ctx context.Context, runDir, 
 	if err := request.Candidate.Validate(); err != nil {
 		return multiagent.FreewillExecutionResult{}, errors.New("freewill: approved intention is invalid")
 	}
+	cfg, err := orchestrator.LoadConfig(configPath)
+	if err != nil {
+		return multiagent.FreewillExecutionResult{}, fmt.Errorf("load Prizm config: %w", err)
+	}
 	input, err := freewillReferenceInput(intention)
 	if err != nil {
 		return multiagent.FreewillExecutionResult{}, err
+	}
+	var resourceNegotiation *multiagent.ResourceNegotiationConfig
+	resourceConfig := cfg.Freewill.Execution.ResourceNegotiation
+	if resourceConfig.Enabled {
+		hardCeiling := multiagent.Limit(resourceConfig.HardCeiling)
+		input.Budgets.MaxTransitions = &hardCeiling
+		resourceNegotiation = &multiagent.ResourceNegotiationConfig{
+			Enabled: true, InitialAllowance: resourceConfig.InitialAllowance, Increment: resourceConfig.Increment,
+			HardCeiling: resourceConfig.HardCeiling, OwnerID: resourceConfig.OwnerID,
+			ParentRunID: request.ParentRunID, AgentID: intention.AgentID, ProjectID: intention.Scope.ProjectID,
+			Workspace: intention.Scope.Workspace, GrantGeneration: request.ApprovalGeneration,
+		}
 	}
 	var sandboxConfig *sandbox.Config
 	if len(sandboxConfigs) > 0 {
@@ -182,7 +199,8 @@ func startFreewillReferenceRunWithExecutionControl(ctx context.Context, runDir, 
 			return multiagent.FreewillExecutionResult{}, err
 		}
 		if manifest.WorkflowID != multiagent.ReferenceWorkflowID || manifest.registryBacked() ||
-			manifest.Input.Objective != input.Objective || manifest.Input.Workspace != input.Workspace || !manifest.SandboxApprovalMode || !sameFreewillSandboxConfig(manifest.FreewillSandboxConfig, sandboxConfig) {
+			manifest.Input.Objective != input.Objective || manifest.Input.Workspace != input.Workspace || !manifest.SandboxApprovalMode || !sameFreewillSandboxConfig(manifest.FreewillSandboxConfig, sandboxConfig) ||
+			!sameResourceNegotiationConfig(manifest.ResourceNegotiation, resourceNegotiation) {
 			return multiagent.FreewillExecutionResult{}, multiagent.ErrRequestIdentityConflict
 		}
 		runtime, err := openReferenceRuntimeWithInteraction(runDir, manifest, unavailableRoleRunner{}, nil, nil)
@@ -215,10 +233,6 @@ func startFreewillReferenceRunWithExecutionControl(ctx context.Context, runDir, 
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return multiagent.FreewillExecutionResult{}, err
 	}
-	cfg, err := orchestrator.LoadConfig(configPath)
-	if err != nil {
-		return multiagent.FreewillExecutionResult{}, fmt.Errorf("load Prizm config: %w", err)
-	}
 	definition, err := multiagent.ApplyReferenceOverrides(multiagent.DefaultReferenceDefinition(), input)
 	if err != nil {
 		return multiagent.FreewillExecutionResult{}, err
@@ -237,6 +251,7 @@ func startFreewillReferenceRunWithExecutionControl(ctx context.Context, runDir, 
 		WorkspaceID: workspaceID, WorkspacePath: workspacePath, SourceWorkspacePath: sourceWorkspacePath,
 		SandboxApprovalMode:   true,
 		FreewillSandboxConfig: sandboxConfig,
+		ResourceNegotiation:   resourceNegotiation,
 	}
 	if err := bindManifestValidationProfiles(configPath, &manifest); err != nil {
 		return multiagent.FreewillExecutionResult{}, cleanupUnadmitted(err)
@@ -320,6 +335,12 @@ func resumeFreewillReferenceChildWithExecutionControl(runDir, configPath, runID 
 		}
 		return nil
 	}
+	// Resource negotiation is a dedicated owner-decision wait. Generic child
+	// recovery must never resume it; the resource decision path clears this
+	// exact wait before explicitly invoking recovery.
+	if record.Waiting != nil && record.Waiting.Kind == "resource_extension" {
+		return finishResourceWaitRecovery(inspection.close, finished)
+	}
 	if err := inspection.close(); err != nil {
 		return err
 	}
@@ -362,6 +383,14 @@ func resumeFreewillReferenceChildWithExecutionControl(runDir, configPath, runID 
 		}
 	}()
 	return nil
+}
+
+func finishResourceWaitRecovery(closeInspection func() error, finished func()) error {
+	closeErr := closeInspection()
+	if finished != nil {
+		finished()
+	}
+	return closeErr
 }
 
 func driveAcceptedFreewillReferenceRun(runDir, runID, configPath string, reconcile freewillChildTerminalReconciler,
@@ -616,6 +645,13 @@ func freewillReferenceInput(intention freewill.IntentionRequest) (multiagent.Ref
 		return multiagent.ReferenceWorkflowInput{}, errors.New("freewill: approved intention cannot form a reference workflow input")
 	}
 	return input, nil
+}
+
+func sameResourceNegotiationConfig(left, right *multiagent.ResourceNegotiationConfig) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 // bindConfiguredReferenceProfiles adapts the fixed reference graph's
@@ -1020,7 +1056,7 @@ func openReferenceRuntimeWithInteractionForComposition(runDir string, manifest r
 	runtime, err := multiagent.NewDurableRuntime(
 		graph, runner, store,
 		multiagent.FileRunClaimer{Root: runDir}, eventStore,
-		multiagent.DurableRuntimeOptions{Interaction: interaction, Reflection: reflection, Memory: reflectionMemory, Proposals: proposals, Delegation: delegationOptions},
+		multiagent.DurableRuntimeOptions{Interaction: interaction, Reflection: reflection, Memory: reflectionMemory, Proposals: proposals, Delegation: delegationOptions, ResourceNegotiation: manifest.ResourceNegotiation},
 	)
 	if err != nil {
 		store.Close()

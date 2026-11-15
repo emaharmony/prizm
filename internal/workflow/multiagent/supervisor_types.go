@@ -195,28 +195,31 @@ type RunView struct {
 
 // RoleRunRequest is the complete, read-only input for one role visit.
 type RoleRunRequest struct {
-	Run              RunView
-	ParentTask       *TaskReference         `json:"parent_task,omitempty"`
-	TrustedTreeBasis *gitx.TrustedTreeBasis `json:"trusted_tree_basis,omitempty"`
-	RoleConfig       RoleConfig
-	FanOutAvailable  bool                 `json:"fan_out_available,omitempty"`
-	RecoveryFeedback string               `json:"-"`
-	RetryHandle      RoleVisitRetryHandle `json:"-"`
-	ToolEventSink    ToolEventSink        `json:"-"`
+	Run                          RunView
+	ParentTask                   *TaskReference         `json:"parent_task,omitempty"`
+	TrustedTreeBasis             *gitx.TrustedTreeBasis `json:"trusted_tree_basis,omitempty"`
+	RoleConfig                   RoleConfig
+	ResourceExtensionEnabled     bool                 `json:"resource_extension_enabled,omitempty"`
+	ResourceTransitionsAllowance int                  `json:"resource_transitions_allowance,omitempty"`
+	FanOutAvailable              bool                 `json:"fan_out_available,omitempty"`
+	RecoveryFeedback             string               `json:"-"`
+	RetryHandle                  RoleVisitRetryHandle `json:"-"`
+	ToolEventSink                ToolEventSink        `json:"-"`
 }
 
 // HandoffDraft contains role-produced context without routing authority.
 // The supervisor assigns source, destination, outcome, run, and timestamp.
 type HandoffDraft struct {
-	ID                string
-	TaskRef           string
-	Objective         string
-	Artifacts         []ArtifactRef
-	Evidence          []ArtifactRef
-	Reason            string
-	ValidationResults []validation.Result
-	UnresolvedIssues  []Issue
-	Notes             string
+	ID                       string
+	TaskRef                  string
+	Objective                string
+	Artifacts                []ArtifactRef
+	Evidence                 []ArtifactRef
+	Reason                   string
+	ValidationResults        []validation.Result
+	UnresolvedIssues         []Issue
+	Notes                    string
+	ResourceExtensionRequest *ResourceExtensionIntent
 }
 
 // ExecutionMetadata is observational data returned by a runner.

@@ -29,10 +29,25 @@ const (
 )
 
 var (
-	ErrRequestIdentityConflict = errors.New("multiagent: request idempotency identity conflicts with accepted run")
-	ErrRetryBudgetExhausted    = errors.New("multiagent: role visit recovery budget exhausted")
-	ErrStaleRetryAttempt       = errors.New("multiagent: stale role retry attempt")
+	ErrRequestIdentityConflict  = errors.New("multiagent: request idempotency identity conflicts with accepted run")
+	ErrRetryBudgetExhausted     = errors.New("multiagent: role visit recovery budget exhausted")
+	ErrStaleRetryAttempt        = errors.New("multiagent: stale role retry attempt")
+	ErrMutationNoEffectUnproven = errors.New("multiagent: exact child mutation no-effect evidence is unavailable")
 )
+
+// FreewillMutationNoEffectReceipt can only be populated by a DurableRuntime
+// after it has fenced and terminalized the exact child under its run claim.
+type FreewillMutationNoEffectReceipt struct {
+	childRunID  string
+	attemptID   string
+	mutationIDs []string
+}
+
+func (r FreewillMutationNoEffectReceipt) ChildRunID() string { return r.childRunID }
+func (r FreewillMutationNoEffectReceipt) AttemptID() string  { return r.attemptID }
+func (r FreewillMutationNoEffectReceipt) MutationIDs() []string {
+	return append([]string(nil), r.mutationIDs...)
+}
 
 type RetryDeadlineError struct{}
 

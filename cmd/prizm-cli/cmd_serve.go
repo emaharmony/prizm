@@ -191,6 +191,14 @@ func executeServe(args []string) {
 
 	serveCmd.Parse(args)
 
+	// Scrub ambient Ollama credentials before config/provider startup can
+	// launch any shell, worker, MCP, or provider subprocess.
+	ollamaAPIKey, keyErr := takeOllamaAPIKey(os.Getenv, os.Unsetenv)
+	if keyErr != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", keyErr)
+		os.Exit(1)
+	}
+
 	fmt.Println("🔮 Starting Prizm...")
 
 	// V77: Global review store for Mango feedback injection
@@ -215,6 +223,34 @@ func executeServe(args []string) {
 		}
 		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
 		os.Exit(1)
+	}
+	if !freewillGoalProposalAuthAllowed(cfg.Freewill.GoalProposalEnabled, cfg.API.ResolveAuthToken()) {
+		fmt.Fprintln(os.Stderr, "Error: Freewill goal proposals require a configured API bearer token")
+		os.Exit(1)
+	}
+	if !freewillGoalProposalAuthAllowed(cfg.Freewill.StrategyExperimentEnabled, cfg.API.ResolveAuthToken()) {
+		fmt.Fprintln(os.Stderr, "Error: Freewill strategy experiments require a configured API bearer token")
+		os.Exit(1)
+	}
+	if !freewillGoalProposalAuthAllowed(cfg.Freewill.DiaryAnnotationsEnabled, cfg.API.ResolveAuthToken()) {
+		fmt.Fprintln(os.Stderr, "Error: Freewill diary annotations require a configured API bearer token")
+		os.Exit(1)
+	}
+	if cfg.API.LocalDiaryPrincipalAuth.Enabled && (!cfg.Freewill.Enabled || !cfg.Freewill.DiaryAnnotationsEnabled ||
+		cfg.API.LocalDiaryPrincipalAuth.OwnerPrincipalID != cfg.Freewill.DiaryAnnotationsOwnerID) {
+		fmt.Fprintln(os.Stderr, "Error: local diary principal mode requires enabled annotations and an exact owner binding")
+		os.Exit(1)
+	}
+	if !freewillGoalProposalAuthAllowed(cfg.Freewill.Execution.ResourceNegotiation.Enabled, cfg.API.ResolveAuthToken()) {
+		fmt.Fprintln(os.Stderr, "Error: Freewill resource negotiation requires a configured API bearer token")
+		os.Exit(1)
+	}
+	if !freewillGoalProposalAuthAllowed(cfg.Freewill.PromiseConfirmation.Enabled, cfg.API.ResolveAuthToken()) {
+		fmt.Fprintln(os.Stderr, "Error: Freewill promise confirmation requires a configured API bearer token")
+		os.Exit(1)
+	}
+	if !usesDirectFreewillCloudSelector(cfg) {
+		ollamaAPIKey = ""
 	}
 
 	// Override NATS URL if provided
@@ -1333,7 +1369,8 @@ func executeServe(args []string) {
 	}
 	var freewillRuntime *freewillServeRuntime
 	if cfg.Freewill.Enabled {
-		freewillRuntime, err = openFreewillServeRuntime(cfg, provReg, natsURL, *configPath)
+		freewillRuntime, err = openFreewillServeRuntime(cfg, provReg, natsURL, *configPath, ollamaAPIKey)
+		ollamaAPIKey = ""
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error starting Freewill runtime: %v\n", err)
 			return
@@ -1347,7 +1384,7 @@ func executeServe(args []string) {
 	}
 	if freewillRuntime != nil {
 		defer freewillRuntime.Close()
-		if err := freewillRuntime.Start(ctx, natsConn, cfg.Freewill.Enabled && cfg.Freewill.Scheduling.Enabled); err != nil {
+		if err := freewillRuntime.Start(ctx, natsConn, cfg.Freewill.Enabled && (cfg.Freewill.Scheduling.Enabled || len(cfg.Freewill.Scheduling.EventKinds) > 0)); err != nil {
 			fmt.Fprintf(os.Stderr, "Error starting Freewill lifecycle: %v\n", err)
 			return
 		}
@@ -1377,7 +1414,7 @@ func executeServe(args []string) {
 			}
 		}
 	}
-	apiServer := api.NewServer(api.Config{
+	apiServer, apiServerErr := api.NewServerChecked(api.Config{
 		Addr:               cfg.BindAddr(apiPort),
 		Orch:               orch,
 		Store:              taskStore,
@@ -1411,11 +1448,60 @@ func executeServe(args []string) {
 			}
 			return freewillRuntime
 		}(),
+		FreewillChildResources: func() api.FreewillChildResourceNegotiationController {
+			if freewillRuntime == nil {
+				return nil
+			}
+			return freewillRuntime
+		}(),
 		FreewillControl: func() api.FreewillOperatorControlController {
 			if freewillRuntime == nil {
 				return nil
 			}
 			return freewillRuntime.control
+		}(),
+		FreewillGoals: func() api.FreewillGoalProposalController {
+			if freewillRuntime == nil {
+				return nil
+			}
+			return freewillRuntime
+		}(),
+		FreewillStrategyExperiments: func() api.FreewillStrategyExperimentController {
+			if freewillRuntime == nil || freewillRuntime.strategyExperiments == nil {
+				return nil
+			}
+			return freewillRuntime
+		}(),
+		FreewillDiaryAnnotations: func() api.FreewillDiaryAnnotationController {
+			if freewillRuntime == nil {
+				return nil
+			}
+			return freewillRuntime.diaryAnnotations
+		}(),
+		FreewillDiaryConsent: func() api.FreewillDiaryConsentController {
+			if freewillRuntime == nil {
+				return nil
+			}
+			return freewillRuntime.diaryConsent
+		}(),
+		FreewillRelationships: func() api.FreewillRelationshipController {
+			if freewillRuntime == nil {
+				return nil
+			}
+			return freewillRuntime.relationshipConsent
+		}(),
+		FreewillPreferenceChallenges: func() api.FreewillPreferenceChallengeController {
+			if freewillRuntime == nil {
+				return nil
+			}
+			return freewillRuntime.preferenceChallenges
+		}(),
+		LocalDiaryPrincipalAuth: freewillLocalDiaryPrincipalAuthFromConfig(cfg.API.LocalDiaryPrincipalAuth),
+		FreewillPromises: func() api.FreewillPromiseConfirmationController {
+			if freewillRuntime == nil {
+				return nil
+			}
+			return freewillRuntime.promiseConfirmation
 		}(),
 
 		MaxRequestBytes:       cfg.API.MaxRequestBytes,
@@ -1433,6 +1519,10 @@ func executeServe(args []string) {
 		DefinitionStore:       definitionStore,
 		WorkflowRunStarter:    newGraphRunStarter(runDir, definitionDBPath, *configPath, graphWorkspace),
 	})
+	if apiServerErr != nil {
+		fmt.Fprintf(os.Stderr, "Error configuring API server: %v\n", apiServerErr)
+		os.Exit(1)
+	}
 	go func() {
 		if err := apiServer.Start(); err != nil {
 			log.Printf("[WARN] API server failed: %v", err)

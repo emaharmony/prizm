@@ -26,26 +26,28 @@ type DurableRuntimeOptions struct {
 	// Interaction optionally runs the adapter cascade for graph nodes that
 	// advertise execution metadata. Its audit events are connected to the
 	// same durable outbox as supervisor events.
-	Interaction *InteractionScheduler
-	Reflection  ReflectionRunner
-	Memory      ReflectionMemorySink
-	Proposals   ProposalLifecycle
-	Delegation  *DurableDelegationOptions
+	Interaction         *InteractionScheduler
+	Reflection          ReflectionRunner
+	Memory              ReflectionMemorySink
+	Proposals           ProposalLifecycle
+	Delegation          *DurableDelegationOptions
+	ResourceNegotiation *ResourceNegotiationConfig
 }
 
 // DurableRuntime advances a run only through atomically persisted checkpoints.
 type DurableRuntime struct {
-	supervisor  *Supervisor
-	buffer      *durableEventBuffer
-	store       DurableRunStore
-	claimer     RunClaimer
-	publisher   EventPublisher
-	now         func() time.Time
-	interaction *InteractionScheduler
-	reflection  ReflectionRunner
-	memory      ReflectionMemorySink
-	proposals   ProposalLifecycle
-	delegation  *DurableDelegationOptions
+	supervisor          *Supervisor
+	buffer              *durableEventBuffer
+	store               DurableRunStore
+	claimer             RunClaimer
+	publisher           EventPublisher
+	now                 func() time.Time
+	interaction         *InteractionScheduler
+	reflection          ReflectionRunner
+	memory              ReflectionMemorySink
+	proposals           ProposalLifecycle
+	delegation          *DurableDelegationOptions
+	resourceNegotiation *ResourceNegotiationConfig
 }
 
 // NewDurableRuntime creates the Phase 1 persistence and recovery boundary
@@ -59,6 +61,9 @@ func NewDurableRuntime(
 	publisher EventPublisher,
 	options DurableRuntimeOptions,
 ) (*DurableRuntime, error) {
+	if graph == nil {
+		return nil, errors.New("multiagent: compiled graph is required")
+	}
 	if store == nil {
 		return nil, errors.New("multiagent: durable run store is required")
 	}
@@ -71,6 +76,16 @@ func NewDurableRuntime(
 	if options.Delegation != nil && (strings.TrimSpace(options.Delegation.Subject) == "" ||
 		options.Delegation.Dispatcher == nil || options.Delegation.Outcomes == nil || options.Delegation.Deadline <= 0) {
 		return nil, errors.New("multiagent: delegated role execution requires subject, dispatcher, outcome source, and positive deadline")
+	}
+	if options.ResourceNegotiation != nil {
+		cfg := *options.ResourceNegotiation
+		if !cfg.Enabled || cfg.InitialAllowance <= 0 || cfg.Increment <= 0 || cfg.HardCeiling <= 0 ||
+			cfg.InitialAllowance+cfg.Increment > cfg.HardCeiling ||
+			cfg.HardCeiling != int(graph.Budgets().MaxTransitions) || cfg.OwnerID == "" || cfg.ParentRunID == "" ||
+			cfg.AgentID == "" || cfg.ProjectID == "" || cfg.Workspace == "" {
+			return nil, errors.New("multiagent: resource negotiation configuration is invalid")
+		}
+		options.ResourceNegotiation = &cfg
 	}
 	buffer := &durableEventBuffer{}
 	supervisor, err := NewSupervisor(
@@ -93,17 +108,18 @@ func NewDurableRuntime(
 		setter.SetEventSink(buffer)
 	}
 	return &DurableRuntime{
-		supervisor:  supervisor,
-		buffer:      buffer,
-		store:       store,
-		claimer:     claimer,
-		publisher:   publisher,
-		now:         supervisor.now,
-		interaction: options.Interaction,
-		reflection:  options.Reflection,
-		memory:      options.Memory,
-		proposals:   options.Proposals,
-		delegation:  options.Delegation,
+		supervisor:          supervisor,
+		buffer:              buffer,
+		store:               store,
+		claimer:             claimer,
+		publisher:           publisher,
+		now:                 supervisor.now,
+		interaction:         options.Interaction,
+		reflection:          options.Reflection,
+		memory:              options.Memory,
+		proposals:           options.Proposals,
+		delegation:          options.Delegation,
+		resourceNegotiation: options.ResourceNegotiation,
 	}, nil
 }
 
@@ -147,6 +163,10 @@ func (r *DurableRuntime) Accept(
 		SchemaVersion: DurableRunSchemaVersion,
 		State:         state,
 		Phase:         CheckpointPendingRole,
+	}
+	if r.resourceNegotiation != nil {
+		cfg := *r.resourceNegotiation
+		record.ResourceNegotiation = &ResourceNegotiationState{Config: cfg, Allowance: cfg.InitialAllowance}
 	}
 	if err := record.Validate(r.supervisor.graph); err != nil {
 		return RunState{}, err
@@ -270,6 +290,9 @@ func (r *DurableRuntime) resumeClaimed(
 		if cancelled {
 			return record.State, nil
 		}
+	}
+	if resourceRequestPending(record) {
+		return record.State, waitingError(record)
 	}
 	// A scheduled retry is a safe role boundary. Honor a persisted operator
 	// pause before consuming that retry, including when the service recovery
@@ -743,6 +766,9 @@ func (r *DurableRuntime) drive(
 			}
 
 		case CheckpointTransitionPending:
+			if resourceRequestPending(record) {
+				return record.State, waitingError(record)
+			}
 			var err error
 			record, err = r.applyPendingTransition(ctx, record, recovering)
 			if err != nil {
@@ -913,6 +939,20 @@ func (r *DurableRuntime) prepareRole(
 		}
 		return record, terminalErr
 	}
+	if record.ResourceNegotiation != nil &&
+		exceeded(record.State.TransitionCount+1, Limit(record.ResourceNegotiation.Allowance)) {
+		budgetErr := newBudgetError("max_transitions", "", record.State.TransitionCount+1, Limit(record.ResourceNegotiation.Allowance))
+		state, terminalErr := r.supervisor.exhaustRun(record.State, budgetErr)
+		record.State = state
+		record.Phase = CheckpointTerminal
+		record.Waiting = nil
+		record.Failure = persistedFailure("budget_exhausted", terminalErr, r.now())
+		record, err = r.checkpoint(ctx, record)
+		if err != nil {
+			return record, err
+		}
+		return record, terminalErr
+	}
 
 	role := record.State.CurrentRole
 	r.supervisor.enterRole(&record.State, role)
@@ -983,8 +1023,15 @@ func (r *DurableRuntime) executePreparedRole(
 	}
 	retryHandle := newDurableRoleRetryHandle(ctx, r, record)
 	result, runErr := r.supervisor.runner.RunRole(ctx, RoleRunRequest{
-		Run:              r.supervisor.runView(record.State),
-		RoleConfig:       cloneRoleConfig(roleConfig),
+		Run:                      r.supervisor.runView(record.State),
+		RoleConfig:               cloneRoleConfig(roleConfig),
+		ResourceExtensionEnabled: record.ResourceNegotiation != nil && record.ResourceNegotiation.Config.Enabled,
+		ResourceTransitionsAllowance: func() int {
+			if record.ResourceNegotiation == nil {
+				return 0
+			}
+			return record.ResourceNegotiation.Allowance
+		}(),
 		TrustedTreeBasis: trustedTreeBasisForRole(record, role),
 		RecoveryFeedback: func() string {
 			if record.Retry != nil {
@@ -1352,6 +1399,15 @@ func (r *DurableRuntime) finishPreparedRole(
 		Handoff:      cloneHandoffDraft(result.OutgoingHandoff),
 	}
 	record.Phase = CheckpointTransitionPending
+	if result.OutgoingHandoff != nil && result.OutgoingHandoff.ResourceExtensionRequest != nil {
+		if resourceExtensionCanBeRequested(record, transition) {
+			r.createResourceExtensionRequest(&record, result.OutgoingHandoff.ResourceExtensionRequest)
+		} else if record.PendingTransition.Handoff != nil {
+			// A premature or disabled request is not carried forward as a latent
+			// authorization trigger on a later role visit.
+			record.PendingTransition.Handoff.ResourceExtensionRequest = nil
+		}
+	}
 	return r.checkpointPreparedRole(ctx, record)
 }
 
@@ -2058,7 +2114,26 @@ func (r *DurableRuntime) persistRoleFailure(
 	role Role,
 	cause error,
 ) (DurableRun, error) {
+	return r.persistRoleFailureWithKind(ctx, record, role, cause, "role_execution", "")
+}
+
+func (r *DurableRuntime) persistRoleFailureWithKind(
+	ctx context.Context,
+	record DurableRun,
+	role Role,
+	cause error,
+	failureKind string,
+	overrideFailureCode string,
+) (DurableRun, error) {
 	failureCode := roleFailureCode(cause)
+	if overrideFailureCode != "" {
+		failureCode = overrideFailureCode
+	}
+	if failureKind == "mutation_no_effect_reconciled" && record.Retry != nil {
+		record.Retry.FailureClass = "mutation_reconciliation"
+		record.Retry.FailureCode = failureCode
+		record.Retry.FailureOrigin = FailureOriginGovernance
+	}
 	diagnostic := durableFailureDiagnostic(cause, record.Retry)
 	if record.Retry != nil {
 		roleState := record.State.RoleStates[role]
@@ -2084,7 +2159,7 @@ func (r *DurableRuntime) persistRoleFailure(
 	record.State = state
 	record.Phase = CheckpointTerminal
 	record.Failure = diagnostic
-	record.Failure.Kind = "role_execution"
+	record.Failure.Kind = failureKind
 	record.Failure.Message = failureCode
 	record.Failure.At = r.now().UTC()
 	record.PendingTransition = nil
@@ -2284,6 +2359,7 @@ func cloneHandoffDraft(draft *HandoffDraft) *HandoffDraft {
 		draft.ValidationResults...,
 	)
 	cloned.UnresolvedIssues = cloneIssues(draft.UnresolvedIssues)
+	cloned.ResourceExtensionRequest = cloneResourceExtensionIntent(draft.ResourceExtensionRequest)
 	return &cloned
 }
 

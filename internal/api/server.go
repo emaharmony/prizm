@@ -183,13 +183,112 @@ type Server struct {
 	// maxWorkspaceFileBytes caps a single workspace file write. 0 → 4 MiB.
 	maxWorkspaceFileBytes int64
 
-	multiAgentRuns         multiagent.RunLocator
-	multiAgentController   MultiAgentController
-	definitionStore        *multiagent.DefinitionStore
-	workflowRunStarter     WorkflowRunStarter
-	freewillApprovals      FreewillApprovalController
-	freewillChildApprovals FreewillChildApprovalController
-	freewillControl        FreewillOperatorControlController
+	multiAgentRuns               multiagent.RunLocator
+	multiAgentController         MultiAgentController
+	definitionStore              *multiagent.DefinitionStore
+	workflowRunStarter           WorkflowRunStarter
+	freewillApprovals            FreewillApprovalController
+	freewillChildApprovals       FreewillChildApprovalController
+	freewillChildResources       FreewillChildResourceNegotiationController
+	freewillControl              FreewillOperatorControlController
+	freewillGoals                FreewillGoalProposalController
+	freewillStrategyExperiments  FreewillStrategyExperimentController
+	freewillDiaryAnnotations     FreewillDiaryAnnotationController
+	freewillDiaryConsent         FreewillDiaryConsentController
+	freewillRelationships        FreewillRelationshipController
+	freewillPreferenceChallenges FreewillPreferenceChallengeController
+	localDiaryPrincipalAuth      *LocalFreewillDiaryPrincipalAuth
+	localDiaryPrincipalAuthErr   error
+	freewillPromises             FreewillPromiseConfirmationController
+}
+
+type FreewillGoalProposal struct {
+	ProposalID string   `json:"proposal_id"`
+	OwnerID    string   `json:"owner_id"`
+	ProjectID  string   `json:"project_id"`
+	AgentID    string   `json:"agent_id"`
+	Hypothesis string   `json:"hypothesis"`
+	SourceIDs  []string `json:"source_ids"`
+	Provider   string   `json:"provider"`
+	Model      string   `json:"model"`
+	Confidence string   `json:"confidence"`
+}
+
+type FreewillGoalDecision struct {
+	DecisionID string `json:"decision_id"`
+	ProposalID string `json:"proposal_id"`
+	OwnerID    string `json:"owner_id"`
+	ProjectID  string `json:"project_id"`
+	AgentID    string `json:"agent_id"`
+	Decision   string `json:"decision"`
+	RecordedAt string `json:"recorded_at"`
+}
+
+type FreewillGoalStateRevision struct {
+	RecordID         string `json:"record_id"`
+	PreviousRecordID string `json:"previous_record_id,omitempty"`
+	Transition       string `json:"transition,omitempty"`
+	Revision         int    `json:"revision"`
+	State            string `json:"state"`
+	Reason           string `json:"reason,omitempty"`
+	RecordedAt       string `json:"recorded_at"`
+}
+
+type FreewillActiveGoal struct {
+	GoalID      string `json:"goal_id"`
+	ProposalID  string `json:"proposal_id"`
+	OwnerID     string `json:"owner_id"`
+	ProjectID   string `json:"project_id"`
+	WorkspaceID string `json:"workspace_id"`
+	AgentID     string `json:"agent_id"`
+	State       string `json:"state"`
+	Revision    int    `json:"revision"`
+}
+
+type FreewillGoalRecord struct {
+	Proposal    FreewillGoalProposal          `json:"proposal"`
+	Decision    *FreewillGoalDecision         `json:"decision,omitempty"`
+	Goal        *FreewillActiveGoal           `json:"goal,omitempty"`
+	GoalHistory []FreewillGoalStateRevision   `json:"goal_history,omitempty"`
+	Progress    []FreewillGoalProgress        `json:"progress,omitempty"`
+	Reviews     []FreewillGoalRelevanceReview `json:"relevance_reviews,omitempty"`
+}
+
+type FreewillGoalProgress struct {
+	RecordID        string `json:"record_id"`
+	RequestID       string `json:"request_id"`
+	GoalID          string `json:"goal_id"`
+	GoalRevision    int    `json:"goal_revision"`
+	ChildRunID      string `json:"child_run_id"`
+	ReceiptRef      string `json:"receipt_ref"`
+	ReceiptEventID  string `json:"receipt_event_id"`
+	ReportSHA256    string `json:"report_sha256"`
+	SelfReportRef   string `json:"self_report_ref"`
+	OwnerSelfReport string `json:"owner_self_report,omitempty"`
+	RecordedAt      string `json:"recorded_at"`
+}
+
+type FreewillGoalRelevanceReview struct {
+	RecordID         string   `json:"record_id"`
+	ProgressRecordID string   `json:"progress_record_id"`
+	PreviousReviewID string   `json:"previous_review_id,omitempty"`
+	Classification   string   `json:"classification"`
+	Reason           string   `json:"reason"`
+	Provider         string   `json:"provider"`
+	Model            string   `json:"model"`
+	Confidence       string   `json:"confidence"`
+	SourceIDs        []string `json:"source_ids"`
+	RecordedAt       string   `json:"recorded_at"`
+}
+
+type FreewillGoalProposalController interface {
+	Propose(contextctx.Context, string, string, string, []string) (FreewillGoalProposal, error)
+	Read(contextctx.Context, string, string, string, string) (FreewillGoalRecord, error)
+	Decide(contextctx.Context, string, string, string, string, string) (FreewillGoalDecision, error)
+	Activate(contextctx.Context, string, string, string, string) (FreewillGoalRecord, error)
+	Pause(contextctx.Context, string, string, string, string, string) (FreewillGoalRecord, error)
+	Resume(contextctx.Context, string, string, string, string, string) (FreewillGoalRecord, error)
+	CheckIn(contextctx.Context, string, string, string, string, int, string, string, string, string) (FreewillGoalRecord, error)
 }
 
 type FreewillApprovalController interface {
@@ -257,6 +356,30 @@ type FreewillChildApprovalController interface {
 	ListChildApprovals(contextctx.Context, string, string) ([]FreewillChildApproval, error)
 	ListChildApprovalHistory(contextctx.Context, string, string) ([]FreewillChildApprovalDecision, error)
 	DecideChildApproval(contextctx.Context, string, string, string, string, string, string) (FreewillChildApproval, error)
+}
+
+type FreewillChildResourceExtension struct {
+	ParentRunID        string    `json:"parent_run_id"`
+	ChildRunID         string    `json:"child_run_id"`
+	RequestID          string    `json:"request_id"`
+	Status             string    `json:"status"`
+	Reason             string    `json:"reason,omitempty"`
+	CurrentAllowance   int       `json:"current_allowance"`
+	RequestedIncrement int       `json:"requested_increment"`
+	HardCeiling        int       `json:"hard_ceiling"`
+	FromRole           string    `json:"from_role"`
+	NextRole           string    `json:"next_role"`
+	GrantGeneration    uint64    `json:"grant_generation"`
+	Generation         uint64    `json:"generation"`
+	CheckpointRevision int64     `json:"checkpoint_revision"`
+	Decision           string    `json:"decision,omitempty"`
+	Actor              string    `json:"actor,omitempty"`
+	DecidedAt          time.Time `json:"decided_at,omitempty"`
+}
+
+type FreewillChildResourceNegotiationController interface {
+	ListChildResourceExtensions(contextctx.Context, string, string) ([]FreewillChildResourceExtension, error)
+	DecideChildResourceExtension(contextctx.Context, string, string, string, int64, string, string, string) (FreewillChildResourceExtension, error)
 }
 
 type FreewillOperatorControlController interface {
@@ -343,13 +466,22 @@ type Config struct {
 	// RemClient is the Remembrance client for the memories API. Nil → Remembrance source disabled.
 	RemClient *remembrance.Client
 
-	MultiAgentRuns         multiagent.RunLocator
-	MultiAgentController   MultiAgentController
-	DefinitionStore        *multiagent.DefinitionStore
-	WorkflowRunStarter     WorkflowRunStarter
-	FreewillApprovals      FreewillApprovalController
-	FreewillChildApprovals FreewillChildApprovalController
-	FreewillControl        FreewillOperatorControlController
+	MultiAgentRuns               multiagent.RunLocator
+	MultiAgentController         MultiAgentController
+	DefinitionStore              *multiagent.DefinitionStore
+	WorkflowRunStarter           WorkflowRunStarter
+	FreewillApprovals            FreewillApprovalController
+	FreewillChildApprovals       FreewillChildApprovalController
+	FreewillChildResources       FreewillChildResourceNegotiationController
+	FreewillControl              FreewillOperatorControlController
+	FreewillGoals                FreewillGoalProposalController
+	FreewillStrategyExperiments  FreewillStrategyExperimentController
+	FreewillDiaryAnnotations     FreewillDiaryAnnotationController
+	FreewillDiaryConsent         FreewillDiaryConsentController
+	FreewillRelationships        FreewillRelationshipController
+	FreewillPreferenceChallenges FreewillPreferenceChallengeController
+	LocalDiaryPrincipalAuth      *LocalFreewillDiaryPrincipalAuth
+	FreewillPromises             FreewillPromiseConfirmationController
 }
 
 // AutoPatchStarter is the API surface needed from the autopatch service.
@@ -388,23 +520,37 @@ func NewServer(cfg Config) *Server {
 		invokeIdleTimeout:  cfg.InvokeIdleTimeout,
 		mux:                http.NewServeMux(),
 
-		maxRequestBytes:        cfg.MaxRequestBytes,
-		maxWorkspaceFileBytes:  cfg.MaxWorkspaceFileBytes,
-		memStore:               cfg.MemStore,
-		remClient:              cfg.RemClient,
-		ctxBuilder:             cfg.CtxBuilder,
-		memStoreForInvoke:      cfg.MemStoreForInvoke,
-		memInjectorForInvoke:   cfg.MemInjectorForInvoke,
-		coreIdentityForInject:  cfg.CoreIdentityForInvoke,
-		toolRegForInvoke:       cfg.ToolRegForInvoke,
-		toolExecForInvoke:      cfg.ToolExecForInvoke,
-		multiAgentRuns:         cfg.MultiAgentRuns,
-		multiAgentController:   cfg.MultiAgentController,
-		definitionStore:        cfg.DefinitionStore,
-		workflowRunStarter:     cfg.WorkflowRunStarter,
-		freewillApprovals:      cfg.FreewillApprovals,
-		freewillChildApprovals: cfg.FreewillChildApprovals,
-		freewillControl:        cfg.FreewillControl,
+		maxRequestBytes:              cfg.MaxRequestBytes,
+		maxWorkspaceFileBytes:        cfg.MaxWorkspaceFileBytes,
+		memStore:                     cfg.MemStore,
+		remClient:                    cfg.RemClient,
+		ctxBuilder:                   cfg.CtxBuilder,
+		memStoreForInvoke:            cfg.MemStoreForInvoke,
+		memInjectorForInvoke:         cfg.MemInjectorForInvoke,
+		coreIdentityForInject:        cfg.CoreIdentityForInvoke,
+		toolRegForInvoke:             cfg.ToolRegForInvoke,
+		toolExecForInvoke:            cfg.ToolExecForInvoke,
+		multiAgentRuns:               cfg.MultiAgentRuns,
+		multiAgentController:         cfg.MultiAgentController,
+		definitionStore:              cfg.DefinitionStore,
+		workflowRunStarter:           cfg.WorkflowRunStarter,
+		freewillApprovals:            cfg.FreewillApprovals,
+		freewillChildApprovals:       cfg.FreewillChildApprovals,
+		freewillChildResources:       cfg.FreewillChildResources,
+		freewillControl:              cfg.FreewillControl,
+		freewillGoals:                cfg.FreewillGoals,
+		freewillStrategyExperiments:  cfg.FreewillStrategyExperiments,
+		freewillDiaryAnnotations:     cfg.FreewillDiaryAnnotations,
+		freewillDiaryConsent:         cfg.FreewillDiaryConsent,
+		freewillRelationships:        cfg.FreewillRelationships,
+		freewillPreferenceChallenges: cfg.FreewillPreferenceChallenges,
+		freewillPromises:             cfg.FreewillPromises,
+	}
+	if cfg.LocalDiaryPrincipalAuth != nil && cfg.LocalDiaryPrincipalAuth.Enabled {
+		principalAuth := *cfg.LocalDiaryPrincipalAuth
+		principalAuth.Credentials = append([]LocalFreewillDiaryPrincipalCredential(nil), cfg.LocalDiaryPrincipalAuth.Credentials...)
+		s.localDiaryPrincipalAuth = &principalAuth
+		s.localDiaryPrincipalAuthErr = validateLocalDiaryPrincipalAuth(cfg.Addr, cfg.AuthToken, principalAuth, cfg.FreewillDiaryAnnotations, cfg.FreewillDiaryConsent)
 	}
 	if s.maxRequestBytes <= 0 {
 		s.maxRequestBytes = 1 << 20 // 1 MiB
@@ -417,6 +563,17 @@ func NewServer(cfg Config) *Server {
 	}
 	s.routes()
 	return s
+}
+
+// NewServerChecked creates a server and fails if opt-in local diary principal
+// configuration is invalid. Existing callers may keep using NewServer when
+// they do not enable that mode.
+func NewServerChecked(cfg Config) (*Server, error) {
+	s := NewServer(cfg)
+	if s.localDiaryPrincipalAuthErr != nil {
+		return nil, fmt.Errorf("api: local Freewill diary principal authentication is invalid: %w", s.localDiaryPrincipalAuthErr)
+	}
+	return s, nil
 }
 
 // routes registers all API endpoints.
@@ -434,6 +591,15 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/v1/freewill/runs", s.handleFreewillApproval)
 	s.mux.HandleFunc("/api/v1/freewill/runs/", s.handleFreewillApproval)
 	s.mux.HandleFunc("/api/v1/freewill/control", s.handleFreewillControl)
+	s.mux.HandleFunc("/api/v1/freewill/goals/", s.handleFreewillGoals)
+	s.mux.HandleFunc("/api/v1/freewill/strategy-experiments/", s.handleFreewillStrategyExperiments)
+	s.mux.HandleFunc("/api/v1/freewill/diary/entries/", s.handleFreewillDiaryAnnotations)
+	s.mux.HandleFunc("/api/v1/freewill/diary/shares", s.handleFreewillDiaryShareCollection)
+	s.mux.HandleFunc("/api/v1/freewill/diary/shares/", s.handleFreewillDiaryShare)
+	s.mux.HandleFunc("/api/v1/freewill/relationships", s.handleFreewillRelationshipCollection)
+	s.mux.HandleFunc("/api/v1/freewill/relationships/", s.handleFreewillRelationship)
+	s.mux.HandleFunc("/api/v1/freewill/preferences/", s.handleFreewillPreferenceChallenges)
+	s.mux.HandleFunc("/api/v1/freewill/promises/", s.handleFreewillPromiseConfirmation)
 	s.mux.HandleFunc("/api/v1/events/stream", s.handleEventStream)
 	s.mux.HandleFunc("/api/v1/workflows", s.handleWorkflows)
 	s.mux.HandleFunc("/api/v1/workflows/start", s.handleWorkflowStart)
@@ -485,6 +651,9 @@ func (s *Server) routes() {
 
 // Start starts the API server with timeouts and panic recovery.
 func (s *Server) Start() error {
+	if s.localDiaryPrincipalAuthErr != nil {
+		return fmt.Errorf("api: local Freewill diary principal authentication is invalid: %w", s.localDiaryPrincipalAuthErr)
+	}
 	defer s.resumeStop()
 	log.Printf("[API] starting on %s", s.addr)
 
@@ -556,6 +725,29 @@ func (s *Server) originAllowed(origin string) bool {
 // is configured. When no token is set it is a no-op (loopback-only mode).
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.localDiaryPrincipalAuth != nil && isFreewillPrincipalBoundAPIPath(r.URL.Path) {
+			// The consent audit begins after a synthetic principal resolves. An
+			// unknown credential has no stable actor ID, and its value is never logged.
+			if s.localDiaryPrincipalAuthErr != nil {
+				writeJSONError(w, "local Freewill diary principal authentication is unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			principalID, ok := s.localFreewillDiaryPrincipal(r)
+			if !ok {
+				writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			r = r.WithContext(contextctx.WithValue(r.Context(), freewillDiaryPrincipalContextKey{}, principalID))
+			if _, hasQueryToken := r.URL.Query()["token"]; hasQueryToken {
+				if isFreewillDiaryAPIPath(r.URL.Path) && !s.requireDiaryAudit(w, r, "auth.query_token", "", diaryRouteEntryID(r.URL.Path), 0, "denied") {
+					return
+				}
+				writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
 		if s.authToken != "" && requiresAuth(r) && !s.authorized(r) {
 			writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -565,8 +757,8 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 }
 
 // requiresAuth reports whether a request targets a protected operation: any
-// state-changing method, sensitive Freewill status, or the SSE event stream
-// (which can expose all bus traffic). Other read-only GETs remain open.
+// state-changing method, sensitive Freewill status or evidence, or the SSE
+// event stream (which can expose all bus traffic). Other read-only GETs remain open.
 func requiresAuth(r *http.Request) bool {
 	switch r.Method {
 	case http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch:
@@ -575,6 +767,11 @@ func requiresAuth(r *http.Request) bool {
 	return r.URL.Path == "/api/v1/events/stream" || r.URL.Path == "/api/v1/freewill/control" ||
 		r.URL.Path == "/api/v1/freewill/runs" || r.URL.Path == "/api/v1/freewill/runs/" ||
 		strings.HasPrefix(r.URL.Path, "/api/v1/freewill/runs/") ||
+		strings.HasPrefix(r.URL.Path, "/api/v1/freewill/strategy-experiments/") ||
+		(r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/freewill/preferences/")) ||
+		isFreewillDiaryAPIPath(r.URL.Path) ||
+		strings.HasPrefix(r.URL.Path, "/api/v1/freewill/goals/") ||
+		strings.HasPrefix(r.URL.Path, "/api/v1/freewill/promises/") ||
 		(strings.HasPrefix(r.URL.Path, "/api/v1/multiagent/runs/") &&
 			(strings.HasSuffix(r.URL.Path, "/events/stream") ||
 				(r.Method == http.MethodGet && (strings.HasSuffix(r.URL.Path, "/report") || isMultiAgentProposalReadPath(r.URL.Path)))))

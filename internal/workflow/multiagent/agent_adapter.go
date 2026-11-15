@@ -483,6 +483,9 @@ func buildRolePromptForProposalTool(request RoleRunRequest, proposalTool string)
 			prompt += "\n\nDEVELOPER TOOL PROTOCOL: Before returning the developer role-schema JSON, emit exactly one separate JSON tool_request for apply_patch_proposal. Its input must contain the complete unified diff in patch and the exact observed git HEAD in base_sha. Do not combine the tool request with the role-schema JSON. After Prizm returns the tool result, return only the developer role-schema JSON."
 		}
 	}
+	if request.ResourceExtensionEnabled {
+		prompt += fmt.Sprintf("\n\nRESOURCE NEGOTIATION: The host-fixed transition allowance is %d. Your current role consumes one unit. If this is the last allowed role and more work is needed, you may include `handoff.resource_extension_request` with a short `reason`. This requests only an owner decision; it does not change the allowance, authorize the next role, or grant tools. Omit it when no extension is needed.", request.ResourceTransitionsAllowance)
+	}
 	if feedback := boundedRecoveryFeedback(request.RecoveryFeedback); feedback != "" {
 		prompt += "\n\nRECOVERY CORRECTION: " + feedback
 	}

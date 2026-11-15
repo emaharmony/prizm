@@ -7,18 +7,20 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode"
 )
 
 const roleOutputSchemaVersion = 1
 
 // OutputHandoff is role-produced context without routing fields.
 type OutputHandoff struct {
-	Objective        string        `json:"objective"`
-	Reason           string        `json:"reason"`
-	Summary          string        `json:"summary,omitempty"`
-	Evidence         []ArtifactRef `json:"evidence,omitempty"`
-	UnresolvedIssues []Issue       `json:"unresolved_issues,omitempty"`
-	Notes            string        `json:"notes,omitempty"`
+	Objective                string                   `json:"objective"`
+	Reason                   string                   `json:"reason"`
+	Summary                  string                   `json:"summary,omitempty"`
+	Evidence                 []ArtifactRef            `json:"evidence,omitempty"`
+	UnresolvedIssues         []Issue                  `json:"unresolved_issues,omitempty"`
+	Notes                    string                   `json:"notes,omitempty"`
+	ResourceExtensionRequest *ResourceExtensionIntent `json:"resource_extension_request,omitempty"`
 }
 
 // UnmarshalJSON accepts a concise summary string as well as the strict object
@@ -53,6 +55,17 @@ func (h *OutputHandoff) UnmarshalJSON(data []byte) error {
 	}
 	if strings.TrimSpace(decoded.Reason) == "" && strings.TrimSpace(decoded.Summary) != "" {
 		decoded.Reason = "role handoff summary"
+	}
+	if intent := decoded.ResourceExtensionRequest; intent != nil {
+		intent.Reason = strings.TrimSpace(intent.Reason)
+		if intent.Reason == "" || len(intent.Reason) > 256 || strings.ContainsAny(intent.Reason, "\r\n\x00") {
+			return errors.New("resource_extension_request.reason must be bounded single-line text")
+		}
+		for _, r := range intent.Reason {
+			if unicode.IsControl(r) {
+				return errors.New("resource_extension_request.reason must be bounded single-line text")
+			}
+		}
 	}
 	*h = OutputHandoff(decoded)
 	return nil
@@ -538,13 +551,22 @@ func handoffFromOutput(output OutputHandoff, artifacts []ArtifactRef) *HandoffDr
 		notes = output.Summary
 	}
 	return &HandoffDraft{
-		Objective:        output.Objective,
-		Reason:           output.Reason,
-		Artifacts:        cloneArtifactRefs(artifacts),
-		Evidence:         cloneArtifactRefs(output.Evidence),
-		UnresolvedIssues: cloneIssues(output.UnresolvedIssues),
-		Notes:            notes,
+		Objective:                output.Objective,
+		Reason:                   output.Reason,
+		Artifacts:                cloneArtifactRefs(artifacts),
+		Evidence:                 cloneArtifactRefs(output.Evidence),
+		UnresolvedIssues:         cloneIssues(output.UnresolvedIssues),
+		Notes:                    notes,
+		ResourceExtensionRequest: cloneResourceExtensionIntent(output.ResourceExtensionRequest),
 	}
+}
+
+func cloneResourceExtensionIntent(intent *ResourceExtensionIntent) *ResourceExtensionIntent {
+	if intent == nil {
+		return nil
+	}
+	cloned := *intent
+	return &cloned
 }
 
 func structuredError(role Role, err error) error {

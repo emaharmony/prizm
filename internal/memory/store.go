@@ -4,6 +4,10 @@ package memory
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -14,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -87,6 +92,542 @@ func (s *MarkdownStore) dateMu(t time.Time) *sync.Mutex {
 	return val.(*sync.Mutex)
 }
 
+func (s *MarkdownStore) withStoreLock(fn func(string) error) error {
+	dir := s.memDir()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create memory dir: %w", err)
+	}
+	lock := flock.New(filepath.Join(dir, ".memory-store.lock"))
+	if err := lock.Lock(); err != nil {
+		return fmt.Errorf("lock memory store: %w", err)
+	}
+	defer lock.Unlock()
+	return fn(dir)
+}
+
+const redactedIDsFile = ".redacted-memory-ids.json"
+
+type memoryRedactionLedger struct {
+	IDs     map[string]bool              `json:"ids"`
+	Scopes  []memoryRedactedScope        `json:"scopes,omitempty"`
+	Records []memoryScopedRedactedRecord `json:"records,omitempty"`
+}
+
+type memoryRedactedScope struct {
+	Scope   Scope            `json:"scope"`
+	Records []MemoryIdentity `json:"records,omitempty"`
+}
+
+// memoryScopedRedactedRecord masks one record identity without withdrawing or
+// blocking writes to its containing scope. The ID remains blocked in that
+// scope after compaction so a deterministic capture cannot restore the body.
+type memoryScopedRedactedRecord struct {
+	Scope  Scope          `json:"scope"`
+	Record MemoryIdentity `json:"record"`
+}
+
+// MemoryIdentity names one stored record without copying its body into the
+// redaction ledger. Source/category and a content+summary digest prevent a
+// duplicate ID in another record from being erased by a scoped request.
+type MemoryIdentity struct {
+	ID       string `json:"id"`
+	Source   string `json:"source"`
+	Category string `json:"category"`
+	Digest   string `json:"digest"`
+}
+
+func IdentityOf(mem Memory) MemoryIdentity {
+	encoded, _ := json.Marshal([2]string{mem.Content, mem.Summary})
+	digest := sha256.Sum256(encoded)
+	return MemoryIdentity{ID: mem.ID, Source: mem.Source, Category: mem.Category, Digest: hex.EncodeToString(digest[:])}
+}
+
+func identityMatches(mem Memory, identity MemoryIdentity) bool {
+	return mem.ID == identity.ID && mem.Source == identity.Source && mem.Category == identity.Category && IdentityOf(mem).Digest == identity.Digest
+}
+
+func readRedactionLedger(dir string) (memoryRedactionLedger, error) {
+	ledger := memoryRedactionLedger{}
+	b, err := os.ReadFile(filepath.Join(dir, redactedIDsFile))
+	if os.IsNotExist(err) {
+		return memoryRedactionLedger{IDs: map[string]bool{}}, nil
+	}
+	if err != nil {
+		return ledger, err
+	}
+	if err := json.Unmarshal(b, &ledger); err == nil && ledger.IDs != nil {
+		return ledger, nil
+	}
+	legacy := map[string]bool{}
+	if err := json.Unmarshal(b, &legacy); err != nil || legacy == nil {
+		return memoryRedactionLedger{}, errors.New("memory redaction ledger is invalid")
+	}
+	return memoryRedactionLedger{IDs: legacy}, nil
+}
+
+func writeJSONAtomic(path string, value any) error {
+	dir := filepath.Dir(path)
+	b, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".memory-redaction-*.tmp")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err = tmp.Write(append(b, '\n')); err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(name, path)
+}
+
+// EraseIDs durably masks and then physically removes only the supplied memory
+// IDs. The ID-only ledger is retained to prevent resurrection after retries.
+// A returned error means cleanup is pending; reads remain masked.
+func (s *MarkdownStore) EraseIDs(ctx context.Context, ids []string) (int, error) {
+	return s.eraseIDs(ctx, ids)
+}
+
+// EraseScopedIDs durably blocks writes and reads in the exact scope while
+// erasing the supplied IDs. The scope and IDs are stored together so a crash
+// before file compaction still fails closed after reopen.
+func (s *MarkdownStore) EraseScopedRecords(ctx context.Context, scope Scope, records []MemoryIdentity) (int, error) {
+	if err := scope.Validate(); err != nil {
+		return 0, err
+	}
+	return s.eraseScopedRecords(ctx, scope, records, true)
+}
+
+// RedactScopedRecords durably masks and removes exact records in one scope,
+// without making withdrawal permanent for that scope. A redacted deterministic
+// record ID cannot be written again, while new IDs in the scope remain valid.
+func (s *MarkdownStore) RedactScopedRecords(ctx context.Context, scope Scope, records []MemoryIdentity) (int, error) {
+	if err := scope.Validate(); err != nil {
+		return 0, err
+	}
+	return s.eraseScopedRecords(ctx, scope, records, false)
+}
+
+func (s *MarkdownStore) ErasedRecordsForScope(ctx context.Context, scope Scope) ([]MemoryIdentity, error) {
+	if err := scope.Validate(); err != nil {
+		return nil, err
+	}
+	var records []MemoryIdentity
+	err := s.withStoreLock(func(dir string) error {
+		ledger, err := readRedactionLedger(dir)
+		if err != nil {
+			return err
+		}
+		for _, candidate := range ledger.Scopes {
+			if redactionScopeMatches(candidate.Scope, scope) {
+				records = append(records, candidate.Records...)
+			}
+		}
+		for _, candidate := range ledger.Records {
+			if redactionScopeMatches(candidate.Scope, scope) {
+				records = append(records, candidate.Record)
+			}
+		}
+		sort.Slice(records, func(i, j int) bool { return records[i].ID < records[j].ID })
+		return nil
+	})
+	return records, err
+}
+
+func (s *MarkdownStore) ScopeErased(ctx context.Context, scope Scope) (bool, error) {
+	if err := scope.Validate(); err != nil {
+		return false, err
+	}
+	var erased bool
+	err := s.withStoreLock(func(dir string) error {
+		ledger, err := readRedactionLedger(dir)
+		if err != nil {
+			return err
+		}
+		erased = scopeErased(ledger, scope)
+		return nil
+	})
+	return erased, err
+}
+
+// ListScopedRecords returns every physically stored row in one exact memory
+// scope without ID deduplication or tombstone filtering. Erasure selectors use
+// this for exact allowlist selection and post-compaction verification.
+func (s *MarkdownStore) ListScopedRecords(ctx context.Context, scope Scope) ([]Memory, error) {
+	if err := scope.Validate(); err != nil {
+		return nil, err
+	}
+	var result []Memory
+	err := s.withStoreLock(func(dir string) error {
+		rows, err := readAllMemoryRows(dir)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			if memoryMatchesScope(row, scope) {
+				result = append(result, row)
+			}
+		}
+		return nil
+	})
+	return result, err
+}
+
+func scopeErased(ledger memoryRedactionLedger, scope Scope) bool {
+	for _, candidate := range ledger.Scopes {
+		if redactionScopeMatches(candidate.Scope, scope) {
+			return true
+		}
+	}
+	return false
+}
+
+func memoryScopeErased(ledger memoryRedactionLedger, mem Memory) bool {
+	for _, candidate := range ledger.Scopes {
+		if memoryMatchesScope(mem, candidate.Scope) {
+			return true
+		}
+	}
+	return false
+}
+
+func redactionScopeMatches(a, b Scope) bool {
+	return a.UserID == b.UserID && a.IncludeUserScope == b.IncludeUserScope && a.ProjectID == b.ProjectID && a.TaskID == b.TaskID && a.AgentID == b.AgentID && a.CorrelationID == b.CorrelationID
+}
+
+func memoryMatchesScope(mem Memory, scope Scope) bool {
+	return mem.UserID == scope.UserID && mem.ProjectID == scope.ProjectID && mem.TaskID == scope.TaskID && mem.AgentID == scope.AgentID
+}
+
+func memoryRedacted(mem Memory, ledger memoryRedactionLedger) bool {
+	if ledger.IDs[mem.ID] {
+		return true
+	}
+	for _, scope := range ledger.Scopes {
+		if memoryMatchesScope(mem, scope.Scope) {
+			for _, record := range scope.Records {
+				if identityMatches(mem, record) {
+					return true
+				}
+			}
+		}
+	}
+	for _, candidate := range ledger.Records {
+		if memoryMatchesScope(mem, candidate.Scope) && mem.ID == candidate.Record.ID {
+			return true
+		}
+	}
+	return false
+}
+
+func memoryPhysicallyRedacted(mem Memory, ledger memoryRedactionLedger) bool {
+	if ledger.IDs[mem.ID] {
+		return true
+	}
+	for _, scope := range ledger.Scopes {
+		if memoryMatchesScope(mem, scope.Scope) {
+			for _, record := range scope.Records {
+				if identityMatches(mem, record) {
+					return true
+				}
+			}
+		}
+	}
+	for _, candidate := range ledger.Records {
+		if memoryMatchesScope(mem, candidate.Scope) && identityMatches(mem, candidate.Record) {
+			return true
+		}
+	}
+	return false
+}
+
+func memoryWriteBlocked(mem Memory, ledger memoryRedactionLedger) bool {
+	if ledger.IDs[mem.ID] {
+		return true
+	}
+	if memoryScopeErased(ledger, mem) {
+		return true
+	}
+	for _, candidate := range ledger.Records {
+		if memoryMatchesScope(mem, candidate.Scope) && mem.ID == candidate.Record.ID {
+			return true
+		}
+	}
+	return false
+}
+
+func readAllMemoryRows(dir string) ([]Memory, error) {
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var rows []Memory
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
+			continue
+		}
+		parsed, err := parseMemoryFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, parsed...)
+	}
+	return rows, nil
+}
+
+func (s *MarkdownStore) eraseIDs(ctx context.Context, ids []string) (int, error) {
+	requested := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if strings.TrimSpace(id) == "" || id != strings.TrimSpace(id) {
+			return 0, errors.New("memory erasure contains invalid ID")
+		}
+		requested[id] = true
+	}
+	removed := 0
+	err := s.withStoreLock(func(dir string) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		ledger, err := readRedactionLedger(dir)
+		if err != nil {
+			return err
+		}
+		for id := range requested {
+			ledger.IDs[id] = true
+		}
+		if err := writeJSONAtomic(filepath.Join(dir, redactedIDsFile), ledger); err != nil {
+			return fmt.Errorf("persist memory erasure marker: %w", err)
+		}
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		for _, file := range files {
+			if file.IsDir() || !strings.HasSuffix(file.Name(), ".md") {
+				continue
+			}
+			path := filepath.Join(dir, file.Name())
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			globalRedactions := memoryRedactionLedger{IDs: ledger.IDs}
+			updated, count, err := eraseMarkdownRecords(string(data), globalRedactions)
+			if err != nil {
+				return err
+			}
+			if count == 0 {
+				continue
+			}
+			if err := writeTextAtomic(path, updated); err != nil {
+				return fmt.Errorf("rewrite memory file: %w", err)
+			}
+			removed += count
+		}
+		if s.embIdx != nil {
+			if err := s.embIdx.DeleteIDs(ledger.IDs); err != nil {
+				return fmt.Errorf("memory embedding cleanup pending: %w", err)
+			}
+		}
+		return nil
+	})
+	return removed, err
+}
+
+func (s *MarkdownStore) eraseScopedRecords(ctx context.Context, scope Scope, records []MemoryIdentity, blockScopeWrites bool) (int, error) {
+	for _, record := range records {
+		if strings.TrimSpace(record.ID) == "" || record.Digest == "" {
+			return 0, errors.New("memory erasure contains invalid record identity")
+		}
+	}
+	removed := 0
+	err := s.withStoreLock(func(dir string) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		ledger, err := readRedactionLedger(dir)
+		if err != nil {
+			return err
+		}
+		if blockScopeWrites {
+			found := false
+			for i := range ledger.Scopes {
+				if redactionScopeMatches(ledger.Scopes[i].Scope, scope) {
+					found = true
+					for _, record := range records {
+						if !containsMemoryIdentity(ledger.Scopes[i].Records, record) {
+							ledger.Scopes[i].Records = append(ledger.Scopes[i].Records, record)
+						}
+					}
+				}
+			}
+			if !found {
+				ledger.Scopes = append(ledger.Scopes, memoryRedactedScope{Scope: scope, Records: append([]MemoryIdentity(nil), records...)})
+			}
+		} else {
+			for _, record := range records {
+				found := false
+				for _, candidate := range ledger.Records {
+					if redactionScopeMatches(candidate.Scope, scope) && candidate.Record.ID == record.ID {
+						if candidate.Record != record {
+							return errors.New("memory redaction identity changed for retained ID")
+						}
+						found = true
+						break
+					}
+				}
+				if !found {
+					ledger.Records = append(ledger.Records, memoryScopedRedactedRecord{Scope: scope, Record: record})
+				}
+			}
+		}
+		if err := writeJSONAtomic(filepath.Join(dir, redactedIDsFile), ledger); err != nil {
+			return fmt.Errorf("persist memory erasure marker: %w", err)
+		}
+		targetIDs := map[string]bool{}
+		for _, record := range records {
+			targetIDs[record.ID] = true
+		}
+		allRows, err := readAllMemoryRows(dir)
+		if err != nil {
+			return fmt.Errorf("memory erasure pending collision scan: %w", err)
+		}
+		collisionIDs := map[string]bool{}
+		for _, row := range allRows {
+			if !targetIDs[row.ID] {
+				continue
+			}
+			target := false
+			for _, record := range records {
+				if memoryMatchesScope(row, scope) && identityMatches(row, record) {
+					target = true
+				}
+			}
+			if !target {
+				collisionIDs[row.ID] = true
+			}
+		}
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		for _, file := range files {
+			if file.IsDir() || filepath.Ext(file.Name()) != ".md" {
+				continue
+			}
+			path := filepath.Join(dir, file.Name())
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			updated, count, err := eraseMarkdownRecords(string(data), ledger)
+			if err != nil {
+				return err
+			}
+			if count == 0 {
+				continue
+			}
+			if err := writeTextAtomic(path, updated); err != nil {
+				return fmt.Errorf("rewrite memory file: %w", err)
+			}
+			removed += count
+		}
+		if s.embIdx != nil {
+			indexIDs := make(map[string]bool, len(ledger.IDs))
+			for id := range ledger.IDs {
+				indexIDs[id] = true
+			}
+			for _, record := range records {
+				if !collisionIDs[record.ID] {
+					indexIDs[record.ID] = true
+				}
+			}
+			if err := s.embIdx.DeleteIDs(indexIDs); err != nil {
+				return fmt.Errorf("memory embedding cleanup pending: %w", err)
+			}
+		}
+		if len(collisionIDs) > 0 && (!blockScopeWrites || s.embIdx != nil) {
+			return errors.New("memory scoped erasure pending: erased ID is shared with another record")
+		}
+		return nil
+	})
+	return removed, err
+}
+
+func containsMemoryIdentity(records []MemoryIdentity, wanted MemoryIdentity) bool {
+	for _, record := range records {
+		if record == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func eraseMarkdownRecords(contents string, ledger memoryRedactionLedger) (string, int, error) {
+	lines := strings.SplitAfter(contents, "\n")
+	var out strings.Builder
+	removed := 0
+	var section strings.Builder
+	flush := func() {
+		if section.Len() == 0 {
+			return
+		}
+		rows := parseStructured(section.String(), time.Time{})
+		if len(rows) == 1 && memoryPhysicallyRedacted(rows[0], ledger) {
+			removed++
+		} else {
+			out.WriteString(section.String())
+		}
+		section.Reset()
+	}
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r"), "### ") {
+			flush()
+			section.WriteString(line)
+		} else if section.Len() > 0 {
+			section.WriteString(line)
+		} else {
+			out.WriteString(line)
+		}
+	}
+	flush()
+	return out.String(), removed, nil
+}
+
+func writeTextAtomic(path, contents string) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".memory-rewrite-*.tmp")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err = tmp.WriteString(contents); err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(name, path)
+}
+
 // Store appends a memory to today's markdown file.
 func (s *MarkdownStore) Store(ctx context.Context, mem Memory) (string, error) {
 	if mem.ID == "" {
@@ -105,6 +646,27 @@ func (s *MarkdownStore) Store(ctx context.Context, mem Memory) (string, error) {
 		mem.Tier = "active"
 	}
 
+	var storeErr error
+	err := s.withStoreLock(func(dir string) error {
+		ledger, err := readRedactionLedger(dir)
+		if err != nil {
+			return err
+		}
+		if memoryWriteBlocked(mem, ledger) {
+			return errors.New("memory scope or ID was erased and cannot be restored")
+		}
+		return s.storeUnlocked(mem)
+	})
+	if err != nil {
+		storeErr = err
+	}
+	if storeErr != nil {
+		return "", storeErr
+	}
+	return mem.ID, nil
+}
+
+func (s *MarkdownStore) storeUnlocked(mem Memory) error {
 	path := s.datePath(mem.CreatedAt)
 	mu := s.dateMu(mem.CreatedAt)
 	mu.Lock()
@@ -112,27 +674,41 @@ func (s *MarkdownStore) Store(ctx context.Context, mem Memory) (string, error) {
 
 	// Ensure directory exists
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return "", fmt.Errorf("create memory dir: %w", err)
+		return fmt.Errorf("create memory dir: %w", err)
 	}
 
 	// Append to file
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		return "", fmt.Errorf("open memory file: %w", err)
+		return fmt.Errorf("open memory file: %w", err)
 	}
 	defer f.Close()
 
 	entry := formatMemoryEntry(mem)
 	if _, err := f.WriteString("\n" + entry + "\n"); err != nil {
-		return "", fmt.Errorf("write memory entry: %w", err)
+		return fmt.Errorf("write memory entry: %w", err)
 	}
-
-	return mem.ID, nil
+	return nil
 }
 
 // Get retrieves a memory by ID prefix match in markdown files.
 func (s *MarkdownStore) Get(ctx context.Context, id string) (*Memory, error) {
-	memDir := s.memDir()
+	var result *Memory
+	err := s.withStoreLock(func(dir string) error {
+		ledger, err := readRedactionLedger(dir)
+		if err != nil {
+			return err
+		}
+		if ledger.IDs[id] {
+			return nil
+		}
+		result, err = s.getUnlocked(dir, id, ledger)
+		return err
+	})
+	return result, err
+}
+
+func (s *MarkdownStore) getUnlocked(memDir, id string, ledger memoryRedactionLedger) (*Memory, error) {
 	entries, err := os.ReadDir(memDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -151,7 +727,7 @@ func (s *MarkdownStore) Get(ctx context.Context, id string) (*Memory, error) {
 			continue
 		}
 		for _, m := range memories {
-			if strings.HasPrefix(m.ID, id) || m.ID == id {
+			if (strings.HasPrefix(m.ID, id) || m.ID == id) && !memoryRedacted(m, ledger) {
 				return &m, nil
 			}
 		}
@@ -163,7 +739,19 @@ func (s *MarkdownStore) Get(ctx context.Context, id string) (*Memory, error) {
 // V84: Deduplicates by ID (keeps first occurrence), filters out junk entries
 // (dream candidates, raw conversation dumps), and caps content size.
 func (s *MarkdownStore) ListRecent(ctx context.Context, limit int) ([]Memory, error) {
-	memDir := s.memDir()
+	var result []Memory
+	err := s.withStoreLock(func(memDir string) error {
+		ledger, err := readRedactionLedger(memDir)
+		if err != nil {
+			return err
+		}
+		result, err = s.listRecentUnlocked(memDir, limit, ledger)
+		return err
+	})
+	return result, err
+}
+
+func (s *MarkdownStore) listRecentUnlocked(memDir string, limit int, ledger memoryRedactionLedger) ([]Memory, error) {
 	entries, err := os.ReadDir(memDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -198,6 +786,9 @@ func (s *MarkdownStore) ListRecent(ctx context.Context, limit int) ([]Memory, er
 	seen := make(map[string]bool)
 	deduped := make([]Memory, 0, len(all))
 	for _, m := range all {
+		if memoryRedacted(m, ledger) {
+			continue
+		}
 		if !seen[m.ID] {
 			seen[m.ID] = true
 			deduped = append(deduped, m)
@@ -408,10 +999,27 @@ func recencyMultiplier(createdAt time.Time) float64 {
 
 // Search performs hybrid BM25 + embedding search with RRF fusion.
 func (s *MarkdownStore) Search(ctx context.Context, query string, limit int) ([]Memory, error) {
-	all, err := s.ListRecent(ctx, 0) // get all (deduped and junk-filtered)
-	if err != nil {
-		return nil, err
+	var embeddingResults []EmbeddingSearchResult
+	if s.embIdx != nil && query != "" {
+		embeddingResults = s.embIdx.Search(ctx, query, limit*3)
 	}
+	var result []Memory
+	err := s.withStoreLock(func(dir string) error {
+		ledger, err := readRedactionLedger(dir)
+		if err != nil {
+			return err
+		}
+		all, err := s.listRecentUnlocked(dir, 0, ledger)
+		if err != nil {
+			return err
+		}
+		result, err = s.searchRecent(query, limit, all, embeddingResults)
+		return err
+	})
+	return result, err
+}
+
+func (s *MarkdownStore) searchRecent(query string, limit int, all []Memory, embRaw []EmbeddingSearchResult) ([]Memory, error) {
 
 	if query == "" {
 		if limit > 0 && len(all) > limit {
@@ -450,7 +1058,6 @@ func (s *MarkdownStore) Search(ctx context.Context, query string, limit int) ([]
 	var embeddingResults []Memory
 	if s.embIdx != nil {
 		// Get more candidates than needed for RRF fusion
-		embRaw := s.embIdx.Search(ctx, query, limit*3)
 		idMap := make(map[string]Memory)
 		for _, m := range all {
 			idMap[m.ID] = m
@@ -512,21 +1119,35 @@ func (s *MarkdownStore) SetEmbeddingIndex(idx *EmbeddingIndex) {
 // Returns memories sorted by cosine similarity to the query.
 // Returns nil if embeddings are unavailable.
 func (s *MarkdownStore) EmbeddingSearch(ctx context.Context, query string, limit int) ([]Memory, error) {
+	var embeddingResults []EmbeddingSearchResult
+	if s.embIdx != nil {
+		embeddingResults = s.embIdx.Search(ctx, query, limit*2)
+	}
+	var result []Memory
+	err := s.withStoreLock(func(dir string) error {
+		ledger, err := readRedactionLedger(dir)
+		if err != nil {
+			return err
+		}
+		all, err := s.listRecentUnlocked(dir, 0, ledger)
+		if err != nil {
+			return err
+		}
+		result, err = s.embeddingSearchRecent(query, limit, all, embeddingResults)
+		return err
+	})
+	return result, err
+}
+
+func (s *MarkdownStore) embeddingSearchRecent(query string, limit int, all []Memory, results []EmbeddingSearchResult) ([]Memory, error) {
 	if s.embIdx == nil {
 		return nil, nil
 	}
-
-	results := s.embIdx.Search(ctx, query, limit*2) // get 2x for re-ranking
 	if len(results) == 0 {
 		return nil, nil
 	}
 
 	// Look up full Memory objects by ID
-	all, err := s.ListRecent(ctx, 0) // get all
-	if err != nil {
-		return nil, err
-	}
-
 	idMap := make(map[string]Memory)
 	for _, m := range all {
 		idMap[m.ID] = m

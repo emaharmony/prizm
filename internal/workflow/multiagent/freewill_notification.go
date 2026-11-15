@@ -27,6 +27,7 @@ var FreewillNotifyWorthyEventTypes = []string{
 	event.EventFreewillExecutionCompleted,
 	event.EventFreewillExecutionFailed,
 	event.EventFreewillExecutionCancelled,
+	event.EventFreewillExecutionRecoveryUncertain,
 }
 
 func freewillNotifyWorthy(t string) bool {

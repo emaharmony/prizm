@@ -1,6 +1,42 @@
 package orchestrator
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+)
+
+func TestLocalDiaryPrincipalAuthConfigYAMLIsDefaultOffAndRedactedFromJSON(t *testing.T) {
+	var disabled struct {
+		API APIServerConfig `yaml:"api"`
+	}
+	if err := yaml.Unmarshal([]byte("api: {}\n"), &disabled); err != nil {
+		t.Fatal(err)
+	}
+	if disabled.API.LocalDiaryPrincipalAuth.Enabled {
+		t.Fatal("local diary principal mode must default off")
+	}
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	var enabled struct {
+		API APIServerConfig `yaml:"api"`
+	}
+	input := "api:\n  local_diary_principal_auth:\n    enabled: true\n    owner_principal_id: synthetic-owner-a\n    credentials:\n      - principal_id: synthetic-owner-a\n        token_sha256: " + digest + "\n      - principal_id: synthetic-recipient-b\n        token_sha256: " + strings.Repeat("f", 64) + "\n"
+	if err := yaml.Unmarshal([]byte(input), &enabled); err != nil {
+		t.Fatal(err)
+	}
+	if !enabled.API.LocalDiaryPrincipalAuth.Enabled || enabled.API.LocalDiaryPrincipalAuth.OwnerPrincipalID != "synthetic-owner-a" || len(enabled.API.LocalDiaryPrincipalAuth.Credentials) != 2 || enabled.API.LocalDiaryPrincipalAuth.Credentials[0].TokenSHA256 != digest {
+		t.Fatalf("principal YAML config not loaded: %#v", enabled.API.LocalDiaryPrincipalAuth)
+	}
+	encoded, err := json.Marshal(enabled.API)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), digest) || strings.Contains(string(encoded), "token_sha256") {
+		t.Fatalf("principal credential verifier was exposed by JSON config: %s", encoded)
+	}
+}
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()

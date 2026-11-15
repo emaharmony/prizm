@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/emaharmony/prizm/internal/provider"
 )
@@ -23,8 +25,35 @@ import (
 // tool schemas via the `tools` parameter, letting the model generate structured
 // tool_calls instead of text-based JSON.
 type ChatProvider struct {
-	BaseURL    string
-	HTTPClient *http.Client
+	BaseURL     string
+	HTTPClient  *http.Client
+	cloudAPIKey string
+	directCloud bool
+	cloudClient *http.Client
+}
+
+const directCloudBaseURL = "https://ollama.com"
+
+// NewDirectCloudChatProvider creates an authenticated provider for Ollama's
+// direct Cloud API. The key is held only in memory and never logged or persisted.
+func NewDirectCloudChatProvider(apiKey string) (*ChatProvider, error) {
+	if strings.TrimSpace(apiKey) == "" || len(apiKey) > 4096 || strings.IndexFunc(apiKey, unicode.IsControl) >= 0 {
+		return nil, errors.New("ollama/chat: direct Cloud API key is required")
+	}
+	return &ChatProvider{
+		BaseURL: directCloudBaseURL, cloudAPIKey: apiKey, directCloud: true,
+		HTTPClient: newDirectCloudHTTPClient(), cloudClient: newDirectCloudHTTPClient(),
+	}, nil
+}
+
+func newDirectCloudHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:   DefaultHTTPTimeout,
+		Transport: provider.DefaultTransport,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 // NewChatProvider creates an OllamaChatProvider with sensible defaults.
@@ -99,6 +128,17 @@ type chatResponse struct {
 // The response may contain Content (final text), ToolCalls (tool requests), or both.
 func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGenerateRequest) (provider.ChatGenerateResponse, error) {
 	start := time.Now()
+	if cp.directCloud {
+		if cp.BaseURL != directCloudBaseURL || cp.cloudAPIKey == "" || cp.cloudClient == nil || !isGLM53FlashCloud(req.Model) {
+			return provider.ChatGenerateResponse{}, errors.New("ollama/chat: direct Cloud provider configuration is invalid")
+		}
+	}
+	wireModel := req.Model
+	if cp.directCloud {
+		// The direct Cloud API uses the registry model name. The :cloud suffix
+		// remains the selector's local-routing identifier only.
+		wireModel = "glm-5.3-flash"
+	}
 
 	// Convert provider types to Ollama wire format
 	ollamaMsgs := make([]ollamaMessage, 0, len(req.Messages))
@@ -150,7 +190,7 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 		format = nil
 	}
 	body := chatRequest{
-		Model:    req.Model,
+		Model:    wireModel,
 		Messages: ollamaMsgs,
 		Tools:    ollamaTools,
 		Format:   format,
@@ -198,8 +238,15 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 			return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: create request: %w", err)
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
+		if cp.directCloud {
+			httpReq.Header.Set("Authorization", "Bearer "+cp.cloudAPIKey)
+		}
 
-		resp, err = cp.HTTPClient.Do(httpReq)
+		client := cp.HTTPClient
+		if cp.directCloud {
+			client = cp.cloudClient
+		}
+		resp, err = client.Do(httpReq)
 		if err != nil {
 			return provider.ChatGenerateResponse{}, fmt.Errorf("ollama/chat: %w", err)
 		}
@@ -273,11 +320,15 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 			},
 		})
 	}
+	responseModel := oResp.Model
+	if cp.directCloud {
+		responseModel = req.Model
+	}
 
 	return provider.ChatGenerateResponse{
 		Content:      publicContent,
 		ToolCalls:    toolCalls,
-		Model:        oResp.Model,
+		Model:        responseModel,
 		Provider:     Name + "-chat",
 		LatencyMS:    latency,
 		PromptTokens: promptTokens,

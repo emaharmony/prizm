@@ -35,13 +35,29 @@ func TestFreewillProductionOneCycleOCI(t *testing.T) {
 	if os.Getenv("PRIZM_SANDBOX_OCI_CONFORMANCE") != "1" {
 		t.Skip("set PRIZM_SANDBOX_OCI_CONFORMANCE=1 to require a Linux OCI engine")
 	}
+	runFreewillProductionCycleOCI(t, false)
+}
+
+func TestFreewillProductionOperatorHaltDuringOCI(t *testing.T) {
+	if os.Getenv("PRIZM_SANDBOX_OCI_CONFORMANCE") != "1" || strings.TrimSpace(os.Getenv("PRIZM_SANDBOX_OCI_IMAGE")) == "" {
+		t.Skip("set PRIZM_SANDBOX_OCI_CONFORMANCE=1 and PRIZM_SANDBOX_OCI_IMAGE to a locally cached digest-pinned image")
+	}
+	runFreewillProductionCycleOCI(t, true)
+}
+
+func runFreewillProductionCycleOCI(t *testing.T, haltDuringOCI bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	dockerPath := strings.TrimSpace(os.Getenv("PRIZM_SUBAGENT_SANDBOX_DOCKER"))
 	if dockerPath == "" {
 		dockerPath = "docker"
 	}
-	image := requireFreewillProductionOCIImage(t, ctx, dockerPath)
+	image := ""
+	if haltDuringOCI {
+		image = requireCachedProductionOCIImage(t, ctx, dockerPath, os.Getenv("PRIZM_SANDBOX_OCI_IMAGE"))
+	} else {
+		image = requireFreewillProductionOCIImage(t, ctx, dockerPath)
+	}
 
 	root := t.TempDir()
 	runsDir := filepath.Join(root, "runs")
@@ -64,9 +80,14 @@ func TestFreewillProductionOneCycleOCI(t *testing.T) {
 		t.Fatalf("source fixture is not clean: %v", err)
 	}
 
+	ociStartMarker := "e45-" + filepath.Base(root)
+	sandboxExecReply := productionCycleSandboxExecRequest
+	if haltDuringOCI {
+		sandboxExecReply = fmt.Sprintf(`{"type":"tool_request","tool":"sandbox_exec","input":{"command":"printf 'running\\n' > %s; while :; do sleep 1; done; printf 'approved-change\\n' > approved.txt"}}`, ociStartMarker)
+	}
 	providerScript := newProductionCycleModelScript([]string{
 		productionCyclePlannerReply,
-		productionCycleSandboxExecRequest,
+		sandboxExecReply,
 		productionCycleSandboxProposalRequest,
 		productionCycleDeveloperReply,
 		productionCycleTesterReply,
@@ -158,7 +179,8 @@ func TestFreewillProductionOneCycleOCI(t *testing.T) {
 		executionEnabled: true, resumingChildren: make(map[string]bool)}
 	dispatcher := freewillReferenceExecutionDispatcher{runDir: runsDir, configPath: configPath, approvals: service, control: control, sandboxConfig: sandboxConfig}
 	service.SetExecutionDispatcher(dispatcher)
-	apiHandler := api.NewServer(api.Config{Addr: ":0", AuthToken: "synthetic-token", FreewillApprovals: service, FreewillChildApprovals: serve}).Handler()
+	apiHandler := api.NewServer(api.Config{Addr: ":0", AuthToken: "synthetic-token", FreewillApprovals: service, FreewillChildApprovals: serve,
+		FreewillControl: control}).Handler()
 	apiServer := httptest.NewServer(apiHandler)
 	defer apiServer.Close()
 	woken, err := wake.HandleScheduledTick(ctx, time.Date(2031, 2, 3, 4, 5, 0, 0, time.UTC))
@@ -187,6 +209,103 @@ func TestFreewillProductionOneCycleOCI(t *testing.T) {
 	childID := granted.ChildRunID
 	if childID == "" || granted.ExecutionStatus != "accepted" {
 		t.Fatalf("production dispatcher did not durably admit child: %#v", granted)
+	}
+	if haltDuringOCI {
+		containerID := waitForProductionCycleOCIContainer(t, ctx, dockerPath, image, ociStartMarker)
+		controlBody, err := json.Marshal(map[string]any{"agent_id": "synthetic-agent", "project_id": scope.ProjectID,
+			"workspace": scope.Workspace, "halted": true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		haltResponse := postFreewillProductionCycleDecision(t, apiServer.URL+"/api/v1/freewill/control", "synthetic-token", string(controlBody))
+		var haltState multiagent.FreewillOperatorControlState
+		if err := json.Unmarshal(haltResponse, &haltState); err != nil || !haltState.Halted {
+			t.Fatalf("authenticated same-scope halt response=%s err=%v", haltResponse, err)
+		}
+		status, err := waitForProductionCycleStatus(t, ctx, service, woken.State.RunID, "execution_cancelled")
+		if err != nil {
+			t.Fatalf("wait for halted parent cancellation: %v", err)
+		}
+		waitForNoProductionCycleOCIContainer(t, ctx, dockerPath, containerID)
+		manifest, err := loadReferenceManifest(runsDir, childID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inspection, err := openInspectionReferenceRuntime(runsDir, manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		child, inspectErr := inspection.runtime.Inspect(ctx, childID)
+		inspection.close()
+		if inspectErr != nil || child.State.Status != multiagent.RunStatusCancelled {
+			t.Fatalf("halted OCI child state=%#v err=%v, want canceled", child.State, inspectErr)
+		}
+		if status.ChildStatus != string(child.State.Status) {
+			t.Fatalf("parent child outcome=%q differs from durable child status=%q", status.ChildStatus, child.State.Status)
+		}
+		if status.ExecutionReportRef != "multiagent_report.json" || status.ValidationSummary != "not_run" {
+			t.Fatalf("canceled child report/validation summary=%#v, want cancellation receipt without validation", status)
+		}
+		reportData, err := os.ReadFile(filepath.Join(runsDir, childID, "multiagent_report.json"))
+		if err != nil {
+			t.Fatalf("read durable cancellation report: %v", err)
+		}
+		var report multiagent.ReferenceRunReport
+		if err := json.Unmarshal(reportData, &report); err != nil || report.FinalStatus != multiagent.RunStatusCancelled || len(report.ValidationResults) != 0 || len(report.TestsExecuted) != 0 {
+			t.Fatalf("canceled child report=%#v err=%v, want canceled with no validation", report, err)
+		}
+		if calls := providerScript.callCount(); calls != 2 {
+			t.Fatalf("halted child continued provider/role work: calls=%d, want planner plus active developer request", calls)
+		}
+		if _, err := os.Stat(filepath.Join(source, "approved.txt")); !os.IsNotExist(err) {
+			t.Fatalf("canceled OCI artifact reached source workspace: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(runsDir, childID, "approved-task")); !os.IsNotExist(err) {
+			t.Fatalf("canceled OCI artifact was promoted into approved-task: %v", err)
+		}
+		before, err := store.Load(ctx, woken.State.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := serve.recoverPending(ctx); err != nil {
+			t.Fatalf("replay halted child recovery: %v", err)
+		}
+		controlBody, err = json.Marshal(map[string]any{"agent_id": "synthetic-agent", "project_id": scope.ProjectID,
+			"workspace": scope.Workspace, "halted": false})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resumeResponse := postFreewillProductionCycleDecision(t, apiServer.URL+"/api/v1/freewill/control", "synthetic-token", string(controlBody))
+		if err := json.Unmarshal(resumeResponse, &haltState); err != nil || haltState.Halted {
+			t.Fatalf("authenticated control resume response=%s err=%v", resumeResponse, err)
+		}
+		if err := serve.recoverPending(ctx); err != nil {
+			t.Fatalf("replay after unhalt: %v", err)
+		}
+		after, err := store.Load(ctx, woken.State.RunID)
+		if err != nil || after.Revision != before.Revision {
+			t.Fatalf("halted parent was resurrected by replay: before revision=%d after=%d err=%v", before.Revision, after.Revision, err)
+		}
+		reopenedStore, err := multiagent.NewSQLiteDurableRunStore(dbPath)
+		if err != nil {
+			t.Fatalf("reopen durable run store after halt replay: %v", err)
+		}
+		reopenedParent, loadErr := reopenedStore.Load(ctx, woken.State.RunID)
+		closeErr := reopenedStore.Close()
+		if loadErr != nil || closeErr != nil || reopenedParent.Revision != before.Revision || reopenedParent.Freewill == nil ||
+			reopenedParent.Freewill.ExecutionDispatch == nil || reopenedParent.Freewill.ExecutionDispatch.Status != "execution_cancelled" {
+			t.Fatalf("reopened parent state changed after halt replay: parent=%#v load=%v close=%v", reopenedParent, loadErr, closeErr)
+		}
+		reopenedInspection, err := openInspectionReferenceRuntime(runsDir, manifest)
+		if err != nil {
+			t.Fatalf("reopen canceled child after halt replay: %v", err)
+		}
+		reopenedChild, inspectErr := reopenedInspection.runtime.Inspect(ctx, childID)
+		reopenedInspection.close()
+		if inspectErr != nil || reopenedChild.State.Status != multiagent.RunStatusCancelled {
+			t.Fatalf("child state changed after halt replay: child=%#v err=%v", reopenedChild.State, inspectErr)
+		}
+		return
 	}
 	patchApproval := waitForProductionCycleApproval(t, ctx, childApprovals, childID)
 	manifest, err := loadReferenceManifest(runsDir, childID)
@@ -502,6 +621,64 @@ func requireFreewillProductionOCIImage(t *testing.T, ctx context.Context, docker
 		t.Fatalf("Docker returned no immutable Debian image digest: %q", image)
 	}
 	return image
+}
+
+func requireCachedProductionOCIImage(t *testing.T, ctx context.Context, dockerPath, image string) string {
+	t.Helper()
+	image = strings.TrimSpace(image)
+	if !strings.Contains(image, "@sha256:") {
+		t.Fatalf("offline OCI halt test requires an immutable image digest, got %q", image)
+	}
+	if _, err := runFreewillProductionDocker(ctx, dockerPath, "image", "inspect", image); err != nil {
+		t.Fatalf("offline OCI halt test image is not already cached: %v", err)
+	}
+	return image
+}
+
+func waitForProductionCycleOCIContainer(t *testing.T, ctx context.Context, dockerPath, image, marker string) string {
+	t.Helper()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		output, err := runFreewillProductionDocker(ctx, dockerPath, "ps", "--quiet", "--filter", "ancestor="+image)
+		if err == nil {
+			for _, id := range strings.Fields(string(output)) {
+				command, inspectErr := runFreewillProductionDocker(ctx, dockerPath, "inspect", "--format", "{{json .Config.Cmd}}", id)
+				if inspectErr != nil || !strings.Contains(string(command), marker) {
+					continue
+				}
+				if _, execErr := runFreewillProductionDocker(ctx, dockerPath, "exec", id, "/bin/sh", "-c", "test -f /workspace/"+marker); execErr == nil {
+					return id
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waiting for this fixture's started OCI child (marker %q): err=%v context=%v", marker, err, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForNoProductionCycleOCIContainer(t *testing.T, ctx context.Context, dockerPath, containerID string) {
+	t.Helper()
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		output, err := runFreewillProductionDocker(ctx, dockerPath, "ps", "--all", "--quiet", "--filter", "id="+containerID)
+		if err == nil && strings.TrimSpace(string(output)) == "" {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waiting for OCI child reap: output=%q err=%v context=%v", strings.TrimSpace(string(output)), err, ctx.Err())
+		case <-deadline.C:
+			t.Fatalf("fixture OCI child container was not reaped after halt: id=%s output=%q err=%v", containerID, strings.TrimSpace(string(output)), err)
+		case <-ticker.C:
+		}
+	}
 }
 
 func runFreewillProductionDocker(ctx context.Context, dockerPath string, args ...string) ([]byte, error) {

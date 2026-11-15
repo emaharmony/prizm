@@ -10,9 +10,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gofrs/flock"
 )
 
 // EmbeddingIndex manages vector embeddings for memory entries.
@@ -28,6 +31,7 @@ import (
 type EmbeddingIndex struct {
 	mu         sync.RWMutex
 	entries    map[string]*EmbeddingEntry // keyed by Memory.ID
+	redacted   map[string]bool            // permanently denied IDs
 	filePath   string                     // path to embeddings.json
 	model      string                     // Ollama model name
 	url        string                     // Ollama API URL
@@ -45,10 +49,11 @@ type EmbeddingEntry struct {
 
 // EmbeddingIndexFile is the on-disk format.
 type EmbeddingIndexFile struct {
-	Version int              `json:"version"`
-	Model   string           `json:"model"`
-	Dims    int              `json:"dimensions"`
-	Entries []*EmbeddingEntry `json:"entries"`
+	Version     int               `json:"version"`
+	Model       string            `json:"model"`
+	Dims        int               `json:"dimensions"`
+	Entries     []*EmbeddingEntry `json:"entries"`
+	RedactedIDs []string          `json:"redacted_ids,omitempty"`
 }
 
 // EmbeddingConfig holds configuration for the embedding index.
@@ -65,10 +70,10 @@ type EmbeddingConfig struct {
 func DefaultEmbeddingConfig() EmbeddingConfig {
 	return EmbeddingConfig{
 		Enabled:          true,
-		Model:           "nomic-embed-text",
-		URL:             "http://localhost:11434",
-		Dimensions:      768,
-		IndexPath:       "memory/embeddings.json",
+		Model:            "nomic-embed-text",
+		URL:              "http://localhost:11434",
+		Dimensions:       768,
+		IndexPath:        "memory/embeddings.json",
 		ReindexOnStartup: true,
 	}
 }
@@ -125,6 +130,7 @@ func (c *OllamaEmbeddingClient) Embed(ctx context.Context, model, text string) (
 func NewEmbeddingIndex(cfg EmbeddingConfig) *EmbeddingIndex {
 	return &EmbeddingIndex{
 		entries:    make(map[string]*EmbeddingEntry),
+		redacted:   make(map[string]bool),
 		filePath:   cfg.IndexPath,
 		model:      cfg.Model,
 		url:        cfg.URL,
@@ -135,9 +141,13 @@ func NewEmbeddingIndex(cfg EmbeddingConfig) *EmbeddingIndex {
 
 // Load reads the embedding index from disk. Returns nil error if file doesn't exist.
 func (ei *EmbeddingIndex) Load() error {
+	fileLock, err := ei.lockSidecar()
+	if err != nil {
+		return err
+	}
+	defer fileLock.Unlock()
 	ei.mu.Lock()
 	defer ei.mu.Unlock()
-
 	data, err := os.ReadFile(ei.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -153,8 +163,13 @@ func (ei *EmbeddingIndex) Load() error {
 		return nil
 	}
 
+	for _, id := range idx.RedactedIDs {
+		ei.redacted[id] = true
+	}
 	for _, e := range idx.Entries {
-		ei.entries[e.ID] = e
+		if !ei.redacted[e.ID] {
+			ei.entries[e.ID] = e
+		}
 	}
 
 	log.Printf("[EMBEDDING] loaded %d entries from %s (model=%s, dims=%d)",
@@ -164,35 +179,112 @@ func (ei *EmbeddingIndex) Load() error {
 
 // Save writes the embedding index to disk.
 func (ei *EmbeddingIndex) Save() error {
-	ei.mu.RLock()
+	fileLock, err := ei.lockSidecar()
+	if err != nil {
+		return err
+	}
+	defer fileLock.Unlock()
+	ei.mu.Lock()
+	defer ei.mu.Unlock()
+	if err := ei.mergeDiskLocked(); err != nil {
+		return err
+	}
+	return ei.saveLocked()
+}
+
+func (ei *EmbeddingIndex) lockSidecar() (*flock.Flock, error) {
+	if strings.TrimSpace(ei.filePath) == "" {
+		return nil, fmt.Errorf("embedding index path is empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(ei.filePath), 0755); err != nil {
+		return nil, fmt.Errorf("create embedding index directory: %w", err)
+	}
+	lock := flock.New(ei.filePath + ".lock")
+	if err := lock.Lock(); err != nil {
+		return nil, fmt.Errorf("lock embedding index: %w", err)
+	}
+	return lock, nil
+}
+
+// mergeDiskLocked imports concurrent entries and, critically, unions durable
+// denied IDs before any process writes a sidecar snapshot. Caller holds both
+// the sidecar flock and ei.mu.
+func (ei *EmbeddingIndex) mergeDiskLocked() error {
+	data, err := os.ReadFile(ei.filePath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read index before update: %w", err)
+	}
+	var idx EmbeddingIndexFile
+	if err := json.Unmarshal(data, &idx); err != nil {
+		return fmt.Errorf("decode index before update: %w", err)
+	}
+	if ei.redacted == nil {
+		ei.redacted = make(map[string]bool)
+	}
+	for _, id := range idx.RedactedIDs {
+		ei.redacted[id] = true
+		delete(ei.entries, id)
+	}
+	for _, entry := range idx.Entries {
+		if entry != nil && !ei.redacted[entry.ID] {
+			if _, exists := ei.entries[entry.ID]; !exists {
+				ei.entries[entry.ID] = entry
+			}
+		}
+	}
+	return nil
+}
+
+// saveLocked atomically replaces the sidecar. Caller holds both locks.
+func (ei *EmbeddingIndex) saveLocked() error {
 	entries := make([]*EmbeddingEntry, 0, len(ei.entries))
 	for _, e := range ei.entries {
 		entries = append(entries, e)
 	}
-	ei.mu.RUnlock()
+	redacted := make([]string, 0, len(ei.redacted))
+	for id := range ei.redacted {
+		redacted = append(redacted, id)
+	}
+	sort.Strings(redacted)
 
 	idx := EmbeddingIndexFile{
 		Version: 1,
 		Model:   ei.model,
 		Dims:    ei.dims,
-		Entries: entries,
+		Entries: entries, RedactedIDs: redacted,
 	}
 
-	data, err := json.MarshalIndent(idx, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal index: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(ei.filePath), 0755); err != nil {
-		return fmt.Errorf("create dir: %w", err)
-	}
-
-	if err := os.WriteFile(ei.filePath, data, 0644); err != nil {
+	if err := writeJSONAtomic(ei.filePath, idx); err != nil {
 		return fmt.Errorf("write index: %w", err)
 	}
 
 	log.Printf("[EMBEDDING] saved %d entries to %s", len(entries), ei.filePath)
 	return nil
+}
+
+// DeleteIDs removes embedding vectors for durably redacted memories.
+func (ei *EmbeddingIndex) DeleteIDs(ids map[string]bool) error {
+	fileLock, err := ei.lockSidecar()
+	if err != nil {
+		return err
+	}
+	defer fileLock.Unlock()
+	ei.mu.Lock()
+	defer ei.mu.Unlock()
+	if err := ei.mergeDiskLocked(); err != nil {
+		return err
+	}
+	if ei.redacted == nil {
+		ei.redacted = make(map[string]bool)
+	}
+	for id := range ids {
+		ei.redacted[id] = true
+		delete(ei.entries, id)
+	}
+	return ei.saveLocked()
 }
 
 // IndexMemories generates embeddings for memories that are new or changed.
@@ -202,6 +294,9 @@ func (ei *EmbeddingIndex) IndexMemories(ctx context.Context, memories []Memory) 
 
 	var toEmbed []Memory
 	for _, m := range memories {
+		if ei.redacted[m.ID] {
+			continue
+		}
 		entry, exists := ei.entries[m.ID]
 		hash := summaryHash(m.Summary)
 		if !exists || entry.SummaryHash != hash {
@@ -238,21 +333,34 @@ func (ei *EmbeddingIndex) IndexMemories(ctx context.Context, memories []Memory) 
 			continue
 		}
 
+		fileLock, lockErr := ei.lockSidecar()
+		if lockErr != nil {
+			return generated, lockErr
+		}
 		ei.mu.Lock()
+		if mergeErr := ei.mergeDiskLocked(); mergeErr != nil {
+			ei.mu.Unlock()
+			_ = fileLock.Unlock()
+			return generated, mergeErr
+		}
+		if ei.redacted[m.ID] {
+			ei.mu.Unlock()
+			_ = fileLock.Unlock()
+			continue
+		}
 		ei.entries[m.ID] = &EmbeddingEntry{
 			ID:          m.ID,
 			SummaryHash: summaryHash(m.Summary),
 			Embedding:   emb,
 			UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
 		}
+		saveErr := ei.saveLocked()
 		ei.mu.Unlock()
-		generated++
-	}
-
-	if generated > 0 {
-		if err := ei.Save(); err != nil {
-			log.Printf("[EMBEDDING] failed to save index: %v", err)
+		_ = fileLock.Unlock()
+		if saveErr != nil {
+			return generated, saveErr
 		}
+		generated++
 	}
 
 	return generated, nil
@@ -267,7 +375,10 @@ type EmbeddingSearchResult struct {
 // Search embeds the query and returns the top-N most similar memory IDs with scores.
 // Returns nil if embeddings are unavailable (Ollama down, no entries, etc.).
 func (ei *EmbeddingIndex) Search(ctx context.Context, query string, topN int) []EmbeddingSearchResult {
-	if len(ei.entries) == 0 {
+	ei.mu.RLock()
+	empty := len(ei.entries) == 0
+	ei.mu.RUnlock()
+	if empty {
 		return nil
 	}
 
@@ -282,8 +393,16 @@ func (ei *EmbeddingIndex) Search(ctx context.Context, query string, topN int) []
 		return nil
 	}
 
-	ei.mu.RLock()
-	defer ei.mu.RUnlock()
+	fileLock, lockErr := ei.lockSidecar()
+	if lockErr != nil {
+		return nil
+	}
+	ei.mu.Lock()
+	if err := ei.mergeDiskLocked(); err != nil {
+		ei.mu.Unlock()
+		_ = fileLock.Unlock()
+		return nil
+	}
 
 	type scored struct {
 		id    string
@@ -320,6 +439,8 @@ func (ei *EmbeddingIndex) Search(ctx context.Context, query string, topN int) []
 		}
 	}
 
+	ei.mu.Unlock()
+	_ = fileLock.Unlock()
 	return out
 }
 

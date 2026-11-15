@@ -1,3 +1,17 @@
+## Current Handoff: Freewill POC PR3 sanitized candidate (2026-11-15)
+
+**Roadmap IDs:** FW-P2, FW-P3, and FW-G2; R1/G1 remains a prerequisite for served or unattended FW-P2.
+
+**Remote baseline:** PR1 is present at merge SHA 441207fbde631b06ebd5b28dafb3b284fc7a6ab8. PR2 #146 is present at merge SHA 694a633532a4b08e5b0eeaecf0d1a90da9475f90; this candidate starts at that PR2 merge.
+
+**Scope:** The candidate carries the remaining sanitized Freewill POC runtime, tests, configuration/reference updates, UI integration, and design/inventory/task-log documentation. The 117-path snapshot is dependency-coupled across the existing Freewill workflow, API, event, provider, memory, and CLI composition boundaries. The review follow-up protects preference evidence/challenge GETs with the service bearer when local principal auth is not configured, without changing write auth. It adds no package or new authority path.
+
+**Validation:** Staticcheck, go build, go vet, the focused preference read-auth regression, and a captured full go test ./... -count=1 run after the review fix passed. An earlier full-suite attempt returned FAIL with terminal output truncated before the failing package; the later captured runs passed, so the earlier result is not reproduced. The added-line privacy scan found no local-path or credential-token patterns; sample project details are generic. git diff --check passed.
+
+**Open gates and next action:** Provider-backed R1/G1 acceptance, Linux OCI execution, exact-head CI, and independent release review remain open. Keep this candidate unpublished until those gates and review are complete; then prepare the final staging PR.
+
+---
+
 ## Current Handoff: FW-P2 approved-reference child-dispatch PR1 candidate (2026-11-13)
 
 **Roadmap IDs:** FW-P2 and FW-G2; R1/G1 remains a prerequisite for served or unattended FW-P2. Candidate branch `codex/freewill-p2-staging-pr1` is local and starts at `947afe43738c72a98f862c49a3f678109e73dff9`, whose merge base is the supplied staging head `4083cb803f6b4ab83cd93d6cc27ef64281f1701e`. The implementation slice is 43 files (`+5915/-303`) covering approved reference-child dispatch, approval, recovery, halt, and reporting. No remote operation was performed.
@@ -164,16 +178,6 @@ service-worker-loss evidence. FW-G2 remains gated on R1/G1. The isolated
 publication; do not start write-capable Freewill or claim full R1/G1.
 
 # Prizm Plan of Action
-
-## Current Handoff: FW-P2 PR2 child approval history (2026-11-14)
-
-**Roadmap:** FW-P2 and FW-G2; R1/G1 remains an upstream dependency for served or unattended FW-P2 acceptance.
-
-PR1 (#145) merged into `codex/freewill-integration` at `441207fbde631b06ebd5b28dafb3b284fc7a6ab8`. PR2 is being prepared from that exact base as `codex/freewill-child-approval-history-pr2-restack`; it adds durable, bounded, read-only child patch decision history and persists grant reasons. It is intended to target `codex/freewill-integration`, not `staging`.
-
-**Verification:** focused API, approval, dashboard, and one-cycle CLI tests passed; `go build ./...`, `staticcheck ./...`, and `git diff --check` passed. The local diff is limited to the approval history feature and sanitized plan/work-log updates.
-
-**Next action:** finish independent review, then publish through the GitHub API and require exact-head CI before merging into the Freewill integration branch. Do not promote to staging until R1/G1 and FW-P2 acceptance gates are satisfied.
 
 ## Current Handoff: R1 acceptance blocked after approved apply (2026-10-22)
 
@@ -957,9 +961,3 @@ The bridge exposes a pathless `sandbox_propose_artifact` tool only to the opted-
 **Review follow-up (2026-11-05):** sandbox patch generation now rejects invalid UTF-8 and Unicode control characters other than tab, CR, and LF; regressions cover invalid UTF-8 without NUL and a control byte. The bridge feature flag now selects `sandbox_propose_artifact` consistently across the role prompt, allowed tool list, LoopRunner prerequisite, expected deliverable, and corrective turn. It removes `apply_patch_proposal` from that lane's tool descriptions while default workflow and NATS behavior remain unchanged. Focused sandbox, subagent, multiagent, and CLI tests passed; the ExecuteAgent/LoopRunner test persisted and resolved the pathless proposal through the proposal resolver.
 
 **Risk/next action:** the workflow bridge is locally committed in three logical commits and remains unpublished. Independent security rereview found no actionable P1/P2 findings. Await explicit authorization before publication; then require exact-head CI and the existing real OCI conformance gate. Keep R1/G1 and served Freewill acceptance open; do not start the service or apply an approval as part of this slice.
-
-## Current Handoff: Freewill P2 PR1 publication and lint correction (2026-11-14)
-
-PR #145 is open from `codex/freewill-p2-staging-pr1` at `c6aa6cb6a147240548bf5157cf6f51e49a1a3d0e` into `codex/freewill-integration`, whose base is staging `4083cb803f6b4ab83cd93d6cc27ef64281f1701e`. Exact diff: 44 paths, +5,928/-307. Run #285 passed Python, Windows, Linux test/race, and real sandbox OCI conformance; Linux lint failed on six Staticcheck findings. A narrow four-file correction removes only unreferenced helpers/schema builders, fixes the overwritten approval ID setup, and scopes the cancellation reason to its only used branch. Local `staticcheck ./...`, gofmt, and diff-check pass on the correction; it is pending independent review and publication.
-
-**Next action:** once review clears, append the correction to the PR source branch with an expected-head guard, then require fresh exact-head CI to pass before merging PR #145 into the Freewill integration branch. Preserve R1/G1 and served/unattended FW-P2 as open gates; create the final staging PR only after those acceptance gates are satisfied.

@@ -2,6 +2,8 @@ package multiagent
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -72,6 +74,71 @@ type WaitingState struct {
 	Deadline            time.Time `json:"deadline,omitempty"`
 	DispatchPending     bool      `json:"dispatch_pending,omitempty"`
 	JoinID              string    `json:"join_id,omitempty"`
+}
+
+// ResourceExtensionIntent is an agent-authored request for the host-fixed
+// transition increment. It never selects a budget, amount, scope, or authority.
+type ResourceExtensionIntent struct {
+	Reason string `json:"reason"`
+}
+
+// ResourceNegotiationConfig is host configuration for one bounded extension
+// dimension. HardCeiling must equal the compiled graph MaxTransitions limit.
+type ResourceNegotiationConfig struct {
+	Enabled          bool   `json:"enabled" yaml:"enabled"`
+	InitialAllowance int    `json:"initial_allowance" yaml:"initial_allowance"`
+	Increment        int    `json:"increment" yaml:"increment"`
+	HardCeiling      int    `json:"hard_ceiling" yaml:"hard_ceiling"`
+	OwnerID          string `json:"owner_id,omitempty" yaml:"owner_id,omitempty"`
+	ParentRunID      string `json:"parent_run_id,omitempty" yaml:"-"`
+	AgentID          string `json:"agent_id,omitempty" yaml:"-"`
+	ProjectID        string `json:"project_id,omitempty" yaml:"-"`
+	Workspace        string `json:"workspace,omitempty" yaml:"-"`
+	GrantGeneration  uint64 `json:"grant_generation,omitempty" yaml:"-"`
+}
+
+// ResourceExtensionRequestRecord is the durable scoped pending request.
+type ResourceExtensionRequestRecord struct {
+	RequestID          string    `json:"request_id"`
+	RunID              string    `json:"run_id"`
+	ParentRunID        string    `json:"parent_run_id"`
+	AgentID            string    `json:"agent_id"`
+	ProjectID          string    `json:"project_id"`
+	Workspace          string    `json:"workspace"`
+	OwnerID            string    `json:"owner_id"`
+	GrantGeneration    uint64    `json:"grant_generation"`
+	CheckpointRevision int64     `json:"checkpoint_revision"`
+	FromRole           Role      `json:"from_role"`
+	NextRole           Role      `json:"next_role"`
+	ExecutionKey       string    `json:"execution_key"`
+	Reason             string    `json:"reason"`
+	CurrentAllowance   int       `json:"current_allowance"`
+	RequestedIncrement int       `json:"requested_increment"`
+	HardCeiling        int       `json:"hard_ceiling"`
+	Generation         uint64    `json:"generation"`
+	Status             string    `json:"status"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
+// ResourceExtensionDecision is the single immutable owner decision for a
+// request. RequestID is the decision idempotency key.
+type ResourceExtensionDecision struct {
+	RequestID string    `json:"request_id"`
+	Decision  string    `json:"decision"`
+	Actor     string    `json:"actor"`
+	Reason    string    `json:"reason,omitempty"`
+	Allowance int       `json:"allowance"`
+	DecidedAt time.Time `json:"decided_at"`
+}
+
+// ResourceNegotiationState binds the host ceiling, effective allowance, and
+// exact owner request/decision history to one durable run.
+type ResourceNegotiationState struct {
+	Config     ResourceNegotiationConfig        `json:"config"`
+	Allowance  int                              `json:"allowance"`
+	Generation uint64                           `json:"generation"`
+	Requests   []ResourceExtensionRequestRecord `json:"requests,omitempty"`
+	Decisions  []ResourceExtensionDecision      `json:"decisions,omitempty"`
 }
 
 // ProposalDecision is the approval authority's decision for one exact
@@ -306,26 +373,27 @@ type PersistedFailure struct {
 
 // DurableRun is the atomic persistence envelope around canonical RunState.
 type DurableRun struct {
-	SchemaVersion               int                  `json:"schema_version"`
-	Revision                    int64                `json:"revision"`
-	Kind                        DurableRunKind       `json:"kind,omitempty"`
-	State                       RunState             `json:"state"`
-	Phase                       CheckpointPhase      `json:"phase"`
-	PendingTransition           *PendingTransition   `json:"pending_transition,omitempty"`
-	ActiveExecutionKey          string               `json:"active_execution_key,omitempty"`
-	LastCompletedExecutionKey   string               `json:"last_completed_execution_key,omitempty"`
-	Waiting                     *WaitingState        `json:"waiting,omitempty"`
-	Retry                       *RetryState          `json:"retry,omitempty"`
-	RetryHistory                []RetryState         `json:"retry_history,omitempty"`
-	DelegationJoin              *DelegationJoinState `json:"delegation_join,omitempty"`
-	ApprovedTask                *ApprovedTaskState   `json:"approved_task,omitempty"`
-	PendingFanOutAdoption       *FanOutAdoptionState `json:"pending_fan_out_adoption,omitempty"`
-	ProposalResults             []ProposalProgress   `json:"proposal_results,omitempty"`
-	Failure                     *PersistedFailure    `json:"failure,omitempty"`
-	Reflections                 []ReflectionRecord   `json:"reflections,omitempty"`
-	ReplanCount                 int                  `json:"replan_count,omitempty"`
-	PendingDelegationOutcomeAck string               `json:"pending_delegation_outcome_ack,omitempty"`
-	Freewill                    *FreewillRunState    `json:"freewill,omitempty"`
+	SchemaVersion               int                       `json:"schema_version"`
+	Revision                    int64                     `json:"revision"`
+	Kind                        DurableRunKind            `json:"kind,omitempty"`
+	State                       RunState                  `json:"state"`
+	Phase                       CheckpointPhase           `json:"phase"`
+	PendingTransition           *PendingTransition        `json:"pending_transition,omitempty"`
+	ActiveExecutionKey          string                    `json:"active_execution_key,omitempty"`
+	LastCompletedExecutionKey   string                    `json:"last_completed_execution_key,omitempty"`
+	Waiting                     *WaitingState             `json:"waiting,omitempty"`
+	Retry                       *RetryState               `json:"retry,omitempty"`
+	RetryHistory                []RetryState              `json:"retry_history,omitempty"`
+	DelegationJoin              *DelegationJoinState      `json:"delegation_join,omitempty"`
+	ApprovedTask                *ApprovedTaskState        `json:"approved_task,omitempty"`
+	PendingFanOutAdoption       *FanOutAdoptionState      `json:"pending_fan_out_adoption,omitempty"`
+	ProposalResults             []ProposalProgress        `json:"proposal_results,omitempty"`
+	Failure                     *PersistedFailure         `json:"failure,omitempty"`
+	Reflections                 []ReflectionRecord        `json:"reflections,omitempty"`
+	ReplanCount                 int                       `json:"replan_count,omitempty"`
+	PendingDelegationOutcomeAck string                    `json:"pending_delegation_outcome_ack,omitempty"`
+	Freewill                    *FreewillRunState         `json:"freewill,omitempty"`
+	ResourceNegotiation         *ResourceNegotiationState `json:"resource_negotiation,omitempty"`
 }
 
 type DurableRunKind string
@@ -352,51 +420,66 @@ type FreewillApprovalReceipt struct {
 }
 
 type FreewillExecutionDispatch struct {
-	Status            string    `json:"status"`
-	ChildRunID        string    `json:"child_run_id,omitempty"`
-	ReportRef         string    `json:"report_ref,omitempty"`
-	ChildStatus       string    `json:"child_status,omitempty"`
-	ValidationSummary string    `json:"validation_summary,omitempty"`
-	ReportSHA256      string    `json:"report_sha256,omitempty"`
-	FailureCode       string    `json:"failure_code,omitempty"`
-	UpdatedAt         time.Time `json:"updated_at,omitempty"`
+	Status              string    `json:"status"`
+	RecoveryReason      string    `json:"recovery_reason,omitempty"`
+	ChildRunID          string    `json:"child_run_id,omitempty"`
+	ReportRef           string    `json:"report_ref,omitempty"`
+	ChildStatus         string    `json:"child_status,omitempty"`
+	ValidationSummary   string    `json:"validation_summary,omitempty"`
+	ReportSHA256        string    `json:"report_sha256,omitempty"`
+	FailureCode         string    `json:"failure_code,omitempty"`
+	MutationAttemptID   string    `json:"mutation_attempt_id,omitempty"`
+	NoEffectMutationIDs []string  `json:"no_effect_mutation_ids,omitempty"`
+	UpdatedAt           time.Time `json:"updated_at,omitempty"`
 }
 
 type FreewillRunState struct {
-	Lifecycle               freewill.State                `json:"lifecycle"`
-	Scope                   freewill.Scope                `json:"scope"`
-	WakeID                  string                        `json:"wake_id"`
-	ResumeFromRunID         string                        `json:"resume_from_run_id,omitempty"`
-	Trigger                 string                        `json:"trigger"`
-	DedupeKey               string                        `json:"dedupe_key"`
-	CorrelationID           string                        `json:"correlation_id"`
-	LeaseAttempt            uint64                        `json:"lease_attempt,omitempty"`
-	SelectionAttemptLimit   uint64                        `json:"selection_attempt_limit,omitempty"`
-	LeaseOwner              string                        `json:"lease_owner,omitempty"`
-	LeaseUntil              time.Time                     `json:"lease_until,omitempty"`
-	Candidates              []freewill.CandidateIntention `json:"candidates,omitempty"`
-	VerifiedResumeIDs       []string                      `json:"verified_resume_ids,omitempty"`
-	ChoiceID                string                        `json:"choice_id,omitempty"`
-	ReasonSummary           string                        `json:"reason_summary,omitempty"`
-	SleepReason             string                        `json:"sleep_reason,omitempty"`
-	ApprovalRef             string                        `json:"approval_ref,omitempty"`
-	ApprovalFingerprint     string                        `json:"approval_fingerprint,omitempty"`
-	ApprovalGeneration      uint64                        `json:"approval_generation,omitempty"`
-	ApprovalReceipt         *FreewillApprovalReceipt      `json:"approval_receipt,omitempty"`
-	ExecutionDispatch       *FreewillExecutionDispatch    `json:"execution_dispatch,omitempty"`
-	PolicyDecision          string                        `json:"policy_decision,omitempty"`
-	PolicyRuleID            string                        `json:"policy_rule_id,omitempty"`
-	ExecutionDisabled       bool                          `json:"execution_disabled,omitempty"`
-	PauseReason             string                        `json:"pause_reason,omitempty"`
-	SelectionProvider       string                        `json:"selection_provider,omitempty"`
-	SelectionModel          string                        `json:"selection_model,omitempty"`
-	SelectionUsage          cost.TokenUsage               `json:"selection_usage,omitempty"`
-	SelectionAttempt        uint64                        `json:"selection_attempt,omitempty"`
-	SelectionRecoveryNumber int                           `json:"selection_recovery_number,omitempty"`
-	SelectionFailureClass   string                        `json:"selection_failure_class,omitempty"`
-	SelectionFailureCode    string                        `json:"selection_failure_code,omitempty"`
-	SelectionNextAt         time.Time                     `json:"selection_next_at,omitempty"`
-	SelectionFeedback       string                        `json:"selection_feedback,omitempty"`
+	Lifecycle             freewill.State                      `json:"lifecycle"`
+	Scope                 freewill.Scope                      `json:"scope"`
+	WakeID                string                              `json:"wake_id"`
+	ResumeFromRunID       string                              `json:"resume_from_run_id,omitempty"`
+	Trigger               string                              `json:"trigger"`
+	DedupeKey             string                              `json:"dedupe_key"`
+	CorrelationID         string                              `json:"correlation_id"`
+	StrategyID            string                              `json:"strategy_id,omitempty"`
+	StrategyVersion       string                              `json:"strategy_version,omitempty"`
+	ExpectedPatchSHA256   string                              `json:"expected_patch_sha256,omitempty"`
+	LeaseAttempt          uint64                              `json:"lease_attempt,omitempty"`
+	SelectionAttemptLimit uint64                              `json:"selection_attempt_limit,omitempty"`
+	LeaseOwner            string                              `json:"lease_owner,omitempty"`
+	LeaseUntil            time.Time                           `json:"lease_until,omitempty"`
+	Candidates            []freewill.CandidateIntention       `json:"candidates,omitempty"`
+	VerifiedResumeIDs     []string                            `json:"verified_resume_ids,omitempty"`
+	ChoiceID              string                              `json:"choice_id,omitempty"`
+	ReasonSummary         string                              `json:"reason_summary,omitempty"`
+	SleepReason           string                              `json:"sleep_reason,omitempty"`
+	ApprovalRef           string                              `json:"approval_ref,omitempty"`
+	ApprovalFingerprint   string                              `json:"approval_fingerprint,omitempty"`
+	ApprovalGeneration    uint64                              `json:"approval_generation,omitempty"`
+	ApprovalReceipt       *FreewillApprovalReceipt            `json:"approval_receipt,omitempty"`
+	ExecutionDispatch     *FreewillExecutionDispatch          `json:"execution_dispatch,omitempty"`
+	PolicyDecision        string                              `json:"policy_decision,omitempty"`
+	PolicyRuleID          string                              `json:"policy_rule_id,omitempty"`
+	ExecutionDisabled     bool                                `json:"execution_disabled,omitempty"`
+	PauseReason           string                              `json:"pause_reason,omitempty"`
+	SelectionProvider     string                              `json:"selection_provider,omitempty"`
+	SelectionModel        string                              `json:"selection_model,omitempty"`
+	SelectionUsage        cost.TokenUsage                     `json:"selection_usage,omitempty"`
+	SelectionObjective    string                              `json:"selection_objective,omitempty"`
+	PreferenceSelection   FreewillPreferenceSelectionMetadata `json:"preference_selection,omitempty"`
+	// Legacy context metadata remains readable for runs persisted before the
+	// versioned content-free manifest was introduced.
+	ProjectContextDigest        string                           `json:"project_context_digest,omitempty"`
+	ProjectContextCapturedAt    time.Time                        `json:"project_context_captured_at,omitempty"`
+	ProjectContextSources       []FreewillProjectContextSource   `json:"project_context_sources,omitempty"`
+	ProjectContextManifest      *freewill.ProjectContextManifest `json:"project_context_manifest,omitempty"`
+	ProjectContextEgressAllowed bool                             `json:"project_context_egress_allowed,omitempty"`
+	SelectionAttempt            uint64                           `json:"selection_attempt,omitempty"`
+	SelectionRecoveryNumber     int                              `json:"selection_recovery_number,omitempty"`
+	SelectionFailureClass       string                           `json:"selection_failure_class,omitempty"`
+	SelectionFailureCode        string                           `json:"selection_failure_code,omitempty"`
+	SelectionNextAt             time.Time                        `json:"selection_next_at,omitempty"`
+	SelectionFeedback           string                           `json:"selection_feedback,omitempty"`
 }
 
 type FreewillOperatorControlStore interface {
@@ -466,6 +549,9 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 	if err := r.State.Validate(graph); err != nil {
 		problems = append(problems, err.Error())
 	}
+	if graph != nil {
+		problems = append(problems, validateResourceNegotiationState(r, graph)...)
+	}
 
 	switch r.Phase {
 	case CheckpointPendingRole:
@@ -488,6 +574,12 @@ func (r DurableRun) Validate(graph *CompiledGraph) error {
 			problems = append(problems, "transition_pending checkpoint requires pending_transition")
 		} else if r.PendingTransition.ExecutionKey != r.LastCompletedExecutionKey {
 			problems = append(problems, "pending transition execution key is not the last completed key")
+		}
+		if r.Waiting != nil && (r.Waiting.Kind != "resource_extension" || r.State.Status != RunStatusPaused || !resourceRequestPending(r)) {
+			problems = append(problems, "transition_pending wait must be a pending resource extension decision")
+		}
+		if r.Waiting == nil && r.State.Status != RunStatusRunning {
+			problems = append(problems, "transition_pending checkpoint without a decision wait requires a running run")
 		}
 	case CheckpointWaiting:
 		if r.State.Status != RunStatusPaused || r.Waiting == nil {
@@ -623,6 +715,13 @@ func (r DurableRun) validateFreewill() []string {
 		return []string{"Freewill run kind requires Freewill state"}
 	}
 	var problems []string
+	if manifest := r.Freewill.ProjectContextManifest; manifest != nil {
+		if err := manifest.Validate(); err != nil || manifest.ProjectID != r.Freewill.Scope.ProjectID {
+			problems = append(problems, "Freewill project context manifest is invalid or belongs to another project")
+		} else if encoded, marshalErr := json.Marshal(manifest); marshalErr != nil || len(encoded) > 12<<10 {
+			problems = append(problems, "Freewill project context manifest exceeds its durable limit")
+		}
+	}
 	if r.Phase != CheckpointFreewillWake {
 		problems = append(problems, "Freewill record requires freewill_wake checkpoint")
 	}
@@ -636,6 +735,11 @@ func (r DurableRun) validateFreewill() []string {
 		strings.TrimSpace(r.Freewill.CorrelationID) == "" || strings.TrimSpace(r.Freewill.Scope.ProjectID) == "" ||
 		strings.TrimSpace(r.Freewill.Scope.Workspace) == "" {
 		problems = append(problems, "Freewill wake identity and scope are required")
+	}
+	if (r.Freewill.StrategyID == "") != (r.Freewill.StrategyVersion == "") || (r.Freewill.StrategyID == "") != (r.Freewill.ExpectedPatchSHA256 == "") || strings.TrimSpace(r.Freewill.StrategyID) != r.Freewill.StrategyID ||
+		strings.TrimSpace(r.Freewill.StrategyVersion) != r.Freewill.StrategyVersion || len(r.Freewill.StrategyID) > 96 || len(r.Freewill.StrategyVersion) > 64 ||
+		strings.ContainsAny(r.Freewill.StrategyID+r.Freewill.StrategyVersion, "\r\n\x00") || (r.Freewill.ExpectedPatchSHA256 != "" && !validFreewillHash(r.Freewill.ExpectedPatchSHA256)) {
+		problems = append(problems, "Freewill strategy binding is invalid")
 	}
 	if r.Freewill.ResumeFromRunID != "" && (strings.TrimSpace(r.Freewill.ResumeFromRunID) != r.Freewill.ResumeFromRunID ||
 		r.Freewill.ResumeFromRunID == r.State.RunID || len(r.Freewill.ResumeFromRunID) > 256) {
@@ -655,17 +759,17 @@ func (r DurableRun) validateFreewill() []string {
 		case "dispatching":
 			if (dispatch.ChildRunID == "" && dispatch.ReportRef != "") ||
 				(dispatch.ChildRunID != "" && (!validFreewillChildRunID(dispatch.ChildRunID) || dispatch.ReportRef != "multiagent_report.json")) ||
-				dispatch.FailureCode != "" || dispatch.ChildStatus != "" || dispatch.ValidationSummary != "" || dispatch.ReportSHA256 != "" {
+				dispatch.FailureCode != "" || dispatch.RecoveryReason != "" || dispatch.ChildStatus != "" || dispatch.ValidationSummary != "" || dispatch.ReportSHA256 != "" {
 				problems = append(problems, "Freewill dispatching state is invalid")
 			}
 		case "accepted":
-			if !validFreewillChildRunID(dispatch.ChildRunID) || dispatch.ReportRef != "multiagent_report.json" || dispatch.FailureCode != "" ||
+			if !validFreewillChildRunID(dispatch.ChildRunID) || dispatch.ReportRef != "multiagent_report.json" || dispatch.FailureCode != "" || dispatch.RecoveryReason != "" ||
 				dispatch.ChildStatus != "" || dispatch.ValidationSummary != "" || dispatch.ReportSHA256 != "" {
 				problems = append(problems, "Freewill accepted dispatch linkage is invalid")
 			}
 		case "completed", "execution_failed", "execution_cancelled":
 			if !validFreewillChildRunID(dispatch.ChildRunID) || dispatch.ReportRef != "multiagent_report.json" ||
-				!validFreewillTerminalChildStatus(dispatch.ChildStatus) || !validFreewillValidationSummary(dispatch.ValidationSummary) ||
+				dispatch.RecoveryReason != "" || !validFreewillTerminalChildStatus(dispatch.ChildStatus) || !validFreewillValidationSummary(dispatch.ValidationSummary) ||
 				!validSHA256Hex(dispatch.ReportSHA256) {
 				problems = append(problems, "Freewill terminal dispatch result is invalid")
 			}
@@ -683,18 +787,65 @@ func (r DurableRun) validateFreewill() []string {
 			if dispatch.Status == "completed" && dispatch.FailureCode != "" {
 				problems = append(problems, "Freewill completed execution has a failure code")
 			}
+		case "mutation_no_effect_reconciled":
+			if !validFreewillChildRunID(dispatch.ChildRunID) || dispatch.ReportRef != "multiagent_report.json" ||
+				dispatch.RecoveryReason != "" || dispatch.ChildStatus != string(RunStatusFailed) || dispatch.ValidationSummary != "" ||
+				dispatch.ReportSHA256 != "" || dispatch.FailureCode != "child_mutation_no_effect_proven" ||
+				!validAttemptIdentity(dispatch.MutationAttemptID) || len(dispatch.NoEffectMutationIDs) == 0 || len(dispatch.NoEffectMutationIDs) > 128 {
+				problems = append(problems, "Freewill no-effect reconciliation receipt is invalid")
+			} else {
+				seen := make(map[string]struct{}, len(dispatch.NoEffectMutationIDs))
+				for _, id := range dispatch.NoEffectMutationIDs {
+					if !validSHA256Hex(id) {
+						problems = append(problems, "Freewill no-effect reconciliation mutation id is invalid")
+						break
+					}
+					if _, ok := seen[id]; ok {
+						problems = append(problems, "Freewill no-effect reconciliation mutation ids are duplicated")
+						break
+					}
+					seen[id] = struct{}{}
+				}
+			}
+		case "recovery_uncertain":
+			if !validFreewillChildRunID(dispatch.ChildRunID) || dispatch.ReportRef != "multiagent_report.json" ||
+				!validFreewillRecoveryReason(dispatch.RecoveryReason) || dispatch.ChildStatus != "" ||
+				dispatch.ValidationSummary != "" || dispatch.ReportSHA256 != "" || dispatch.FailureCode != "" {
+				problems = append(problems, "Freewill uncertain recovery state is invalid")
+			}
 		case "failed":
 			invalidIdentity := (dispatch.ChildRunID == "" && dispatch.ReportRef != "") ||
 				(dispatch.ChildRunID != "" && (!validFreewillChildRunID(dispatch.ChildRunID) || dispatch.ReportRef != "multiagent_report.json"))
-			if dispatch.FailureCode != "workflow_start_failed" || invalidIdentity ||
+			if dispatch.FailureCode != "workflow_start_failed" || dispatch.RecoveryReason != "" || invalidIdentity ||
 				dispatch.ChildStatus != "" || dispatch.ValidationSummary != "" || dispatch.ReportSHA256 != "" {
 				problems = append(problems, "Freewill failed dispatch state is invalid")
 			}
 		default:
 			problems = append(problems, "Freewill dispatch status is invalid")
 		}
+		if dispatch.Status != "mutation_no_effect_reconciled" &&
+			(dispatch.MutationAttemptID != "" || len(dispatch.NoEffectMutationIDs) != 0) {
+			problems = append(problems, "Freewill mutation receipt is present outside its reconciled state")
+		}
 	}
 	return problems
+}
+
+func validFreewillRecoveryReason(reason string) bool {
+	switch reason {
+	case "child_manifest_missing", "child_mutation_possible", "terminal_report_unavailable", "terminal_report_invalid":
+		return true
+	default:
+		return false
+	}
+}
+
+func validFreewillHash(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func validFreewillTerminalChildStatus(status string) bool {

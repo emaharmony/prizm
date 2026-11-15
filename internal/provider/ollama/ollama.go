@@ -1,4 +1,5 @@
-// Package ollama provides an LLM provider for local Ollama instances.
+// Package ollama provides LLM providers for local Ollama instances and the
+// opt-in direct Ollama Cloud API.
 //
 // OllamaProvider calls Ollama's native /api/generate endpoint using raw HTTP.
 // No SDK dependency — just net/http and encoding/json.
