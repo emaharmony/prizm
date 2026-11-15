@@ -51,6 +51,41 @@ func TestFreewillApprovalPolicyAllowsAndRequiresApprovalRemainExecutionDisabled(
 	}
 }
 
+func TestFreewillApprovalServiceListsBoundedStatusPage(t *testing.T) {
+	_, _, service, record, _ := newFreewillApprovalTestService(t, policy.DecisionRequiresApproval)
+	statuses, err := service.List(context.Background(), 500)
+	if err != nil {
+		t.Fatalf("list Freewill status: %v", err)
+	}
+	if len(statuses) != 1 || statuses[0].RunID != record.State.RunID || statuses[0].Lifecycle != record.Freewill.Lifecycle {
+		t.Fatalf("listed statuses=%#v, want one projection for %s", statuses, record.State.RunID)
+	}
+}
+
+func TestFreewillDecisionOnlyGrantDoesNotGainExecutionWhenDispatcherIsEnabledLater(t *testing.T) {
+	_, _, service, record, _ := newFreewillApprovalTestService(t, policy.DecisionRequiresApproval)
+	pending, err := service.RequestApproval(context.Background(), record.State.RunID)
+	if err != nil {
+		t.Fatalf("request approval: %v", err)
+	}
+	granted, err := service.Decide(context.Background(), record.State.RunID, pending.Freewill.ApprovalRef, "grant", "owner", "")
+	if err != nil {
+		t.Fatalf("grant decision-only approval: %v", err)
+	}
+	if granted.Freewill.ExecutionDispatch != nil {
+		t.Fatalf("decision-only grant unexpectedly wrote execution marker: %#v", granted.Freewill.ExecutionDispatch)
+	}
+
+	dispatcher := &freewillExecutionDispatcherStub{}
+	service.SetExecutionDispatcher(dispatcher)
+	if _, err := service.DispatchApproved(context.Background(), record.State.RunID); !errors.Is(err, ErrFreewillApprovalStale) {
+		t.Fatalf("dispatch old decision-only grant after enablement = %v, want stale approval", err)
+	}
+	if len(dispatcher.calls) != 0 {
+		t.Fatalf("enabling execution dispatched an earlier decision-only grant: %#v", dispatcher.calls)
+	}
+}
+
 func TestFreewillApprovalPolicyDenialIsFinalAndQueryable(t *testing.T) {
 	env, _, service, record, roleRunner := newFreewillApprovalTestService(t, policy.DecisionDenied)
 
@@ -116,6 +151,303 @@ func TestFreewillApprovalEditedRequestInvalidatesPriorFingerprint(t *testing.T) 
 	}
 }
 
+type freewillExecutionDispatcherStub struct {
+	calls []FreewillExecutionRequest
+	err   error
+}
+
+type blockingFreewillExecutionDispatcher struct {
+	started chan FreewillExecutionRequest
+	release chan struct{}
+}
+
+func TestExecutionEnabledSelectorCapabilitiesAreHostBound(t *testing.T) {
+	selection := freewill.Selection{Candidates: []freewill.CandidateIntention{{
+		Request: freewill.IntentionRequest{RequestedCapabilities: []string{"shell", "network"}},
+	}}}
+	decisionOnly := bindFreewillExecutionCapabilities(selection, false)
+	if strings.Join(decisionOnly.Candidates[0].Request.RequestedCapabilities, ",") != "shell,network" {
+		t.Fatalf("decision-only selection changed without execution opt-in: %#v", decisionOnly)
+	}
+	bounded := bindFreewillExecutionCapabilities(selection, true)
+	if len(bounded.Candidates[0].Request.RequestedCapabilities) != 1 || bounded.Candidates[0].Request.RequestedCapabilities[0] != "code" {
+		t.Fatalf("execution opt-in did not host-bind the exact supported capability: %#v", bounded)
+	}
+}
+
+func (s *freewillExecutionDispatcherStub) Start(_ context.Context, request FreewillExecutionRequest) (FreewillExecutionResult, error) {
+	s.calls = append(s.calls, request)
+	if s.err != nil {
+		return FreewillExecutionResult{}, s.err
+	}
+	return FreewillExecutionResult{RunID: request.RunID, ReportRef: "multiagent_report.json"}, nil
+}
+
+func (d *blockingFreewillExecutionDispatcher) Start(ctx context.Context, request FreewillExecutionRequest) (FreewillExecutionResult, error) {
+	select {
+	case d.started <- request:
+	case <-ctx.Done():
+		return FreewillExecutionResult{}, ctx.Err()
+	}
+	select {
+	case <-d.release:
+		return FreewillExecutionResult{RunID: request.RunID, ReportRef: "multiagent_report.json"}, nil
+	case <-ctx.Done():
+		return FreewillExecutionResult{}, ctx.Err()
+	}
+}
+
+func TestFreewillGrantDispatchesOnceAndPersistsChildReportLink(t *testing.T) {
+	_, _, service, record, _ := newFreewillApprovalTestService(t, policy.DecisionRequiresApproval)
+	dispatcher := &freewillExecutionDispatcherStub{}
+	service.SetExecutionDispatcher(dispatcher)
+	pending, err := service.RequestApproval(context.Background(), record.State.RunID)
+	if err != nil {
+		t.Fatalf("request approval: %v", err)
+	}
+	granted, err := service.Decide(context.Background(), record.State.RunID, pending.Freewill.ApprovalRef, "grant", "owner", "")
+	if err != nil {
+		t.Fatalf("grant intention: %v", err)
+	}
+	if len(dispatcher.calls) != 1 || granted.Freewill.ExecutionDispatch == nil || granted.Freewill.ExecutionDispatch.Status != "accepted" {
+		t.Fatalf("dispatch was not durably accepted exactly once: calls=%d state=%#v", len(dispatcher.calls), granted.Freewill.ExecutionDispatch)
+	}
+	call := dispatcher.calls[0]
+	if call.RunID != freewillExecutionChildRunID(call.Identity.RequesterID, call.Identity.SessionID, call.Identity.IdempotencyKey) ||
+		call.ParentRunID != record.State.RunID || call.ApprovalID != pending.Freewill.ApprovalRef {
+		t.Fatalf("child request did not use stable exact-approval identity: %#v", call)
+	}
+	status, err := service.Status(context.Background(), record.State.RunID)
+	if err != nil {
+		t.Fatalf("read execution status: %v", err)
+	}
+	if status.ExecutionStatus != "accepted" || status.ChildRunID != call.RunID || status.ExecutionReportRef != "multiagent_report.json" || !status.ExecutionDisabled {
+		t.Fatalf("execution linkage/report not exposed with disabled parent authority: %#v", status)
+	}
+	if _, err := service.DispatchApproved(context.Background(), record.State.RunID); err != nil {
+		t.Fatalf("duplicate dispatch recovery: %v", err)
+	}
+	if len(dispatcher.calls) != 1 {
+		t.Fatalf("accepted dispatch was repeated: %d calls", len(dispatcher.calls))
+	}
+}
+
+func TestFreewillExecutionGrantPersistsAdmissionBeforeDispatcherStart(t *testing.T) {
+	env, _, service, record, _ := newFreewillApprovalTestService(t, policy.DecisionRequiresApproval)
+	dispatcher := &blockingFreewillExecutionDispatcher{started: make(chan FreewillExecutionRequest, 1), release: make(chan struct{}, 1)}
+	service.SetExecutionDispatcher(dispatcher)
+	pending, err := service.RequestApproval(context.Background(), record.State.RunID)
+	if err != nil {
+		t.Fatalf("request approval: %v", err)
+	}
+	admission := env.store
+	if err := admission.EnsureFreewillActorAdmission(context.Background(), record.State.RunID, "agent-1", freewill.Scope{ProjectID: "project-1", Workspace: "workspace-1"}); err != nil {
+		t.Fatalf("reserve initial actor admission: %v", err)
+	}
+	type decisionResult struct {
+		record DurableRun
+		err    error
+	}
+	decisionDone := make(chan decisionResult, 1)
+	go func() {
+		granted, decideErr := service.Decide(context.Background(), record.State.RunID, pending.Freewill.ApprovalRef, "grant", "owner", "")
+		decisionDone <- decisionResult{record: granted, err: decideErr}
+	}()
+	defer func() {
+		select {
+		case dispatcher.release <- struct{}{}:
+		default:
+		}
+	}()
+
+	var childRequest FreewillExecutionRequest
+	select {
+	case childRequest = <-dispatcher.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("dispatcher did not start after the grant checkpoint")
+	}
+	checkpointed, err := env.store.Load(context.Background(), record.State.RunID)
+	if err != nil || checkpointed.Freewill.ApprovalReceipt == nil ||
+		checkpointed.Freewill.ApprovalReceipt.Decision != FreewillApprovalGranted ||
+		checkpointed.Freewill.ExecutionDispatch == nil || checkpointed.Freewill.ExecutionDispatch.Status != "dispatching" ||
+		checkpointed.Freewill.ExecutionDispatch.ChildRunID != childRequest.RunID ||
+		checkpointed.Freewill.ExecutionDispatch.ReportRef != "multiagent_report.json" {
+		t.Fatalf("grant checkpoint did not persist dispatch intent atomically: state=%#v err=%v", checkpointed.Freewill, err)
+	}
+	events, err := env.events.Query(context.Background(), event.EventFilter{RunID: record.State.RunID, Limit: 100})
+	if err != nil {
+		t.Fatalf("query grant/dispatch marker events: %v", err)
+	}
+	dispatchMarkerEventFound := false
+	for _, current := range events {
+		if current.Type == event.EventFreewillExecutionDispatching && current.Payload["child_run_id"] == childRequest.RunID {
+			dispatchMarkerEventFound = true
+			break
+		}
+	}
+	if !dispatchMarkerEventFound {
+		t.Fatal("atomic grant checkpoint omitted the stable-child dispatching event")
+	}
+	wake, wakeRecord := freewillWakeAcceptanceFixture("next-after-grant", "agent-1",
+		freewill.Scope{ProjectID: "project-1", Workspace: "workspace-1"}, "next-after-grant-dedupe")
+	if _, _, err := env.store.AcceptFreewillWake(context.Background(), wakeRecord, nil, wake); !errors.Is(err, ErrFreewillActorAdmissionConflict) {
+		t.Fatalf("new wake while granted child is dispatching = %v, want actor-admission conflict", err)
+	}
+	dispatcher.release <- struct{}{}
+	select {
+	case result := <-decisionDone:
+		if result.err != nil || result.record.Freewill.ExecutionDispatch == nil ||
+			result.record.Freewill.ExecutionDispatch.Status != "accepted" ||
+			result.record.Freewill.ExecutionDispatch.ChildRunID != childRequest.RunID {
+			t.Fatalf("grant dispatch result = state %#v err=%v child=%q", result.record.Freewill.ExecutionDispatch, result.err, childRequest.RunID)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("grant decision did not finish after dispatcher release")
+	}
+}
+
+func TestFreewillAcceptedChildResumeFailsClosedAfterOperatorHalt(t *testing.T) {
+	_, _, service, record, _ := newFreewillApprovalTestService(t, policy.DecisionRequiresApproval)
+	dispatcher := &freewillExecutionDispatcherStub{}
+	service.SetExecutionDispatcher(dispatcher)
+	pending, err := service.RequestApproval(context.Background(), record.State.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Decide(context.Background(), record.State.RunID, pending.Freewill.ApprovalRef, "grant", "owner", ""); err != nil {
+		t.Fatal(err)
+	}
+	control, err := NewFreewillOperatorControl(service.store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := control.SetHalted(context.Background(), "agent-1", freewill.Scope{ProjectID: "project-1", Workspace: "workspace-1"}, true, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ValidateAcceptedExecutionResume(context.Background(), record.State.RunID); !errors.Is(err, ErrFreewillHalted) {
+		t.Fatalf("accepted child resume after halt = %v, want ErrFreewillHalted", err)
+	}
+}
+
+func TestFreewillTerminalChildProjectionIsVisibleAndIdempotent(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		childStatus       RunStatus
+		validationSummary string
+		failureCode       string
+		wantStatus        string
+		wantEvent         string
+	}{
+		{name: "completed", childStatus: RunStatusCompleted, validationSummary: "passed", wantStatus: "completed", wantEvent: event.EventFreewillExecutionCompleted},
+		{name: "failed", childStatus: RunStatusFailed, validationSummary: "failed", failureCode: "validation_failed", wantStatus: "execution_failed", wantEvent: event.EventFreewillExecutionFailed},
+		{name: "cancelled", childStatus: RunStatusCancelled, validationSummary: "not_run", failureCode: "child_cancelled", wantStatus: "execution_cancelled", wantEvent: event.EventFreewillExecutionCancelled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			env, _, service, record, _ := newFreewillApprovalTestService(t, policy.DecisionRequiresApproval)
+			dispatcher := &freewillExecutionDispatcherStub{}
+			service.SetExecutionDispatcher(dispatcher)
+			pending, err := service.RequestApproval(context.Background(), record.State.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			accepted, err := service.Decide(context.Background(), record.State.RunID, pending.Freewill.ApprovalRef, "grant", "owner", "")
+			if err != nil {
+				t.Fatalf("grant intention: %v", err)
+			}
+			result := FreewillExecutionTerminalResult{ChildRunID: accepted.Freewill.ExecutionDispatch.ChildRunID,
+				ChildStatus: test.childStatus, ReportRef: "multiagent_report.json", ReportSHA256: strings.Repeat("a", 64),
+				ValidationSummary: test.validationSummary, FailureCode: test.failureCode}
+			terminal, err := service.ReconcileExecutionTerminal(context.Background(), record.State.RunID, result)
+			if err != nil {
+				t.Fatalf("persist child terminal outcome: %v", err)
+			}
+			if terminal.Freewill.ExecutionDispatch.Status != test.wantStatus || terminal.Freewill.ExecutionDispatch.ChildStatus != string(test.childStatus) {
+				t.Fatalf("parent outcome = %#v", terminal.Freewill.ExecutionDispatch)
+			}
+			status, err := service.Status(context.Background(), record.State.RunID)
+			if err != nil {
+				t.Fatalf("read Freewill status: %v", err)
+			}
+			if status.ExecutionStatus != test.wantStatus || status.ChildRunID != result.ChildRunID || status.ChildStatus != string(test.childStatus) ||
+				status.ExecutionReportRef != result.ReportRef || status.ExecutionReportSHA256 != result.ReportSHA256 || status.ValidationSummary != test.validationSummary ||
+				status.ExecutionFailureCode != test.failureCode {
+				t.Fatalf("status omitted terminal report evidence: %#v", status)
+			}
+			revision := terminal.Revision
+			replayed, err := service.ReconcileExecutionTerminal(context.Background(), record.State.RunID, result)
+			if err != nil || replayed.Revision != revision {
+				t.Fatalf("same terminal replay changed parent: revision=%d want=%d err=%v", replayed.Revision, revision, err)
+			}
+			conflict := result
+			conflict.ReportSHA256 = strings.Repeat("b", 64)
+			if _, err := service.ReconcileExecutionTerminal(context.Background(), record.State.RunID, conflict); !errors.Is(err, ErrRequestIdentityConflict) {
+				t.Fatalf("conflicting terminal replay = %v", err)
+			}
+			persisted, err := env.store.Load(context.Background(), record.State.RunID)
+			if err != nil || persisted.Freewill.ExecutionDispatch.ReportSHA256 != result.ReportSHA256 {
+				t.Fatalf("conflicting replay overwrote durable report digest: state=%#v err=%v", persisted.Freewill.ExecutionDispatch, err)
+			}
+			events, err := env.events.Query(context.Background(), event.EventFilter{RunID: record.State.RunID, Type: test.wantEvent, Limit: 10})
+			if err != nil || len(events) != 1 {
+				t.Fatalf("terminal event count=%d err=%v want=1", len(events), err)
+			}
+			if _, err := service.DispatchApproved(context.Background(), record.State.RunID); err != nil {
+				t.Fatalf("recovery after terminal outcome: %v", err)
+			}
+			if len(dispatcher.calls) != 1 {
+				t.Fatalf("terminal outcome was redispatched: calls=%d", len(dispatcher.calls))
+			}
+		})
+	}
+}
+
+func TestFreewillDenialNeverDispatches(t *testing.T) {
+	_, _, service, record, _ := newFreewillApprovalTestService(t, policy.DecisionRequiresApproval)
+	dispatcher := &freewillExecutionDispatcherStub{}
+	service.SetExecutionDispatcher(dispatcher)
+	pending, err := service.RequestApproval(context.Background(), record.State.RunID)
+	if err != nil {
+		t.Fatalf("request approval: %v", err)
+	}
+	denied, err := service.Decide(context.Background(), record.State.RunID, pending.Freewill.ApprovalRef, "deny", "owner", "not this task")
+	if err != nil {
+		t.Fatalf("deny intention: %v", err)
+	}
+	if len(dispatcher.calls) != 0 || denied.Freewill.ExecutionDispatch != nil || denied.Freewill.Lifecycle != freewill.StateDenied {
+		t.Fatalf("denied intention reached dispatcher: calls=%d state=%#v", len(dispatcher.calls), denied.Freewill)
+	}
+}
+
+func TestFreewillDispatchRecoveryReusesStableChildIdentity(t *testing.T) {
+	env, _, service, record, _ := newFreewillApprovalTestService(t, policy.DecisionRequiresApproval)
+	dispatcher := &freewillExecutionDispatcherStub{err: errors.New("simulated lost child-start response")}
+	service.SetExecutionDispatcher(dispatcher)
+	pending, err := service.RequestApproval(context.Background(), record.State.RunID)
+	if err != nil {
+		t.Fatalf("request approval: %v", err)
+	}
+	failed, err := service.Decide(context.Background(), record.State.RunID, pending.Freewill.ApprovalRef, "grant", "owner", "")
+	if err != nil || failed.Freewill.ExecutionDispatch == nil || failed.Freewill.ExecutionDispatch.Status != "failed" {
+		t.Fatalf("lost response was not recorded for retry: state=%#v err=%v", failed.Freewill.ExecutionDispatch, err)
+	}
+
+	// Recompose the service over the same durable stores to model process restart.
+	runtime := newDurableRuntimeForTest(t, validDefinition(), &scriptedRunner{}, env.store, env.claimer, env.events)
+	restarted, err := NewFreewillApprovalService(runtime, env.store, service.approvals, freewillApprovalEvaluatorStub{decision: policy.PolicyDecision{Decision: policy.DecisionRequiresApproval}}, "freewill-policy")
+	if err != nil {
+		t.Fatalf("recompose approval service: %v", err)
+	}
+	dispatcher.err = nil
+	restarted.SetExecutionDispatcher(dispatcher)
+	accepted, err := restarted.DispatchApproved(context.Background(), record.State.RunID)
+	if err != nil || accepted.Freewill.ExecutionDispatch == nil || accepted.Freewill.ExecutionDispatch.Status != "accepted" {
+		t.Fatalf("recovery dispatch failed: state=%#v err=%v", accepted.Freewill.ExecutionDispatch, err)
+	}
+	if len(dispatcher.calls) != 2 || dispatcher.calls[0].RunID != dispatcher.calls[1].RunID || dispatcher.calls[0].Identity.IdempotencyKey != dispatcher.calls[1].Identity.IdempotencyKey {
+		t.Fatalf("restart did not retry the same child identity: %#v", dispatcher.calls)
+	}
+}
+
 func TestFreewillApprovalServiceRejectsMissingPolicy(t *testing.T) {
 	env := newDurableTestEnvironment(t)
 	runtime := newDurableRuntimeForTest(t, validDefinition(), &scriptedRunner{}, env.store, env.claimer, env.events)
@@ -172,4 +504,3 @@ func assertFreewillApprovalEventsDoNotExecute(t *testing.T, store event.EventSto
 		}
 	}
 }
-

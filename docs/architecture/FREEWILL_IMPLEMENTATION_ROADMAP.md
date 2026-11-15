@@ -153,6 +153,81 @@ open.
 **Tests:** edited scope rechecks; forbidden tool denied; escapes/privilege escalation blocked; rejected intent never executes; one approved change applies once.\
 **Done when:** One small autonomous coding/research project starts by agent choice, is approved as needed, executes only within its exact envelope, and produces a validated report.
 
+**Owner-run POC checkpoint (2026-11-09, provisional):** The local stack on
+`codex/fw-full-poc-restack-20261109` now combines approved reference-workflow
+dispatch, child recovery and terminal projection, durable halt/admission
+fencing, a two-approval cycle, and P3 resume lineage. Prior isolated Linux OCI
+evidence records a scripted-provider cycle with separate intention and patch
+grants, bounded validation, a terminal report, and idempotent replay. Focused
+workflow and CLI regression tests pass on the restacked tree. The opt-in
+`prizm serve` path now exposes authenticated parent-intention and child-patch
+review routes. It binds patch decisions to the accepted parent and one child,
+persists digest-pinned OCI configuration with the child manifest, and resumes
+only after an explicit patch decision. A synthetic-provider served OCI
+acceptance exercises both authenticated HTTP approval gates, durable report
+projection, a terminal notification carrying the report SHA and passed
+validation, and idempotent replay. It passed in 7.42s inside an isolated Linux
+DinD daemon on Windows Docker Desktop. This acceptance composes the production
+Freewill runtime and API handlers but does not launch the long-running
+`prizm serve` process or NATS. The POC remains provisional and owner-run; G1/G2
+evidence, broader process-level recovery cases, external-provider behavior, and
+unattended-use readiness remain open. These results are local owner-run
+evidence and do not close the remaining roadmap gates.
+
+**Windows process-level follow-up (2026-11-09):** A fresh isolated run of the
+rebuilt `prizm serve` used a local fake provider, manual NATS wake, authenticated
+parent and child approval routes, and the pinned OCI image. It applied exactly
+the approved synthetic file, passed validation, projected the durable report,
+and replayed the terminal state after service restart without another provider
+call. Discord was disabled; terminal sink delivery remains covered by the
+in-process acceptance above. A Windows line-ending regression now covers the
+host's `core.autocrlf=true` setting: detached worktree creation uses a
+command-scoped normalization that matches the sandbox's isolated clean check,
+while a real tracked edit still fails closed. The POC remains owner-run and
+provisional; G1/G2 evidence, external-provider behavior, and unattended-use
+readiness remain open.
+
+**Paused-child restart follow-up (2026-11-09):** A second process-level run
+restarted `prizm serve` while its accepted child was paused for patch approval.
+Recovery preserved the same child and sole pending approval, kept the child
+paused, and made no additional provider calls before the explicit grant. The
+post-restart grant produced one approved patch and one validated durable report.
+This remains synthetic owner-run evidence; broader recovery cases, G1/G2,
+external-provider behavior, and unattended-use readiness remain open.
+
+**Operator patch review (2026-11-09):** The authenticated dashboard now exposes
+pending child patches only for accepted parent intentions whose child is paused.
+It presents the exact diff, target paths, artifact and patch digests, and the
+host-verified sandbox binding, then records a separate grant or denial with an
+operator actor and reason through the existing API. Parent intention approval
+does not imply patch approval; the API remains the authority for binding and
+decision validation. This dashboard milestone does not change decision-only
+defaults or close G1/G2 and unattended-use gates.
+
+**Terminal outcome review (2026-11-09, local implementation):** The authenticated
+Freewill dashboard now surfaces completed and failed child outcomes, denied
+intention decisions, child validation summary, report reference and SHA-256,
+execution failure code, and selector retry state. Operators can load the
+existing authenticated child report to inspect its terminal status, changed
+artifact paths, checks, and full evidence. The existing child-approval read API
+lists pending patches only, so the final child patch grant/denial receipt and
+its actor/reason are not yet shown after that approval leaves the pending state.
+The dashboard adds no decision authority and leaves the decision-only default
+and child approval binding unchanged.
+
+**GLM Cloud selector contract (2026-11-09, local implementation):** Ollama's
+[official structured-output documentation](https://docs.ollama.com/capabilities/structured-outputs)
+states that Ollama Cloud does not support structured outputs. The
+`glm-5.3-flash:cloud` selector therefore sends
+short visible IDEA/SCORE/FACTORS/RATIONALE and CHOICE/REASON text contracts;
+the host keeps strict bounds, allowlisted score factors and candidate IDs, and
+owns canonical candidate identity, scope, capability, persistence, and choice
+validation. The provider omits `format` only for the exact
+`glm-5.3-flash:cloud` selector model; other GLM-5.3 models retain the caller's
+requested format. No live GLM calls were made for this code change; served
+provider acceptance is still pending explicit authorization and successful
+evidence.
+
 ### FW-P3 — Persistence, Lifecycle, and Recovery
 
 **Requires:** FW-P2 + G1.\
@@ -267,6 +342,6 @@ flowchart TD
 
 ## 10. Recommendation and next action
 
-**Begin with FW-P0 and FW-001 today**, in a branch from current `staging`. This can proceed even while R1 and R6 mature. Then implement FW-P1 as a **read-only, policy-aware** vertical slice. Only start FW-P2 after G1 and G2 acceptance tests pass; preserve every locked user decision in the companion spec and keep the entire feature behind `experimental.freewill.enabled: false` until explicit local opt-in.
+**Begin with FW-P0 and FW-001 today**, in a branch from current `staging`. This can proceed even while R1 and R6 mature. Then implement FW-P1 as a **read-only, policy-aware** vertical slice. A local owner-run FW-P2 POC may proceed before G1/G2 closure only with opt-in, separate intention and patch approval, actual OCI isolation, and a bounded fixture; it is not served or unattended acceptance. Require G1/G2 evidence before served or unattended FW-P2, preserve every locked user decision in the companion spec, and keep the entire feature behind `experimental.freewill.enabled: false` until explicit local opt-in.
 
 The roadmap is a planning artifact. It does not represent new commits, PRs, passing test results or enabled runtime features.

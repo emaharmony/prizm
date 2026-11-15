@@ -143,6 +143,12 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 	if req.OutputSchema != nil {
 		format = req.OutputSchema
 	}
+	// This Freewill selector model uses a bounded plain-text protocol because
+	// Ollama Cloud does not support structured outputs. Other GLM-5.3 models
+	// retain the caller's requested format.
+	if isGLM53FlashCloud(req.Model) {
+		format = nil
+	}
 	body := chatRequest{
 		Model:    req.Model,
 		Messages: ollamaMsgs,
@@ -295,6 +301,10 @@ func isGLM53Cloud(model string) bool {
 	default:
 		return false
 	}
+}
+
+func isGLM53FlashCloud(model string) bool {
+	return strings.EqualFold(strings.TrimSpace(model), "glm-5.3-flash:cloud")
 }
 
 // isQuotaExhausted reports whether a 429 response body indicates an

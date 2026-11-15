@@ -28,7 +28,11 @@ func CreateDetachedWorktree(ctx context.Context, root, path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	_, err := RunCommand(ctx, root, "", "git", "worktree", "add", "--detach", path, "HEAD")
+	// Keep checkout normalization independent of the host's global/system Git
+	// config. The sandbox's clean-source check deliberately ignores those
+	// configs, so a Windows autocrlf setting must not make a fresh worktree
+	// appear dirty there. Committed .gitattributes eol rules remain in force.
+	_, err := RunCommand(ctx, root, "", "git", "-c", "core.autocrlf=false", "worktree", "add", "--detach", path, "HEAD")
 	if err != nil {
 		return fmt.Errorf("create worktree: %w", err)
 	}

@@ -474,7 +474,9 @@ func TestServedFreewillP1GLMFlashBlankObjectiveStillPersistsPolicyOnly(t *testin
 		}
 
 		content := ""
-		if strings.Contains(request.Messages[0].Content, "FACTORS (scope_fit, feasibility, impact, novelty, readiness)") {
+		ideaPrompt := request.Messages[0].Content
+		if strings.Contains(ideaPrompt, "FACTORS (scope_fit, feasibility, impact, novelty, readiness)") ||
+			strings.Contains(ideaPrompt, "FACTORS: one or more comma-separated labels from scope_fit, feasibility, impact, novelty, readiness") {
 			var user struct {
 				Mode      string `json:"mode"`
 				MaxIdeas  int    `json:"max_ideas"`
@@ -486,7 +488,8 @@ func TestServedFreewillP1GLMFlashBlankObjectiveStillPersistsPolicyOnly(t *testin
 				return
 			}
 			content = ideas
-		} else if strings.Contains(request.Messages[0].Content, "Choose the candidate that best fits the objective") {
+		} else if strings.Contains(request.Messages[0].Content, "Choose the candidate that best fits the objective") ||
+			strings.Contains(request.Messages[0].Content, "Choose using the objective and supplied candidate IDs.") {
 			var user struct {
 				Objective  string `json:"objective"`
 				Candidates []struct {
@@ -495,7 +498,10 @@ func TestServedFreewillP1GLMFlashBlankObjectiveStillPersistsPolicyOnly(t *testin
 					Score int    `json:"score"`
 				} `json:"candidates"`
 			}
-			if err := json.Unmarshal([]byte(request.Messages[1].Content), &user); err != nil || user.Objective != cfgObjective || !strings.Contains(request.Messages[0].Content, "If the objective is absent, use the titles and advisory scores and give a reason.") || len(user.Candidates) != 3 || user.Candidates[0].Title == "" || user.Candidates[0].Score != 82 {
+			choicePrompt := request.Messages[0].Content
+			legacyChoiceContract := strings.Contains(choicePrompt, "If the objective is absent, use the titles and advisory scores and give a reason.")
+			flashChoiceContract := strings.Contains(choicePrompt, "Scores are advisory.")
+			if err := json.Unmarshal([]byte(request.Messages[1].Content), &user); err != nil || user.Objective != cfgObjective || (!legacyChoiceContract && !flashChoiceContract) || len(user.Candidates) != 3 || user.Candidates[0].Title == "" || user.Candidates[0].Score != 82 {
 				requestFailure = "choice stage did not provide objective and three scored host-bound candidates"
 				http.Error(w, "invalid request", http.StatusBadRequest)
 				return
@@ -570,7 +576,10 @@ func TestServedFreewillP1GLMFlashBlankObjectiveStillPersistsPolicyOnly(t *testin
 		time.Sleep(20 * time.Millisecond)
 	}
 	if run.Freewill == nil || len(run.Freewill.Candidates) != 3 || run.Freewill.ChoiceID == "" {
-		t.Fatalf("GLM annotated scores did not reach a durable denied proposal: %#v", run.Freewill)
+		mu.Lock()
+		failure, requests := requestFailure, requestCount
+		mu.Unlock()
+		t.Fatalf("GLM annotated scores did not reach a durable denied proposal: %#v (provider requests=%d failure=%q)", run.Freewill, requests, failure)
 	}
 	if run.Freewill.PolicyDecision != "denied" || run.Freewill.PauseReason != "policy_denied" || !run.Freewill.ExecutionDisabled || run.Freewill.ApprovalRef != "" {
 		t.Fatalf("policy-only boundary changed: %#v", run.Freewill)

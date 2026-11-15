@@ -132,6 +132,13 @@ func TestDecodeCandidateIntentionRejectsNestedUnknownAuthority(t *testing.T) {
 	}
 }
 
+func TestDecodeSelectionRejectsModelSuppliedResumeLineage(t *testing.T) {
+	input := `{"candidates":[],"choice_id":"resume-candidate","reason_summary":"Continue prior work.","resume_from_run_id":"freewill-prior"}`
+	if _, err := DecodeSelection([]byte(input)); err == nil {
+		t.Fatal("selector decoder accepted host-owned resume lineage")
+	}
+}
+
 func TestDecodeIntentionRequestRejectsMalformedOrAuthorityFields(t *testing.T) {
 	base, err := json.Marshal(validRequest())
 	if err != nil {

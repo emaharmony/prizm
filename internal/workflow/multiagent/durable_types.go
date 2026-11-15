@@ -351,10 +351,22 @@ type FreewillApprovalReceipt struct {
 	ControlGeneration  uint64                   `json:"control_generation,omitempty"`
 }
 
+type FreewillExecutionDispatch struct {
+	Status            string    `json:"status"`
+	ChildRunID        string    `json:"child_run_id,omitempty"`
+	ReportRef         string    `json:"report_ref,omitempty"`
+	ChildStatus       string    `json:"child_status,omitempty"`
+	ValidationSummary string    `json:"validation_summary,omitempty"`
+	ReportSHA256      string    `json:"report_sha256,omitempty"`
+	FailureCode       string    `json:"failure_code,omitempty"`
+	UpdatedAt         time.Time `json:"updated_at,omitempty"`
+}
+
 type FreewillRunState struct {
 	Lifecycle               freewill.State                `json:"lifecycle"`
 	Scope                   freewill.Scope                `json:"scope"`
 	WakeID                  string                        `json:"wake_id"`
+	ResumeFromRunID         string                        `json:"resume_from_run_id,omitempty"`
 	Trigger                 string                        `json:"trigger"`
 	DedupeKey               string                        `json:"dedupe_key"`
 	CorrelationID           string                        `json:"correlation_id"`
@@ -371,6 +383,7 @@ type FreewillRunState struct {
 	ApprovalFingerprint     string                        `json:"approval_fingerprint,omitempty"`
 	ApprovalGeneration      uint64                        `json:"approval_generation,omitempty"`
 	ApprovalReceipt         *FreewillApprovalReceipt      `json:"approval_receipt,omitempty"`
+	ExecutionDispatch       *FreewillExecutionDispatch    `json:"execution_dispatch,omitempty"`
 	PolicyDecision          string                        `json:"policy_decision,omitempty"`
 	PolicyRuleID            string                        `json:"policy_rule_id,omitempty"`
 	ExecutionDisabled       bool                          `json:"execution_disabled,omitempty"`
@@ -624,13 +637,102 @@ func (r DurableRun) validateFreewill() []string {
 		strings.TrimSpace(r.Freewill.Scope.Workspace) == "" {
 		problems = append(problems, "Freewill wake identity and scope are required")
 	}
+	if r.Freewill.ResumeFromRunID != "" && (strings.TrimSpace(r.Freewill.ResumeFromRunID) != r.Freewill.ResumeFromRunID ||
+		r.Freewill.ResumeFromRunID == r.State.RunID || len(r.Freewill.ResumeFromRunID) > 256) {
+		problems = append(problems, "Freewill resume predecessor identity is invalid")
+	}
 	if r.State.RequestIdentity != nil && r.Freewill.DedupeKey != r.State.RequestIdentity.IdempotencyKey {
 		problems = append(problems, "Freewill dedupe key does not match accepted identity")
 	}
 	if !r.Freewill.ExecutionDisabled && r.Freewill.Lifecycle != freewill.StateWaking && r.Freewill.Lifecycle != freewill.StateSelecting {
 		problems = append(problems, "Freewill execution must remain disabled")
 	}
+	if dispatch := r.Freewill.ExecutionDispatch; dispatch != nil {
+		if !r.Freewill.ExecutionDisabled || !validFreewillApprovalReceipt(r.Freewill, FreewillApprovalGranted) {
+			problems = append(problems, "Freewill dispatch requires a granted exact approval receipt")
+		}
+		switch dispatch.Status {
+		case "dispatching":
+			if (dispatch.ChildRunID == "" && dispatch.ReportRef != "") ||
+				(dispatch.ChildRunID != "" && (!validFreewillChildRunID(dispatch.ChildRunID) || dispatch.ReportRef != "multiagent_report.json")) ||
+				dispatch.FailureCode != "" || dispatch.ChildStatus != "" || dispatch.ValidationSummary != "" || dispatch.ReportSHA256 != "" {
+				problems = append(problems, "Freewill dispatching state is invalid")
+			}
+		case "accepted":
+			if !validFreewillChildRunID(dispatch.ChildRunID) || dispatch.ReportRef != "multiagent_report.json" || dispatch.FailureCode != "" ||
+				dispatch.ChildStatus != "" || dispatch.ValidationSummary != "" || dispatch.ReportSHA256 != "" {
+				problems = append(problems, "Freewill accepted dispatch linkage is invalid")
+			}
+		case "completed", "execution_failed", "execution_cancelled":
+			if !validFreewillChildRunID(dispatch.ChildRunID) || dispatch.ReportRef != "multiagent_report.json" ||
+				!validFreewillTerminalChildStatus(dispatch.ChildStatus) || !validFreewillValidationSummary(dispatch.ValidationSummary) ||
+				!validSHA256Hex(dispatch.ReportSHA256) {
+				problems = append(problems, "Freewill terminal dispatch result is invalid")
+			}
+			if dispatch.Status == "completed" && dispatch.ChildStatus != string(RunStatusCompleted) {
+				problems = append(problems, "Freewill completed dispatch does not match child status")
+			}
+			if dispatch.Status == "execution_failed" && (dispatch.ChildStatus == string(RunStatusCompleted) ||
+				!validFreewillFailureCode(dispatch.FailureCode)) {
+				problems = append(problems, "Freewill failed execution does not match child status")
+			}
+			if dispatch.Status == "execution_cancelled" && (dispatch.ChildStatus != string(RunStatusCancelled) ||
+				!validFreewillFailureCode(dispatch.FailureCode)) {
+				problems = append(problems, "Freewill cancelled execution does not match child status")
+			}
+			if dispatch.Status == "completed" && dispatch.FailureCode != "" {
+				problems = append(problems, "Freewill completed execution has a failure code")
+			}
+		case "failed":
+			invalidIdentity := (dispatch.ChildRunID == "" && dispatch.ReportRef != "") ||
+				(dispatch.ChildRunID != "" && (!validFreewillChildRunID(dispatch.ChildRunID) || dispatch.ReportRef != "multiagent_report.json"))
+			if dispatch.FailureCode != "workflow_start_failed" || invalidIdentity ||
+				dispatch.ChildStatus != "" || dispatch.ValidationSummary != "" || dispatch.ReportSHA256 != "" {
+				problems = append(problems, "Freewill failed dispatch state is invalid")
+			}
+		default:
+			problems = append(problems, "Freewill dispatch status is invalid")
+		}
+	}
 	return problems
+}
+
+func validFreewillTerminalChildStatus(status string) bool {
+	value := RunStatus(status)
+	return value.Terminal() && value.Valid()
+}
+
+func validFreewillValidationSummary(summary string) bool {
+	switch summary {
+	case "passed", "failed", "mixed", "not_run":
+		return true
+	default:
+		return false
+	}
+}
+
+func validSHA256Hex(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, r := range value {
+		if !(r >= '0' && r <= '9') && !(r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func validFreewillChildRunID(runID string) bool {
+	if !strings.HasPrefix(runID, "run_") || len(runID) > 80 {
+		return false
+	}
+	for _, r := range runID {
+		if !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '_' && r != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func validFanOutAdoptionSource(a FanOutAdoptionState, state RunState, graph *CompiledGraph) bool {

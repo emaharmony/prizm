@@ -437,6 +437,42 @@ func TestDurableRuntimeReemitsOutboxIdempotently(t *testing.T) {
 	}
 }
 
+type cancelAfterTerminalCommitStore struct {
+	DurableRunStore
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (s *cancelAfterTerminalCommitStore) Checkpoint(ctx context.Context, revision int64, record DurableRun, events []event.Event) (DurableRun, error) {
+	saved, err := s.DurableRunStore.Checkpoint(ctx, revision, record, events)
+	if err == nil && record.Phase == CheckpointTerminal {
+		s.once.Do(s.cancel)
+	}
+	return saved, err
+}
+
+func TestDurableRuntimeDrainsOutboxAfterCommittedTerminalCancellation(t *testing.T) {
+	env := newDurableTestEnvironment(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := &cancelAfterTerminalCommitStore{DurableRunStore: env.store, cancel: cancel}
+	runtime := newDurableRuntimeForTest(t, validDefinition(), happyDurableRunner(), store, env.claimer, env.events)
+	request := testRunRequest()
+	request.RunID = "run-terminal-outbox-cancel-race"
+	state, err := runtime.Run(ctx, request)
+	if err != nil || state.Status != RunStatusCompleted {
+		t.Fatalf("terminal result after canceled outbox publish: status=%s err=%v", state.Status, err)
+	}
+	stored, err := env.store.Load(context.Background(), request.RunID)
+	if err != nil || stored.Phase != CheckpointTerminal || stored.State.Status != RunStatusCompleted {
+		t.Fatalf("terminal winner changed: phase=%s status=%s err=%v", stored.Phase, stored.State.Status, err)
+	}
+	pending, err := env.store.PendingEvents(context.Background(), request.RunID, 100)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("committed terminal outbox was not drained: pending=%d err=%v", len(pending), err)
+	}
+}
+
 func TestDurableRuntimeRejectsCorruptAndFutureState(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -83,6 +83,29 @@ func TestAuthMiddleware_GetReadIsOpen(t *testing.T) {
 	}
 }
 
+func TestAuthMiddleware_FreewillRunCollectionRequiresAuth(t *testing.T) {
+	s, reached := newAuthTestServer("secret-token", nil)
+	h := s.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	for _, path := range []string{"/api/v1/freewill/runs", "/api/v1/freewill/runs/"} {
+		*reached = false
+		unauthenticated := httptest.NewRecorder()
+		h.ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodGet, path, nil))
+		if *reached || unauthenticated.Code != http.StatusUnauthorized {
+			t.Fatalf("unauthenticated collection GET %s reached=%v status=%d, want protected", path, *reached, unauthenticated.Code)
+		}
+		authorized := httptest.NewRequest(http.MethodGet, path, nil)
+		authorized.Header.Set("Authorization", "Bearer secret-token")
+		response := httptest.NewRecorder()
+		h.ServeHTTP(response, authorized)
+		if !*reached || response.Code != http.StatusOK {
+			t.Fatalf("authenticated collection GET %s reached=%v status=%d, want allowed", path, *reached, response.Code)
+		}
+	}
+}
+
 func TestAuthMiddleware_SSERequiresAuth(t *testing.T) {
 	s, reached := newAuthTestServer("secret-token", nil)
 	h := s.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

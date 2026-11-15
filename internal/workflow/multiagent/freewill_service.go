@@ -38,6 +38,11 @@ type FreewillSelectionEvidence struct {
 	Usage    cost.TokenUsage
 }
 
+type verifiedFreewillResume struct {
+	candidate        freewill.CandidateIntention
+	predecessorRunID string
+}
+
 // FreewillSelectionProvider performs exactly one no-tools selection request.
 type FreewillSelectionProvider interface {
 	SelectFreewill(context.Context, FreewillSelectionInput) (freewill.Selection, FreewillSelectionEvidence, error)
@@ -46,6 +51,7 @@ type FreewillSelectionProvider interface {
 type FreewillWakeServiceConfig struct {
 	Enabled           bool
 	SchedulingEnabled bool
+	ExecutionEnabled  bool
 	AgentID           string
 	Scope             freewill.Scope
 	Objective         string
@@ -182,7 +188,15 @@ func (s *FreewillWakeService) ProcessWake(ctx context.Context, runID string) (Du
 	if err := ensureFreewillNotHalted(selectionCtx, s.store, s.config.AgentID, s.config.Scope); err != nil {
 		return record, err
 	}
-	resumes := s.verifiedResumeCandidates(ctx, record)
+	verifiedResumes := s.verifiedResumeCandidates(ctx, record)
+	resumes := make([]freewill.CandidateIntention, 0, len(verifiedResumes))
+	verified := make(map[string]struct{}, len(verifiedResumes))
+	resumePredecessors := make(map[string]string, len(verifiedResumes))
+	for _, resume := range verifiedResumes {
+		resumes = append(resumes, resume.candidate)
+		verified[resume.candidate.CandidateID] = struct{}{}
+		resumePredecessors[resume.candidate.CandidateID] = resume.predecessorRunID
+	}
 	if err := ensureFreewillNotHalted(providerCtx, s.store, s.config.AgentID, s.config.Scope); err != nil {
 		return record, err
 	}
@@ -201,6 +215,22 @@ func (s *FreewillWakeService) ProcessWake(ctx context.Context, runID string) (Du
 		}
 		return failed, err
 	}
+	for index := range selection.Candidates {
+		selected := selection.Candidates[index]
+		if selected.Request.CandidateSource != freewill.SourceResume {
+			continue
+		}
+		for _, resume := range verifiedResumes {
+			if selected.CandidateID == resume.candidate.CandidateID {
+				// The selector chooses a host-supplied resume by ID. Restore the
+				// canonical request from durable storage; model output cannot alter
+				// its identity or predecessor lineage.
+				selection.Candidates[index] = resume.candidate
+				break
+			}
+		}
+	}
+	selection = bindFreewillExecutionCapabilities(selection, s.config.ExecutionEnabled)
 	if err := ensureFreewillNotHalted(ctx, s.store, s.config.AgentID, s.config.Scope); err != nil {
 		return record, err
 	}
@@ -209,16 +239,28 @@ func (s *FreewillWakeService) ProcessWake(ctx context.Context, runID string) (Du
 	}
 	stopRenewal()
 	lease = currentLease()
-	verified := make(map[string]struct{}, len(resumes))
-	for _, candidate := range resumes {
-		verified[candidate.CandidateID] = struct{}{}
+	resumeFromRunID := ""
+	if predecessorRunID := resumePredecessors[selection.ChoiceID]; predecessorRunID != "" {
+		resumeFromRunID = predecessorRunID
 	}
-	record, err = s.runtime.CommitFreewillSelectionWithEvidence(ctx, lease, selection, verified, evidence)
+	record, err = s.runtime.CommitFreewillSelectionWithEvidence(ctx, lease, selection, verified, resumeFromRunID, evidence)
 	if err != nil {
 		return record, err
 	}
 	committed = true
 	return record, nil
+}
+
+func bindFreewillExecutionCapabilities(selection freewill.Selection, executionEnabled bool) freewill.Selection {
+	if !executionEnabled {
+		return selection
+	}
+	for index := range selection.Candidates {
+		// This is host configuration, not selector authority. The selector has
+		// no tools; the owner still approves each exact proposal before dispatch.
+		selection.Candidates[index].Request.RequestedCapabilities = []string{"code"}
+	}
+	return selection
 }
 
 func (s *FreewillWakeService) validateConfiguredWake(record DurableRun) error {
@@ -251,6 +293,8 @@ func freewillSelectionRecoveryFeedback(code string) string {
 		return "Give each of exactly three blocks a specific RATIONALE of at least six words, after IDEA, SCORE, and optional FACTORS. Keep it decision-only and avoid extra fields or prose."
 	case "invalid_scored_ideas_unsafe":
 		return "Return exactly three bounded decision-only ideas with IDEA, SCORE, optional FACTORS, and specific RATIONALE. Do not include paths, authority, approval, tools, network, secrets, or execution requests."
+	case "invalid_scored_ideas_json_size_or_encoding", "invalid_scored_ideas_json_duplicate_key", "invalid_scored_ideas_json_trailing_content", "invalid_scored_ideas_json_syntax", "invalid_scored_ideas_json_unknown_field", "invalid_scored_ideas_json_wrong_shape":
+		return "Return exactly three IDEA/SCORE/FACTORS/RATIONALE text blocks in the requested order. No JSON, code fence, or extra prose."
 	case "invalid_idea_lines":
 		return "Return only three lines, each beginning exactly IDEA: followed by a short decision-only objective. No preamble, bullets, explanation, JSON, paths, authority, tools, network, secrets, approval, or execution requests."
 	case "invalid_selection_schema", "empty_selection_response", "selection_tool_request", "invalid_selection_json", "unknown_selection_field", "selection_candidate_count", "selection_contract_invalid":
@@ -312,7 +356,7 @@ func (s *FreewillWakeService) maintainLease(parent context.Context, initial Free
 	return ctx, stop, current
 }
 
-func (s *FreewillWakeService) verifiedResumeCandidates(ctx context.Context, current DurableRun) []freewill.CandidateIntention {
+func (s *FreewillWakeService) verifiedResumeCandidates(ctx context.Context, current DurableRun) []verifiedFreewillResume {
 	control, ok := s.store.(FreewillOperatorControlStore)
 	if !ok {
 		return nil
@@ -349,13 +393,12 @@ func (s *FreewillWakeService) verifiedResumeCandidates(ctx context.Context, curr
 			!validFreewillApprovalReceipt(record.Freewill, FreewillApprovalGranted) {
 			continue
 		}
-		for _, candidate := range record.Freewill.Candidates {
-			if candidate.Request.CandidateSource != freewill.SourceNew {
-				continue
-			}
-			candidate.Request.CandidateSource = freewill.SourceResume
-			return []freewill.CandidateIntention{candidate}
+		candidate, ok := selectedFreewillCandidate(record.Freewill)
+		if !ok || (candidate.Request.CandidateSource != freewill.SourceNew && candidate.Request.CandidateSource != freewill.SourceResume) {
+			continue
 		}
+		candidate.Request.CandidateSource = freewill.SourceResume
+		return []verifiedFreewillResume{{candidate: candidate, predecessorRunID: record.State.RunID}}
 	}
 	return nil
 }

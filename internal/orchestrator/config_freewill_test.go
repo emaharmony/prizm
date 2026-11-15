@@ -10,8 +10,8 @@ import (
 
 func TestFreewillFeatureSwitchesDefaultOffAndRoundTrip(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.Freewill.Enabled || cfg.Freewill.Scheduling.Enabled {
-		t.Fatal("Freewill feature and scheduler must default off")
+	if cfg.Freewill.Enabled || cfg.Freewill.Scheduling.Enabled || cfg.Freewill.Execution.Enabled {
+		t.Fatal("Freewill feature, scheduler, and execution must default off")
 	}
 
 	encoded, err := yaml.Marshal(cfg)
@@ -22,7 +22,7 @@ func TestFreewillFeatureSwitchesDefaultOffAndRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload default config: %v", err)
 	}
-	if decoded.Freewill.Enabled || decoded.Freewill.Scheduling.Enabled {
+	if decoded.Freewill.Enabled || decoded.Freewill.Scheduling.Enabled || decoded.Freewill.Execution.Enabled {
 		t.Fatal("Freewill flags changed during default config round trip")
 	}
 	if decoded.Shell.MasterUserID != cfg.Shell.MasterUserID || len(decoded.Shell.Allowlists) != len(cfg.Shell.Allowlists) {
@@ -45,6 +45,14 @@ func TestFreewillConfigFlagsAreIndependentAndDoNotActivateRuntime(t *testing.T) 
 	}
 	if schedulingOnly.Freewill.Enabled || !schedulingOnly.Freewill.Scheduling.Enabled {
 		t.Fatalf("scheduling flag must not enable feature flag: %#v", schedulingOnly.Freewill)
+	}
+
+	executionOnly, err := LoadConfigFromBytes([]byte("freewill:\n  execution:\n    enabled: true\n"))
+	if err != nil {
+		t.Fatalf("load execution-only config: %v", err)
+	}
+	if executionOnly.Freewill.Enabled || !executionOnly.Freewill.Execution.Enabled {
+		t.Fatalf("execution opt-in must not turn on Freewill: %#v", executionOnly.Freewill)
 	}
 }
 

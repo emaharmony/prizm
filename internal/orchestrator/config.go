@@ -119,6 +119,7 @@ type FreewillConfig struct {
 	ReasoningEffort string                   `yaml:"reasoning_effort,omitempty"`
 	PolicyDir       string                   `yaml:"policy_dir,omitempty"`
 	Scheduling      FreewillSchedulingConfig `yaml:"scheduling"`
+	Execution       FreewillExecutionConfig  `yaml:"execution"`
 	// NotifyChannelID optionally relays curated Freewill lifecycle events
 	// (proposals, decisions, denials, halts) to a Discord channel. Empty = off.
 	NotifyChannelID string `yaml:"notify_channel_id,omitempty"`
@@ -133,11 +134,20 @@ type FreewillSchedulingConfig struct {
 	Schedule string `yaml:"schedule,omitempty"`
 }
 
+// FreewillExecutionConfig is a separate opt-in for owner-approved dispatch.
+// It remains disabled unless explicitly configured.
+type FreewillExecutionConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
 // ValidateHostBinding checks the opt-in Freewill service bindings without
 // making ordinary config loading activate or require the feature.
 func (f FreewillConfig) ValidateHostBinding(agents []AgentConfig, projects []ProjectConfig) error {
 	if err := freewill.ValidateSelectionObjective(f.Objective); err != nil {
 		return fmt.Errorf("config: freewill.objective is invalid")
+	}
+	if f.Execution.Enabled && !f.Enabled {
+		return fmt.Errorf("config: freewill.execution.enabled requires freewill.enabled")
 	}
 	if !f.Enabled {
 		return nil

@@ -555,7 +555,7 @@ func (r *DurableRuntime) scheduleRoleRetry(ctx context.Context, record DurableRu
 	record.State.RoleStates[role] = roleState
 	record.Waiting = &WaitingState{Kind: "role_retry", Reason: retryWaitReason(state), SafeToRetry: true, Since: record.State.UpdatedAt}
 	r.emitRetry(event.EventMultiAgentRetryScheduled, record, *state)
-	saved, err := r.checkpoint(ctx, record)
+	saved, err := r.checkpointPreparedRole(ctx, record)
 	if err != nil {
 		return saved, err
 	}

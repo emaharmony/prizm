@@ -89,7 +89,9 @@ func (f *fakeFreewillApprovals) DecideStatus(_ context.Context, runID, approvalI
 
 func TestFreewillStatusIsAuthenticatedAndShowsReviewableRequest(t *testing.T) {
 	controller := &fakeFreewillApprovals{status: multiagent.FreewillApprovalStatus{
-		RunID: "run-fw", Lifecycle: freewill.StateApprovalPending, ApprovalID: "appr-fw", ExecutionDisabled: true,
+		RunID: "run-fw", Lifecycle: freewill.StateRunning, ApprovalID: "appr-fw", ExecutionDisabled: true,
+		ExecutionStatus: "completed", ChildRunID: "run-child", ChildStatus: "completed", ExecutionReportRef: "multiagent_report.json",
+		ExecutionReportSHA256: strings.Repeat("a", 64), ValidationSummary: "passed",
 		Selected:     &multiagent.FreewillPublicCandidate{CandidateID: "candidate-1", Title: "Bounded task", Goal: "Inspect project tests", Reason: "Useful next action", Scope: freewill.Scope{ProjectID: "project-a", Workspace: "workspace-a"}, Capabilities: []string{"read_only"}},
 		Alternatives: []multiagent.FreewillPublicCandidate{{CandidateID: "candidate-2", Title: "Alternative", Goal: "Another bounded task", Reason: "Less urgent"}},
 	}}
@@ -104,7 +106,11 @@ func TestFreewillStatusIsAuthenticatedAndShowsReviewableRequest(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer secret")
 	response := httptest.NewRecorder()
 	h.ServeHTTP(response, req)
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Inspect project tests") || !strings.Contains(response.Body.String(), "execution_disabled") || controller.runID != "run-fw" {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Inspect project tests") || !strings.Contains(response.Body.String(), "execution_disabled") ||
+		!strings.Contains(response.Body.String(), `"execution_status":"completed"`) || !strings.Contains(response.Body.String(), `"child_run_id":"run-child"`) ||
+		!strings.Contains(response.Body.String(), `"execution_report_ref":"multiagent_report.json"`) ||
+		!strings.Contains(response.Body.String(), `"execution_report_sha256":"`+strings.Repeat("a", 64)+`"`) ||
+		!strings.Contains(response.Body.String(), `"validation_summary":"passed"`) || controller.runID != "run-fw" {
 		t.Fatalf("status response=%d body=%s run=%s", response.Code, response.Body.String(), controller.runID)
 	}
 }
@@ -162,5 +168,57 @@ func TestFreewillDecisionEndpointRejectsUnknownAuthorityAndUsesAuthenticatedActo
 	h.ServeHTTP(response, req)
 	if response.Code != http.StatusOK || controller.runID != "run-fw" || controller.approvalID != "appr-fw" || controller.decision != "grant" || controller.actor != "operator" {
 		t.Fatalf("decision response=%d run=%s approval=%s decision=%s actor=%s", response.Code, controller.runID, controller.approvalID, controller.decision, controller.actor)
+	}
+}
+
+type fakeFreewillChildApprovals struct {
+	listedParent, listedChild, parent, child, approvalID, decision, actor, reason string
+}
+
+func (f *fakeFreewillChildApprovals) ListChildApprovals(_ context.Context, parent, child string) ([]FreewillChildApproval, error) {
+	f.listedParent, f.listedChild = parent, child
+	return []FreewillChildApproval{{ParentRunID: parent, ChildRunID: child, ApprovalID: "patch-1", ProposalID: "proposal-1", Status: "pending", TargetPath: "approved.txt", Patch: "diff --git a/approved.txt b/approved.txt",
+		SandboxBinding: FreewillChildSandboxBinding{TaskID: "task-1", ExecutionKey: "exec-1", AgentID: "lumi", WorkspaceID: "workspace-1", WorkspacePath: "C:/sandbox", BaseSHA: "base-sha", BaseTree: "base-tree", ArtifactDigest: "sha256:artifact"},
+		PatchPlan:      FreewillChildPatchPlan{BaseSHA: "base-sha", BaseTree: "base-tree", ExpectedTree: "expected-tree", PatchSHA256: "patch-sha", Paths: []string{"approved.txt"}}}}, nil
+}
+
+func (f *fakeFreewillChildApprovals) DecideChildApproval(_ context.Context, parent, child, approvalID, decision, actor, reason string) (FreewillChildApproval, error) {
+	f.parent, f.child, f.approvalID, f.decision, f.actor, f.reason = parent, child, approvalID, decision, actor, reason
+	return FreewillChildApproval{ParentRunID: parent, ChildRunID: child, ApprovalID: approvalID, Status: decision + "ed"}, nil
+}
+
+func TestFreewillChildPatchApprovalIsAuthenticatedAndBoundToChild(t *testing.T) {
+	controller := &fakeFreewillChildApprovals{}
+	s := NewServer(Config{Addr: ":0", AuthToken: "secret", FreewillChildApprovals: controller})
+	h := s.authMiddleware(s.mux)
+	path := "/api/v1/freewill/runs/parent-1/children/child-1/approvals"
+	unauth := httptest.NewRecorder()
+	h.ServeHTTP(unauth, httptest.NewRequest(http.MethodGet, path, nil))
+	if unauth.Code != http.StatusUnauthorized || controller.listedChild != "" {
+		t.Fatalf("unauthorized list status=%d controller=%+v", unauth.Code, controller)
+	}
+	get := httptest.NewRequest(http.MethodGet, path, nil)
+	get.Header.Set("Authorization", "Bearer secret")
+	listed := httptest.NewRecorder()
+	h.ServeHTTP(listed, get)
+	if listed.Code != http.StatusOK || controller.listedParent != "parent-1" || controller.listedChild != "child-1" ||
+		!strings.Contains(listed.Body.String(), "diff --git a/approved.txt") ||
+		!strings.Contains(listed.Body.String(), `"artifact_digest":"sha256:artifact"`) ||
+		!strings.Contains(listed.Body.String(), `"patch_sha256":"patch-sha"`) ||
+		!strings.Contains(listed.Body.String(), `"expected_tree":"expected-tree"`) {
+		t.Fatalf("list status=%d controller=%+v body=%s", listed.Code, controller, listed.Body.String())
+	}
+	decisionPath := path + "/patch-1/decision?by=owner"
+	unauthPost := httptest.NewRecorder()
+	h.ServeHTTP(unauthPost, httptest.NewRequest(http.MethodPost, decisionPath, strings.NewReader(`{"decision":"grant"}`)))
+	if unauthPost.Code != http.StatusUnauthorized || controller.decision != "" {
+		t.Fatalf("unauthorized decision status=%d controller=%+v", unauthPost.Code, controller)
+	}
+	post := httptest.NewRequest(http.MethodPost, decisionPath, strings.NewReader(`{"decision":"grant","reason":"reviewed"}`))
+	post.Header.Set("Authorization", "Bearer secret")
+	decided := httptest.NewRecorder()
+	h.ServeHTTP(decided, post)
+	if decided.Code != http.StatusOK || controller.parent != "parent-1" || controller.child != "child-1" || controller.approvalID != "patch-1" || controller.decision != "grant" || controller.actor != "owner" || controller.reason != "reviewed" {
+		t.Fatalf("decision status=%d controller=%+v body=%s", decided.Code, controller, decided.Body.String())
 	}
 }

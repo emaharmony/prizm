@@ -1065,7 +1065,7 @@ func (r *DurableRuntime) executePreparedRole(
 		}
 		if r.runReflection(ctx, &record, ReflectionFailure, reflectionFailureInput(role, "", runErr, record.State)) {
 			record = archiveRetryForReflection(record, result, role, roleFailureCode(runErr), r.now().UTC())
-			return r.checkpoint(ctx, record)
+			return r.checkpointPreparedRole(ctx, record)
 		}
 		if class, code, retryAfter, retryable := classifyRetryableRoleFailure(runErr); retryable {
 			return r.scheduleRoleRetry(ctx, record, role, result, runErr, class, code, retryAfter, retryDeadline)
@@ -1089,7 +1089,7 @@ func (r *DurableRuntime) executePreparedRole(
 		}
 		if r.runReflection(ctx, &record, ReflectionFailure, reflectionFailureInput(role, result.Outcome, err, record.State)) {
 			record = archiveRetryForReflection(record, result, role, roleFailureCode(err), r.now().UTC())
-			return r.checkpoint(ctx, record)
+			return r.checkpointPreparedRole(ctx, record)
 		}
 		if class, code, retryAfter, retryable := classifyRetryableRoleFailure(err); retryable {
 			return r.scheduleRoleRetry(ctx, record, role, result, err, class, code, retryAfter, retryDeadline)
@@ -1278,7 +1278,7 @@ func (r *DurableRuntime) finishPreparedRole(
 		}
 		if r.runReflection(ctx, &record, ReflectionFailure, reflectionFailureInput(role, result.Outcome, err, record.State)) {
 			record = archiveRetryForReflection(record, result, role, roleFailureCode(err), r.now().UTC())
-			return r.checkpoint(ctx, record)
+			return r.checkpointPreparedRole(ctx, record)
 		}
 		return r.persistRoleFailure(ctx, record, role, err)
 	}
@@ -1297,7 +1297,7 @@ func (r *DurableRuntime) finishPreparedRole(
 			input.Evidence = append(input.Evidence, result.OutgoingHandoff.Artifacts...)
 		}
 		if r.runReflection(ctx, &record, ReflectionTerminal, input) {
-			return r.checkpoint(ctx, record)
+			return r.checkpointPreparedRole(ctx, record)
 		}
 	}
 
@@ -1317,7 +1317,7 @@ func (r *DurableRuntime) finishPreparedRole(
 		record.State = state
 		record.Phase = CheckpointTerminal
 		record.Failure = persistedFailure("budget_exhausted", terminalErr, r.now())
-		record, checkpointErr := r.checkpoint(ctx, record)
+		record, checkpointErr := r.checkpointPreparedRole(ctx, record)
 		if checkpointErr != nil {
 			return record, checkpointErr
 		}
@@ -1352,7 +1352,132 @@ func (r *DurableRuntime) finishPreparedRole(
 		Handoff:      cloneHandoffDraft(result.OutgoingHandoff),
 	}
 	record.Phase = CheckpointTransitionPending
-	return r.checkpoint(ctx, record)
+	return r.checkpointPreparedRole(ctx, record)
+}
+
+// checkpointPreparedRole resolves a halt/context-cancel race after a role has
+// returned but before its completion checkpoint is durable. It never writes a
+// stale prepared result over a newer revision: it reloads the current record,
+// preserves a terminal winner, and only checkpoints this role result when the
+// durable role-running revision and execution key still match.
+func (r *DurableRuntime) checkpointPreparedRole(ctx context.Context, prepared DurableRun) (DurableRun, error) {
+	saved, checkpointErr := r.checkpoint(ctx, prepared)
+	if checkpointErr == nil || ctx.Err() == nil {
+		return saved, checkpointErr
+	}
+	safeCtx := context.WithoutCancel(ctx)
+	preparedCommitted := saved.Revision > prepared.Revision
+	latest, err := r.store.Load(safeCtx, prepared.State.RunID)
+	if err != nil {
+		return prepared, errors.Join(checkpointErr, err)
+	}
+	if latest.Phase == CheckpointTerminal && !preparedCommitted {
+		r.buffer.reset()
+		// The completion/cancellation checkpoint committed before the halt could
+		// win. Keep that durable winner, including a completed side effect.
+		return latest, nil
+	}
+	if latest.Phase == CheckpointTerminal && preparedCommitted {
+		// The terminal CAS committed, but its outbox publication may have failed
+		// after observing ctx cancellation. Drain it with the uncanceled context;
+		// retain the terminal winner and report delivery failure without mutation.
+		if err := r.dispatchOutbox(safeCtx, latest.State.RunID); err != nil {
+			return latest, errors.Join(checkpointErr, err)
+		}
+		r.buffer.reset()
+		return latest, nil
+	}
+	_, requested, err := r.store.CancellationRequest(safeCtx, latest.State.RunID)
+	if err != nil {
+		return latest, errors.Join(checkpointErr, err)
+	}
+	if !requested {
+		reason := checkpointErr.Error()
+		if ctx.Err() != nil {
+			reason = ctx.Err().Error()
+		}
+		if err := r.store.RequestCancellation(safeCtx, latest.State.RunID, reason); err != nil {
+			return latest, errors.Join(checkpointErr, err)
+		}
+	}
+	if preparedCommitted {
+		// Checkpoint() may commit the CAS and then fail while publishing its
+		// outbox. The returned revision is authoritative; never retry the stale
+		// prepared CAS. Drain the committed outbox before advancing cancellation.
+		if err := r.dispatchOutbox(safeCtx, latest.State.RunID); err != nil {
+			return latest, errors.Join(checkpointErr, err)
+		}
+	}
+	if prepared.Phase == CheckpointTerminal {
+		// This process has observed the role's terminal result. Persist it only
+		// when the exact role-running revision is still current; this creates a
+		// durable boundary before any further role can start. If another writer
+		// advanced the record, leave the request for normal reconciliation.
+		if !preparedCommitted && latest.Revision == prepared.Revision && latest.Phase == CheckpointRoleRunning &&
+			latest.ActiveExecutionKey == prepared.ActiveExecutionKey {
+			committed, err := r.checkpoint(safeCtx, prepared)
+			if err == nil {
+				return committed, nil
+			}
+			latest, loadErr := r.store.Load(safeCtx, prepared.State.RunID)
+			r.buffer.reset()
+			if loadErr != nil {
+				return latest, errors.Join(checkpointErr, err, loadErr)
+			}
+			if latest.Phase == CheckpointTerminal {
+				return latest, nil
+			}
+			return latest, errors.Join(checkpointErr, err)
+		}
+		latest, cancelled, cancelErr := r.persistRequestedCancellation(safeCtx, latest)
+		if cancelErr != nil {
+			return latest, errors.Join(checkpointErr, cancelErr)
+		}
+		if cancelled {
+			return latest, nil
+		}
+		return latest, checkpointErr
+	}
+
+	if !preparedCommitted && latest.Revision == prepared.Revision && latest.Phase == CheckpointRoleRunning &&
+		latest.ActiveExecutionKey == prepared.ActiveExecutionKey {
+		// This is still the exact checkpoint from which the in-memory result was
+		// prepared. Persist it once so any completed role evidence is retained;
+		// cancellation is applied immediately below before another role enters.
+		committed, err := r.checkpoint(safeCtx, prepared)
+		if err != nil {
+			latest, loadErr := r.store.Load(safeCtx, prepared.State.RunID)
+			r.buffer.reset()
+			if loadErr != nil {
+				return latest, errors.Join(checkpointErr, err, loadErr)
+			}
+			if latest.Phase == CheckpointTerminal {
+				return latest, nil
+			}
+			if latest.Revision == prepared.Revision && latest.Phase == CheckpointRoleRunning {
+				return latest, errors.Join(checkpointErr, err)
+			}
+		} else {
+			latest = committed
+		}
+	} else {
+		// A different writer advanced the record. Discard buffered events from
+		// the stale in-memory result and reconcile only against the fresh record.
+		r.buffer.reset()
+	}
+	if latest.Phase == CheckpointTerminal {
+		return latest, nil
+	}
+	latest, cancelled, cancelErr := r.persistRequestedCancellation(safeCtx, latest)
+	if cancelErr != nil {
+		return latest, errors.Join(checkpointErr, cancelErr)
+	}
+	if cancelled {
+		return latest, nil
+	}
+	// An unresolved mutation checkpoint must go through the existing recovery
+	// reconciliation path; leave the durable request for that path to consume.
+	return latest, checkpointErr
 }
 
 func (r *DurableRuntime) applyPendingTransition(
@@ -1412,7 +1537,7 @@ func (r *DurableRuntime) applyPendingTransition(
 				"pending transition applied",
 			)
 		}
-		record, checkpointErr := r.checkpoint(ctx, record)
+		record, checkpointErr := r.checkpointPreparedRole(ctx, record)
 		if checkpointErr != nil {
 			return record, checkpointErr
 		}
@@ -1472,7 +1597,7 @@ func (r *DurableRuntime) pauseForProposals(
 	record.Waiting = proposalWaitingState(progress[0], "waiting for exact proposal approval", r.proposals != nil, now)
 	r.emitProposal(event.EventProposalApprovalPending, progress[0].ProposalOperation, record.Waiting.Reason)
 	r.supervisor.emitRun(event.EventMultiAgentRunPaused, record.State, record.Waiting.Reason)
-	record, err := r.checkpoint(ctx, record)
+	record, err := r.checkpointPreparedRole(ctx, record)
 	if err != nil {
 		return record, err
 	}
@@ -1860,7 +1985,7 @@ func (r *DurableRuntime) pauseForApproval(
 		Since:       now,
 	}
 	r.supervisor.emitRun(event.EventMultiAgentRunPaused, record.State, record.Waiting.Reason)
-	record, err := r.checkpoint(ctx, record)
+	record, err := r.checkpointPreparedRole(ctx, record)
 	if err != nil {
 		return record, err
 	}
@@ -1924,7 +2049,7 @@ func (r *DurableRuntime) pauseUncertainExecution(
 	}
 	r.supervisor.emitRun(event.EventMultiAgentRunPaused, record.State, record.Waiting.Reason)
 	r.emitRecovery(event.EventMultiAgentRecoveryFailed, record.State, record.Waiting.Reason)
-	return r.checkpoint(ctx, record)
+	return r.checkpointPreparedRole(ctx, record)
 }
 
 func (r *DurableRuntime) persistRoleFailure(
@@ -1964,7 +2089,7 @@ func (r *DurableRuntime) persistRoleFailure(
 	record.Failure.At = r.now().UTC()
 	record.PendingTransition = nil
 	record.Waiting = nil
-	record, checkpointErr := r.checkpoint(ctx, record)
+	record, checkpointErr := r.checkpointPreparedRole(ctx, record)
 	if checkpointErr != nil {
 		return record, checkpointErr
 	}

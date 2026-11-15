@@ -182,6 +182,13 @@ func TestChatProviderGLM53FlashUsesLowEffortAndClearsThinking(t *testing.T) {
 		if request["model"] != "glm-5.3-flash:cloud" || request["clear_thinking"] != true || request["think"] != "low" {
 			t.Fatalf("Flash request must use GLM chat options: %#v", request)
 		}
+		if _, present := request["format"]; present {
+			t.Fatalf("Ollama Cloud must not receive unsupported structured output format: %#v", request["format"])
+		}
+		options, ok := request["options"].(map[string]any)
+		if !ok || options["num_predict"] != float64(1024) {
+			t.Fatalf("Flash request lost the bounded output-token option: %#v", request["options"])
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"model": "glm-5.3-flash:cloud", "done": true,
 			"message": map[string]any{"role": "assistant", "content": "OK"},
@@ -190,7 +197,9 @@ func TestChatProviderGLM53FlashUsesLowEffortAndClearsThinking(t *testing.T) {
 	defer server.Close()
 
 	response, err := ollama.NewChatProvider(server.URL).ChatGenerate(context.Background(), provider.ChatGenerateRequest{
-		Model: "glm-5.3-flash:cloud", Messages: []provider.ChatMessage{{Role: "user", Content: "return OK"}},
+		Model: "glm-5.3-flash:cloud", Format: "json", MaxTokens: 1024,
+		OutputSchema: map[string]any{"type": "object", "properties": map[string]any{"ok": map[string]any{"type": "boolean"}}},
+		Messages:     []provider.ChatMessage{{Role: "user", Content: "return OK"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -271,20 +280,26 @@ func TestChatProviderPassesJSONFormatToOllama(t *testing.T) {
 	}
 }
 
-func TestChatProviderPassesOutputSchemaAsOllamaFormat(t *testing.T) {
+func TestChatProviderGLM53CloudRetainsOutputSchemaFormat(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil { t.Fatal(err) }
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
 		format, ok := request["format"].(map[string]any)
-		if !ok || format["type"] != "object" { t.Fatalf("request format=%#v", request["format"]) }
-		_ = json.NewEncoder(w).Encode(map[string]any{"model": "glm-5.2:cloud", "done": true, "message": map[string]any{"role": "assistant", "content": `{"ok":true}`}})
+		if !ok || format["type"] != "object" {
+			t.Fatalf("request format=%#v", request["format"])
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"model": "glm-5.3:cloud", "done": true, "message": map[string]any{"role": "assistant", "content": `{"ok":true}`}})
 	}))
 	defer server.Close()
 	_, err := ollama.NewChatProvider(server.URL).ChatGenerate(context.Background(), provider.ChatGenerateRequest{
-		Model: "glm-5.2:cloud", OutputSchema: map[string]any{"type": "object", "properties": map[string]any{"ok": map[string]any{"type": "boolean"}}},
+		Model: "glm-5.3:cloud", OutputSchema: map[string]any{"type": "object", "properties": map[string]any{"ok": map[string]any{"type": "boolean"}}},
 		Messages: []provider.ChatMessage{{Role: "user", Content: "return JSON"}},
 	})
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestChatProviderGLM53PreservesConfiguredReasoningEffort(t *testing.T) {
