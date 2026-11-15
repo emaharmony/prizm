@@ -1,18 +1,14 @@
-## Current Handoff: Freewill POC PR3 sanitized candidate (2026-11-15)
+## Current Handoff: CTX-05 GLM schema/feedback PR4 candidate (2026-11-15)
 
-**Roadmap IDs:** FW-P2, FW-P3, and FW-G2; R1/G1 remains a prerequisite for served or unattended FW-P2.
+**Roadmap IDs:** FW-003; CTX-01–05. Restacked on PR3 merge `46f42596275091b2b734344afe6bc8c5102bf9cf` (tree `8b63bd28dc54358b30e016487af2fbdd168512fc`), the exact current `codex/freewill-integration` head.
 
-**Remote baseline:** PR1 is present at merge SHA 441207fbde631b06ebd5b28dafb3b284fc7a6ab8. PR2 #146 is present at merge SHA 694a633532a4b08e5b0eeaecf0d1a90da9475f90; this candidate starts at that PR2 merge.
+**Scope:** Local branch `codex/freewill-ctx05-pr4` carries native JSON schemas and stage-correct retry feedback for GLM Flash. The direct Cloud route forwards the selector schema; local Ollama retains its compatibility behavior. The idea schema pairs the only valid candidate/sleep combinations and carries idea/rationale length bounds. Host validation remains authoritative for word count, unsafe content, provenance, and action binding. No package or authority path was added.
 
-**Scope:** The candidate carries the remaining sanitized Freewill POC runtime, tests, configuration/reference updates, UI integration, and design/inventory/task-log documentation. The 117-path snapshot is dependency-coupled across the existing Freewill workflow, API, event, provider, memory, and CLI composition boundaries. The review follow-up protects preference evidence/challenge GETs with the service bearer when local principal auth is not configured, without changing write auth. It adds no package or new authority path.
+**Validation:** Full `internal/provider/ollama` and `internal/workflow/multiagent` package tests passed. Focused synthetic E57 host-binding, fake-serve, and safe-diagnostic tests passed. `gofmt` and `git diff --check` passed. No live Cloud request was made because the process key and explicit opt-in flags were absent.
 
-**Validation:** Staticcheck, go build, go vet, the focused preference read-auth regression, and a captured full go test ./... -count=1 run after the review fix passed. An earlier full-suite attempt returned FAIL with terminal output truncated before the failing package; the later captured runs passed, so the earlier result is not reproduced. The added-line privacy scan found no local-path or credential-token patterns; sample project details are generic. git diff --check passed.
+**Open gates and next action:** Exact-model Cloud compatibility and CTX-05 semantic acceptance remain unverified. Publish only to `codex/freewill-integration`; wait for exact-head required CI and blocking review clearance before merging. Do not promote to staging or deploy.
 
-**Open gates and next action:** Provider-backed R1/G1 acceptance, Linux OCI execution, exact-head CI, and independent release review remain open. Keep this candidate unpublished until those gates and review are complete; then prepare the final staging PR.
-
----
-
-## Current Handoff: FW-P2 approved-reference child-dispatch PR1 candidate (2026-11-13)
+---## Current Handoff: FW-P2 approved-reference child-dispatch PR1 candidate (2026-11-13)
 
 **Roadmap IDs:** FW-P2 and FW-G2; R1/G1 remains a prerequisite for served or unattended FW-P2. Candidate branch `codex/freewill-p2-staging-pr1` is local and starts at `947afe43738c72a98f862c49a3f678109e73dff9`, whose merge base is the supplied staging head `4083cb803f6b4ab83cd93d6cc27ef64281f1701e`. The implementation slice is 43 files (`+5915/-303`) covering approved reference-child dispatch, approval, recovery, halt, and reporting. No remote operation was performed.
 

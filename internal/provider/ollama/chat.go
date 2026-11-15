@@ -183,10 +183,9 @@ func (cp *ChatProvider) ChatGenerate(ctx context.Context, req provider.ChatGener
 	if req.OutputSchema != nil {
 		format = req.OutputSchema
 	}
-	// This Freewill selector model uses a bounded plain-text protocol because
-	// Ollama Cloud does not support structured outputs. Other GLM-5.3 models
-	// retain the caller's requested format.
-	if isGLM53FlashCloud(req.Model) {
+	// Preserve the local route's compatibility behavior for this Cloud alias.
+	// Direct Cloud requests retain the caller's schema in the shared format field.
+	if isGLM53FlashCloud(req.Model) && !cp.directCloud {
 		format = nil
 	}
 	body := chatRequest{

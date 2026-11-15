@@ -32,6 +32,7 @@ type FreewillSelectionInput struct {
 	ResumeCandidates []freewill.CandidateIntention
 	Budget           freewill.ResourceBudget
 	RecoveryFeedback string
+	RecoveryCode     string
 	ProjectContext   freewill.ProjectContextSnapshot
 	PriorReflection  *FreewillReflectionEvidence
 }
@@ -411,6 +412,7 @@ func (s *FreewillWakeService) ProcessWake(ctx context.Context, runID string) (Du
 		RunID: runID, CorrelationID: record.Freewill.CorrelationID, AgentID: s.config.AgentID,
 		Scope: s.config.Scope, Objective: s.config.Objective, ResumeCandidates: resumes, Budget: s.config.Budget,
 		RecoveryFeedback: freewillSelectionRecoveryFeedback(record.Freewill.SelectionFailureCode, projectContext),
+		RecoveryCode:     record.Freewill.SelectionFailureCode,
 		ProjectContext:   cloneFreewillProjectContextSnapshot(projectContext),
 		PriorReflection:  cloneFreewillReflectionEvidence(priorReflection),
 	})
@@ -606,13 +608,15 @@ func freewillSelectionRecoveryFeedback(code string, snapshots ...freewill.Projec
 	case "invalid_scored_ideas_score":
 		return "Each of exactly three blocks needs SCORE as one integer from 0 to 100 on its own line. Keep IDEA, optional FACTORS, and specific RATIONALE in the required labeled order; no extra fields or prose."
 	case "invalid_scored_ideas_factors":
-		return "FACTORS is optional. When present, use only scope_fit, feasibility, impact, novelty, or readiness with valid 0-10 ratings; omit FACTORS if uncertain. Keep exactly three blocks with specific RATIONALE and no extra fields."
+		return "Return one JSON object matching the supplied schema. Each of exactly three candidates needs a nonempty factors array using only scope_fit, feasibility, impact, novelty, or readiness. Do not add ratings or annotations."
 	case "invalid_scored_ideas_rationale":
 		return "Give each of exactly three blocks a specific RATIONALE of at least six words, after IDEA, SCORE, and optional FACTORS. Keep it decision-only and avoid extra fields or prose."
 	case "invalid_scored_ideas_unsafe":
 		return "Return exactly three bounded decision-only ideas with IDEA, SCORE, optional FACTORS, and specific RATIONALE. Do not include paths, authority, approval, tools, network, secrets, or execution requests."
-	case "invalid_scored_ideas_json_size_or_encoding", "invalid_scored_ideas_json_duplicate_key", "invalid_scored_ideas_json_trailing_content", "invalid_scored_ideas_json_syntax", "invalid_scored_ideas_json_unknown_field", "invalid_scored_ideas_json_wrong_shape":
+	case "invalid_scored_ideas_json_size_or_encoding", "invalid_scored_ideas_json_duplicate_key", "invalid_scored_ideas_json_trailing_content", "invalid_scored_ideas_json_syntax", "invalid_scored_ideas_json_wrong_shape":
 		return "Return exactly three IDEA/SCORE/FACTORS/RATIONALE text blocks in the requested order. No JSON, code fence, or extra prose."
+	case "invalid_scored_ideas_json_unknown_field":
+		return "Return JSON matching the supplied schema: exactly three candidates or an empty list with sleep=true. Use only idea, score, factors, rationale, basis_refs, uncertainty, and project_action_id. No aliases or extra fields."
 	case "invalid_idea_lines":
 		return "Return only three lines, each beginning exactly IDEA: followed by a short decision-only objective. No preamble, bullets, explanation, JSON, paths, authority, tools, network, secrets, approval, or execution requests."
 	case "invalid_selection_schema", "empty_selection_response", "selection_tool_request", "invalid_selection_json", "unknown_selection_field", "selection_candidate_count", "selection_contract_invalid":
@@ -626,6 +630,51 @@ func freewillSelectionRecoveryFeedback(code string, snapshots ...freewill.Projec
 		return "The previous provider attempt failed transiently. Retry the same selection request and return the required schema."
 	default:
 		return ""
+	}
+}
+
+func freewillFlashSelectionRecoveryFeedback(code string, snapshot freewill.ProjectContextSnapshot) string {
+	switch code {
+	case "invalid_scored_ideas_json_size_or_encoding", "invalid_scored_ideas_json_duplicate_key", "invalid_scored_ideas_json_trailing_content", "invalid_scored_ideas_json_syntax", "invalid_scored_ideas_json_wrong_shape":
+		return "Return one JSON object matching the supplied schema with exactly three candidates, or an empty candidates array and sleep=true. Each candidate needs idea, integer score from 0 to 100, nonempty factors array, rationale, basis_refs, uncertainty, and optional project_action_id. No aliases, prose, fences, or extra keys."
+	case "invalid_scored_ideas_count":
+		return "Return one JSON object matching the supplied schema with exactly three candidates, or an empty candidates array and sleep=true. Do not return one or two candidates."
+	case "invalid_scored_ideas_size":
+		return "Return one compact JSON object matching the supplied schema with exactly three candidates, or an empty candidates array and sleep=true. Keep each field concise and omit extra keys or prose."
+	case "invalid_scored_ideas_idea_shape":
+		return "Return JSON matching the supplied schema. Keep each candidate idea concise (160 characters maximum) and plain text, without paths, URLs, brackets, backslashes, or traversal markers."
+	case "invalid_scored_ideas_duplicate":
+		return "Return JSON matching the supplied schema with exactly three candidates whose idea strings are distinct. Preserve all required fields."
+	case "invalid_scored_ideas_structure":
+		return "Return one JSON object matching the supplied schema. Include the required candidates array and sleep boolean; each candidate must use the declared field names and JSON value types. Do not add prose or extra keys."
+	case "invalid_scored_ideas_unsafe":
+		return "Return JSON matching the supplied schema with three bounded decision-only ideas or the empty-candidate sleep form. Do not include paths, authority, approval, tools, network, secrets, or execution requests."
+	case "idea_tool_request":
+		return "Return only JSON matching the supplied schema. This selector has no tools; provide three bounded decision-only candidates or the empty-candidate sleep form."
+	case "invalid_scored_ideas_json_unknown_field":
+		return "Return JSON matching the supplied schema: exactly three candidates or an empty list with sleep=true. Use only idea, score, factors, rationale, basis_refs, uncertainty, and project_action_id. No aliases or extra fields."
+	case "invalid_scored_ideas_factors":
+		return "Return one JSON object matching the supplied schema. Each of exactly three candidates needs a nonempty factors array using only scope_fit, feasibility, impact, novelty, or readiness. Do not add ratings or annotations."
+	case "invalid_scored_ideas_score":
+		return "Return JSON matching the supplied schema. Each of exactly three candidates needs score as an integer from 0 to 100, plus the required idea, factors, rationale, basis_refs, and uncertainty fields."
+	case "invalid_scored_ideas_rationale":
+		return "Return JSON matching the supplied schema. Each of exactly three candidates needs a specific rationale of at least six words; preserve the other required fields."
+	case "invalid_project_basis":
+		if sourceID := freewillSelectionCorrectionSourceID([]freewill.ProjectContextSnapshot{snapshot}); sourceID != "" {
+			return "Return JSON matching the supplied schema. Each candidate's basis_refs may contain only supplied source ID " + sourceID + "; include uncertainty and do not invent refs. Return the schema's sleep/no-op form if unsupported."
+		}
+		return "Return JSON matching the supplied schema. Cite exact supplied project source IDs in basis_refs, include uncertainty, and do not invent refs. Return the schema's sleep/no-op form if unsupported."
+	case "invalid_project_action":
+		return "Return JSON matching the supplied schema. Set project_action_id only to an exact host-supplied action ID supported by the candidate's basis_refs; omit it when no supplied action applies. Do not invent action IDs."
+	case "duplicate_project_action":
+		return "Return JSON matching the supplied schema. Do not assign the same host-supplied project_action_id to multiple candidates; omit unsupported action IDs."
+	case "invalid_choice":
+		return "Retry the idea-selection stage: return JSON matching the supplied idea schema with exactly three candidates, or an empty candidates array and sleep=true. Preserve the required idea fields; do not return a choice object."
+	default:
+		if strings.HasPrefix(code, "invalid_scored_ideas_") {
+			return "Return one JSON object matching the supplied schema with exactly three candidates, or an empty candidates array and sleep=true. Use the declared field names and types only; no text blocks, aliases, or extra prose."
+		}
+		return freewillSelectionRecoveryFeedback(code, snapshot)
 	}
 }
 

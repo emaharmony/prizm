@@ -195,7 +195,11 @@ func TestE57StandaloneLiveGLMSyntheticActionGrounding(t *testing.T) {
 		}
 		logs := serveOutput.String()
 		subscriptionHash := e57SHA256Hex([]byte(eventKind))
-		t.Logf("E57_STARTUP_META pid=%d executable=prizm.exe config_sha256=%s nats_url_matches=%t subscription_config_matches=%t subscription_ready=%t freewill_enabled=true selector_route_requested=direct_cloud startup_runtime_line=%t nats_connected_line=%t freewill_start_error=%t callback_entered=%t callback_skipped=%t callback_rejected=%t callback_deferred=%t callback_returned=%t event_wake_ignored=%t event_wake_deferred=%t recovery_scan_failed=%t", cmd.Process.Pid, e57SHA256Hex(configBytes), strings.Contains(logs, "NATS: external at "+natsURL), strings.Contains(logs, fmt.Sprintf("[FREEWILL-DIAG] event_subscription_config wake_sources=true scheduling=false count=1 subjects_sha256=%s", subscriptionHash)), strings.Contains(logs, fmt.Sprintf("[FREEWILL-DIAG] event_subscriptions_ready count=1 subjects_sha256=%s", subscriptionHash)), strings.Contains(logs, "decision-only runtime enabled"), strings.Contains(logs, "NATS: connected"), strings.Contains(logs, "Error starting Freewill"), strings.Contains(logs, "[FREEWILL-DIAG] event_callback_entered"), strings.Contains(logs, "[FREEWILL-DIAG] event_callback_skipped"), strings.Contains(logs, "[FREEWILL-DIAG] event_callback_rejected"), strings.Contains(logs, "[FREEWILL-DIAG] event_callback_deferred"), strings.Contains(logs, "[FREEWILL-DIAG] event_callback_returned"), strings.Contains(logs, "event wake ignored"), strings.Contains(logs, "event-triggered wake deferred"), strings.Contains(logs, "recovery scan failed"))
+		mapperMetadata := strings.Join(e57SafeMapperDiagnosticSummary(logs), ";")
+		if mapperMetadata == "" {
+			mapperMetadata = "none"
+		}
+		t.Logf("E57_STARTUP_META pid=%d executable=prizm.exe config_sha256=%s nats_url_matches=%t subscription_config_matches=%t subscription_ready=%t freewill_enabled=true selector_route_requested=direct_cloud startup_runtime_line=%t nats_connected_line=%t freewill_start_error=%t callback_entered=%t callback_skipped=%t callback_rejected=%t callback_deferred=%t callback_returned=%t event_wake_ignored=%t event_wake_deferred=%t recovery_scan_failed=%t mapper_diagnostics=%s", cmd.Process.Pid, e57SHA256Hex(configBytes), strings.Contains(logs, "NATS: external at "+natsURL), strings.Contains(logs, fmt.Sprintf("[FREEWILL-DIAG] event_subscription_config wake_sources=true scheduling=false count=1 subjects_sha256=%s", subscriptionHash)), strings.Contains(logs, fmt.Sprintf("[FREEWILL-DIAG] event_subscriptions_ready count=1 subjects_sha256=%s", subscriptionHash)), strings.Contains(logs, "decision-only runtime enabled"), strings.Contains(logs, "NATS: connected"), strings.Contains(logs, "Error starting Freewill"), strings.Contains(logs, "[FREEWILL-DIAG] event_callback_entered"), strings.Contains(logs, "[FREEWILL-DIAG] event_callback_skipped"), strings.Contains(logs, "[FREEWILL-DIAG] event_callback_rejected"), strings.Contains(logs, "[FREEWILL-DIAG] event_callback_deferred"), strings.Contains(logs, "[FREEWILL-DIAG] event_callback_returned"), strings.Contains(logs, "event wake ignored"), strings.Contains(logs, "event-triggered wake deferred"), strings.Contains(logs, "recovery scan failed"), mapperMetadata)
 	}()
 	healthCtx, healthCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer healthCancel()
@@ -499,6 +503,7 @@ func e57SafeMapperDiagnosticSummary(logText string) []string {
 		"tool_calls": true, "idea_markers": true, "parsed_blocks": true,
 		"json_valid": true, "starts_object": true, "fenced": true,
 		"candidates_key": true, "idea_key": true, "glm_plain": true,
+		"json_shape": true,
 	}
 	var summaries []string
 	for _, line := range strings.Split(logText, "\n") {
@@ -531,9 +536,77 @@ func e57SafeMapperDiagnosticSummary(logText string) []string {
 				parts = append(parts, key+"="+fields[key])
 			}
 		}
+		if shape := e57SafeJSONShapeMetadata(fields["json_shape"]); shape != "" {
+			parts = append(parts, "json_shape={"+shape+"}")
+		}
 		summaries = append(summaries, strings.Join(parts, ","))
 	}
 	return summaries
+}
+
+func e57SafeJSONShapeMetadata(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(strings.TrimSuffix(value, "}"), "{")
+	if value == "" {
+		return ""
+	}
+	validName := func(name string) bool {
+		if name == "" || len(name) > 40 {
+			return false
+		}
+		for i, r := range name {
+			if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9' || i == 0) && r != '_' {
+				return false
+			}
+		}
+		return true
+	}
+	var top, candidate, unknownTop, unknownCandidate string
+	objects := -1
+	authority := ""
+	for _, field := range strings.Split(value, ";") {
+		key, item, ok := strings.Cut(field, "=")
+		if !ok {
+			return ""
+		}
+		switch key {
+		case "top_keys":
+			top = item
+		case "candidate_keys":
+			candidate = item
+		case "unknown_top_keys":
+			unknownTop = item
+		case "unknown_candidate_keys":
+			unknownCandidate = item
+		case "authority_key":
+			if item != "true" && item != "false" {
+				return ""
+			}
+			authority = item
+		case "candidate_objects":
+			parsed, err := strconv.Atoi(item)
+			if err != nil || parsed < 0 || parsed > 3 {
+				return ""
+			}
+			objects = parsed
+		default:
+			return ""
+		}
+	}
+	if objects < 0 || authority == "" {
+		return ""
+	}
+	for _, group := range []string{top, candidate, unknownTop, unknownCandidate} {
+		for _, name := range strings.Split(group, "+") {
+			if name == "" || strings.HasSuffix(name, "_more") {
+				continue
+			}
+			if !validName(name) {
+				return ""
+			}
+		}
+	}
+	return fmt.Sprintf("top_keys=%s;candidate_objects=%d;candidate_keys=%s;unknown_top_keys=%s;unknown_candidate_keys=%s;authority_key=%s", top, objects, candidate, unknownTop, unknownCandidate, authority)
 }
 
 func TestE57SafeFailureDiagnosticSummaries(t *testing.T) {
@@ -564,6 +637,10 @@ func TestE57SafeFailureDiagnosticSummaries(t *testing.T) {
 	if !strings.Contains(mapperSummary, "idea_markers=3") || !strings.Contains(mapperSummary, "parser_code=invalid_project_basis") ||
 		strings.Contains(mapperSummary, "private-model") || strings.Contains(mapperSummary, "DO_NOT_LEAK_THIS_TEXT") {
 		t.Fatalf("mapper summary did not preserve only safe fields: %s", mapperSummary)
+	}
+	shapeSummary := strings.Join(e57SafeMapperDiagnosticSummary("[FREEWILL] mapper diagnostic stage=idea content_len=42 parser_code=invalid_scored_ideas_json_unknown_field json_shape={top_keys=analysis+candidates+sleep;candidate_objects=1;candidate_keys=idea+score+title;unknown_top_keys=analysis;unknown_candidate_keys=title;authority_key=false}"), "")
+	if !strings.Contains(shapeSummary, "unknown_top_keys=analysis") || !strings.Contains(shapeSummary, "unknown_candidate_keys=title") || !strings.Contains(shapeSummary, "authority_key=false") || strings.Contains(shapeSummary, "DO_NOT_LEAK") {
+		t.Fatalf("mapper summary did not preserve only field-name shape metadata: %s", shapeSummary)
 	}
 }
 

@@ -21,6 +21,15 @@ func (f directCloudRoundTripper) RoundTrip(request *http.Request) (*http.Respons
 
 func TestDirectCloudChatProviderUsesBearerAndDirectFlashWireModel(t *testing.T) {
 	const secret = "synthetic-api-key"
+	schema := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"choice_id", "reason"},
+		"properties": map[string]any{
+			"choice_id": map[string]any{"type": "string", "enum": []string{"candidate-synthetic-1", "NONE"}},
+			"reason":    map[string]any{"type": "string", "minLength": 1},
+		},
+	}
 	chat, err := NewDirectCloudChatProvider(secret)
 	if err != nil {
 		t.Fatal("create direct Cloud chat provider")
@@ -41,8 +50,14 @@ func TestDirectCloudChatProviderUsesBearerAndDirectFlashWireModel(t *testing.T) 
 		if gotModel != "glm-5.3-flash" {
 			t.Fatal("direct Cloud model alias was not applied")
 		}
-		if _, present := payload["format"]; present {
-			t.Fatal("direct Flash request unexpectedly contains format")
+		format, present := payload["format"]
+		wantFormat, err := json.Marshal(schema)
+		if err != nil {
+			t.Fatal("marshal expected synthetic output schema")
+		}
+		gotFormat, err := json.Marshal(format)
+		if err != nil || !present || !bytes.Equal(gotFormat, wantFormat) {
+			t.Fatal("direct Flash request did not forward the exact output schema")
 		}
 		body, err := json.Marshal(payload)
 		if err != nil || strings.Contains(string(body), secret) {
@@ -53,7 +68,7 @@ func TestDirectCloudChatProviderUsesBearerAndDirectFlashWireModel(t *testing.T) 
 	})
 	for range 2 {
 		response, err := chat.ChatGenerate(context.Background(), provider.ChatGenerateRequest{
-			Model: "glm-5.3-flash:cloud", Format: "json", OutputSchema: map[string]any{"type": "object"},
+			Model: "glm-5.3-flash:cloud", Format: "json", OutputSchema: schema,
 			Messages: []provider.ChatMessage{{Role: "user", Content: "synthetic"}}, MaxTokens: 128,
 		})
 		if err != nil || gotModel != "glm-5.3-flash" || response.Model != "glm-5.3-flash:cloud" {
@@ -136,7 +151,7 @@ func TestLocalChatProviderKeepsLocalModelAndNoCloudAuthorization(t *testing.T) {
 	})
 	for _, current := range cases {
 		_, err := chat.ChatGenerate(context.Background(), provider.ChatGenerateRequest{
-			Model: current.model, Format: current.format, Messages: []provider.ChatMessage{{Role: "user", Content: "synthetic"}},
+			Model: current.model, Format: current.format, OutputSchema: map[string]any{"type": "object"}, Messages: []provider.ChatMessage{{Role: "user", Content: "synthetic"}},
 		})
 		if err != nil {
 			t.Fatal("in-memory local Ollama request failed")
