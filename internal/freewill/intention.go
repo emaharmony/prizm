@@ -47,7 +47,7 @@ func ValidateSelectionObjective(objective string) error {
 	}
 	for _, r := range objective {
 		if unicode.IsControl(r) {
-		return errors.New("freewill selection objective must be single-line text")
+			return errors.New("freewill selection objective must be single-line text")
 		}
 	}
 	return nil
@@ -69,6 +69,9 @@ type IntentionRequest struct {
 	AgentID               string          `json:"agent_id"`
 	Origin                Origin          `json:"origin"`
 	CandidateSource       CandidateSource `json:"candidate_source"`
+	ReflectionID          string          `json:"reflection_id,omitempty"`
+	ReflectionRevision    string          `json:"reflection_revision,omitempty"`
+	ReflectionSource      string          `json:"reflection_source,omitempty"`
 	Title                 string          `json:"title"`
 	Goal                  string          `json:"goal"`
 	ReasonSummary         string          `json:"reason_summary"`
@@ -79,14 +82,26 @@ type IntentionRequest struct {
 	Budget                ResourceBudget  `json:"budget"`
 }
 
+// ReflectionBinding is an exact host-issued citation. Its source text remains
+// a bounded hypothesis and never conveys policy or execution authority.
+type ReflectionBinding struct {
+	ID       string `json:"id"`
+	Revision string `json:"revision"`
+	Source   string `json:"source"`
+}
+
 // CandidateIntention is the selection-facing wrapper around a validated
 // request. It does not express approval, permission, or execution readiness.
 type CandidateIntention struct {
-	CandidateID    string           `json:"candidate_id"`
-	Request        IntentionRequest `json:"request"`
-	Score          int              `json:"score"`
-	ScoreFactors   []string         `json:"score_factors,omitempty"`
-	ScoreRationale string           `json:"score_rationale,omitempty"`
+	CandidateID      string           `json:"candidate_id"`
+	Request          IntentionRequest `json:"request"`
+	Score            int              `json:"score"`
+	ScoreFactors     []string         `json:"score_factors,omitempty"`
+	ScoreRationale   string           `json:"score_rationale,omitempty"`
+	BasisRefs        []string         `json:"basis_refs,omitempty"`
+	Uncertainty      string           `json:"uncertainty,omitempty"`
+	ProjectActionID  string           `json:"project_action_id,omitempty"`
+	ProjectGrounding string           `json:"project_grounding,omitempty"`
 }
 
 var allowedScoreFactors = map[string]struct{}{
@@ -103,7 +118,7 @@ type Selection struct {
 	SleepReason   string               `json:"sleep_reason,omitempty"`
 }
 
-func (s Selection) Validate(agentID string, scope Scope, verifiedResumeIDs map[string]struct{}) error {
+func (s Selection) Validate(agentID string, scope Scope, verifiedResumeIDs map[string]struct{}, verifiedReflectionIDs ...map[string]ReflectionBinding) error {
 	if len(s.Candidates) == 0 && s.ChoiceID == "" && strings.TrimSpace(s.SleepReason) != "" && strings.TrimSpace(s.ReasonSummary) == "" {
 		if len(s.SleepReason) > 1000 {
 			return errors.New("sleep reason exceeds its limit")
@@ -122,7 +137,11 @@ func (s Selection) Validate(agentID string, scope Scope, verifiedResumeIDs map[s
 	}
 	seenIDs := make(map[string]struct{}, len(s.Candidates))
 	seenRequests := make(map[string]struct{}, len(s.Candidates))
-	fresh, resumes := 0, 0
+	fresh, resumes, reflections := 0, 0, 0
+	reflectionBindings := map[string]ReflectionBinding{}
+	if len(verifiedReflectionIDs) > 0 && verifiedReflectionIDs[0] != nil {
+		reflectionBindings = verifiedReflectionIDs[0]
+	}
 	choiceFound := false
 	for _, candidate := range s.Candidates {
 		if err := candidate.Validate(); err != nil {
@@ -145,6 +164,16 @@ func (s Selection) Validate(agentID string, scope Scope, verifiedResumeIDs map[s
 		switch candidate.Request.CandidateSource {
 		case SourceNew:
 			fresh++
+		case SourceReflection:
+			fresh++
+			reflections++
+			if reflections > 1 {
+				return errors.New("selection may contain at most one reflection candidate")
+			}
+			binding, ok := reflectionBindings[candidate.Request.ReflectionID]
+			if !ok || binding.ID != candidate.Request.ReflectionID || binding.Revision != candidate.Request.ReflectionRevision || binding.Source != candidate.Request.ReflectionSource {
+				return errors.New("reflection candidate is not bound to a host-verified reflection")
+			}
 		case SourceResume:
 			resumes++
 			if _, ok := verifiedResumeIDs[candidate.CandidateID]; !ok {
@@ -172,8 +201,34 @@ func (c CandidateIntention) Validate() error {
 	if len(c.CandidateID) > 128 {
 		return errors.New("candidate_id must be bounded")
 	}
-	if c.Score < 0 || c.Score > 100 || len(c.ScoreFactors) > len(allowedScoreFactors) || len(c.ScoreRationale) > 500 {
+	if c.Score < 0 || c.Score > 100 || len(c.ScoreFactors) > len(allowedScoreFactors) || len(c.ScoreRationale) > 500 || len(c.Uncertainty) > 500 || len(c.BasisRefs) > 16 || len(c.ProjectActionID) > 128 {
 		return errors.New("candidate score evidence is invalid or exceeds its limit")
+	}
+	switch c.ProjectGrounding {
+	case "":
+		if c.ProjectActionID != "" {
+			return errors.New("project action ID requires roadmap grounding")
+		}
+	case "roadmap_action":
+		if c.ProjectActionID == "" {
+			return errors.New("roadmap grounded candidate lacks its action ID")
+		}
+	case "exploration":
+		if c.ProjectActionID != "" {
+			return errors.New("exploratory candidate cannot claim a roadmap action ID")
+		}
+	default:
+		return errors.New("candidate project grounding is invalid")
+	}
+	seenRefs := make(map[string]struct{}, len(c.BasisRefs))
+	for _, ref := range c.BasisRefs {
+		if strings.TrimSpace(ref) == "" || len(ref) > 128 {
+			return errors.New("candidate basis reference is invalid")
+		}
+		if _, exists := seenRefs[ref]; exists {
+			return errors.New("candidate basis references must be unique")
+		}
+		seenRefs[ref] = struct{}{}
 	}
 	seenFactors := make(map[string]struct{}, len(c.ScoreFactors))
 	for _, factor := range c.ScoreFactors {
@@ -271,6 +326,18 @@ func (r IntentionRequest) Validate() error {
 	}
 	if len(r.IdempotencyKey) > 256 || len(r.CorrelationID) > 128 {
 		return errors.New("idempotency_key and correlation_id must be bounded")
+	}
+	if r.CandidateSource == SourceReflection {
+		if r.ReflectionID == "" || len(r.ReflectionID) > 128 || r.ReflectionRevision == "" || len(r.ReflectionRevision) != 64 || r.ReflectionSource != "prizm:freewill-task-reflection" {
+			return errors.New("reflection candidate requires a bounded host reflection binding")
+		}
+		for _, char := range r.ReflectionRevision {
+			if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+				return errors.New("reflection candidate revision must be a lowercase SHA-256 digest")
+			}
+		}
+	} else if r.ReflectionID != "" || r.ReflectionRevision != "" || r.ReflectionSource != "" {
+		return errors.New("reflection binding is only valid for reflection candidates")
 	}
 	if len(r.RequestedCapabilities) == 0 {
 		return errors.New("at least one requested capability is required")

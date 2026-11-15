@@ -16,6 +16,8 @@ func init() {
 	Schemas[EventFreewillExecutionCompleted] = Schema{Required: []string{"run_id", "request_id", "approval_id", "child_run_id", "child_status", "report_ref", "report_sha256", "validation_summary", "execution_disabled"}}
 	Schemas[EventFreewillExecutionFailed] = Schema{Required: []string{"run_id", "request_id", "approval_id", "child_run_id", "child_status", "report_ref", "report_sha256", "validation_summary", "failure_code", "execution_disabled"}}
 	Schemas[EventFreewillExecutionCancelled] = Schema{Required: []string{"run_id", "request_id", "approval_id", "child_run_id", "child_status", "report_ref", "report_sha256", "validation_summary", "failure_code", "execution_disabled"}}
+	Schemas[EventFreewillExecutionRecoveryUncertain] = Schema{Required: []string{"run_id", "request_id", "approval_id", "child_run_id", "reason_code", "execution_disabled"}}
+	Schemas[EventFreewillExecutionMutationNoEffectReconciled] = Schema{Required: []string{"run_id", "request_id", "approval_id", "child_run_id", "attempt_id", "mutation_ids", "reason_code", "child_status", "execution_disabled"}}
 	Schemas[EventFreewillPolicyDenied] = Schema{Required: []string{"run_id", "request_id", "policy_rule_id", "reason_code", "execution_disabled"}}
 	Schemas[EventProposalApplyFailed] = Schema{
 		Required: []string{"run_id", "proposal_id", "approval_id", "apply_key", "execution_key", "workspace_id", "reason"},
@@ -112,6 +114,12 @@ func init() {
 	Schemas[EventMultiAgentBudgetExhausted] = Schema{
 		Required: []string{"run_id", "workflow_id", "budget", "used", "limit"},
 		Optional: []string{"role", "reason"},
+	}
+	Schemas[EventMultiAgentResourceExtensionRequested] = Schema{
+		Required: []string{"run_id", "workflow_id", "request_id", "parent_run_id", "agent_id", "project_id", "grant_generation", "checkpoint_revision", "from_role", "next_role", "current_allowance", "requested_increment", "hard_ceiling", "generation"},
+	}
+	Schemas[EventMultiAgentResourceExtensionDecided] = Schema{
+		Required: []string{"run_id", "workflow_id", "request_id", "decision", "actor", "allowance", "hard_ceiling", "generation"},
 	}
 	Schemas[EventMultiAgentRunPaused] = Schema{
 		Required: []string{"run_id", "workflow_id", "status"},

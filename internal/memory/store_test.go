@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
@@ -10,6 +11,21 @@ import (
 	"testing"
 	"time"
 )
+
+type blockingEmbeddingClient struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (c *blockingEmbeddingClient) Embed(ctx context.Context, model, text string) ([]float64, error) {
+	close(c.started)
+	select {
+	case <-c.release:
+		return []float64{1, 0}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
 
 func tempStore(t *testing.T) *MarkdownStore {
 	t.Helper()
@@ -51,6 +67,343 @@ func TestStoreAndRetrieve(t *testing.T) {
 	}
 	if got.AgentID != "lumi" {
 		t.Errorf("AgentID = %q, want lumi", got.AgentID)
+	}
+}
+
+func TestEraseIDsMasksAndPhysicallyRemovesAcrossReopen(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	s := NewMarkdownStore(root)
+	erasedID, err := s.Store(ctx, Memory{ID: "derived-pref-1", Content: "private hypothesis body", Summary: "private preference summary", Category: "preference_hypothesis", Source: "prizm:freewill-preference-hypothesis", UserID: "owner", ProjectID: "project", TaskID: "pref-scope", AgentID: "agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keepID, err := s.Store(ctx, Memory{ID: "task-history-1", Content: "independent cited task outcome", Summary: "task history", Category: "fact", Source: "prizm:freewill-task-outcome", UserID: "owner", ProjectID: "project", TaskID: "task-1", AgentID: "agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(root, "memory", "embeddings.json")
+	idx := NewEmbeddingIndex(EmbeddingConfig{IndexPath: indexPath, Dimensions: 2, Model: "synthetic"})
+	idx.entries[erasedID] = &EmbeddingEntry{ID: erasedID, Embedding: []float64{1, 0}}
+	idx.entries[keepID] = &EmbeddingEntry{ID: keepID, Embedding: []float64{0, 1}}
+	s.SetEmbeddingIndex(idx)
+	if err := idx.Save(); err != nil {
+		t.Fatal(err)
+	}
+	badParent := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(badParent, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	idx.filePath = filepath.Join(badParent, "embeddings.json")
+	memDir := filepath.Join(root, "memory")
+	if err := writeJSONAtomic(filepath.Join(memDir, redactedIDsFile), map[string]bool{erasedID: true}); err != nil {
+		t.Fatal(err)
+	}
+	reopened := NewMarkdownStore(root)
+	if got, err := reopened.Get(ctx, "derived-pref-"); err != nil || got != nil {
+		t.Fatalf("erased Get=%#v err=%v", got, err)
+	}
+	if got, err := reopened.ListRecent(ctx, 0); err != nil || len(got) != 1 || got[0].ID != keepID {
+		t.Fatalf("reopened rows=%#v err=%v", got, err)
+	}
+	if got, err := reopened.Search(ctx, "private hypothesis", 10); err != nil || len(got) != 0 {
+		t.Fatalf("erased Search=%#v err=%v", got, err)
+	}
+	if _, err := reopened.Store(ctx, Memory{ID: erasedID, Content: "resurrection", CreatedAt: time.Now()}); err == nil {
+		t.Fatal("redacted ID was resurrected")
+	}
+	if removed, err := s.EraseIDs(ctx, nil); err == nil || removed != 1 {
+		t.Fatalf("injected embedding cleanup failure removed=%d err=%v", removed, err)
+	}
+	files, err := os.ReadDir(filepath.Join(root, "memory"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if filepath.Ext(file.Name()) != ".md" {
+			continue
+		}
+		contents, err := os.ReadFile(filepath.Join(root, "memory", file.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(contents), "private hypothesis body") || strings.Contains(string(contents), "private preference summary") {
+			t.Fatal("redacted body or summary remains on disk")
+		}
+	}
+	idx.filePath = indexPath
+	reopened.SetEmbeddingIndex(idx)
+	if _, err := reopened.EraseIDs(ctx, nil); err != nil {
+		t.Fatalf("pending cleanup retry failed: %v", err)
+	}
+	indexBytes, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var indexFile EmbeddingIndexFile
+	if err := json.Unmarshal(indexBytes, &indexFile); err != nil {
+		t.Fatal(err)
+	}
+	if len(indexFile.Entries) != 1 || indexFile.Entries[0].ID != keepID || len(indexFile.RedactedIDs) != 1 || indexFile.RedactedIDs[0] != erasedID {
+		t.Fatalf("embedding sidecar did not retain only the unrelated vector: %#v", indexFile)
+	}
+	if _, err := reopened.EraseIDs(ctx, nil); err != nil {
+		t.Fatalf("idempotent cleanup retry failed: %v", err)
+	}
+}
+
+func TestEmbeddingIndexRejectsInFlightRedactedID(t *testing.T) {
+	root := t.TempDir()
+	indexPath := filepath.Join(root, "embeddings.json")
+	idx := NewEmbeddingIndex(EmbeddingConfig{IndexPath: indexPath, Dimensions: 2, Model: "synthetic"})
+	client := &blockingEmbeddingClient{started: make(chan struct{}), release: make(chan struct{})}
+	idx.httpClient = client
+	done := make(chan error, 1)
+	go func() {
+		_, err := idx.IndexMemories(context.Background(), []Memory{{ID: "redact-me", Summary: "synthetic body"}})
+		done <- err
+	}()
+	<-client.started
+	if err := idx.DeleteIDs(map[string]bool{"redact-me": true}); err != nil {
+		t.Fatal(err)
+	}
+	close(client.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := idx.entries["redact-me"]; exists {
+		t.Fatal("in-flight embedding was reinserted after deletion")
+	}
+	reopened := NewEmbeddingIndex(EmbeddingConfig{IndexPath: indexPath, Dimensions: 2, Model: "synthetic"})
+	if err := reopened.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := reopened.entries["redact-me"]; exists || !reopened.redacted["redact-me"] {
+		t.Fatalf("redaction marker failed across embedding index reopen: entries=%v redacted=%v", reopened.entries, reopened.redacted)
+	}
+}
+
+func TestEmbeddingIndexStaleInstanceCannotRestoreRedactedID(t *testing.T) {
+	root := t.TempDir()
+	indexPath := filepath.Join(root, "embeddings.json")
+	eraser := NewEmbeddingIndex(EmbeddingConfig{IndexPath: indexPath, Dimensions: 2, Model: "synthetic"})
+	stale := NewEmbeddingIndex(EmbeddingConfig{IndexPath: indexPath, Dimensions: 2, Model: "synthetic"})
+	if err := stale.Load(); err != nil {
+		t.Fatal(err)
+	}
+	client := &blockingEmbeddingClient{started: make(chan struct{}), release: make(chan struct{})}
+	stale.httpClient = client
+	done := make(chan error, 1)
+	go func() {
+		_, err := stale.IndexMemories(context.Background(), []Memory{{ID: "redact-cross-instance", Summary: "synthetic derived preference"}})
+		done <- err
+	}()
+	<-client.started
+	if err := eraser.DeleteIDs(map[string]bool{"redact-cross-instance": true}); err != nil {
+		t.Fatal(err)
+	}
+	close(client.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	// A stale instance doing an ordinary save must also merge the persisted
+	// denial set before writing its snapshot.
+	stale.entries["redact-cross-instance"] = &EmbeddingEntry{ID: "redact-cross-instance", SummaryHash: "stale", Embedding: []float64{1, 0}}
+	if err := stale.Save(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := NewEmbeddingIndex(EmbeddingConfig{IndexPath: indexPath, Dimensions: 2, Model: "synthetic"})
+	if err := reopened.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := reopened.entries["redact-cross-instance"]; exists || !reopened.redacted["redact-cross-instance"] {
+		t.Fatalf("stale instance restored denied vector: entries=%v redacted=%v", reopened.entries, reopened.redacted)
+	}
+}
+
+func TestScopedRedactionLedgerMasksCrashWindowAndBlocksReopenWrites(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := NewMarkdownStore(root)
+	scope := Scope{UserID: "owner", IncludeUserScope: true, ProjectID: "project", TaskID: "preference-scope", AgentID: "agent", CorrelationID: "preference-scope"}
+	target := Memory{ID: "preference-body", Content: "synthetic derived hypothesis", Summary: "synthetic derived preference", Category: "preference_hypothesis", Source: "prizm:freewill-preference-hypothesis", UserID: scope.UserID, ProjectID: scope.ProjectID, TaskID: scope.TaskID, AgentID: scope.AgentID}
+	erasedID, err := store.Store(ctx, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keepID, err := store.Store(ctx, Memory{ID: "task-receipt", Content: "independent task history", Summary: "task outcome", Category: "fact", Source: "prizm:freewill-task-outcome", UserID: scope.UserID, ProjectID: scope.ProjectID, TaskID: "task-one", AgentID: scope.AgentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate process death immediately after the durable tombstone, before
+	// Markdown compaction begins.
+	ledger := memoryRedactionLedger{IDs: map[string]bool{}, Scopes: []memoryRedactedScope{{Scope: scope, Records: []MemoryIdentity{IdentityOf(target)}}}}
+	memDir := filepath.Join(root, "memory")
+	if err := writeJSONAtomic(filepath.Join(memDir, redactedIDsFile), ledger); err != nil {
+		t.Fatal(err)
+	}
+	reopened := NewMarkdownStore(root)
+	if got, err := reopened.Get(ctx, "preference-"); err != nil || got != nil {
+		t.Fatalf("prefix Get after crash=%#v err=%v", got, err)
+	}
+	if rows, err := reopened.ListRecent(ctx, 0); err != nil || len(rows) != 1 || rows[0].ID != keepID {
+		t.Fatalf("rows after crash=%#v err=%v", rows, err)
+	}
+	if _, err := reopened.Store(ctx, Memory{ID: "new-challenge", Content: "should be blocked", UserID: scope.UserID, ProjectID: scope.ProjectID, TaskID: scope.TaskID, AgentID: scope.AgentID}); err == nil {
+		t.Fatal("write in withdrawn scope was accepted")
+	}
+	records, err := reopened.ErasedRecordsForScope(ctx, scope)
+	if err != nil || len(records) != 1 || records[0].ID != erasedID {
+		t.Fatalf("recovery records=%v err=%v", records, err)
+	}
+	if _, err := reopened.EraseScopedRecords(ctx, scope, records); err != nil {
+		t.Fatalf("resume scoped cleanup: %v", err)
+	}
+	files, err := os.ReadDir(memDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if filepath.Ext(file.Name()) != ".md" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(memDir, file.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "synthetic derived hypothesis") {
+			t.Fatal("derived body remains after resumed compaction")
+		}
+	}
+}
+
+func TestRecordRedactionSurvivesRestartWithoutBlockingScopeOrNeighbors(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := NewMarkdownStore(root)
+	scope := Scope{UserID: "owner", IncludeUserScope: true, ProjectID: "project", TaskID: "preference-scope", AgentID: "agent", CorrelationID: "preference-scope"}
+	target := Memory{ID: "expired-hypothesis", Content: "derived body to expire", Summary: "derived preference", Category: "preference_hypothesis", Source: "prizm:freewill-preference-hypothesis", UserID: scope.UserID, ProjectID: scope.ProjectID, TaskID: scope.TaskID, AgentID: scope.AgentID}
+	if _, err := store.Store(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := store.RedactScopedRecords(ctx, scope, []MemoryIdentity{IdentityOf(target)}); err != nil || removed != 1 {
+		t.Fatalf("record redaction removed=%d err=%v", removed, err)
+	}
+	reopened := NewMarkdownStore(root)
+	if got, err := reopened.Get(ctx, target.ID); err != nil || got != nil {
+		t.Fatalf("redacted record after reopen=%#v err=%v", got, err)
+	}
+	if _, err := reopened.Store(ctx, Memory{ID: target.ID, Content: "same source pair resurrection", Summary: "new body", Category: target.Category, Source: target.Source, UserID: scope.UserID, ProjectID: scope.ProjectID, TaskID: scope.TaskID, AgentID: scope.AgentID}); err == nil {
+		t.Fatal("redacted deterministic ID was resurrected")
+	}
+	if _, err := reopened.Store(ctx, Memory{ID: "new-pair-hypothesis", Content: "new exact source pairs", Summary: "new derived preference", Category: target.Category, Source: target.Source, UserID: scope.UserID, ProjectID: scope.ProjectID, TaskID: scope.TaskID, AgentID: scope.AgentID}); err != nil {
+		t.Fatalf("new source pair in retained scope was blocked: %v", err)
+	}
+	neighborScope := Scope{UserID: "owner", IncludeUserScope: true, ProjectID: "project", TaskID: "neighbor-scope", AgentID: "agent", CorrelationID: "neighbor-scope"}
+	if _, err := reopened.Store(ctx, Memory{ID: target.ID, Content: "neighbor scope remains writable", Summary: "neighbor", Category: "fact", Source: "unrelated", UserID: neighborScope.UserID, ProjectID: neighborScope.ProjectID, TaskID: neighborScope.TaskID, AgentID: neighborScope.AgentID}); err != nil {
+		t.Fatalf("same ID in neighbor scope was blocked: %v", err)
+	}
+	if withdrawn, err := reopened.ScopeErased(ctx, scope); err != nil || withdrawn {
+		t.Fatalf("ordinary record expiry changed withdrawal state: withdrawn=%v err=%v", withdrawn, err)
+	}
+}
+
+func TestRecordRedactionMasksConflictingSameIDAndRemainsPending(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := NewMarkdownStore(root)
+	scope := Scope{UserID: "owner", IncludeUserScope: true, ProjectID: "project", TaskID: "preference-scope", AgentID: "agent", CorrelationID: "preference-scope"}
+	target := Memory{ID: "ambiguous-derived-id", Content: "derived hypothesis body", Summary: "derived", Category: "preference_hypothesis", Source: "prizm:freewill-preference-hypothesis", UserID: scope.UserID, ProjectID: scope.ProjectID, TaskID: scope.TaskID, AgentID: scope.AgentID, CreatedAt: time.Now().UTC()}
+	conflict := Memory{ID: target.ID, Content: "unrelated conflicting same-ID body", Summary: "unrelated", Category: "fact", Source: "synthetic-unrelated", UserID: scope.UserID, ProjectID: scope.ProjectID, TaskID: scope.TaskID, AgentID: scope.AgentID, CreatedAt: time.Now().Add(-24 * time.Hour).UTC()}
+	if _, err := store.Store(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Store(ctx, conflict); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RedactScopedRecords(ctx, scope, []MemoryIdentity{IdentityOf(target)}); err == nil {
+		t.Fatal("ambiguous ID cleanup was reported complete")
+	}
+	if got, err := store.Get(ctx, target.ID); err != nil || got != nil {
+		t.Fatalf("conflicting body leaked through Get: %#v err=%v", got, err)
+	}
+	if withdrawn, err := store.ScopeErased(ctx, scope); err != nil || withdrawn {
+		t.Fatalf("pending record redaction withdrew scope: %v err=%v", withdrawn, err)
+	}
+	rows, err := store.ListScopedRecords(ctx, scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Source != "synthetic-unrelated" {
+		t.Fatalf("expected only masked ambiguous conflict to remain, got %#v", rows)
+	}
+}
+
+func TestScopedRedactionPreservesIDCollisionAndReportsPendingIndexCleanup(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := NewMarkdownStore(root)
+	scope := Scope{UserID: "owner", IncludeUserScope: true, ProjectID: "project", TaskID: "preference-scope", AgentID: "agent", CorrelationID: "preference-scope"}
+	sharedID := "colliding-memory-id"
+	target := Memory{ID: sharedID, Content: "derived body to erase", Summary: "derived summary", Category: "preference_hypothesis", Source: "prizm:freewill-preference-hypothesis", UserID: scope.UserID, ProjectID: scope.ProjectID, TaskID: scope.TaskID, AgentID: scope.AgentID}
+	if _, err := store.Store(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Store(ctx, Memory{ID: sharedID, Content: "same-scope non-allowlisted body", Summary: "same-scope neighbor", Category: "fact", Source: "unrelated", UserID: scope.UserID, ProjectID: scope.ProjectID, TaskID: scope.TaskID, AgentID: scope.AgentID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Store(ctx, Memory{ID: sharedID, Content: "cross-scope neighbor body", Summary: "cross-scope row", Category: "fact", Source: "unrelated", UserID: "another-owner", ProjectID: "another-project", TaskID: "other-task", AgentID: "another-agent"}); err != nil {
+		t.Fatal(err)
+	}
+	scopeC := Scope{UserID: "owner", IncludeUserScope: true, ProjectID: "project", TaskID: "other-preference-scope", AgentID: "agent", CorrelationID: "other-preference-scope"}
+	recordC := Memory{ID: "independent-c-record", Content: "another scoped derived body", Summary: "another scoped summary", Category: "preference_hypothesis", Source: "prizm:freewill-preference-hypothesis", UserID: scopeC.UserID, ProjectID: scopeC.ProjectID, TaskID: scopeC.TaskID, AgentID: scopeC.AgentID}
+	if _, err := store.Store(ctx, recordC); err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(root, "memory", "embeddings.json")
+	index := NewEmbeddingIndex(EmbeddingConfig{IndexPath: indexPath, Dimensions: 1, Model: "synthetic"})
+	index.entries[sharedID] = &EmbeddingEntry{ID: sharedID, Embedding: []float64{1}}
+	index.entries[recordC.ID] = &EmbeddingEntry{ID: recordC.ID, Embedding: []float64{0.5}}
+	store.SetEmbeddingIndex(index)
+	if err := index.Save(); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := store.EraseScopedRecords(ctx, scope, []MemoryIdentity{IdentityOf(target)})
+	if err == nil || !strings.Contains(err.Error(), "shared with another record") || removed != 1 {
+		t.Fatalf("collision outcome removed=%d err=%v", removed, err)
+	}
+	if removed, err := store.EraseScopedRecords(ctx, scopeC, []MemoryIdentity{IdentityOf(recordC)}); err != nil || removed != 1 {
+		t.Fatalf("unrelated later purge removed=%d err=%v", removed, err)
+	}
+	if row, err := store.Get(ctx, sharedID); err != nil || row == nil || row.Content != "same-scope non-allowlisted body" {
+		t.Fatalf("neighbor Get=%#v err=%v", row, err)
+	}
+	files, err := os.ReadDir(filepath.Join(root, "memory"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if filepath.Ext(file.Name()) != ".md" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(root, "memory", file.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "derived body to erase") || !strings.Contains(string(data), "same-scope non-allowlisted body") || !strings.Contains(string(data), "cross-scope neighbor body") {
+			t.Fatal("scoped compaction erased the neighbor or retained the target")
+		}
+	}
+	indexBytes, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var indexFile EmbeddingIndexFile
+	if err := json.Unmarshal(indexBytes, &indexFile); err != nil {
+		t.Fatal(err)
+	}
+	if len(indexFile.Entries) != 1 || indexFile.Entries[0].ID != sharedID {
+		t.Fatalf("ambiguous embedding was removed or altered: %#v", indexFile.Entries)
 	}
 }
 
@@ -220,6 +573,7 @@ This is the memory content.
 		t.Errorf("AgentID = %q, want lumi", got.AgentID)
 	}
 }
+
 // --- V79: Multi-strategy parser tests ---
 
 func TestParseByHeaders(t *testing.T) {
@@ -393,7 +747,7 @@ func TestBM25Scoring(t *testing.T) {
 	// because IDF gives high weight to rare term "v80" and BM25 normalizes by length
 	if scores["short-specific"] <= scores["long-generic"] {
 		t.Errorf("BM25: short-specific (%.4f) should score higher than long-generic (%.4f) for 'V80 memory search'",
-				scores["short-specific"], scores["long-generic"])
+			scores["short-specific"], scores["long-generic"])
 	}
 }
 
@@ -544,9 +898,9 @@ Second content.
 
 func TestIsJunkEntry(t *testing.T) {
 	tests := []struct {
-		name    string
-		memory  Memory
-		isJunk  bool
+		name   string
+		memory Memory
+		isJunk bool
 	}{
 		{
 			name:   "dream candidate summary",
@@ -588,4 +942,3 @@ func TestIsJunkEntry(t *testing.T) {
 		})
 	}
 }
-

@@ -2,6 +2,7 @@ package multiagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -33,15 +34,18 @@ const (
 
 var ErrFreewillSelectionBudgetExceeded = errors.New("multiagent: Freewill selector attempt budget is exhausted")
 
-// FreewillWakeRequest is a scheduler-owned wake envelope. Trigger is an
+// FreewillWakeRequest is a host-owned wake envelope. Trigger is an
 // allowlisted source label; it cannot carry task instructions or authority.
 type FreewillWakeRequest struct {
-	RunID         string
-	AgentID       string
-	Scope         freewill.Scope
-	Trigger       string
-	DedupeKey     string
-	CorrelationID string
+	RunID               string
+	AgentID             string
+	Scope               freewill.Scope
+	Trigger             string
+	DedupeKey           string
+	CorrelationID       string
+	StrategyID          string
+	StrategyVersion     string
+	ExpectedPatchSHA256 string
 }
 
 // FreewillWakeLease is the persisted claim identity returned to a trusted
@@ -63,7 +67,11 @@ func (w FreewillWakeRequest) validate() error {
 			return fmt.Errorf("multiagent: Freewill wake %s is invalid", name)
 		}
 	}
-	if w.Trigger != "scheduled_tick" {
+	if (w.StrategyID == "") != (w.StrategyVersion == "") || (w.StrategyID == "") != (w.ExpectedPatchSHA256 == "") || strings.TrimSpace(w.StrategyID) != w.StrategyID || strings.TrimSpace(w.StrategyVersion) != w.StrategyVersion ||
+		len(w.StrategyID) > 96 || len(w.StrategyVersion) > 64 || strings.ContainsAny(w.StrategyID+w.StrategyVersion, "\r\n\x00") || (w.ExpectedPatchSHA256 != "" && !validFreewillHash(w.ExpectedPatchSHA256)) {
+		return errors.New("multiagent: Freewill wake strategy binding is invalid")
+	}
+	if w.Trigger != "scheduled_tick" && !(strings.HasPrefix(w.Trigger, "event:") && validFreewillEventKind(strings.TrimPrefix(w.Trigger, "event:"))) {
 		return errors.New("multiagent: Freewill wake trigger is not allowed")
 	}
 	if strings.TrimSpace(w.Scope.ProjectID) == "" || strings.TrimSpace(w.Scope.Workspace) == "" ||
@@ -118,6 +126,9 @@ func (r *DurableRuntime) AcceptFreewillWake(ctx context.Context, wake FreewillWa
 			Trigger:               wake.Trigger,
 			DedupeKey:             wake.DedupeKey,
 			CorrelationID:         wake.CorrelationID,
+			StrategyID:            wake.StrategyID,
+			StrategyVersion:       wake.StrategyVersion,
+			ExpectedPatchSHA256:   wake.ExpectedPatchSHA256,
 			ExecutionDisabled:     true,
 		},
 	}
@@ -157,7 +168,7 @@ func freewillWakeMatches(record DurableRun, wake FreewillWakeRequest) bool {
 		return freewillAdmissionActive(record)
 	}
 	return record.Freewill.WakeID == wake.RunID && record.Freewill.DedupeKey == wake.DedupeKey &&
-		record.Freewill.CorrelationID == wake.CorrelationID
+		record.Freewill.CorrelationID == wake.CorrelationID && record.Freewill.StrategyID == wake.StrategyID && record.Freewill.StrategyVersion == wake.StrategyVersion && record.Freewill.ExpectedPatchSHA256 == wake.ExpectedPatchSHA256
 }
 
 // ClaimFreewillWake leases one accepted wake through the run's existing CAS
@@ -369,6 +380,15 @@ func (r *DurableRuntime) CommitFreewillSelectionWithEvidence(ctx context.Context
 			return DurableRun{}, errors.New("multiagent: Freewill selection evidence is invalid")
 		}
 	}
+	if evidence.ProjectContextManifest != nil {
+		if err := evidence.ProjectContextManifest.Validate(); err != nil {
+			return DurableRun{}, errors.New("multiagent: Freewill project context manifest is invalid")
+		}
+		encoded, err := json.Marshal(evidence.ProjectContextManifest)
+		if err != nil || len(encoded) > 12<<10 {
+			return DurableRun{}, errors.New("multiagent: Freewill project context manifest exceeds its limit")
+		}
+	}
 	claim, err := r.claimer.Acquire(ctx, lease.RunID)
 	if err != nil {
 		return DurableRun{}, err
@@ -387,7 +407,7 @@ func (r *DurableRuntime) CommitFreewillSelectionWithEvidence(ctx context.Context
 	if record.Freewill.Lifecycle != freewill.StateSelecting {
 		return record, errors.New("multiagent: Freewill selection is not active")
 	}
-	if err := selection.Validate(record.State.RequestIdentity.RequesterID, record.Freewill.Scope, verifiedResumeIDs); err != nil {
+	if err := selection.Validate(record.State.RequestIdentity.RequesterID, record.Freewill.Scope, verifiedResumeIDs, evidence.ReflectionBindings); err != nil {
 		return record, err
 	}
 	selected, selectedOK := selectedFreewillCandidate(&FreewillRunState{Candidates: selection.Candidates, ChoiceID: selection.ChoiceID})
@@ -435,6 +455,13 @@ func (r *DurableRuntime) CommitFreewillSelectionWithEvidence(ctx context.Context
 		record.Freewill.SelectionUsage = evidence.Usage
 		record.Freewill.SelectionAttempt = lease.Attempt
 	}
+	record.Freewill.SelectionObjective = evidence.Objective
+	record.Freewill.PreferenceSelection = evidence.PreferenceInfluence
+	if evidence.ProjectContextManifest != nil {
+		manifest := evidence.ProjectContextManifest.Clone()
+		record.Freewill.ProjectContextManifest = &manifest
+		record.Freewill.ProjectContextEgressAllowed = evidence.ProjectContextEgressAllowed
+	}
 	record.Freewill.SelectionFailureClass = ""
 	record.Freewill.SelectionFailureCode = ""
 	record.Freewill.SelectionFeedback = ""
@@ -461,6 +488,10 @@ func (r *DurableRuntime) CommitFreewillSelectionWithEvidence(ctx context.Context
 		evt.Payload["prompt_tokens"] = evidence.Usage.PromptTokens
 		evt.Payload["completion_tokens"] = evidence.Usage.CompletionTokens
 		evt.Payload["total_tokens"] = evidence.Usage.TotalTokens
+	}
+	if evidence.ProjectContextManifest != nil {
+		evt.Payload["project_context_manifest"] = evidence.ProjectContextManifest
+		evt.Payload["project_context_egress_allowed"] = evidence.ProjectContextEgressAllowed
 	}
 	saved, err := r.store.Checkpoint(ctx, record.Revision, record, []event.Event{evt})
 	if err != nil {
@@ -565,6 +596,8 @@ func cloneFreewillCandidates(candidates []freewill.CandidateIntention) []freewil
 	copy(cloned, candidates)
 	for i := range cloned {
 		cloned[i].Request.RequestedCapabilities = append([]string(nil), candidates[i].Request.RequestedCapabilities...)
+		cloned[i].ScoreFactors = append([]string(nil), candidates[i].ScoreFactors...)
+		cloned[i].BasisRefs = append([]string(nil), candidates[i].BasisRefs...)
 	}
 	return cloned
 }
@@ -620,6 +653,7 @@ func freewillLeaseEvent(eventType string, record DurableRun, fields map[string]a
 func freewillSelectionTraceFields(selection freewill.Selection) map[string]any {
 	ids := make([]string, 0, len(selection.Candidates))
 	budgets := make([]map[string]any, 0, len(selection.Candidates))
+	grounding := make([]map[string]any, 0, len(selection.Candidates))
 	for _, candidate := range selection.Candidates {
 		ids = append(ids, candidate.CandidateID)
 		budget := map[string]any{"candidate_id": candidate.CandidateID}
@@ -636,16 +670,20 @@ func freewillSelectionTraceFields(selection freewill.Selection) map[string]any {
 			budget["max_tokens"] = *value
 		}
 		budgets = append(budgets, budget)
+		grounding = append(grounding, map[string]any{"candidate_id": candidate.CandidateID,
+			"basis_refs": append([]string(nil), candidate.BasisRefs...), "motivation": candidate.Request.ReasonSummary,
+			"uncertainty": candidate.Uncertainty})
 	}
 	outcome := "sleep"
 	if selection.ChoiceID != "" {
 		outcome = "proposal"
 	}
 	return map[string]any{
-		"candidate_ids":     ids,
-		"candidate_budgets": budgets,
-		"reason_summary":    selection.ReasonSummary,
-		"sleep_reason":      selection.SleepReason,
-		"outcome":           outcome,
+		"candidate_ids":       ids,
+		"candidate_budgets":   budgets,
+		"candidate_grounding": grounding,
+		"reason_summary":      selection.ReasonSummary,
+		"sleep_reason":        selection.SleepReason,
+		"outcome":             outcome,
 	}
 }

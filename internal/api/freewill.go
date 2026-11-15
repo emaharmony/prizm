@@ -157,6 +157,10 @@ func (s *Server) handleFreewillApproval(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleFreewillChildApproval(w http.ResponseWriter, r *http.Request) {
+	if strings.Contains(r.URL.Path, "/resources") {
+		s.handleFreewillChildResource(w, r)
+		return
+	}
 	if s.freewillChildApprovals == nil {
 		writeJSONError(w, "Freewill child approval service is not configured", http.StatusServiceUnavailable)
 		return
@@ -243,4 +247,70 @@ func (s *Server) handleFreewillChildApproval(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, approval)
+}
+
+type freewillResourceDecisionRequest struct {
+	Decision         string `json:"decision"`
+	ExpectedRevision int64  `json:"expected_revision"`
+	Reason           string `json:"reason,omitempty"`
+}
+
+func (s *Server) handleFreewillChildResource(w http.ResponseWriter, r *http.Request) {
+	if s.freewillChildResources == nil {
+		writeJSONError(w, "Freewill child resource service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/freewill/runs/"), "/"), "/")
+	if len(parts) < 4 || len(parts) > 6 || !validMultiAgentRunID(parts[0]) || parts[1] != "children" ||
+		!validMultiAgentRunID(parts[2]) || parts[3] != "resources" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if len(parts) == 4 {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		items, err := s.freewillChildResources.ListChildResourceExtensions(r.Context(), parts[0], parts[2])
+		if err != nil {
+			writeJSONError(w, "Freewill child resource requests unavailable", http.StatusConflict)
+			return
+		}
+		if items == nil {
+			items = []FreewillChildResourceExtension{}
+		}
+		writeJSON(w, map[string]any{"requests": items})
+		return
+	}
+	if len(parts) != 6 || strings.TrimSpace(parts[4]) == "" || parts[5] != "decision" || r.Method != http.MethodPost {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	var request freewillResourceDecisionRequest
+	decoder := json.NewDecoder(io.LimitReader(http.MaxBytesReader(w, r.Body, s.maxRequestBytes), 4097))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		writeJSONError(w, "invalid Freewill resource decision", http.StatusBadRequest)
+		return
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		writeJSONError(w, "invalid Freewill resource decision", http.StatusBadRequest)
+		return
+	}
+	if (request.Decision != "accept" && request.Decision != "reject") || request.ExpectedRevision <= 0 || len(request.Reason) > 256 {
+		writeJSONError(w, "invalid Freewill resource decision", http.StatusBadRequest)
+		return
+	}
+	actor := strings.TrimSpace(r.URL.Query().Get("by"))
+	if actor == "" {
+		actor = "api:user"
+	}
+	result, err := s.freewillChildResources.DecideChildResourceExtension(r.Context(), parts[0], parts[2], parts[4], request.ExpectedRevision, request.Decision, actor, request.Reason)
+	if err != nil {
+		writeJSONError(w, "Freewill resource decision could not be recorded", http.StatusConflict)
+		return
+	}
+	writeJSON(w, result)
 }

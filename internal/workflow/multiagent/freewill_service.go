@@ -12,10 +12,13 @@ import (
 	"time"
 
 	"github.com/emaharmony/prizm/internal/cost"
+	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/freewill"
+	"github.com/oklog/ulid/v2"
 )
 
 var ErrFreewillDisabled = errors.New("multiagent: Freewill scheduling is disabled")
+var ErrFreewillEventNotAllowed = errors.New("multiagent: Freewill event kind or identity is not allowed")
 var ErrFreewillWakeScopeMismatch = errors.New("multiagent: Freewill wake identity does not match configured host scope")
 
 // FreewillSelectionInput contains host-verified identity and resumable
@@ -29,13 +32,72 @@ type FreewillSelectionInput struct {
 	ResumeCandidates []freewill.CandidateIntention
 	Budget           freewill.ResourceBudget
 	RecoveryFeedback string
+	ProjectContext   freewill.ProjectContextSnapshot
+	PriorReflection  *FreewillReflectionEvidence
+}
+
+// FreewillReflectionEvidence is host-retrieved advisory material from an exact
+// owner/project/workspace/agent-scoped prior task reflection.
+type FreewillReflectionEvidence struct {
+	Binding     freewill.ReflectionBinding `json:"binding"`
+	OwnerID     string                     `json:"owner_id"`
+	ProjectID   string                     `json:"project_id"`
+	Workspace   string                     `json:"workspace"`
+	AgentID     string                     `json:"agent_id"`
+	TaskID      string                     `json:"task_id"`
+	Hypothesis  string                     `json:"hypothesis"`
+	Uncertainty string                     `json:"uncertainty"`
+	Alignment   string                     `json:"alignment"`
 }
 
 // FreewillSelectionEvidence is provider metadata, not model output.
 type FreewillSelectionEvidence struct {
-	Provider string
-	Model    string
-	Usage    cost.TokenUsage
+	Provider                    string
+	Model                       string
+	Usage                       cost.TokenUsage
+	Objective                   string
+	ProjectContextManifest      *freewill.ProjectContextManifest
+	ProjectContextEgressAllowed bool
+	ReflectionBindings          map[string]freewill.ReflectionBinding
+	PreferenceInfluence         FreewillPreferenceSelectionMetadata
+}
+
+// FreewillPreferenceInfluence is bounded, host-validated but explicitly
+// unverified hypothesis material for the optional phase-two choice only.
+type FreewillPreferenceInfluence struct {
+	HypothesisID       string   `json:"hypothesis_id"`
+	HypothesisRevision string   `json:"hypothesis_revision"`
+	Hypothesis         string   `json:"hypothesis"`
+	Uncertainty        string   `json:"uncertainty"`
+	SourcePairRefs     []string `json:"source_pair_refs"`
+	Strength           string   `json:"strength"`
+	Verification       string   `json:"verification"`
+}
+
+// FreewillPreferenceSelectionMetadata persists provenance only, never the
+// preference text or challenge content.
+type FreewillPreferenceSelectionMetadata struct {
+	Considered         bool     `json:"considered"`
+	Eligible           bool     `json:"eligible"`
+	Reason             string   `json:"reason"`
+	HypothesisID       string   `json:"hypothesis_id,omitempty"`
+	HypothesisRevision string   `json:"hypothesis_revision,omitempty"`
+	SourcePairRefs     []string `json:"source_pair_refs,omitempty"`
+}
+
+// FreewillPreferenceInfluenceSource is implemented by the local CLI adapter.
+type FreewillPreferenceInfluenceSource interface {
+	CurrentPreferenceInfluence(context.Context, string, string, string, string) (FreewillPreferenceInfluence, string, bool)
+}
+
+// FreewillProjectContextSource is retained to decode pre-manifest durable runs.
+type FreewillProjectContextSource struct {
+	ID         string    `json:"id"`
+	Path       string    `json:"path,omitempty"`
+	Revision   string    `json:"revision"`
+	Digest     string    `json:"digest"`
+	ObservedAt time.Time `json:"observed_at"`
+	Confidence string    `json:"confidence"`
 }
 
 type verifiedFreewillResume struct {
@@ -49,21 +111,28 @@ type FreewillSelectionProvider interface {
 }
 
 type FreewillWakeServiceConfig struct {
-	Enabled           bool
-	SchedulingEnabled bool
-	ExecutionEnabled  bool
-	AgentID           string
-	Scope             freewill.Scope
-	Objective         string
-	Owner             string
-	LeaseFor          time.Duration
-	Budget            freewill.ResourceBudget
-	OperatorControl   *FreewillOperatorControl
+	Enabled                bool
+	SchedulingEnabled      bool
+	EventKinds             []string
+	ExecutionEnabled       bool
+	AgentID                string
+	Scope                  freewill.Scope
+	Objective              string
+	StrategyID             string
+	StrategyVersion        string
+	ExpectedPatchSHA256    string
+	Owner                  string
+	LeaseFor               time.Duration
+	Budget                 freewill.ResourceBudget
+	OperatorControl        *FreewillOperatorControl
+	ProjectContext         func(context.Context) (freewill.ProjectContextSnapshot, error)
+	PriorReflection        func(context.Context) (*FreewillReflectionEvidence, error)
+	PriorReflectionOwnerID string
 }
 
 // FreewillWakeService composes the existing durable runtime with a configured
-// selector. It accepts only scheduler ticks and never advances an ordinary
-// workflow role.
+// selector. It accepts only configured timer/event triggers and never advances
+// an ordinary workflow role.
 type FreewillWakeService struct {
 	runtime  *DurableRuntime
 	store    DurableRunStore
@@ -80,9 +149,26 @@ func NewFreewillWakeService(runtime *DurableRuntime, store DurableRunStore, sele
 	if strings.TrimSpace(cfg.AgentID) == "" || strings.TrimSpace(cfg.Scope.ProjectID) == "" || strings.TrimSpace(cfg.Scope.Workspace) == "" || strings.TrimSpace(cfg.Owner) == "" || cfg.LeaseFor <= 0 {
 		return nil, errors.New("multiagent: Freewill agent, trusted scope, owner, and lease are required")
 	}
+	if (cfg.StrategyID == "") != (cfg.StrategyVersion == "") || (cfg.StrategyID == "") != (cfg.ExpectedPatchSHA256 == "") || strings.TrimSpace(cfg.StrategyID) != cfg.StrategyID || strings.TrimSpace(cfg.StrategyVersion) != cfg.StrategyVersion || len(cfg.StrategyID) > 96 || len(cfg.StrategyVersion) > 64 || (cfg.ExpectedPatchSHA256 != "" && !validFreewillHash(cfg.ExpectedPatchSHA256)) {
+		return nil, errors.New("multiagent: Freewill strategy binding is invalid")
+	}
 	if err := freewill.ValidateSelectionObjective(cfg.Objective); err != nil {
 		return nil, errors.New("multiagent: Freewill selection objective is invalid")
 	}
+	if len(cfg.EventKinds) > 16 {
+		return nil, errors.New("multiagent: Freewill event allowlist exceeds its limit")
+	}
+	seenEventKinds := make(map[string]struct{}, len(cfg.EventKinds))
+	for _, kind := range cfg.EventKinds {
+		if !validFreewillEventKind(kind) {
+			return nil, ErrFreewillEventNotAllowed
+		}
+		if _, exists := seenEventKinds[kind]; exists {
+			return nil, ErrFreewillEventNotAllowed
+		}
+		seenEventKinds[kind] = struct{}{}
+	}
+	cfg.EventKinds = append([]string(nil), cfg.EventKinds...)
 	if clock == nil {
 		clock = time.Now
 	}
@@ -116,7 +202,7 @@ func (s *FreewillWakeService) HandleScheduledTick(ctx context.Context, firedAt t
 	wake := FreewillWakeRequest{
 		RunID: runID, AgentID: s.config.AgentID, Scope: s.config.Scope,
 		Trigger: "scheduled_tick", DedupeKey: "freewill:" + hex.EncodeToString(digest[:]),
-		CorrelationID: runID,
+		CorrelationID: runID, StrategyID: s.config.StrategyID, StrategyVersion: s.config.StrategyVersion, ExpectedPatchSHA256: s.config.ExpectedPatchSHA256,
 	}
 	accepted, created, err := s.runtime.AcceptFreewillWake(ctx, wake)
 	if err != nil {
@@ -128,11 +214,88 @@ func (s *FreewillWakeService) HandleScheduledTick(ctx context.Context, firedAt t
 	return s.ProcessWake(ctx, accepted.State.RunID)
 }
 
+// HasWakeSources reports whether the enabled service has at least one
+// configured source. It is used by the serve composition root to avoid
+// installing subscriptions when every trigger is disabled.
+func (s *FreewillWakeService) HasWakeSources() bool {
+	return s != nil && s.config.Enabled && (s.config.SchedulingEnabled || s.eventWakeEnabled())
+}
+
+// HandleEvent accepts only exact event kinds configured by the host. The
+// canonical event ID and type form a durable idempotency key; message payload
+// content never becomes selector instructions or authority.
+func (s *FreewillWakeService) HandleEvent(ctx context.Context, incoming event.Event) (DurableRun, error) {
+	if !s.config.Enabled || !s.eventWakeEnabled() {
+		return DurableRun{}, ErrFreewillDisabled
+	}
+	if err := ensureFreewillNotHalted(ctx, s.store, s.config.AgentID, s.config.Scope); err != nil {
+		return DurableRun{}, err
+	}
+	if !validFreewillEventKind(incoming.Type) || !validFreewillEventID(incoming.ID) || !s.allowsEventKind(incoming.Type) {
+		return DurableRun{}, ErrFreewillEventNotAllowed
+	}
+	identity := s.config.AgentID + "\x00" + s.config.Scope.ProjectID + "\x00" + s.config.Scope.Workspace + "\x00event\x00" + incoming.Type + "\x00" + incoming.ID
+	digest := sha256.Sum256([]byte(identity))
+	runID := "freewill-" + hex.EncodeToString(digest[:16])
+	wake := FreewillWakeRequest{
+		RunID: runID, AgentID: s.config.AgentID, Scope: s.config.Scope,
+		Trigger: "event:" + incoming.Type, DedupeKey: "freewill:" + hex.EncodeToString(digest[:]),
+		CorrelationID: runID, StrategyID: s.config.StrategyID, StrategyVersion: s.config.StrategyVersion,
+		ExpectedPatchSHA256: s.config.ExpectedPatchSHA256,
+	}
+	accepted, created, err := s.runtime.AcceptFreewillWake(ctx, wake)
+	if err != nil {
+		return DurableRun{}, err
+	}
+	if !created {
+		return accepted, nil
+	}
+	return s.ProcessWake(ctx, accepted.State.RunID)
+}
+
+func (s *FreewillWakeService) eventWakeEnabled() bool {
+	return len(s.config.EventKinds) > 0
+}
+
+func (s *FreewillWakeService) allowsEventKind(kind string) bool {
+	for _, configured := range s.config.EventKinds {
+		if configured == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func validFreewillEventKind(kind string) bool {
+	if len(kind) < len("prizm.a") || len(kind) > 192 || !strings.HasPrefix(kind, "prizm.") || strings.TrimSpace(kind) != kind {
+		return false
+	}
+	for _, part := range strings.Split(kind, ".") {
+		if part == "" {
+			return false
+		}
+		for _, char := range part {
+			if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '_' && char != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func validFreewillEventID(id string) bool {
+	if !strings.HasPrefix(id, "evt_") || len(id) != len("evt_")+ulid.EncodedSize {
+		return false
+	}
+	_, err := ulid.ParseStrict(strings.TrimPrefix(id, "evt_"))
+	return err == nil
+}
+
 // ProcessWake resumes only a Freewill record that is waiting in the wake
 // checkpoint. A crash after acceptance or selection start is recoverable by
 // the same scheduler scan after the fenced lease expires.
 func (s *FreewillWakeService) ProcessWake(ctx context.Context, runID string) (DurableRun, error) {
-	if !s.config.Enabled || !s.config.SchedulingEnabled {
+	if !s.HasWakeSources() {
 		return DurableRun{}, ErrFreewillDisabled
 	}
 	// Bind the durable wake to the exact host configuration before claiming it.
@@ -200,11 +363,58 @@ func (s *FreewillWakeService) ProcessWake(ctx context.Context, runID string) (Du
 	if err := ensureFreewillNotHalted(providerCtx, s.store, s.config.AgentID, s.config.Scope); err != nil {
 		return record, err
 	}
+	var projectContext freewill.ProjectContextSnapshot
+	var priorReflection *FreewillReflectionEvidence
+	reflectionBindings := make(map[string]freewill.ReflectionBinding)
+	if s.config.PriorReflection != nil {
+		priorReflection, err = s.config.PriorReflection(providerCtx)
+		if err != nil {
+			return record, errors.New("multiagent: prior Freewill reflection is unavailable")
+		}
+		if priorReflection != nil {
+			if err := validateFreewillReflectionEvidence(*priorReflection, s.config.Scope, s.config.AgentID, s.config.PriorReflectionOwnerID); err != nil {
+				return record, errors.New("multiagent: prior Freewill reflection binding is invalid")
+			}
+			reflectionBindings[priorReflection.Binding.ID] = priorReflection.Binding
+		}
+	}
+	if s.config.ProjectContext != nil {
+		projectContext, err = s.config.ProjectContext(providerCtx)
+		if err != nil {
+			return record, fmt.Errorf("multiagent: Freewill project context is unavailable")
+		}
+		if projectContext.ProjectID != s.config.Scope.ProjectID || projectContext.Digest == "" || len(projectContext.Sources) > 16 {
+			return record, errors.New("multiagent: Freewill project context binding is invalid")
+		}
+		if err := validateFreewillContextInput(FreewillSelectionInput{Scope: s.config.Scope, ProjectContext: projectContext}); err != nil {
+			return record, errors.New("multiagent: Freewill project context snapshot is invalid")
+		}
+		projectSources := hasFreewillSelectableContextSources(projectContext)
+		if !projectSources || !projectContext.SelectorEgressAllowed {
+			reason := "Project context is unavailable; defer selection until authorized project evidence exists."
+			if projectSources && !projectContext.SelectorEgressAllowed {
+				reason = "Project context sharing with this remote selector is not authorized; defer selection."
+			}
+			selection := freewill.Selection{SleepReason: reason}
+			manifest := projectContext.Manifest()
+			evidence := FreewillSelectionEvidence{ProjectContextManifest: &manifest, ProjectContextEgressAllowed: projectContext.SelectorEgressAllowed}
+			lease = currentLease()
+			record, err = s.runtime.CommitFreewillSelectionWithEvidence(ctx, lease, selection, verified, "", evidence)
+			if err != nil {
+				return record, err
+			}
+			committed = true
+			return record, nil
+		}
+	}
 	selection, evidence, err := s.selector.SelectFreewill(providerCtx, FreewillSelectionInput{
 		RunID: runID, CorrelationID: record.Freewill.CorrelationID, AgentID: s.config.AgentID,
 		Scope: s.config.Scope, Objective: s.config.Objective, ResumeCandidates: resumes, Budget: s.config.Budget,
-		RecoveryFeedback: freewillSelectionRecoveryFeedback(record.Freewill.SelectionFailureCode),
+		RecoveryFeedback: freewillSelectionRecoveryFeedback(record.Freewill.SelectionFailureCode, projectContext),
+		ProjectContext:   cloneFreewillProjectContextSnapshot(projectContext),
+		PriorReflection:  cloneFreewillReflectionEvidence(priorReflection),
 	})
+	evidence.Objective = s.config.Objective
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil {
 			return record, err
@@ -215,9 +425,27 @@ func (s *FreewillWakeService) ProcessWake(ctx context.Context, runID string) (Du
 		}
 		return failed, err
 	}
+	if s.config.ProjectContext != nil {
+		manifest := projectContext.Manifest()
+		evidence.ProjectContextManifest = &manifest
+		evidence.ProjectContextEgressAllowed = projectContext.SelectorEgressAllowed
+	}
 	for index := range selection.Candidates {
 		selected := selection.Candidates[index]
 		if selected.Request.CandidateSource != freewill.SourceResume {
+			if selected.Request.ReflectionID != "" {
+				binding, ok := reflectionBindings[selected.Request.ReflectionID]
+				if !ok || priorReflection == nil || selected.Request.CandidateSource != freewill.SourceNew && selected.Request.CandidateSource != freewill.SourceReflection {
+					return s.recordSelectionFailure(ctx, lease, errors.New("multiagent: Freewill selector cited an unavailable reflection"))
+				}
+				selected.Request.CandidateSource = freewill.SourceReflection
+				selected.Request.ReflectionID = binding.ID
+				selected.Request.ReflectionRevision = binding.Revision
+				selected.Request.ReflectionSource = binding.Source
+				selection.Candidates[index] = selected
+			} else if selected.Request.CandidateSource == freewill.SourceReflection {
+				return s.recordSelectionFailure(ctx, lease, errors.New("multiagent: Freewill reflection candidate omitted its host citation"))
+			}
 			continue
 		}
 		for _, resume := range verifiedResumes {
@@ -229,6 +457,24 @@ func (s *FreewillWakeService) ProcessWake(ctx context.Context, runID string) (Du
 				break
 			}
 		}
+	}
+	reflectionCandidateCount := 0
+	for _, candidate := range selection.Candidates {
+		if candidate.Request.CandidateSource == freewill.SourceReflection {
+			reflectionCandidateCount++
+		}
+	}
+	if reflectionCandidateCount > 1 {
+		return s.recordSelectionFailure(ctx, lease, errors.New("multiagent: Freewill selector supplied multiple reflection candidates"))
+	}
+	evidence.ReflectionBindings = reflectionBindings
+	selection, err = normalizeFreewillRoadmapSelection(selection, projectContext)
+	if err != nil {
+		failed, failureErr := s.runtime.RecordFreewillSelectionFailure(ctx, lease, err)
+		if failureErr != nil {
+			return failed, failureErr
+		}
+		return failed, err
 	}
 	selection = bindFreewillExecutionCapabilities(selection, s.config.ExecutionEnabled)
 	if err := ensureFreewillNotHalted(ctx, s.store, s.config.AgentID, s.config.Scope); err != nil {
@@ -251,6 +497,74 @@ func (s *FreewillWakeService) ProcessWake(ctx context.Context, runID string) (Du
 	return record, nil
 }
 
+func cloneFreewillReflectionEvidence(input *FreewillReflectionEvidence) *FreewillReflectionEvidence {
+	if input == nil {
+		return nil
+	}
+	copy := *input
+	return &copy
+}
+
+func (s *FreewillWakeService) recordSelectionFailure(ctx context.Context, lease FreewillWakeLease, cause error) (DurableRun, error) {
+	failed, failureErr := s.runtime.RecordFreewillSelectionFailure(ctx, lease, cause)
+	if failureErr != nil {
+		return failed, failureErr
+	}
+	return failed, cause
+}
+
+func validateFreewillReflectionEvidence(input FreewillReflectionEvidence, scope freewill.Scope, agentID string, ownerID ...string) error {
+	if input.Binding.ID == "" || len(input.Binding.ID) > 128 || input.Binding.Source != "prizm:freewill-task-reflection" || len(input.Binding.Revision) != 64 || input.OwnerID == "" || input.ProjectID != scope.ProjectID || input.Workspace != scope.Workspace || input.AgentID != agentID || input.TaskID == "" || len(input.TaskID) > 256 || input.Hypothesis == "" || len(input.Hypothesis) > 700 || input.Uncertainty == "" || len(input.Uncertainty) > 300 || (input.Alignment != "agreement" && input.Alignment != "disagreement" && input.Alignment != "unknown") || scope.ProjectID == "" || scope.Workspace == "" {
+		return errors.New("invalid bounded reflection evidence")
+	}
+	if len(ownerID) > 0 && input.OwnerID != ownerID[0] {
+		return errors.New("reflection owner binding mismatch")
+	}
+	for _, char := range input.Binding.Revision {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return errors.New("invalid reflection revision")
+		}
+	}
+	return nil
+}
+
+func cloneFreewillProjectContextSnapshot(snapshot freewill.ProjectContextSnapshot) freewill.ProjectContextSnapshot {
+	return snapshot.Clone()
+}
+
+// normalizeFreewillRoadmapSelection rebinds every fresh candidate at the host
+// service boundary. Selector implementations are untrusted, so action IDs and
+// grounding markers are rechecked against the original sealed snapshot before
+// the selection can be committed.
+func normalizeFreewillRoadmapSelection(selection freewill.Selection, snapshot freewill.ProjectContextSnapshot) (freewill.Selection, error) {
+	if len(snapshot.RoadmapActions) == 0 {
+		for index := range selection.Candidates {
+			if selection.Candidates[index].ProjectActionID != "" {
+				return freewill.Selection{}, errors.New("multiagent: Freewill selector supplied an unavailable roadmap action")
+			}
+			selection.Candidates[index].ProjectGrounding = ""
+		}
+		return selection, nil
+	}
+	seenActions := make(map[string]struct{}, len(selection.Candidates))
+	for index := range selection.Candidates {
+		candidate := &selection.Candidates[index]
+		if candidate.Request.CandidateSource == freewill.SourceResume {
+			continue
+		}
+		if candidate.ProjectActionID != "" {
+			if _, duplicate := seenActions[candidate.ProjectActionID]; duplicate {
+				return freewill.Selection{}, errors.New("multiagent: Freewill selector duplicated a roadmap action")
+			}
+			seenActions[candidate.ProjectActionID] = struct{}{}
+		}
+		if err := bindFreewillProjectAction(snapshot, candidate); err != nil {
+			return freewill.Selection{}, errors.New("multiagent: Freewill selector supplied an invalid roadmap action")
+		}
+	}
+	return enforceFreewillRoadmapChoice(selection, snapshot), nil
+}
+
 func bindFreewillExecutionCapabilities(selection freewill.Selection, executionEnabled bool) freewill.Selection {
 	if !executionEnabled {
 		return selection
@@ -271,7 +585,11 @@ func (s *FreewillWakeService) validateConfiguredWake(record DurableRun) error {
 	return nil
 }
 
-func freewillSelectionRecoveryFeedback(code string) string {
+func FreewillSelectionRecoveryFeedback(code string, snapshot freewill.ProjectContextSnapshot) string {
+	return freewillSelectionRecoveryFeedback(code, snapshot)
+}
+
+func freewillSelectionRecoveryFeedback(code string, snapshots ...freewill.ProjectContextSnapshot) string {
 	switch code {
 	case "invalid_scored_ideas":
 		return "Repeat this block exactly three times:\nIDEA: Map project dependencies\nSCORE: 72\nFACTORS: scope_fit: 9/10\nRATIONALE: This maps direct dependencies for a bounded review.\nFACTORS optional; keep rationale specific and add no preamble, footer, paths, authority, or execution requests."
@@ -299,11 +617,46 @@ func freewillSelectionRecoveryFeedback(code string) string {
 		return "Return only three lines, each beginning exactly IDEA: followed by a short decision-only objective. No preamble, bullets, explanation, JSON, paths, authority, tools, network, secrets, approval, or execution requests."
 	case "invalid_selection_schema", "empty_selection_response", "selection_tool_request", "invalid_selection_json", "unknown_selection_field", "selection_candidate_count", "selection_contract_invalid":
 		return "Every response, even sleep/resume, must include exactly 3 fresh candidates. Each has title, goal, reason_summary, requested_capabilities, score 0-100, score_factors, score_rationale; budget optional. Factors: scope_fit, feasibility, impact, novelty, readiness. New: include reason_summary; host selects top (first tie). Resume: include all 3, set supplied resume_candidate_id and reason_summary. Sleep: include all 3 and sleep_reason only. Never omit candidates. Host binds IDs/scope. No tools/extra fields."
+	case "invalid_project_basis":
+		if sourceID := freewillSelectionCorrectionSourceID(snapshots); sourceID != "" {
+			return "For each of exactly three ideas, cite only supplied source ID " + sourceID + " in BASIS_REFS and add concise UNCERTAINTY; do not invent refs. Return NONE if unsupported."
+		}
+		return "For each of exactly three ideas, cite an exact supplied project source ID in BASIS_REFS and add concise UNCERTAINTY; do not invent refs. Return NONE if unsupported."
 	case "provider_transient":
 		return "The previous provider attempt failed transiently. Retry the same selection request and return the required schema."
 	default:
 		return ""
 	}
+}
+
+func freewillSelectionCorrectionSourceID(snapshots []freewill.ProjectContextSnapshot) string {
+	if len(snapshots) == 0 {
+		return ""
+	}
+	ids := make([]string, 0, len(snapshots[0].Sources))
+	for _, source := range snapshots[0].Sources {
+		if source.Path == "" && !freewill.IsOwnerAuthorizedMemorySource(source) {
+			continue
+		}
+		if source.ID == "" || len(source.ID) > 128 {
+			continue
+		}
+		safe := true
+		for _, r := range source.ID {
+			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == ':' || r == '_' || r == '-' || r == '.') {
+				safe = false
+				break
+			}
+		}
+		if safe {
+			ids = append(ids, source.ID)
+		}
+	}
+	sort.Strings(ids)
+	if len(ids) == 0 {
+		return ""
+	}
+	return ids[0]
 }
 
 // maintainLease keeps a live selector call fenced without imposing a task
@@ -404,7 +757,7 @@ func (s *FreewillWakeService) verifiedResumeCandidates(ctx context.Context, curr
 }
 
 func (s *FreewillWakeService) RecoverPending(ctx context.Context, now time.Time, pageSize int) error {
-	if !s.config.Enabled || !s.config.SchedulingEnabled {
+	if !s.HasWakeSources() {
 		return ErrFreewillDisabled
 	}
 	lister, ok := s.store.(FreewillRunLister)

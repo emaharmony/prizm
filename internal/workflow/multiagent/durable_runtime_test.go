@@ -615,6 +615,7 @@ type durableTestEnvironment struct {
 	store   *SQLiteDurableRunStore
 	events  *event.SQLiteEventStore
 	claimer *memoryRunClaimer
+	dbPath  string
 }
 
 func newDurableTestEnvironment(t *testing.T) durableTestEnvironment {
@@ -641,6 +642,7 @@ func newDurableTestEnvironment(t *testing.T) durableTestEnvironment {
 		store:   store,
 		events:  events,
 		claimer: newMemoryRunClaimer(),
+		dbPath:  dbPath,
 	}
 }
 

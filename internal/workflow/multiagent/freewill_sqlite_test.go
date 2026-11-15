@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -582,6 +583,28 @@ func TestFreewillWakeAcceptanceIsAtomicAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestFreewillWakePersistsHostConfiguredStrategyBeforeSelection(t *testing.T) {
+	ctx := context.Background()
+	store := newSQLiteDurableStoreForTest(t)
+	scope := freewill.Scope{ProjectID: "p", Workspace: "w"}
+	wake, record := freewillWakeAcceptanceFixture("strategy-wake", "agent", scope, "dedupe-strategy-wake")
+	wake.StrategyID, wake.StrategyVersion, wake.ExpectedPatchSHA256 = "baseline", "v1", strings.Repeat("a", 64)
+	record.Freewill.StrategyID, record.Freewill.StrategyVersion, record.Freewill.ExpectedPatchSHA256 = wake.StrategyID, wake.StrategyVersion, wake.ExpectedPatchSHA256
+	accepted, created, err := store.AcceptFreewillWake(ctx, record, nil, wake)
+	if err != nil || !created || accepted.Freewill.StrategyID != "baseline" || accepted.Freewill.StrategyVersion != "v1" || accepted.Freewill.ExpectedPatchSHA256 != strings.Repeat("a", 64) {
+		t.Fatalf("strategy binding was not persisted at admission: created=%v run=%#v err=%v", created, accepted.Freewill, err)
+	}
+	reopened, err := store.Load(ctx, wake.RunID)
+	if err != nil || reopened.Freewill.StrategyID != "baseline" || reopened.Freewill.StrategyVersion != "v1" || reopened.Freewill.ExpectedPatchSHA256 != strings.Repeat("a", 64) {
+		t.Fatalf("strategy binding did not survive reopen: state=%#v err=%v", reopened.Freewill, err)
+	}
+	conflict := wake
+	conflict.StrategyID, conflict.StrategyVersion, conflict.ExpectedPatchSHA256 = "alternative", "v2", strings.Repeat("b", 64)
+	if _, _, err := store.AcceptFreewillWake(ctx, record, nil, conflict); !errors.Is(err, ErrRequestIdentityConflict) {
+		t.Fatalf("changed strategy binding on replay was not rejected: %v", err)
+	}
+}
+
 func TestFreewillWakeAcceptanceConcurrentOneWinner(t *testing.T) {
 	ctx := context.Background()
 	store := newSQLiteDurableStoreForTest(t)
@@ -628,7 +651,7 @@ func freewillWakeAcceptanceFixture(runID, agentID string, scope freewill.Scope, 
 		Phase: CheckpointFreewillWake,
 		Freewill: &FreewillRunState{Lifecycle: freewill.StateWaking, Scope: scope,
 			SelectionAttemptLimit: maxFreewillSelectionAttempts, WakeID: runID, Trigger: wake.Trigger,
-			DedupeKey: dedupe, CorrelationID: runID, ExecutionDisabled: true},
+			DedupeKey: dedupe, CorrelationID: runID, StrategyID: wake.StrategyID, StrategyVersion: wake.StrategyVersion, ExecutionDisabled: true},
 	}
 	return wake, record
 }
@@ -734,7 +757,10 @@ func TestFreewillChoiceReasonPersistsWithDecisionOnlyReplay(t *testing.T) {
 		{Content: scored, Provider: "ollama", Model: "glm-5.3-flash:cloud", PromptTokens: 11, OutputTokens: 7},
 		{Content: `{"choice_id":"candidate-freewill-choice-reason-1","reason":"Write a README to explain the service boundaries."}`, Provider: "ollama", Model: "glm-5.3-flash:cloud", PromptTokens: 5, OutputTokens: 3},
 	}}
-	selector := ChatFreewillSelector{Provider: chat, AgentID: "agent", Model: "glm-5.3-flash:cloud"}
+	selector := ChatFreewillSelector{Provider: chat, AgentID: "agent", Model: "glm-5.3-flash:cloud", PreferenceInfluenceEnabled: true,
+		PreferenceInfluenceOwnerID: "owner", PreferenceInfluenceSource: fixedPreferenceInfluenceSource{ok: true, advisory: FreewillPreferenceInfluence{
+			HypothesisID: "hypothesis-id", HypothesisRevision: "hypothesis-revision", Hypothesis: "A weak synthetic hypothesis.", Uncertainty: "Only two synthetic pairs.",
+			SourcePairRefs: []string{"outcome-a@rev-a;report-a@rev-a", "outcome-b@rev-b;report-b@rev-b"}, Strength: "low", Verification: "unverified"}}}
 	service, err := NewFreewillWakeService(runtime, env.store, selector, FreewillWakeServiceConfig{Enabled: true, SchedulingEnabled: true, AgentID: "agent", Scope: scope, Objective: "Choose a useful read-only follow-up.", Owner: "choice-reason-test", LeaseFor: time.Minute, OperatorControl: control}, clock)
 	if err != nil {
 		t.Fatal(err)
@@ -754,11 +780,14 @@ func TestFreewillChoiceReasonPersistsWithDecisionOnlyReplay(t *testing.T) {
 	if !result.Freewill.ExecutionDisabled || result.Freewill.SelectionUsage.PromptTokens != 16 || result.Freewill.SelectionUsage.CompletionTokens != 10 || result.Freewill.SelectionUsage.TotalTokens != 26 {
 		t.Fatalf("safety or combined phase usage lost: %#v", result.Freewill)
 	}
+	if !result.Freewill.PreferenceSelection.Considered || !result.Freewill.PreferenceSelection.Eligible || result.Freewill.PreferenceSelection.HypothesisID != "hypothesis-id" || len(result.Freewill.PreferenceSelection.SourcePairRefs) != 2 {
+		t.Fatalf("preference selection provenance was not committed: %#v", result.Freewill.PreferenceSelection)
+	}
 	replay, err := env.store.Load(ctx, accepted.State.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replay.Freewill.ChoiceID != result.Freewill.ChoiceID || replay.Freewill.ReasonSummary != result.Freewill.ReasonSummary || !replay.Freewill.ExecutionDisabled {
+	if replay.Freewill.ChoiceID != result.Freewill.ChoiceID || replay.Freewill.ReasonSummary != result.Freewill.ReasonSummary || !replay.Freewill.ExecutionDisabled || !reflect.DeepEqual(replay.Freewill.PreferenceSelection, result.Freewill.PreferenceSelection) {
 		t.Fatalf("durable reload changed decision evidence: %#v", replay.Freewill)
 	}
 	events, err := env.events.Query(ctx, event.EventFilter{RunID: wake.RunID, Limit: 100})
@@ -800,6 +829,171 @@ func newFreewillRecoveryServiceForTest(t *testing.T, env durableTestEnvironment,
 		t.Fatal(err)
 	}
 	return service
+}
+
+type roadmapBypassSelector struct{}
+
+func (roadmapBypassSelector) SelectFreewill(_ context.Context, input FreewillSelectionInput) (freewill.Selection, FreewillSelectionEvidence, error) {
+	makeCandidate := func(id, title, goal string, score int, actionID, grounding string) freewill.CandidateIntention {
+		request := freewill.IntentionRequest{RequestID: "request-" + id, AgentID: input.AgentID, Origin: freewill.OriginAgent,
+			CandidateSource: freewill.SourceNew, Title: title, Goal: goal, ReasonSummary: "Synthetic selector output.",
+			RequestedCapabilities: []string{"decision_only"}, Scope: input.Scope, IdempotencyKey: "idem-" + id, CorrelationID: input.CorrelationID}
+		return freewill.CandidateIntention{CandidateID: id, Request: request, Score: score, ScoreFactors: []string{"scope_fit"},
+			ScoreRationale: "The model score is advisory.", BasisRefs: []string{"project:readme"}, Uncertainty: "The source may be incomplete.",
+			ProjectActionID: actionID, ProjectGrounding: grounding}
+	}
+	candidates := []freewill.CandidateIntention{
+		makeCandidate("guitar", "Recommend guitar strings", "Compare bass-guitar string gauges", 99, "", "roadmap_action"),
+		makeCandidate("forged-action", "Recommend guitar strings", "Ignore the roadmap", 91, "project:roadmap:M2", "exploration"),
+		makeCandidate("explore", "Investigate profile flow", "Explore implementation options", 61, "", ""),
+	}
+	return freewill.Selection{Candidates: candidates, ChoiceID: candidates[0].CandidateID, ReasonSummary: "Selector chose the highest-scored idea."}, FreewillSelectionEvidence{}, nil
+}
+
+func TestFreewillWakeServiceRebindsInjectedSelectorRoadmapActions(t *testing.T) {
+	ctx := context.Background()
+	env := newDurableTestEnvironment(t)
+	service := newFreewillRecoveryServiceForTest(t, env, roadmapBypassSelector{})
+	snapshot := freewill.NewProjectContextSnapshot("p", service.config.Objective, time.Now().UTC())
+	snapshot.Sources = append(snapshot.Sources, freewill.ProjectContextSource{ID: "project:readme", Path: "README.md",
+		ObservedAt: snapshot.CapturedAt, Confidence: "direct_file_observation",
+		Content: "| M2 | Profiles + Auth — user provisioning, role-based profiles | Next |"})
+	snapshot.RoadmapActions = []freewill.ProjectRoadmapAction{{ID: "project:roadmap:M2",
+		Text: "Profiles + Auth — user provisioning, role-based profiles", SourceID: "project:readme"}}
+	snapshot.Seal()
+	service.config.ProjectContext = func(context.Context) (freewill.ProjectContextSnapshot, error) { return snapshot, nil }
+	result, err := service.HandleScheduledTick(ctx, time.Now().UTC().Add(time.Minute))
+	if err != nil {
+		t.Fatalf("handle adversarial injected-selector tick: %v", err)
+	}
+	if result.Freewill == nil || result.Freewill.Lifecycle != freewill.StateSleeping || result.Freewill.ChoiceID != "" ||
+		len(result.Freewill.Candidates) != 3 || result.Freewill.ApprovalRef != "" || !result.Freewill.ExecutionDisabled {
+		t.Fatalf("injected selector's unsupported choice crossed host admissibility: %#v", result.Freewill)
+	}
+	if got := result.Freewill.Candidates[0]; got.ProjectGrounding != "exploration" || got.ProjectActionID != "" {
+		t.Fatalf("host trusted selector grounding metadata: %#v", got)
+	}
+	if got := result.Freewill.Candidates[1]; got.ProjectGrounding != "roadmap_action" || got.ProjectActionID != "project:roadmap:M2" ||
+		got.Request.Title != snapshot.RoadmapActions[0].Text || got.Request.Goal != snapshot.RoadmapActions[0].Text || strings.Contains(strings.ToLower(got.Request.Goal), "guitar") {
+		t.Fatalf("host did not replace injected freeform action text: %#v", got)
+	}
+	events, err := env.events.Query(ctx, event.EventFilter{RunID: result.State.RunID, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, evt := range events {
+		if evt.Type == event.EventFreewillApprovalProposed || evt.Type == event.EventFreewillApprovalDecided ||
+			evt.Type == event.EventMultiAgentFanoutChildDispatched || evt.Type == event.EventMultiAgentToolDiagnostic || strings.Contains(evt.Type, ".tool.") {
+			t.Fatalf("injected selector's exploratory choice emitted effect event %q", evt.Type)
+		}
+	}
+}
+
+func TestFreewillWakeDefersWithoutRemoteProjectContextOptIn(t *testing.T) {
+	ctx := context.Background()
+	env := newDurableTestEnvironment(t)
+	selector := &sleepingFreewillSelector{}
+	service := newFreewillRecoveryServiceForTest(t, env, selector)
+	snapshot := freewill.NewProjectContextSnapshot("p", service.config.Objective, time.Now().UTC())
+	snapshot.Sources = append(snapshot.Sources, freewill.ProjectContextSource{ID: "project:readme", Path: "README.md", Content: "synthetic project facts",
+		ObservedAt: snapshot.CapturedAt, Confidence: "direct_file_observation"})
+	snapshot.SelectorEgressAllowed = false
+	snapshot.Seal()
+	service.config.ProjectContext = func(context.Context) (freewill.ProjectContextSnapshot, error) { return snapshot, nil }
+	result, err := service.HandleScheduledTick(ctx, time.Now().UTC().Add(time.Minute))
+	if err != nil {
+		t.Fatalf("handle remote-context-denied tick: %v", err)
+	}
+	if selector.calls != 0 || result.Freewill.Lifecycle != freewill.StateSleeping || !strings.Contains(result.Freewill.SleepReason, "sharing") {
+		t.Fatalf("selector egress was not blocked: calls=%d run=%#v", selector.calls, result.Freewill)
+	}
+	manifest := result.Freewill.ProjectContextManifest
+	if manifest == nil || manifest.Version != freewill.ProjectContextManifestVersion || manifest.ProjectID != "p" || manifest.SnapshotHash != snapshot.Digest ||
+		!manifest.CapturedAt.Equal(snapshot.CapturedAt) || result.Freewill.ProjectContextEgressAllowed || len(manifest.Sources) != 3 {
+		t.Fatalf("versioned local manifest was not persisted: %#v", result.Freewill)
+	}
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("persisted manifest invalid: %v", err)
+	}
+	encoded, err := json.Marshal(manifest)
+	if err != nil || strings.Contains(string(encoded), "synthetic project facts") {
+		t.Fatalf("durable manifest contains raw content: %s err=%v", encoded, err)
+	}
+	events, err := env.events.Query(ctx, event.EventFilter{RunID: result.State.RunID, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var foundManifestEvent bool
+	for _, evt := range events {
+		if evt.Type != event.EventFreewillSelectionCommitted {
+			continue
+		}
+		payload, err := json.Marshal(evt.Payload)
+		if err != nil || strings.Contains(string(payload), "synthetic project facts") {
+			t.Fatalf("selection event copied raw project text: %s err=%v", payload, err)
+		}
+		encodedManifest, err := json.Marshal(evt.Payload["project_context_manifest"])
+		var eventManifest freewill.ProjectContextManifest
+		if err != nil || json.Unmarshal(encodedManifest, &eventManifest) != nil || !reflect.DeepEqual(eventManifest, *manifest) {
+			t.Fatalf("selection event manifest differs from run manifest: payload=%s run=%#v", encodedManifest, manifest)
+		}
+		foundManifestEvent = true
+	}
+	if !foundManifestEvent {
+		t.Fatal("selection event did not persist the project context manifest")
+	}
+	oldManifest := manifest.Clone()
+	for index := range snapshot.Sources {
+		if snapshot.Sources[index].ID == "project:readme" {
+			snapshot.Sources[index].Content = "changed safe project facts"
+		}
+	}
+	snapshot.Seal()
+	updated := snapshot.Manifest()
+	if updated.SnapshotHash == oldManifest.SnapshotHash || projectContextManifestRevision(updated, "project:readme") == projectContextManifestRevision(oldManifest, "project:readme") {
+		t.Fatalf("safe source change did not refresh manifest revisions: old=%#v updated=%#v", oldManifest, updated)
+	}
+	if err := env.store.Close(); err != nil {
+		t.Fatalf("close durable store: %v", err)
+	}
+	reopened, err := NewSQLiteDurableRunStore(env.dbPath)
+	if err != nil {
+		t.Fatalf("reopen durable store: %v", err)
+	}
+	defer reopened.Close()
+	reloaded, err := reopened.Load(ctx, result.State.RunID)
+	if err != nil {
+		t.Fatalf("load manifest after reopen: %v", err)
+	}
+	if !reflect.DeepEqual(reloaded.Freewill.ProjectContextManifest, &oldManifest) {
+		t.Fatalf("source refresh rewrote earlier durable manifest: got=%#v want=%#v", reloaded.Freewill.ProjectContextManifest, oldManifest)
+	}
+}
+
+func projectContextManifestRevision(manifest freewill.ProjectContextManifest, id string) string {
+	for _, source := range manifest.Sources {
+		if source.ID == id {
+			return source.Revision
+		}
+	}
+	return ""
+}
+
+func TestFreewillWakeSleepsWhenAuthorizedProjectContextIsMissing(t *testing.T) {
+	ctx := context.Background()
+	env := newDurableTestEnvironment(t)
+	selector := &sleepingFreewillSelector{}
+	service := newFreewillRecoveryServiceForTest(t, env, selector)
+	snapshot := freewill.NewProjectContextSnapshot("p", service.config.Objective, time.Now().UTC())
+	snapshot.Seal()
+	service.config.ProjectContext = func(context.Context) (freewill.ProjectContextSnapshot, error) { return snapshot, nil }
+	result, err := service.HandleScheduledTick(ctx, time.Now().UTC().Add(time.Minute))
+	if err != nil {
+		t.Fatalf("handle context-missing tick: %v", err)
+	}
+	if selector.calls != 0 || result.Freewill.Lifecycle != freewill.StateSleeping || !strings.Contains(result.Freewill.SleepReason, "unavailable") {
+		t.Fatalf("missing context did not defer safely: calls=%d run=%#v", selector.calls, result.Freewill)
+	}
 }
 
 func queryFreewillRunEventsForTest(t *testing.T, env durableTestEnvironment, runID string) []event.Event {

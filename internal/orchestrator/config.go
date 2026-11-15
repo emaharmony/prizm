@@ -113,13 +113,58 @@ type FreewillConfig struct {
 	Enabled   bool   `yaml:"enabled"`
 	AgentID   string `yaml:"agent_id,omitempty"`
 	ProjectID string `yaml:"project_id,omitempty"`
-	Model     string `yaml:"model,omitempty"`
+	// ProjectProfileRepositoryURL binds an optional ignored .codex/private-context/<project_id>.json import.
+	ProjectProfileRepositoryURL string `yaml:"project_profile_repository_url,omitempty"`
+	ProjectProfileCommitSHA     string `yaml:"project_profile_commit_sha,omitempty"`
+	Model                       string `yaml:"model,omitempty"`
 	// Objective is explicit host-authored selector context. It is sent to the configured provider, including remote/cloud providers; it grants no authority.
 	Objective       string                   `yaml:"objective,omitempty"`
 	ReasoningEffort string                   `yaml:"reasoning_effort,omitempty"`
 	PolicyDir       string                   `yaml:"policy_dir,omitempty"`
 	Scheduling      FreewillSchedulingConfig `yaml:"scheduling"`
 	Execution       FreewillExecutionConfig  `yaml:"execution"`
+	// DiaryEnabled opts in to a local retrospective after a host terminal fact.
+	// It requires the exact project fact binding and an explicit owner identity.
+	DiaryEnabled bool   `yaml:"diary_enabled,omitempty"`
+	DiaryOwnerID string `yaml:"diary_owner_id,omitempty"`
+	// DiaryAnnotationsEnabled opts in to a local owner-only append-only annotation API.
+	DiaryAnnotationsEnabled bool   `yaml:"diary_annotations_enabled,omitempty"`
+	DiaryAnnotationsOwnerID string `yaml:"diary_annotations_owner_id,omitempty"`
+	// TaskAppraisalEnabled opts in to a separate qualitative task-level self-report.
+	TaskAppraisalEnabled bool   `yaml:"task_appraisal_enabled,omitempty"`
+	TaskAppraisalOwnerID string `yaml:"task_appraisal_owner_id,omitempty"`
+	// TaskSurprise opts in to append-only surprise auditing for one exact,
+	// host-bound roadmap action. It records no preference mutation or authority.
+	TaskSurprise FreewillTaskSurpriseConfig `yaml:"task_surprise,omitempty"`
+	// TaskReflectionEnabled opts in to one bounded local hypothesis probe after appraisal.
+	TaskReflectionEnabled bool   `yaml:"task_reflection_enabled,omitempty"`
+	TaskReflectionOwnerID string `yaml:"task_reflection_owner_id,omitempty"`
+	// PreferenceHypothesisEnabled opts in to a single local current-preference hypothesis from two task pairs.
+	PreferenceHypothesisEnabled bool     `yaml:"preference_hypothesis_enabled,omitempty"`
+	PreferenceHypothesisOwnerID string   `yaml:"preference_hypothesis_owner_id,omitempty"`
+	PreferenceHypothesisTaskIDs []string `yaml:"preference_hypothesis_task_ids,omitempty"`
+	// PreferenceHypothesisRetentionSeconds opts in to bounded retention of
+	// derived preference hypotheses and their challenges/revisions. Zero is off.
+	PreferenceHypothesisRetentionSeconds int `yaml:"preference_hypothesis_retention_seconds,omitempty"`
+	// PreferenceInfluenceEnabled opts in to a weak, local-only advisory at phase-two choice.
+	PreferenceInfluenceEnabled bool   `yaml:"preference_influence_enabled,omitempty"`
+	PreferenceInfluenceOwnerID string `yaml:"preference_influence_owner_id,omitempty"`
+	// StrategyExperimentEnabled opts in to one local record-only comparison of two fixed task runs.
+	StrategyExperimentEnabled     bool     `yaml:"strategy_experiment_enabled,omitempty"`
+	StrategyExperimentOwnerID     string   `yaml:"strategy_experiment_owner_id,omitempty"`
+	StrategyExperimentIDs         []string `yaml:"strategy_experiment_ids,omitempty"`
+	StrategyExperimentVersions    []string `yaml:"strategy_experiment_versions,omitempty"`
+	StrategyExperimentPatchSHA256 []string `yaml:"strategy_experiment_patch_sha256,omitempty"`
+	StrategyVariantID             string   `yaml:"strategy_variant_id,omitempty"`
+	StrategyVariantVersion        string   `yaml:"strategy_variant_version,omitempty"`
+	StrategyVariantPatchSHA256    string   `yaml:"strategy_variant_patch_sha256,omitempty"`
+	// GoalProposalEnabled opts in to local qualitative goal hypotheses from task evidence.
+	GoalProposalEnabled bool   `yaml:"goal_proposal_enabled,omitempty"`
+	GoalProposalOwnerID string `yaml:"goal_proposal_owner_id,omitempty"`
+	// PromiseConfirmation binds one synthetic, bounded user-facing promise for a
+	// local record-only renegotiation proof. It is disabled by default.
+	PromiseConfirmation FreewillPromiseConfirmationConfig `yaml:"promise_confirmation,omitempty"`
+	MemoryContext       FreewillMemoryContextConfig       `yaml:"memory_context,omitempty"`
 	// NotifyChannelID optionally relays curated Freewill lifecycle events
 	// (proposals, decisions, denials, halts) to a Discord channel. Empty = off.
 	NotifyChannelID string `yaml:"notify_channel_id,omitempty"`
@@ -128,16 +173,67 @@ type FreewillConfig struct {
 	NotifyAllowUserIDs []string `yaml:"notify_allow_user_ids,omitempty"`
 }
 
+type FreewillTaskSurpriseOutcome string
+
+const (
+	FreewillTaskSurpriseCompleted    FreewillTaskSurpriseOutcome = "completed"
+	FreewillTaskSurpriseNotCompleted FreewillTaskSurpriseOutcome = "not_completed"
+)
+
+// FreewillTaskSurpriseConfig binds a typed host expectation to one observed
+// project source revision. Owner scope is inherited from TaskAppraisalOwnerID.
+type FreewillTaskSurpriseConfig struct {
+	Enabled bool `yaml:"enabled,omitempty"`
+	// ContradictionAuditEnabled also appends a receipt-only E49 audit during
+	// startup recovery. It uses ExpectedOutcome as a tentative host hypothesis;
+	// observed claims are derived only from revalidated terminal receipts.
+	ContradictionAuditEnabled bool                        `yaml:"contradiction_audit_enabled,omitempty"`
+	ProjectActionID           string                      `yaml:"project_action_id,omitempty"`
+	SourceID                  string                      `yaml:"source_id,omitempty"`
+	SourceRevisionSHA256      string                      `yaml:"source_revision_sha256,omitempty"`
+	ExpectedOutcome           FreewillTaskSurpriseOutcome `yaml:"expected_outcome,omitempty"`
+}
+
+// FreewillPromiseConfirmationConfig seeds one owner-authored promise. It grants
+// no scheduling or execution authority.
+type FreewillPromiseConfirmationConfig struct {
+	Enabled   bool   `yaml:"enabled"`
+	OwnerID   string `yaml:"owner_id,omitempty"`
+	PromiseID string `yaml:"promise_id,omitempty"`
+	Scope     string `yaml:"scope,omitempty"`
+	Deadline  string `yaml:"deadline,omitempty"`
+}
+
 // FreewillSchedulingConfig is a separate opt-in switch for future wake work.
 type FreewillSchedulingConfig struct {
-	Enabled  bool   `yaml:"enabled"`
-	Schedule string `yaml:"schedule,omitempty"`
+	Enabled    bool     `yaml:"enabled"`
+	Schedule   string   `yaml:"schedule,omitempty"`
+	EventKinds []string `yaml:"event_kinds,omitempty"`
 }
 
 // FreewillExecutionConfig is a separate opt-in for owner-approved dispatch.
 // It remains disabled unless explicitly configured.
 type FreewillExecutionConfig struct {
-	Enabled bool `yaml:"enabled"`
+	Enabled             bool                              `yaml:"enabled"`
+	ResourceNegotiation FreewillResourceNegotiationConfig `yaml:"resource_negotiation,omitempty"`
+}
+
+// FreewillResourceNegotiationConfig enables one host-bounded MaxTransitions
+// extension path for an approved child task. It is disabled by default.
+type FreewillResourceNegotiationConfig struct {
+	Enabled          bool   `yaml:"enabled"`
+	OwnerID          string `yaml:"owner_id,omitempty"`
+	InitialAllowance int    `yaml:"initial_allowance,omitempty"`
+	Increment        int    `yaml:"increment,omitempty"`
+	HardCeiling      int    `yaml:"hard_ceiling,omitempty"`
+}
+
+// FreewillMemoryContextConfig is an explicit project-scoped allowlist for
+// local prior terminal facts and diary retrospectives used during selection.
+type FreewillMemoryContextConfig struct {
+	Enabled         bool     `yaml:"enabled"`
+	OwnerID         string   `yaml:"owner_id,omitempty"`
+	SourceAllowlist []string `yaml:"source_allowlist,omitempty"`
 }
 
 // ValidateHostBinding checks the opt-in Freewill service bindings without
@@ -148,6 +244,150 @@ func (f FreewillConfig) ValidateHostBinding(agents []AgentConfig, projects []Pro
 	}
 	if f.Execution.Enabled && !f.Enabled {
 		return fmt.Errorf("config: freewill.execution.enabled requires freewill.enabled")
+	}
+	promise := f.PromiseConfirmation
+	if promise.Enabled {
+		if !f.Enabled || promise.OwnerID == "" || promise.OwnerID != strings.TrimSpace(promise.OwnerID) ||
+			promise.PromiseID == "" || promise.PromiseID != strings.TrimSpace(promise.PromiseID) ||
+			promise.Scope == "" || promise.Scope != strings.TrimSpace(promise.Scope) || len(promise.Scope) > 1000 ||
+			promise.Deadline == "" || promise.Deadline != strings.TrimSpace(promise.Deadline) {
+			return fmt.Errorf("config: freewill.promise_confirmation requires enabled Freewill and exact owner, promise ID, bounded scope, and deadline")
+		}
+		if _, err := time.Parse(time.RFC3339, promise.Deadline); err != nil {
+			return fmt.Errorf("config: freewill.promise_confirmation.deadline must be RFC3339")
+		}
+	} else if promise.OwnerID != "" || promise.PromiseID != "" || promise.Scope != "" || promise.Deadline != "" {
+		return fmt.Errorf("config: freewill.promise_confirmation fields require enabled: true")
+	}
+	resource := f.Execution.ResourceNegotiation
+	if resource.Enabled {
+		if !f.Enabled || !f.Execution.Enabled || strings.TrimSpace(resource.OwnerID) == "" || resource.OwnerID != strings.TrimSpace(resource.OwnerID) ||
+			resource.InitialAllowance < 1 || resource.InitialAllowance > 32 || resource.Increment < 1 || resource.Increment > 32 ||
+			resource.HardCeiling < 2 || resource.HardCeiling > 32 || resource.InitialAllowance+resource.Increment > resource.HardCeiling {
+			return fmt.Errorf("config: freewill.execution.resource_negotiation requires execution, an exact synthetic owner, and 1 <= initial + increment <= hard ceiling <= 32")
+		}
+	} else if resource.OwnerID != "" || resource.InitialAllowance != 0 || resource.Increment != 0 || resource.HardCeiling != 0 {
+		return fmt.Errorf("config: freewill.execution.resource_negotiation fields require enabled: true")
+	}
+	if f.DiaryEnabled && (!f.Enabled || strings.TrimSpace(f.DiaryOwnerID) == "") {
+		return fmt.Errorf("config: freewill.diary_enabled requires freewill.enabled and freewill.diary_owner_id")
+	}
+	if f.DiaryAnnotationsEnabled && (!f.Enabled || !f.DiaryEnabled || strings.TrimSpace(f.DiaryAnnotationsOwnerID) == "") {
+		return fmt.Errorf("config: freewill.diary_annotations_enabled requires freewill.enabled, diary_enabled, and diary_annotations_owner_id")
+	}
+	if f.DiaryAnnotationsEnabled && (f.DiaryAnnotationsOwnerID != strings.TrimSpace(f.DiaryAnnotationsOwnerID) || f.DiaryAnnotationsOwnerID != f.DiaryOwnerID) {
+		return fmt.Errorf("config: freewill.diary_annotations_owner_id must exactly match diary_owner_id")
+	}
+	if f.TaskAppraisalEnabled && (!f.Enabled || strings.TrimSpace(f.TaskAppraisalOwnerID) == "") {
+		return fmt.Errorf("config: freewill.task_appraisal_enabled requires freewill.enabled and freewill.task_appraisal_owner_id")
+	}
+	if f.TaskAppraisalEnabled && f.TaskAppraisalOwnerID != strings.TrimSpace(f.TaskAppraisalOwnerID) {
+		return fmt.Errorf("config: freewill.task_appraisal_owner_id must not contain surrounding whitespace")
+	}
+	surprise := f.TaskSurprise
+	if surprise.Enabled {
+		if !f.Enabled || !f.TaskAppraisalEnabled || strings.TrimSpace(f.TaskAppraisalOwnerID) == "" {
+			return fmt.Errorf("config: freewill.task_surprise.enabled requires Freewill, task appraisal, and task_appraisal_owner_id")
+		}
+		if !strings.HasPrefix(surprise.ProjectActionID, "project:roadmap:") || surprise.ProjectActionID != strings.TrimSpace(surprise.ProjectActionID) || len(surprise.ProjectActionID) > 128 ||
+			surprise.SourceID != "project:readme" || !isSHA256Hex(surprise.SourceRevisionSHA256) || strings.ToLower(surprise.SourceRevisionSHA256) != surprise.SourceRevisionSHA256 ||
+			(surprise.ExpectedOutcome != FreewillTaskSurpriseCompleted && surprise.ExpectedOutcome != FreewillTaskSurpriseNotCompleted) {
+			return fmt.Errorf("config: freewill.task_surprise requires one exact roadmap action, project:readme SHA-256 revision, and typed expected outcome")
+		}
+	} else if surprise.ContradictionAuditEnabled || surprise.ProjectActionID != "" || surprise.SourceID != "" || surprise.SourceRevisionSHA256 != "" || surprise.ExpectedOutcome != "" {
+		return fmt.Errorf("config: freewill.task_surprise fields require enabled: true")
+	}
+	if f.TaskReflectionEnabled && (!f.Enabled || !f.TaskAppraisalEnabled || strings.TrimSpace(f.TaskReflectionOwnerID) == "") {
+		return fmt.Errorf("config: freewill.task_reflection_enabled requires freewill.enabled, task_appraisal_enabled, and task_reflection_owner_id")
+	}
+	if f.TaskReflectionEnabled && (f.TaskReflectionOwnerID != strings.TrimSpace(f.TaskReflectionOwnerID) || f.TaskReflectionOwnerID != f.TaskAppraisalOwnerID) {
+		return fmt.Errorf("config: freewill.task_reflection_owner_id must exactly match task_appraisal_owner_id")
+	}
+	if f.PreferenceHypothesisEnabled && (!f.Enabled || !f.TaskAppraisalEnabled || strings.TrimSpace(f.PreferenceHypothesisOwnerID) == "" || len(f.PreferenceHypothesisTaskIDs) != 2) {
+		return fmt.Errorf("config: freewill.preference_hypothesis_enabled requires freewill.enabled, task_appraisal_enabled, preference_hypothesis_owner_id, and exactly two preference_hypothesis_task_ids")
+	}
+	if f.PreferenceHypothesisEnabled && (f.PreferenceHypothesisOwnerID != strings.TrimSpace(f.PreferenceHypothesisOwnerID) || f.PreferenceHypothesisOwnerID != f.TaskAppraisalOwnerID) {
+		return fmt.Errorf("config: freewill.preference_hypothesis_owner_id must exactly match task_appraisal_owner_id")
+	}
+	const maxPreferenceRetentionSeconds = 10 * 365 * 24 * 60 * 60
+	if f.PreferenceHypothesisRetentionSeconds < 0 || f.PreferenceHypothesisRetentionSeconds > maxPreferenceRetentionSeconds {
+		return fmt.Errorf("config: freewill.preference_hypothesis_retention_seconds must be zero or at most ten years")
+	}
+	if f.PreferenceHypothesisRetentionSeconds > 0 && !f.PreferenceHypothesisEnabled {
+		return fmt.Errorf("config: freewill.preference_hypothesis_retention_seconds requires preference_hypothesis_enabled")
+	}
+	if f.PreferenceInfluenceEnabled && (!f.Enabled || !f.PreferenceHypothesisEnabled || strings.TrimSpace(f.PreferenceInfluenceOwnerID) == "") {
+		return fmt.Errorf("config: freewill.preference_influence_enabled requires freewill.enabled, preference_hypothesis_enabled, and preference_influence_owner_id")
+	}
+	if f.PreferenceInfluenceEnabled && (f.PreferenceInfluenceOwnerID != strings.TrimSpace(f.PreferenceInfluenceOwnerID) || f.PreferenceInfluenceOwnerID != f.PreferenceHypothesisOwnerID) {
+		return fmt.Errorf("config: freewill.preference_influence_owner_id must exactly match preference_hypothesis_owner_id")
+	}
+	if f.PreferenceHypothesisEnabled {
+		left, right := f.PreferenceHypothesisTaskIDs[0], f.PreferenceHypothesisTaskIDs[1]
+		if strings.TrimSpace(left) == "" || strings.TrimSpace(right) == "" || left != strings.TrimSpace(left) || right != strings.TrimSpace(right) || left == right {
+			return fmt.Errorf("config: freewill.preference_hypothesis_task_ids must contain two distinct non-empty exact task IDs")
+		}
+	}
+	if f.GoalProposalEnabled && (!f.Enabled || !f.TaskAppraisalEnabled || strings.TrimSpace(f.GoalProposalOwnerID) == "") {
+		return fmt.Errorf("config: freewill.goal_proposal_enabled requires freewill.enabled, task_appraisal_enabled, and goal_proposal_owner_id")
+	}
+	if f.GoalProposalEnabled && (f.GoalProposalOwnerID != strings.TrimSpace(f.GoalProposalOwnerID) || f.GoalProposalOwnerID != f.TaskAppraisalOwnerID) {
+		return fmt.Errorf("config: freewill.goal_proposal_owner_id must exactly match task_appraisal_owner_id")
+	}
+	if f.StrategyExperimentEnabled && (!f.Enabled || !f.TaskAppraisalEnabled || strings.TrimSpace(f.StrategyExperimentOwnerID) == "" || len(f.StrategyExperimentIDs) != 2 || len(f.StrategyExperimentVersions) != 2 || len(f.StrategyExperimentPatchSHA256) != 2) {
+		return fmt.Errorf("config: freewill.strategy_experiment_enabled requires owner-scoped receipts and exactly two fixed strategy IDs, versions, and patch digests")
+	}
+	if f.StrategyExperimentEnabled {
+		if f.StrategyExperimentOwnerID != strings.TrimSpace(f.StrategyExperimentOwnerID) || f.StrategyExperimentOwnerID != f.TaskAppraisalOwnerID {
+			return fmt.Errorf("config: freewill.strategy_experiment_owner_id must exactly match task_appraisal_owner_id")
+		}
+		for i := 0; i < 2; i++ {
+			if strings.TrimSpace(f.StrategyExperimentIDs[i]) == "" || f.StrategyExperimentIDs[i] != strings.TrimSpace(f.StrategyExperimentIDs[i]) ||
+				strings.TrimSpace(f.StrategyExperimentVersions[i]) == "" || f.StrategyExperimentVersions[i] != strings.TrimSpace(f.StrategyExperimentVersions[i]) || !isSHA256Hex(f.StrategyExperimentPatchSHA256[i]) {
+				return fmt.Errorf("config: freewill.strategy_experiment entries must be non-empty and exact")
+			}
+		}
+		if f.StrategyExperimentIDs[0] == f.StrategyExperimentIDs[1] {
+			return fmt.Errorf("config: freewill.strategy_experiment requires distinct strategy IDs")
+		}
+	}
+	variantConfigured := false
+	if f.StrategyExperimentEnabled && len(f.StrategyExperimentIDs) == 2 && len(f.StrategyExperimentVersions) == 2 && len(f.StrategyExperimentPatchSHA256) == 2 {
+		for i := 0; i < 2; i++ {
+			if f.StrategyVariantID == f.StrategyExperimentIDs[i] && f.StrategyVariantVersion == f.StrategyExperimentVersions[i] && f.StrategyVariantPatchSHA256 == f.StrategyExperimentPatchSHA256[i] {
+				variantConfigured = true
+			}
+		}
+	}
+	if (f.StrategyVariantID == "") != (f.StrategyVariantVersion == "") || (f.StrategyVariantID == "") != (f.StrategyVariantPatchSHA256 == "") || f.StrategyVariantID != strings.TrimSpace(f.StrategyVariantID) || f.StrategyVariantVersion != strings.TrimSpace(f.StrategyVariantVersion) ||
+		(f.StrategyVariantID != "" && !variantConfigured) {
+		return fmt.Errorf("config: freewill.strategy_variant must be an exact configured ID/version/patch digest triple")
+	}
+	if f.MemoryContext.Enabled {
+		if !f.Enabled || !f.DiaryEnabled || strings.TrimSpace(f.MemoryContext.OwnerID) == "" {
+			return fmt.Errorf("config: freewill.memory_context.enabled requires freewill.enabled, diary_enabled, and memory_context.owner_id")
+		}
+		if f.MemoryContext.OwnerID != strings.TrimSpace(f.MemoryContext.OwnerID) || f.DiaryOwnerID != strings.TrimSpace(f.DiaryOwnerID) {
+			return fmt.Errorf("config: freewill.memory_context owner IDs must not contain surrounding whitespace")
+		}
+		if f.MemoryContext.OwnerID != f.DiaryOwnerID {
+			return fmt.Errorf("config: freewill.memory_context.owner_id must match diary_owner_id")
+		}
+		allowed := map[string]bool{"prizm:freewill-terminal": false, "prizm:freewill-diary": false}
+		if len(f.MemoryContext.SourceAllowlist) != len(allowed) {
+			return fmt.Errorf("config: freewill.memory_context.source_allowlist must explicitly contain the terminal fact and diary sources")
+		}
+		for _, source := range f.MemoryContext.SourceAllowlist {
+			if _, ok := allowed[source]; !ok || allowed[source] {
+				return fmt.Errorf("config: freewill.memory_context.source_allowlist contains an unsupported or duplicate source")
+			}
+			allowed[source] = true
+		}
+		for _, included := range allowed {
+			if !included {
+				return fmt.Errorf("config: freewill.memory_context.source_allowlist is incomplete")
+			}
+		}
 	}
 	if !f.Enabled {
 		return nil
@@ -180,6 +420,19 @@ func (f FreewillConfig) ValidateHostBinding(agents []AgentConfig, projects []Pro
 	}
 	if f.Scheduling.Enabled && strings.TrimSpace(f.Scheduling.Schedule) == "" {
 		return fmt.Errorf("config: freewill.scheduling.schedule is required when scheduling is enabled")
+	}
+	if len(f.Scheduling.EventKinds) > 16 {
+		return fmt.Errorf("config: freewill.scheduling.event_kinds may contain at most 16 exact event kinds")
+	}
+	seenEventKinds := make(map[string]struct{}, len(f.Scheduling.EventKinds))
+	for _, kind := range f.Scheduling.EventKinds {
+		if !regexp.MustCompile(`^prizm(?:\.[a-z0-9_-]+)+$`).MatchString(kind) || len(kind) > 192 {
+			return fmt.Errorf("config: freewill.scheduling.event_kinds must contain exact prizm event kinds without wildcards")
+		}
+		if _, exists := seenEventKinds[kind]; exists {
+			return fmt.Errorf("config: freewill.scheduling.event_kinds must not contain duplicates")
+		}
+		seenEventKinds[kind] = struct{}{}
 	}
 	return nil
 }
@@ -297,6 +550,10 @@ type APIServerConfig struct {
 	// can stay out of tracked config.
 	AuthTokenEnv string `yaml:"auth_token_env"`
 
+	// LocalDiaryPrincipalAuth enables the synthetic, header-only Freewill diary
+	// POC. Token hashes are never exposed through JSON config responses.
+	LocalDiaryPrincipalAuth LocalDiaryPrincipalAuthConfig `yaml:"local_diary_principal_auth" json:"-"`
+
 	// AllowedOrigins is the CORS origin allowlist for browser-based editors.
 	// Empty means no cross-origin requests are permitted (same-origin only).
 	// Use "*" only for trusted local development.
@@ -309,6 +566,19 @@ type APIServerConfig struct {
 	// MaxWorkspaceFileBytes caps a single workspace markdown file write via the
 	// workspace editor endpoint. Default 4194304 (4 MiB).
 	MaxWorkspaceFileBytes int64 `yaml:"max_workspace_file_bytes"`
+}
+
+// LocalDiaryPrincipalAuthConfig is default-off and valid only on an IP loopback
+// listener with the diary annotation controller configured.
+type LocalDiaryPrincipalAuthConfig struct {
+	Enabled          bool                                  `yaml:"enabled" json:"-"`
+	OwnerPrincipalID string                                `yaml:"owner_principal_id" json:"-"`
+	Credentials      []LocalDiaryPrincipalCredentialConfig `yaml:"credentials" json:"-"`
+}
+
+type LocalDiaryPrincipalCredentialConfig struct {
+	PrincipalID string `yaml:"principal_id" json:"-"`
+	TokenSHA256 string `yaml:"token_sha256" json:"-"`
 }
 
 // ResolveAuthToken returns the effective API bearer token, preferring the
@@ -631,6 +901,16 @@ type ProjectConfig struct {
 	// StateFile is an optional project state file the agent reads for task
 	// assignment (e.g. "PROJECT_STATE.md"). Relative to RepoPath if not absolute.
 	StateFile string `yaml:"state_file"`
+
+	// These fields explicitly authorize remote Freewill context egress only for
+	// the exact project identity and repository path. Empty means denied.
+	FreewillRemoteContextProjectID string `yaml:"freewill_remote_context_project_id,omitempty"`
+	FreewillRemoteContextRepoPath  string `yaml:"freewill_remote_context_repo_path,omitempty"`
+
+	// These exact project and repository bindings explicitly opt in to local
+	// capture of host-validated Freewill terminal outcomes. Empty means off.
+	FreewillTerminalFactsProjectID string `yaml:"freewill_terminal_facts_project_id,omitempty"`
+	FreewillTerminalFactsRepoPath  string `yaml:"freewill_terminal_facts_repo_path,omitempty"`
 
 	// DefaultBranch names the project's main branch. Enforced by
 	// GitCommitTool and GitPushTool (internal/tool/git.go): those mutation
@@ -1652,6 +1932,10 @@ func expandList(values []string) {
 // agentIDPattern enforces alphanumeric + hyphens, no dots.
 // This matches agent.Agent's naming rule and prevents ambiguity in event namespaces.
 var agentIDPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+
+var sha256HexPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+func isSHA256Hex(value string) bool { return sha256HexPattern.MatchString(value) }
 
 func isValidAgentID(id string) bool {
 	return agentIDPattern.MatchString(id)

@@ -100,6 +100,43 @@ func TestSelectionRequiresThreeScopedFreshCandidatesAndServerVerifiedResume(t *t
 	}
 }
 
+func TestSelectionRequiresExactHostReflectionBindingWithinThreeFreshCandidates(t *testing.T) {
+	scope := Scope{ProjectID: "project-a", Workspace: "workspace-a"}
+	binding := ReflectionBinding{ID: "reflection-01", Revision: strings.Repeat("a", 64), Source: "prizm:freewill-task-reflection"}
+	candidates := make([]CandidateIntention, 0, 3)
+	for i := 0; i < 3; i++ {
+		req := validRequest()
+		req.RequestID, req.AgentID, req.Scope = fmt.Sprintf("request-%d", i), "agent-a", scope
+		if i == 1 {
+			req.CandidateSource = SourceReflection
+			req.ReflectionID, req.ReflectionRevision, req.ReflectionSource = binding.ID, binding.Revision, binding.Source
+		}
+		candidates = append(candidates, CandidateIntention{CandidateID: fmt.Sprintf("candidate-%d", i), Request: req})
+	}
+	selection := Selection{Candidates: candidates, ChoiceID: "candidate-1", ReasonSummary: "A cited hypothesis may warrant examination."}
+	if err := selection.Validate("agent-a", scope, nil); err == nil {
+		t.Fatal("reflection candidate passed without a host-issued binding")
+	}
+	if err := selection.Validate("agent-a", scope, nil, map[string]ReflectionBinding{binding.ID: binding}); err != nil {
+		t.Fatalf("exact host reflection binding rejected: %v", err)
+	}
+	wrong := binding
+	wrong.Revision = strings.Repeat("b", 64)
+	if err := selection.Validate("agent-a", scope, nil, map[string]ReflectionBinding{binding.ID: wrong}); err == nil {
+		t.Fatal("reflection candidate passed with a different revision")
+	}
+	if len(selection.Candidates) != 3 {
+		t.Fatalf("reflection expanded the fresh candidate inventory: %d", len(selection.Candidates))
+	}
+	selection.Candidates[2].Request.CandidateSource = SourceReflection
+	selection.Candidates[2].Request.ReflectionID = binding.ID
+	selection.Candidates[2].Request.ReflectionRevision = binding.Revision
+	selection.Candidates[2].Request.ReflectionSource = binding.Source
+	if err := selection.Validate("agent-a", scope, nil, map[string]ReflectionBinding{binding.ID: binding}); err == nil {
+		t.Fatal("injected selector output with two reflection candidates passed the durable contract")
+	}
+}
+
 func TestSelectionRejectsScopeDriftAndSleepWithoutReason(t *testing.T) {
 	scope := Scope{ProjectID: "project-a", Workspace: "workspace-a"}
 	candidates := make([]CandidateIntention, 0, 3)

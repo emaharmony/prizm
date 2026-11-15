@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -261,6 +262,24 @@ func TestFreewillOneCycleRequiresTwoApprovalsAndProjectsDurableReport(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	reflectionData := filepath.Join(root, "reflection-data")
+	facts, err := newFreewillTerminalFactMemorySink(reflectionData, scope.ProjectID, source, events, "owner-e32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appraisalJSON, _ := json.Marshal(freewillTaskAppraisalResponse{AppraisalKind: "satisfaction", PerceivedOutcome: "not_completed", Why: "Synthetic self-report claim for this governed fixture.", Context: "One bounded local task.", Narrative: "Synthetic only.", Uncertainty: "This claim is not independently verified.", Scores: freewillSyntheticTaskScores()})
+	appraisals, err := newFreewillTaskAppraisalSink(facts, &freewillRetrospectiveFake{narrative: string(appraisalJSON), provider: "local-fake", model: "synthetic-appraisal", version: "fixture-v1"}, "owner-e32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adaptiveReflectionProvider := &freewillAdaptiveTaskReflectionFake{}
+	reflections, err := newFreewillTaskReflectionSink(appraisals, adaptiveReflectionProvider, "owner-e32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.SetTerminalFactSink(facts)
+	service.SetTaskAppraisalSink(appraisals)
+	service.SetTaskReflectionSink(reflections)
 	childApprovals := approval.NewStore(runsDir)
 	dispatcher := &oneCycleChildDispatcher{runDir: runsDir, source: source, approvalStore: childApprovals}
 	defer func() {
@@ -351,6 +370,95 @@ func TestFreewillOneCycleRequiresTwoApprovalsAndProjectsDurableReport(t *testing
 	if status.ExecutionStatus != "completed" || status.ChildStatus != string(multiagent.RunStatusCompleted) || status.ExecutionReportSHA256 != result.ReportSHA256 || status.ValidationSummary != "passed" || status.ExecutionReportRef != "multiagent_report.json" {
 		t.Fatalf("Freewill status omitted verified terminal report: %#v", status)
 	}
+	if adaptiveReflectionProvider.base.calls != 1 || adaptiveReflectionProvider.followUpCalls != 1 {
+		t.Fatalf("governed terminal path did not produce one bounded adaptive follow-up: base=%d follow-up=%d", adaptiveReflectionProvider.base.calls, adaptiveReflectionProvider.followUpCalls)
+	}
+	var persistedOutcome freewillTaskOutcome
+	var persistedReport freewillTaskAppraisal
+	var persistedAdaptive freewillAdaptiveTaskReflection
+	for _, entry := range mustFreewillRecent(t, facts) {
+		switch entry.Source {
+		case freewillTaskOutcomeSource:
+			_ = json.Unmarshal([]byte(entry.Content), &persistedOutcome)
+		case freewillTaskAppraisalSource:
+			_ = json.Unmarshal([]byte(entry.Content), &persistedReport)
+		case freewillTaskReflectionSource:
+			var candidate freewillAdaptiveTaskReflection
+			if json.Unmarshal([]byte(entry.Content), &candidate) == nil && candidate.Kind == "task_reflection_adaptive_follow_up" {
+				persistedAdaptive = candidate
+			}
+		}
+	}
+	if persistedOutcome.Status != "completed" || persistedOutcome.Validation != "passed" || persistedReport.PerceivedOutcome != "not_completed" || persistedAdaptive.HostOutcome != "completed" || persistedAdaptive.SelfReportOutcome != "not_completed" || persistedAdaptive.FollowUpCalls != 1 || persistedAdaptive.RevisedHypothesis == "" {
+		t.Fatalf("governed task contradiction/revision metadata incomplete: outcome=%#v report=%#v adaptive=%#v", persistedOutcome, persistedReport, persistedAdaptive)
+	}
+	// E33 associates the actual governed child receipt above with an explicitly
+	// activated synthetic goal. The second task is only a local proposal basis.
+	baseline := multiagent.FreewillTerminalFact{ProjectID: scope.ProjectID, Workspace: source, AgentID: "synthetic-agent", IntentionID: "goal-baseline-intention", ParentRunID: "goal-baseline-parent", ChildRunID: "goal-baseline-child", Status: "completed", ReportRef: "multiagent_report.json", ReportSHA256: strings.Repeat("f", 64), ValidationSummary: "passed", RecordedAt: time.Date(2031, 1, 2, 3, 6, 0, 0, time.UTC)}
+	baselineEvent := event.NewEvent(event.EventFreewillExecutionCompleted, "synthetic-goal-baseline", map[string]any{"child_run_id": baseline.ChildRunID, "report_ref": baseline.ReportRef, "report_sha256": baseline.ReportSHA256, "validation_summary": baseline.ValidationSummary})
+	baselineEvent.Metadata.RunID = baseline.ParentRunID
+	if err := events.Store(ctx, baselineEvent); err != nil {
+		t.Fatal(err)
+	}
+	if err := facts.CaptureFreewillTerminalFact(ctx, baseline); err != nil {
+		t.Fatal(err)
+	}
+	if err := appraisals.Capture(ctx, baseline); err != nil {
+		t.Fatal(err)
+	}
+	goalProvider := &freewillGoalFake{}
+	goalSink, err := newFreewillGoalProposalSink(appraisals, goalProvider, "owner-e32", scope.ProjectID, source, "synthetic-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	goalEvidence := make([]freewillGoalEvidence, 0, 2)
+	for _, id := range []string{childID, baseline.ChildRunID} {
+		rows, readErr := goalSink.readTaskEvidence(ctx, id)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		goalEvidence = append(goalEvidence, rows...)
+	}
+	goalProvider.output = goalOutput(t, goalEvidence[0].OutcomeID, goalEvidence[1].OutcomeID)
+	goalProposal, err := goalSink.Propose(ctx, "owner-e32", scope.ProjectID, "synthetic-agent", []string{childID, baseline.ChildRunID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := goalSink.Decide(ctx, "owner-e32", scope.ProjectID, "synthetic-agent", goalProposal.ProposalID, "accept"); err != nil {
+		t.Fatal(err)
+	}
+	activeGoal, err := goalSink.Activate(ctx, "owner-e32", scope.ProjectID, "synthetic-agent", goalProposal.ProposalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	associated, err := goalSink.CheckIn(ctx, "owner-e32", scope.ProjectID, "synthetic-agent", goalProposal.ProposalID, activeGoal.Goal.Revision, activeGoal.Goal.GoalID, "e33-governed-check-in", childID, "synthetic owner tentative progress report")
+	if err != nil || len(associated.Progress) != 1 || len(associated.Reviews) != 1 || associated.Progress[0].ChildRunID != childID || associated.Progress[0].ReceiptRef != goalEvidence[0].OutcomeID || associated.Progress[0].ReceiptEventID == "" || associated.Progress[0].ReportSHA256 != result.ReportSHA256 || associated.Goal.Revision != activeGoal.Goal.Revision {
+		t.Fatalf("actual governed terminal receipt did not produce one scoped progress/review: %+v err=%v", associated, err)
+	}
+	reopenedFacts, err := newFreewillTerminalFactMemorySink(reflectionData, scope.ProjectID, source, events, "owner-e32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopenedAppraisals, err := newFreewillTaskAppraisalSink(reopenedFacts, &freewillRetrospectiveFake{}, "owner-e32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopenedGoalSink, err := newFreewillGoalProposalSink(reopenedAppraisals, goalProvider, "owner-e32", scope.ProjectID, source, "synthetic-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopenedGoal, err := reopenedGoalSink.Read(ctx, "owner-e32", scope.ProjectID, "synthetic-agent", goalProposal.ProposalID)
+	if err != nil || len(reopenedGoal.Progress) != 1 || len(reopenedGoal.Reviews) != 1 || reopenedGoal.Progress[0].RecordID != associated.Progress[0].RecordID || reopenedGoal.Reviews[0].RecordID != associated.Reviews[0].RecordID || reopenedGoal.Reviews[0].ProgressRecordID != associated.Progress[0].RecordID {
+		t.Fatalf("reopened actual governed goal association/review mismatch: %+v err=%v", reopenedGoal, err)
+	}
+	reopenedReflections, err := newFreewillTaskReflectionSink(reopenedAppraisals, &freewillAdaptiveTaskReflectionFake{}, "owner-e32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	latestReflection, err := reopenedReflections.ReadLatestOwnerProjectReflection(ctx, "owner-e32", scope.ProjectID, source, "synthetic-agent")
+	if err != nil || latestReflection == nil || latestReflection.Hypothesis != persistedAdaptive.RevisedHypothesis {
+		t.Fatalf("reopened exact-scope reader did not return adaptive revision: %#v err=%v", latestReflection, err)
+	}
 	revision := terminal.Revision
 	terminalChildRecord, err := dispatcher.runtime.runtime.Inspect(ctx, childID)
 	if err != nil {
@@ -362,6 +470,9 @@ func TestFreewillOneCycleRequiresTwoApprovalsAndProjectsDurableReport(t *testing
 	replayed, err := service.ReconcileExecutionTerminal(ctx, woken.State.RunID, result)
 	if err != nil || replayed.Revision != revision {
 		t.Fatalf("terminal replay changed parent: revision=%d want=%d err=%v", replayed.Revision, revision, err)
+	}
+	if adaptiveReflectionProvider.base.calls != 1 || adaptiveReflectionProvider.followUpCalls != 1 {
+		t.Fatalf("terminal replay repeated adaptive reflection call: base=%d follow-up=%d", adaptiveReflectionProvider.base.calls, adaptiveReflectionProvider.followUpCalls)
 	}
 	if _, err := dispatcher.runtime.runtime.Resume(ctx, childID); err != nil {
 		t.Fatalf("terminal child replay: %v", err)

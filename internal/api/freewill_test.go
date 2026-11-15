@@ -30,6 +30,49 @@ func (f *fakeFreewillControl) SetHalted(_ context.Context, agentID string, scope
 	return f.state, nil
 }
 
+type preferenceWithdrawalController struct {
+	status string
+	err    error
+	calls  int
+}
+
+func (c *preferenceWithdrawalController) ChallengePreference(context.Context, string, string, string, string, string, string, string, string, string, time.Time) (json.RawMessage, json.RawMessage, error) {
+	return nil, nil, errors.New("unused")
+}
+func (c *preferenceWithdrawalController) ReadPreferenceChallenges(context.Context, string, string, string, string, string) ([]json.RawMessage, error) {
+	return nil, errors.New("unused")
+}
+func (c *preferenceWithdrawalController) ReadPreferenceEvidence(context.Context, string, string, string, string, string) (any, error) {
+	return nil, errors.New("unused")
+}
+func (c *preferenceWithdrawalController) WithdrawPreferenceEvidence(context.Context, string, string, string, string, time.Time) (string, error) {
+	c.calls++
+	return c.status, c.err
+}
+
+func TestFreewillPreferenceWithdrawalReportsPendingThenCompleteOnRetry(t *testing.T) {
+	controller := &preferenceWithdrawalController{status: "pending", err: errors.New("synthetic cleanup failure")}
+	s := NewServer(Config{Addr: ":0", AuthToken: "secret", FreewillPreferenceChallenges: controller})
+	h := s.authMiddleware(s.mux)
+	body := `{"owner_id":"owner-a","project_id":"project-a","workspace":"/synthetic/workspace","agent_id":"agent-a"}`
+	request := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/freewill/preferences/withdrawal", strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer secret")
+		response := httptest.NewRecorder()
+		h.ServeHTTP(response, r)
+		return response
+	}
+	pending := request()
+	if pending.Code != http.StatusServiceUnavailable || !strings.Contains(pending.Body.String(), `"status":"pending"`) {
+		t.Fatalf("pending response=%d %s", pending.Code, pending.Body.String())
+	}
+	controller.err, controller.status = nil, "complete"
+	complete := request()
+	if complete.Code != http.StatusOK || !strings.Contains(complete.Body.String(), `"status":"complete"`) || controller.calls != 2 {
+		t.Fatalf("retry response=%d calls=%d body=%s", complete.Code, controller.calls, complete.Body.String())
+	}
+}
+
 func TestFreewillOperatorControlRequiresAuthAndOnlyExplicitPostChangesHalt(t *testing.T) {
 	controller := &fakeFreewillControl{}
 	s := NewServer(Config{Addr: ":0", AuthToken: "secret", FreewillControl: controller})
@@ -280,5 +323,48 @@ func TestFreewillChildApprovalHistoryIsAuthenticatedBoundedAndReplayable(t *test
 	second := request()
 	if second.Code != http.StatusOK || second.Body.String() != first.Body.String() {
 		t.Fatalf("history replay changed response: first=%s second=%s", first.Body.String(), second.Body.String())
+	}
+}
+
+type fakeFreewillChildResources struct {
+	parent, child, requestID, decision, actor, reason string
+	revision                                          int64
+}
+
+func (f *fakeFreewillChildResources) ListChildResourceExtensions(_ context.Context, parent, child string) ([]FreewillChildResourceExtension, error) {
+	f.parent, f.child = parent, child
+	return []FreewillChildResourceExtension{{ParentRunID: parent, ChildRunID: child, RequestID: "resource-1", Status: "pending",
+		CurrentAllowance: 1, RequestedIncrement: 1, HardCeiling: 2, FromRole: "planner", NextRole: "developer", GrantGeneration: 4, Generation: 0, CheckpointRevision: 7}}, nil
+}
+
+func (f *fakeFreewillChildResources) DecideChildResourceExtension(_ context.Context, parent, child, requestID string, revision int64, decision, actor, reason string) (FreewillChildResourceExtension, error) {
+	f.parent, f.child, f.requestID, f.revision, f.decision, f.actor, f.reason = parent, child, requestID, revision, decision, actor, reason
+	return FreewillChildResourceExtension{ParentRunID: parent, ChildRunID: child, RequestID: requestID, Status: decision, Decision: decision, Actor: actor}, nil
+}
+
+func TestFreewillChildResourceDecisionIsAuthenticatedAndRevisionBound(t *testing.T) {
+	controller := &fakeFreewillChildResources{}
+	s := NewServer(Config{Addr: ":0", AuthToken: "secret", FreewillChildResources: controller})
+	h := s.authMiddleware(s.mux)
+	path := "/api/v1/freewill/runs/parent-1/children/child-1/resources"
+	unauth := httptest.NewRecorder()
+	h.ServeHTTP(unauth, httptest.NewRequest(http.MethodGet, path, nil))
+	if unauth.Code != http.StatusUnauthorized || controller.child != "" {
+		t.Fatalf("unauthorized resource list status=%d controller=%+v", unauth.Code, controller)
+	}
+	get := httptest.NewRequest(http.MethodGet, path, nil)
+	get.Header.Set("Authorization", "Bearer secret")
+	listed := httptest.NewRecorder()
+	h.ServeHTTP(listed, get)
+	if listed.Code != http.StatusOK || controller.parent != "parent-1" || controller.child != "child-1" || strings.Contains(listed.Body.String(), "workspace") {
+		t.Fatalf("resource list status=%d controller=%+v body=%s", listed.Code, controller, listed.Body.String())
+	}
+	decisionPath := path + "/resource-1/decision?by=synthetic-owner"
+	post := httptest.NewRequest(http.MethodPost, decisionPath, strings.NewReader(`{"decision":"accept","expected_revision":7,"reason":"bounded test approval"}`))
+	post.Header.Set("Authorization", "Bearer secret")
+	decided := httptest.NewRecorder()
+	h.ServeHTTP(decided, post)
+	if decided.Code != http.StatusOK || controller.requestID != "resource-1" || controller.revision != 7 || controller.decision != "accept" || controller.actor != "synthetic-owner" || controller.reason != "bounded test approval" {
+		t.Fatalf("resource decision status=%d controller=%+v body=%s", decided.Code, controller, decided.Body.String())
 	}
 }

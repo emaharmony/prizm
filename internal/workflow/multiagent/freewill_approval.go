@@ -8,6 +8,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/emaharmony/prizm/internal/approval"
@@ -65,7 +66,7 @@ func freewillAdmissionActive(record DurableRun) bool {
 			return false
 		}
 		switch dispatch.Status {
-		case "completed", "execution_failed", "execution_cancelled":
+		case "completed", "execution_failed", "execution_cancelled", "mutation_no_effect_reconciled":
 			return false
 		default:
 			// Dispatching, accepted, retryable failed, and unknown states keep
@@ -137,16 +138,69 @@ type FreewillExecutionTerminalResult struct {
 	FailureCode       string
 }
 
+// FreewillTerminalFact contains only host-validated terminal outcome fields.
+// A sink may persist it locally after the outcome is durable; it must not
+// reinterpret selector output or read the child report body.
+type FreewillTerminalFact struct {
+	ProjectID         string
+	Workspace         string
+	AgentID           string
+	IntentionID       string
+	ParentRunID       string
+	ChildRunID        string
+	Status            string
+	ReportRef         string
+	ReportSHA256      string
+	ValidationSummary string
+	FailureCode       string
+	RecordedAt        time.Time
+}
+
+// FreewillTerminalFactSink is an optional local persistence edge. The sink
+// must be idempotent because an identical terminal replay retries capture.
+type FreewillTerminalFactSink interface {
+	CaptureFreewillTerminalFact(context.Context, FreewillTerminalFact) error
+}
+
+// FreewillTerminalDiarySink captures a model-authored retrospective only after
+// the host terminal fact has been durably captured. The two records remain
+// separate and the retrospective sink must preserve its model provenance.
+type FreewillTerminalDiarySink interface {
+	CaptureFreewillTerminalRetrospective(context.Context, FreewillTerminalFact) error
+}
+
+// FreewillTaskAppraisalSink captures a qualitative task self-report after the host receipt is durable.
+type FreewillTaskAppraisalSink interface {
+	Capture(context.Context, FreewillTerminalFact) error
+}
+
+// FreewillTaskReflectionSink records one bounded hypothesis after the task appraisal is durable.
+type FreewillTaskReflectionSink interface {
+	ReflectTask(context.Context, FreewillTerminalFact) error
+}
+
+// FreewillPreferenceHypothesisSink records a separate current-preference hypothesis from exact task evidence.
+type FreewillPreferenceHypothesisSink interface {
+	DerivePreference(context.Context, FreewillTerminalFact) error
+}
+
 // FreewillApprovalService evaluates configured policy and stores a human
 // decision for the selected intention. It has no task, tool, or executor.
 type FreewillApprovalService struct {
-	runtime    *DurableRuntime
-	store      DurableRunStore
-	approvals  FreewillApprovalStore
-	policy     FreewillPolicyEvaluator
-	dispatcher FreewillExecutionDispatcher
-	actor      string
-	readOnly   bool
+	runtime                  *DurableRuntime
+	store                    DurableRunStore
+	approvals                FreewillApprovalStore
+	policy                   FreewillPolicyEvaluator
+	dispatcher               FreewillExecutionDispatcher
+	factSink                 FreewillTerminalFactSink
+	diarySink                FreewillTerminalDiarySink
+	taskAppraisalSink        FreewillTaskAppraisalSink
+	taskReflectionSink       FreewillTaskReflectionSink
+	preferenceHypothesisSink FreewillPreferenceHypothesisSink
+	factMu                   sync.Mutex
+	factDone                 map[string]struct{}
+	actor                    string
+	readOnly                 bool
 }
 
 // SetExecutionDispatcher enables the explicit FW-P2 path in a composed
@@ -155,6 +209,43 @@ type FreewillApprovalService struct {
 func (s *FreewillApprovalService) SetExecutionDispatcher(dispatcher FreewillExecutionDispatcher) {
 	if s != nil && !s.readOnly {
 		s.dispatcher = dispatcher
+	}
+}
+
+// SetTerminalFactSink enables optional post-terminal local fact capture. The
+// default remains off when no sink is configured.
+func (s *FreewillApprovalService) SetTerminalFactSink(sink FreewillTerminalFactSink) {
+	if s != nil && !s.readOnly {
+		s.factSink = sink
+	}
+}
+
+// SetTerminalDiarySink enables optional local retrospective capture after the
+// host fact. It is unset by default and cannot alter the terminal outcome.
+func (s *FreewillApprovalService) SetTerminalDiarySink(sink FreewillTerminalDiarySink) {
+	if s == nil {
+		return
+	}
+	s.factMu.Lock()
+	s.diarySink = sink
+	s.factMu.Unlock()
+}
+
+func (s *FreewillApprovalService) SetTaskAppraisalSink(sink FreewillTaskAppraisalSink) {
+	if s != nil && !s.readOnly {
+		s.taskAppraisalSink = sink
+	}
+}
+
+func (s *FreewillApprovalService) SetTaskReflectionSink(sink FreewillTaskReflectionSink) {
+	if s != nil && !s.readOnly {
+		s.taskReflectionSink = sink
+	}
+}
+
+func (s *FreewillApprovalService) SetPreferenceHypothesisSink(sink FreewillPreferenceHypothesisSink) {
+	if s != nil && !s.readOnly {
+		s.preferenceHypothesisSink = sink
 	}
 }
 
@@ -374,6 +465,113 @@ func (s *FreewillApprovalService) ValidateAcceptedExecutionResume(ctx context.Co
 	return ensureFreewillApprovalGeneration(ctx, s.store, record)
 }
 
+// QuarantineExecutionRecovery durably fences an accepted child when host
+// evidence cannot prove that resuming it is safe. It deliberately leaves the
+// original approval and child identity intact and records no terminal result.
+func (s *FreewillApprovalService) QuarantineExecutionRecovery(ctx context.Context, parentRunID, reason string) (DurableRun, error) {
+	if s == nil || s.runtime == nil || s.store == nil || !validFreewillRecoveryReason(reason) {
+		return DurableRun{}, errors.New("multiagent: Freewill recovery quarantine is invalid")
+	}
+	claim, err := s.runtime.claimer.Acquire(ctx, parentRunID)
+	if err != nil {
+		return DurableRun{}, err
+	}
+	defer claim.Release()
+	record, err := s.store.Load(ctx, parentRunID)
+	if err != nil {
+		return DurableRun{}, err
+	}
+	if record.Kind != DurableRunKindFreewill || record.Freewill == nil || record.Freewill.ExecutionDispatch == nil {
+		return record, ErrFreewillApprovalStale
+	}
+	dispatch := record.Freewill.ExecutionDispatch
+	if dispatch.Status == "recovery_uncertain" {
+		if dispatch.RecoveryReason == reason {
+			return record, nil
+		}
+		return record, ErrRequestIdentityConflict
+	}
+	if dispatch.Status != "accepted" || !validFreewillApprovalReceipt(record.Freewill, FreewillApprovalGranted) {
+		return record, ErrFreewillApprovalStale
+	}
+	dispatch.Status = "recovery_uncertain"
+	dispatch.RecoveryReason = reason
+	dispatch.UpdatedAt = s.runtime.now().UTC()
+	candidate, ok := selectedFreewillCandidate(record.Freewill)
+	if !ok {
+		return record, ErrFreewillApprovalStale
+	}
+	return s.saveExecutionDispatch(ctx, record, event.EventFreewillExecutionRecoveryUncertain, map[string]any{
+		"request_id": candidate.Request.RequestID, "approval_id": record.Freewill.ApprovalRef,
+		"child_run_id": dispatch.ChildRunID, "reason_code": reason, "execution_disabled": true,
+	})
+}
+
+// ReconcileExecutionNoEffectFailure closes an accepted dispatch as failed
+// after the child runtime has fenced and terminalized that attempt under the
+// child's process-safe run claim. It cannot resume the child or claim success.
+func (s *FreewillApprovalService) ReconcileExecutionNoEffectFailure(ctx context.Context, parentRunID string, receipt FreewillMutationNoEffectReceipt) (DurableRun, error) {
+	childRunID, attemptID, mutationIDs := receipt.childRunID, receipt.attemptID, receipt.mutationIDs
+	if s == nil || s.runtime == nil || s.store == nil || !validFreewillChildRunID(childRunID) ||
+		!validAttemptIdentity(attemptID) || len(mutationIDs) == 0 || len(mutationIDs) > 128 {
+		return DurableRun{}, errors.New("multiagent: Freewill mutation reconciliation receipt is invalid")
+	}
+	ids := append([]string(nil), mutationIDs...)
+	sort.Strings(ids)
+	for i, id := range ids {
+		if !validSHA256Hex(id) || (i > 0 && ids[i-1] == id) {
+			return DurableRun{}, errors.New("multiagent: Freewill mutation reconciliation ids are invalid")
+		}
+	}
+	claim, err := s.runtime.claimer.Acquire(ctx, parentRunID)
+	if err != nil {
+		return DurableRun{}, err
+	}
+	defer claim.Release()
+	record, err := s.store.Load(ctx, parentRunID)
+	if err != nil {
+		return DurableRun{}, err
+	}
+	if record.Kind != DurableRunKindFreewill || record.Freewill == nil || record.State.RequestIdentity == nil ||
+		!validFreewillApprovalReceipt(record.Freewill, FreewillApprovalGranted) || record.Freewill.ExecutionDispatch == nil {
+		return record, ErrFreewillApprovalStale
+	}
+	dispatch := record.Freewill.ExecutionDispatch
+	if dispatch.Status == "mutation_no_effect_reconciled" {
+		if dispatch.ChildRunID == childRunID && dispatch.MutationAttemptID == attemptID &&
+			strings.Join(dispatch.NoEffectMutationIDs, ",") == strings.Join(ids, ",") {
+			return record, nil
+		}
+		return record, ErrRequestIdentityConflict
+	}
+	if dispatch.Status != "recovery_uncertain" || dispatch.RecoveryReason != "child_mutation_possible" ||
+		dispatch.ChildRunID != childRunID || dispatch.ReportRef != "multiagent_report.json" {
+		return record, ErrFreewillApprovalStale
+	}
+	dispatch.Status = "mutation_no_effect_reconciled"
+	dispatch.RecoveryReason = ""
+	dispatch.ChildStatus = string(RunStatusFailed)
+	dispatch.ValidationSummary = ""
+	dispatch.ReportSHA256 = ""
+	dispatch.FailureCode = "child_mutation_no_effect_proven"
+	dispatch.MutationAttemptID = attemptID
+	dispatch.NoEffectMutationIDs = ids
+	dispatch.UpdatedAt = s.runtime.now().UTC()
+	record.Freewill.Lifecycle = freewill.StatePaused
+	record.Freewill.PauseReason = "child_mutation_no_effect_proven"
+	candidate, ok := selectedFreewillCandidate(record.Freewill)
+	if !ok {
+		return record, ErrFreewillApprovalStale
+	}
+	saved, err := s.saveExecutionDispatch(ctx, record, event.EventFreewillExecutionMutationNoEffectReconciled, map[string]any{
+		"request_id": candidate.Request.RequestID, "approval_id": record.Freewill.ApprovalRef,
+		"child_run_id": childRunID, "attempt_id": attemptID,
+		"mutation_ids": ids, "reason_code": dispatch.FailureCode, "child_status": string(RunStatusFailed),
+		"execution_disabled": true,
+	})
+	return saved, err
+}
+
 // ReconcileExecutionTerminal persists the result of the exact accepted child.
 // Replays of the same result are no-ops; a conflicting terminal result cannot
 // overwrite the first durable outcome.
@@ -396,7 +594,14 @@ func (s *FreewillApprovalService) ReconcileExecutionTerminal(ctx context.Context
 	if err != nil {
 		return DurableRun{}, err
 	}
-	defer claim.Release()
+	claimReleased := false
+	releaseClaim := func() {
+		if !claimReleased {
+			claim.Release()
+			claimReleased = true
+		}
+	}
+	defer releaseClaim()
 	record, err := s.store.Load(ctx, parentRunID)
 	if err != nil {
 		return DurableRun{}, err
@@ -408,6 +613,17 @@ func (s *FreewillApprovalService) ReconcileExecutionTerminal(ctx context.Context
 	dispatch := record.Freewill.ExecutionDispatch
 	if dispatch.ChildRunID != result.ChildRunID || dispatch.ReportRef != result.ReportRef {
 		return record, ErrRequestIdentityConflict
+	}
+	quarantined := dispatch.Status == "recovery_uncertain"
+	if quarantined {
+		switch dispatch.RecoveryReason {
+		case "child_manifest_missing", "terminal_report_unavailable", "terminal_report_invalid":
+			// A later host inspection may repair an evidence-only quarantine.
+		case "child_mutation_possible":
+			return record, errors.New("multiagent: terminal report cannot resolve possible external mutation")
+		default:
+			return record, ErrFreewillApprovalStale
+		}
 	}
 	if dispatch.Status == "dispatching" {
 		return record, ErrFreewillDispatchNotAccepted
@@ -425,14 +641,16 @@ func (s *FreewillApprovalService) ReconcileExecutionTerminal(ctx context.Context
 		if dispatch.Status == status && dispatch.ChildStatus == string(result.ChildStatus) &&
 			dispatch.ValidationSummary == result.ValidationSummary && dispatch.ReportSHA256 == result.ReportSHA256 &&
 			dispatch.FailureCode == result.FailureCode {
-			return record, nil
+			releaseClaim()
+			return record, s.captureTerminalFact(ctx, record, result)
 		}
 		return record, ErrRequestIdentityConflict
 	}
-	if dispatch.Status != "accepted" {
+	if dispatch.Status != "accepted" && !quarantined {
 		return record, ErrFreewillApprovalStale
 	}
 	dispatch.Status = status
+	dispatch.RecoveryReason = ""
 	dispatch.ChildStatus = string(result.ChildStatus)
 	dispatch.ValidationSummary = result.ValidationSummary
 	dispatch.ReportSHA256 = result.ReportSHA256
@@ -442,11 +660,99 @@ func (s *FreewillApprovalService) ReconcileExecutionTerminal(ctx context.Context
 	if !ok {
 		return record, ErrFreewillApprovalStale
 	}
-	return s.saveExecutionDispatch(ctx, record, eventType, map[string]any{
+	saved, err := s.saveExecutionDispatch(ctx, record, eventType, map[string]any{
 		"request_id": candidate.Request.RequestID, "approval_id": record.Freewill.ApprovalRef,
 		"child_run_id": result.ChildRunID, "child_status": result.ChildStatus, "report_ref": result.ReportRef,
 		"report_sha256": result.ReportSHA256, "validation_summary": result.ValidationSummary,
 		"execution_disabled": true, "failure_code": result.FailureCode,
+	})
+	if err != nil {
+		return saved, err
+	}
+	releaseClaim()
+	return saved, s.captureTerminalFact(ctx, saved, result)
+}
+
+func (s *FreewillApprovalService) captureTerminalFact(ctx context.Context, record DurableRun, result FreewillExecutionTerminalResult) error {
+	if s.factSink == nil {
+		return nil
+	}
+	candidate, ok := selectedFreewillCandidate(record.Freewill)
+	if !ok || record.State.RequestIdentity == nil || record.Freewill.ExecutionDispatch == nil {
+		return ErrFreewillApprovalStale
+	}
+	s.factMu.Lock()
+	defer s.factMu.Unlock()
+	if _, ok := s.factDone[record.State.RunID]; ok {
+		return nil
+	}
+	dispatch := record.Freewill.ExecutionDispatch
+	fact := FreewillTerminalFact{
+		ProjectID: record.Freewill.Scope.ProjectID, Workspace: record.Freewill.Scope.Workspace,
+		AgentID: record.State.RequestIdentity.RequesterID, IntentionID: candidate.CandidateID,
+		ParentRunID: record.State.RunID, ChildRunID: result.ChildRunID, Status: dispatch.Status,
+		ReportRef: dispatch.ReportRef, ReportSHA256: dispatch.ReportSHA256,
+		ValidationSummary: dispatch.ValidationSummary, FailureCode: dispatch.FailureCode,
+		RecordedAt: dispatch.UpdatedAt,
+	}
+	if err := s.factSink.CaptureFreewillTerminalFact(ctx, fact); err != nil {
+		return err
+	}
+	if s.diarySink != nil {
+		if err := s.diarySink.CaptureFreewillTerminalRetrospective(ctx, fact); err != nil {
+			return err
+		}
+	}
+	if s.taskAppraisalSink != nil {
+		if err := s.taskAppraisalSink.Capture(ctx, fact); err != nil {
+			return err
+		}
+	}
+	if s.taskReflectionSink != nil {
+		if err := s.taskReflectionSink.ReflectTask(ctx, fact); err != nil {
+			return err
+		}
+	}
+	if s.preferenceHypothesisSink != nil {
+		if err := s.preferenceHypothesisSink.DerivePreference(ctx, fact); err != nil {
+			return err
+		}
+	}
+	if s.factDone == nil {
+		s.factDone = make(map[string]struct{})
+	}
+	s.factDone[record.State.RunID] = struct{}{}
+	return nil
+}
+
+// RetryTerminalFactCapture retries the optional fact sink for an already
+// durable terminal outcome. It neither changes that outcome nor emits another
+// terminal event; the sink must use the stable parent-run capture key.
+func (s *FreewillApprovalService) RetryTerminalFactCapture(ctx context.Context, parentRunID string) error {
+	if s == nil || s.factSink == nil {
+		return nil
+	}
+	if s.store == nil {
+		return errors.New("multiagent: Freewill terminal fact store is unavailable")
+	}
+	record, err := s.store.Load(ctx, parentRunID)
+	if err != nil {
+		return err
+	}
+	if record.Kind != DurableRunKindFreewill || record.Freewill == nil || record.Freewill.ExecutionDispatch == nil {
+		return ErrFreewillApprovalStale
+	}
+	dispatch := record.Freewill.ExecutionDispatch
+	if dispatch.Status != "completed" && dispatch.Status != "execution_failed" && dispatch.Status != "execution_cancelled" {
+		return nil
+	}
+	childStatus := RunStatus(dispatch.ChildStatus)
+	if !childStatus.Terminal() || !childStatus.Valid() {
+		return ErrFreewillApprovalStale
+	}
+	return s.captureTerminalFact(ctx, record, FreewillExecutionTerminalResult{
+		ChildRunID: dispatch.ChildRunID, ChildStatus: childStatus, ReportRef: dispatch.ReportRef,
+		ReportSHA256: dispatch.ReportSHA256, ValidationSummary: dispatch.ValidationSummary, FailureCode: dispatch.FailureCode,
 	})
 }
 
@@ -857,7 +1163,7 @@ func (s *FreewillApprovalService) dispatchApprovedLocked(ctx context.Context, re
 		!validFreewillApprovalReceipt(record.Freewill, FreewillApprovalGranted) {
 		return record, ErrFreewillApprovalStale
 	}
-	if dispatch := record.Freewill.ExecutionDispatch; dispatch != nil && (dispatch.Status == "accepted" || dispatch.Status == "completed" ||
+	if dispatch := record.Freewill.ExecutionDispatch; dispatch != nil && (dispatch.Status == "accepted" || dispatch.Status == "completed" || dispatch.Status == "recovery_uncertain" ||
 		dispatch.Status == "execution_failed" || dispatch.Status == "execution_cancelled") {
 		return record, nil
 	}
