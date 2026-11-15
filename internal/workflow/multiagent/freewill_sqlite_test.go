@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/emaharmony/prizm/internal/approval"
 	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/freewill"
 	"github.com/emaharmony/prizm/internal/provider"
@@ -90,6 +91,218 @@ func TestFreewillPausedAdmissionWithValidReceiptCanBeReused(t *testing.T) {
 	record.Freewill.ApprovalReceipt = &FreewillApprovalReceipt{ApprovalID: "approval", RequestFingerprint: fingerprint, Decision: FreewillApprovalGranted}
 	if freewillAdmissionActive(record) {
 		t.Fatal("paused run with a valid approval receipt must be releasable")
+	}
+}
+
+type resumeLineageSelector struct {
+	inputs []FreewillSelectionInput
+}
+
+func (s *resumeLineageSelector) SelectFreewill(_ context.Context, input FreewillSelectionInput) (freewill.Selection, FreewillSelectionEvidence, error) {
+	s.inputs = append(s.inputs, input)
+	if len(input.ResumeCandidates) != 1 {
+		return freewill.Selection{}, FreewillSelectionEvidence{}, fmt.Errorf("resume candidates = %d, want 1", len(input.ResumeCandidates))
+	}
+	resume := input.ResumeCandidates[0]
+	resume.Request.Goal = "Model attempted to replace the host-verified resume request."
+	candidates := make([]freewill.CandidateIntention, 0, 4)
+	for i := 0; i < 3; i++ {
+		request := resume.Request
+		request.RequestID = fmt.Sprintf("fresh-request-%d", i)
+		request.CandidateSource = freewill.SourceNew
+		request.Title = fmt.Sprintf("Fresh task %d", i)
+		request.Goal = fmt.Sprintf("Review bounded topic %d", i)
+		request.ReasonSummary = "A separate synthetic read-only task."
+		request.IdempotencyKey = fmt.Sprintf("fresh-idempotency-%d", i)
+		request.CorrelationID = input.CorrelationID
+		candidates = append(candidates, freewill.CandidateIntention{CandidateID: fmt.Sprintf("fresh-candidate-%d", i), Request: request,
+			Score: 50, ScoreRationale: "A bounded, scoped and reversible research task."})
+	}
+	candidates = append(candidates, resume)
+	return freewill.Selection{Candidates: candidates, ChoiceID: resume.CandidateID,
+		ReasonSummary: "Continue the previously approved intention as a fresh proposal."}, FreewillSelectionEvidence{}, nil
+}
+
+func TestFreewillResumeLineagePersistsAcrossSQLiteReopenAndLaterTick(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "freewill-resume-lineage.db")
+	events, err := event.NewSQLiteEventStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewSQLiteDurableRunStore(dbPath)
+	if err != nil {
+		_ = events.Close()
+		t.Fatal(err)
+	}
+	closeStores := func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close durable store: %v", err)
+		}
+		if err := events.Close(); err != nil {
+			t.Errorf("close event store: %v", err)
+		}
+	}
+	defer closeStores()
+
+	scope := freewill.Scope{ProjectID: "p", Workspace: "w"}
+	request := freewill.IntentionRequest{RequestID: "resume-request", AgentID: "agent", Origin: freewill.OriginAgent,
+		CandidateSource: freewill.SourceNew, Title: "Approved task", Goal: "Continue bounded research across sessions",
+		ReasonSummary: "The owner approved this scoped research objective.", RequestedCapabilities: []string{"read_only"},
+		Scope: scope, IdempotencyKey: "resume-idem", CorrelationID: "resume-correlation"}
+	candidate := freewill.CandidateIntention{CandidateID: "resume-candidate", Request: request, Score: 82,
+		ScoreRationale: "Matches the scoped research goal and has low execution risk."}
+	alternativeRequest := request
+	alternativeRequest.RequestID = "unselected-request"
+	alternativeRequest.Title = "Unselected alternative"
+	alternativeRequest.Goal = "Review another bounded topic"
+	alternativeRequest.IdempotencyKey = "unselected-idem"
+	alternative := freewill.CandidateIntention{CandidateID: "unselected-candidate", Request: alternativeRequest, Score: 90,
+		ScoreRationale: "A scored alternative that has no owner approval."}
+	fingerprint, _ := freewillRequestFingerprint(request)
+	prior := freewillAdmissionRecord("freewill-prior-cycle", "agent", scope, freewill.StatePaused)
+	prior.Freewill.PauseReason = "execution_disabled"
+	prior.Freewill.ChoiceID = candidate.CandidateID
+	prior.Freewill.Candidates = []freewill.CandidateIntention{alternative, candidate}
+	prior.Freewill.ApprovalRef = "prior-approval"
+	prior.Freewill.ApprovalFingerprint = fingerprint
+	prior.Freewill.ApprovalReceipt = &FreewillApprovalReceipt{ApprovalID: prior.Freewill.ApprovalRef,
+		RequestFingerprint: fingerprint, Decision: FreewillApprovalGranted, ControlGeneration: 0}
+	if _, err := store.Create(ctx, prior, nil); err != nil {
+		t.Fatalf("persist granted predecessor: %v", err)
+	}
+	if err := store.EnsureFreewillActorAdmission(ctx, prior.State.RunID, "agent", scope); err != nil {
+		t.Fatalf("persist predecessor actor slot: %v", err)
+	}
+	closeStores()
+
+	events, err = event.NewSQLiteEventStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err = NewSQLiteDurableRunStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.November, 9, 12, 0, 0, 0, time.UTC)
+	runtime := newDurableRuntimeForTest(t, validDefinition(), &scriptedRunner{}, store, newMemoryRunClaimer(), events,
+		DurableRuntimeOptions{Clock: func() time.Time { return now }})
+	control, err := NewFreewillOperatorControl(store, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	selector := &resumeLineageSelector{}
+	service, err := NewFreewillWakeService(runtime, store, selector, FreewillWakeServiceConfig{
+		Enabled: true, SchedulingEnabled: true, AgentID: "agent", Scope: scope,
+		Objective: "Choose a safe bounded task.", Owner: "resume-lineage-test", LeaseFor: time.Minute,
+		OperatorControl: control,
+	}, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	cycle, err := service.HandleScheduledTick(ctx, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("process later scheduled tick: %v", err)
+	}
+	if len(selector.inputs) != 1 || len(selector.inputs[0].ResumeCandidates) != 1 ||
+		selector.inputs[0].ResumeCandidates[0].CandidateID != candidate.CandidateID {
+		t.Fatalf("selector did not receive only the verified predecessor choice: %#v", selector.inputs)
+	}
+	if cycle.Freewill.ResumeFromRunID != prior.State.RunID || cycle.Freewill.ApprovalRef != "" ||
+		cycle.Freewill.ApprovalReceipt != nil || cycle.Freewill.ApprovalGeneration != 0 || cycle.Freewill.ExecutionDispatch != nil {
+		t.Fatalf("new cycle lineage or authority = %#v", cycle.Freewill)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := events.Close(); err != nil {
+		t.Fatal(err)
+	}
+	events, err = event.NewSQLiteEventStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err = NewSQLiteDurableRunStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := store.Load(ctx, cycle.State.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Freewill.ResumeFromRunID != prior.State.RunID || persisted.Freewill.ApprovalRef != "" ||
+		persisted.Freewill.ApprovalReceipt != nil || persisted.Freewill.ExecutionDispatch != nil {
+		t.Fatalf("reopened new cycle lost lineage or gained predecessor authority: %#v", persisted.Freewill)
+	}
+	selected, ok := selectedFreewillCandidate(persisted.Freewill)
+	if !ok || selected.Request.Goal != request.Goal || selected.Request.RequestID != request.RequestID {
+		t.Fatalf("model-modified resume candidate replaced canonical predecessor request: %#v", selected)
+	}
+	statusReader, err := NewFreewillApprovalStatusReader(store, approval.NewStore(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := statusReader.Status(ctx, cycle.State.RunID)
+	if err != nil || status.ResumeFromRunID != prior.State.RunID || status.ApprovalID != "" || status.ChildRunID != "" {
+		t.Fatalf("reopened status lineage/authority = %#v err=%v", status, err)
+	}
+	committedEvents, err := events.Query(ctx, event.EventFilter{RunID: cycle.State.RunID, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundLineage := false
+	for _, current := range committedEvents {
+		if current.Type == event.EventFreewillSelectionCommitted && current.Payload["resume_from_run_id"] == prior.State.RunID {
+			foundLineage = true
+		}
+	}
+	if !foundLineage {
+		t.Fatal("selection-committed outbox event omitted host-authored resume lineage")
+	}
+}
+
+func TestFreewillPausedGrantedExecutionAdmissionFollowsDispatchTerminality(t *testing.T) {
+	scope := freewill.Scope{ProjectID: "p", Workspace: "w"}
+	request := freewill.IntentionRequest{RequestID: "request", AgentID: "agent", Origin: freewill.OriginAgent, CandidateSource: freewill.SourceNew, Title: "title", Goal: "goal", ReasonSummary: "reason", RequestedCapabilities: []string{"code"}, Scope: scope, IdempotencyKey: "idem", CorrelationID: "corr"}
+	candidate := freewill.CandidateIntention{CandidateID: "candidate", Request: request}
+	fingerprint, _ := freewillRequestFingerprint(request)
+	base := freewillAdmissionRecord("paused", "agent", scope, freewill.StatePaused)
+	base.Freewill.ChoiceID = candidate.CandidateID
+	base.Freewill.Candidates = []freewill.CandidateIntention{candidate}
+	base.Freewill.ApprovalRef = "approval"
+	base.Freewill.ApprovalFingerprint = fingerprint
+	base.Freewill.ApprovalGeneration = 1
+	base.Freewill.ApprovalReceipt = &FreewillApprovalReceipt{ApprovalID: "approval", RequestFingerprint: fingerprint,
+		Decision: FreewillApprovalGranted, ControlGeneration: 1}
+
+	for _, status := range []string{"dispatching", "accepted", "failed"} {
+		t.Run(status, func(t *testing.T) {
+			record := base
+			freewillState := *base.Freewill
+			record.Freewill = &freewillState
+			record.Freewill.ExecutionDispatch = &FreewillExecutionDispatch{Status: status}
+			if status == "accepted" {
+				record.Freewill.ExecutionDispatch.ChildRunID = "run_aaaaaaaaaaaaaaaaaaaa"
+				record.Freewill.ExecutionDispatch.ReportRef = "multiagent_report.json"
+			}
+			if status == "failed" {
+				record.Freewill.ExecutionDispatch.FailureCode = "workflow_start_failed"
+			}
+			if !freewillAdmissionActive(record) {
+				t.Fatalf("paused granted %s dispatch released actor admission before terminal projection", status)
+			}
+		})
+	}
+	for _, status := range []string{"completed", "execution_failed", "execution_cancelled"} {
+		t.Run(status, func(t *testing.T) {
+			record := base
+			freewillState := *base.Freewill
+			record.Freewill = &freewillState
+			record.Freewill.ExecutionDispatch = &FreewillExecutionDispatch{Status: status}
+			if freewillAdmissionActive(record) {
+				t.Fatalf("paused granted %s dispatch kept actor admission after terminal projection", status)
+			}
+		})
 	}
 }
 
@@ -277,6 +490,74 @@ func TestFreewillWakeAcceptanceRollsBackRunKeyAndOutboxOnAdmissionConflict(t *te
 	}
 }
 
+func TestFreewillAcceptedChildKeepsSQLiteAdmissionUntilTerminalProjection(t *testing.T) {
+	ctx := context.Background()
+	store := newSQLiteDurableStoreForTest(t)
+	scope := freewill.Scope{ProjectID: "p", Workspace: "w"}
+	now := time.Now().UTC()
+	request := freewill.IntentionRequest{RequestID: "approved-request", AgentID: "agent", Origin: freewill.OriginAgent,
+		CandidateSource: freewill.SourceNew, Title: "approved task", Goal: "continue accepted child", ReasonSummary: "bounded recovery fixture",
+		RequestedCapabilities: []string{"code"}, Scope: scope, IdempotencyKey: "approved-idem", CorrelationID: "approved-corr"}
+	candidate := freewill.CandidateIntention{CandidateID: "approved-candidate", Request: request}
+	fingerprint, _ := freewillRequestFingerprint(request)
+	parent := freewillAdmissionRecord("approved-parent", "agent", scope, freewill.StatePaused)
+	parent.Freewill.Candidates = []freewill.CandidateIntention{candidate}
+	parent.Freewill.ChoiceID = candidate.CandidateID
+	parent.Freewill.ApprovalRef = "approved-grant"
+	parent.Freewill.ApprovalFingerprint = fingerprint
+	parent.Freewill.ApprovalGeneration = 1
+	parent.Freewill.ApprovalReceipt = &FreewillApprovalReceipt{ApprovalID: "approved-grant", RequestFingerprint: fingerprint,
+		Decision: FreewillApprovalGranted, ControlGeneration: 1}
+	parent.Freewill.ExecutionDispatch = &FreewillExecutionDispatch{Status: "accepted", ChildRunID: "run_aaaaaaaaaaaaaaaaaaaa",
+		ReportRef: "multiagent_report.json", UpdatedAt: now}
+	if err := parent.Validate(nil); err != nil {
+		t.Fatalf("accepted parent fixture is invalid: %v", err)
+	}
+	if _, err := store.Create(ctx, parent, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureFreewillActorAdmission(ctx, parent.State.RunID, "agent", scope); err != nil {
+		t.Fatal(err)
+	}
+
+	wake, wakeRecord := freewillWakeAcceptanceFixture("next-wake", "agent", scope, "next-wake-dedupe")
+	if _, _, err := store.AcceptFreewillWake(ctx, wakeRecord, nil, wake); !errors.Is(err, ErrFreewillActorAdmissionConflict) {
+		t.Fatalf("accepted child did not block next scheduled wake: %v", err)
+	}
+	if _, err := store.Load(ctx, wake.RunID); !errors.Is(err, ErrRunNotFound) {
+		t.Fatalf("blocked wake left a run behind: %v", err)
+	}
+	var keys, outbox int
+	if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM multiagent_acceptance_keys WHERE run_id = ?", wake.RunID).Scan(&keys); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM multiagent_outbox WHERE run_id = ?", wake.RunID).Scan(&outbox); err != nil {
+		t.Fatal(err)
+	}
+	if keys != 0 || outbox != 0 {
+		t.Fatalf("blocked wake left key/outbox rows: %d/%d", keys, outbox)
+	}
+
+	terminal, err := store.Load(ctx, parent.State.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal.Freewill.ExecutionDispatch = &FreewillExecutionDispatch{Status: "completed", ChildRunID: parent.Freewill.ExecutionDispatch.ChildRunID,
+		ReportRef: "multiagent_report.json", ChildStatus: string(RunStatusCompleted), ValidationSummary: "passed",
+		ReportSHA256: strings.Repeat("a", 64), UpdatedAt: now}
+	terminal.State.UpdatedAt = now.Add(time.Second)
+	if err := terminal.Validate(nil); err != nil {
+		t.Fatalf("terminal parent fixture is invalid: %v", err)
+	}
+	if _, err := store.Checkpoint(ctx, terminal.Revision, terminal, nil); err != nil {
+		t.Fatalf("persist terminal child projection: %v", err)
+	}
+	accepted, created, err := store.AcceptFreewillWake(ctx, wakeRecord, nil, wake)
+	if err != nil || !created || accepted.State.RunID != wake.RunID {
+		t.Fatalf("wake after terminal projection = run %q created=%t err=%v", accepted.State.RunID, created, err)
+	}
+}
+
 func TestFreewillWakeAcceptanceIsAtomicAndIdempotent(t *testing.T) {
 	ctx := context.Background()
 	store := newSQLiteDurableStoreForTest(t)
@@ -448,12 +729,10 @@ func TestFreewillChoiceReasonPersistsWithDecisionOnlyReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scored := "IDEA: Map dependencies\nSCORE: 72\nFACTORS: scope_fit\nRATIONALE: This maps direct dependencies and identifies risky coupling for review.\n" +
-		"IDEA: Document service boundaries\nSCORE: 88\nFACTORS: impact\nRATIONALE: Clear ownership notes help contributors route future work.\n" +
-		"IDEA: Review test coverage gaps\nSCORE: 61\nFACTORS: feasibility\nRATIONALE: A focused gap list guides later tests while keeping review scoped."
+	scored := `{"candidates":[{"idea":"Map dependencies","score":72,"factors":["scope_fit"],"rationale":"This maps direct dependencies and identifies risky coupling that merits focused future review."},{"idea":"Document service boundaries","score":88,"factors":["impact"],"rationale":"Clear ownership notes help contributors route future work and avoid accidental cross-domain changes."},{"idea":"Review test coverage gaps","score":61,"factors":["feasibility"],"rationale":"A focused gap list can guide later tests while keeping the review read only and within scope."}],"sleep":false}`
 	chat := &scoredFreewillChatStub{responses: []provider.ChatGenerateResponse{
 		{Content: scored, Provider: "ollama", Model: "glm-5.3-flash:cloud", PromptTokens: 11, OutputTokens: 7},
-		{Content: "choice: candidate-freewill-choice-reason-1\nreason: Write a README to explain the service boundaries.", Provider: "ollama", Model: "glm-5.3-flash:cloud", PromptTokens: 5, OutputTokens: 3},
+		{Content: `{"choice_id":"candidate-freewill-choice-reason-1","reason":"Write a README to explain the service boundaries."}`, Provider: "ollama", Model: "glm-5.3-flash:cloud", PromptTokens: 5, OutputTokens: 3},
 	}}
 	selector := ChatFreewillSelector{Provider: chat, AgentID: "agent", Model: "glm-5.3-flash:cloud"}
 	service, err := NewFreewillWakeService(runtime, env.store, selector, FreewillWakeServiceConfig{Enabled: true, SchedulingEnabled: true, AgentID: "agent", Scope: scope, Objective: "Choose a useful read-only follow-up.", Owner: "choice-reason-test", LeaseFor: time.Minute, OperatorControl: control}, clock)
@@ -781,13 +1060,13 @@ func (s *liveFreewillPhaseTwoChat) ChatGenerate(ctx context.Context, req provide
 		return provider.ChatGenerateResponse{}, errors.New("unexpected empty Freewill request")
 	}
 	switch req.Messages[0].Content {
-	case freewillIdeaSystemPrompt:
+	case freewillFlashIdeaSystemPrompt:
 		s.ideaCalls++
 		if s.ideaCalls != 1 || len(req.Tools) != 0 {
 			return provider.ChatGenerateResponse{}, errors.New("unexpected phase-one request")
 		}
 		return s.ideaResponse, nil
-	case freewillChoiceSystemPrompt:
+	case freewillFlashChoiceSystemPrompt:
 		s.choiceCalls++
 		if s.choiceCalls != 1 || len(req.Tools) != 0 {
 			return provider.ChatGenerateResponse{}, errors.New("unexpected phase-two request")
@@ -817,9 +1096,7 @@ func TestFreewillChoiceReasonPersistsWithLiveGLMPhaseTwo(t *testing.T) {
 	const model = "glm-5.3-flash:cloud"
 	const objective = "Choose the most useful small read-only documentation follow-up."
 	const runID = "freewill-live-phase2-conformance"
-	scored := "IDEA: Map dependency ownership\nSCORE: 72\nFACTORS: scope_fit\nRATIONALE: This maps dependencies and identifies risky coupling for future review.\n" +
-		"IDEA: Document service boundaries\nSCORE: 88\nFACTORS: impact\nRATIONALE: Clear ownership notes help contributors route future work.\n" +
-		"IDEA: Review coverage gaps\nSCORE: 61\nFACTORS: feasibility\nRATIONALE: A focused gap list guides later tests while keeping review scoped."
+	scored := `{"candidates":[{"idea":"Map dependency ownership","score":72,"factors":["scope_fit"],"rationale":"This maps dependencies and identifies risky coupling that merits focused future review."},{"idea":"Document service boundaries","score":88,"factors":["impact"],"rationale":"Clear ownership notes help contributors route future work and avoid accidental cross-domain changes."},{"idea":"Review coverage gaps","score":61,"factors":["feasibility"],"rationale":"A focused gap list can guide later tests while keeping the review read only and within scope."}],"sleep":false}`
 	chat := &liveFreewillPhaseTwoChat{phaseTwo: ollama.NewChatProvider("http://127.0.0.1:11434"),
 		ideaResponse: provider.ChatGenerateResponse{Content: scored, Provider: "ollama", Model: model, PromptTokens: 11, OutputTokens: 7}}
 	env := newDurableTestEnvironment(t)
@@ -850,7 +1127,7 @@ func TestFreewillChoiceReasonPersistsWithLiveGLMPhaseTwo(t *testing.T) {
 		t.Fatalf("expected one scripted phase one and one live phase two; got %d and %d", chat.ideaCalls, chat.choiceCalls)
 	}
 	req := chat.choiceRequest
-	if req.Model != model || req.MaxTokens != freewillChoiceMaxOutputTokens || len(req.Tools) != 0 || len(req.Messages) != 2 {
+	if req.Model != model || req.MaxTokens != freewillChoiceMaxOutputTokens || len(req.Tools) != 0 || len(req.Messages) != 2 || req.OutputSchema == nil {
 		t.Fatal("phase-two request violated model, output-cap, or no-tools bounds")
 	}
 	var input map[string]any
@@ -875,7 +1152,8 @@ func TestFreewillChoiceReasonPersistsWithLiveGLMPhaseTwo(t *testing.T) {
 		id, idOK := candidate["id"].(string)
 		title, titleOK := candidate["title"].(string)
 		score, scoreOK := candidate["score"].(float64)
-		if !idOK || !titleOK || !scoreOK || id != fmt.Sprintf("candidate-%s-%d", runID, i+1) || title != titles[i] || score != scores[i] {
+		factors, factorsOK := candidate["factors"].([]any)
+		if !idOK || !titleOK || !scoreOK || !factorsOK || len(factors) == 0 || id != fmt.Sprintf("candidate-%s-%d", runID, i+1) || title != titles[i] || score != scores[i] {
 			t.Fatal("phase-two request changed a synthetic candidate or advisory score")
 		}
 		allowed[id] = struct{}{}

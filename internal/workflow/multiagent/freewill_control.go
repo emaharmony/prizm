@@ -22,6 +22,8 @@ type FreewillOperatorControl struct {
 	mu               sync.Mutex
 	activeSelections map[string]map[uint64]context.CancelFunc
 	nextSelectionID  uint64
+	activeExecutions map[string]map[uint64]context.CancelFunc
+	nextExecutionID  uint64
 }
 
 func NewFreewillOperatorControl(store DurableRunStore, clock func() time.Time) (*FreewillOperatorControl, error) {
@@ -32,7 +34,8 @@ func NewFreewillOperatorControl(store DurableRunStore, clock func() time.Time) (
 	if clock == nil {
 		clock = time.Now
 	}
-	return &FreewillOperatorControl{store: control, clock: clock, activeSelections: make(map[string]map[uint64]context.CancelFunc)}, nil
+	return &FreewillOperatorControl{store: control, clock: clock, activeSelections: make(map[string]map[uint64]context.CancelFunc),
+		activeExecutions: make(map[string]map[uint64]context.CancelFunc)}, nil
 }
 
 func (c *FreewillOperatorControl) Status(ctx context.Context, agentID string, scope freewill.Scope) (FreewillOperatorControlState, error) {
@@ -56,8 +59,56 @@ func (c *FreewillOperatorControl) SetHalted(ctx context.Context, agentID string,
 	}
 	if halted {
 		c.cancelActiveSelections(agentID, scope)
+		c.cancelActiveExecutions(agentID, scope)
 	}
 	return state, nil
+}
+
+// RegisterActiveExecution binds a running child to the parent's current
+// approval generation. Halt invokes cancel after the durable control state has
+// been written; the post-registration read rejects stale generations and
+// closes the race where halt commits immediately before registration.
+func (c *FreewillOperatorControl) RegisterActiveExecution(agentID string, scope freewill.Scope, generation uint64, cancel context.CancelFunc) (func(), error) {
+	if c == nil || cancel == nil {
+		return nil, ErrFreewillControlUnavailable
+	}
+	if err := validateFreewillControlIdentity(agentID, scope); err != nil {
+		return nil, err
+	}
+	key := freewillOperatorControlKey(agentID, scope)
+	c.mu.Lock()
+	c.nextExecutionID++
+	id := c.nextExecutionID
+	if c.activeExecutions[key] == nil {
+		c.activeExecutions[key] = make(map[uint64]context.CancelFunc)
+	}
+	c.activeExecutions[key][id] = cancel
+	c.mu.Unlock()
+	var once sync.Once
+	unregister := func() {
+		once.Do(func() {
+			c.mu.Lock()
+			delete(c.activeExecutions[key], id)
+			if len(c.activeExecutions[key]) == 0 {
+				delete(c.activeExecutions, key)
+			}
+			c.mu.Unlock()
+		})
+	}
+	state, err := c.store.LoadFreewillOperatorControl(context.Background(), agentID, scope)
+	if err != nil {
+		unregister()
+		return nil, err
+	}
+	if state.Halted || state.Generation != generation {
+		cancel()
+		unregister()
+		if state.Halted {
+			return nil, ErrFreewillHalted
+		}
+		return nil, ErrFreewillApprovalRevoked
+	}
+	return unregister, nil
 }
 
 // RegisterActiveSelection lets an authenticated in-process halt cancel a
@@ -97,6 +148,19 @@ func (c *FreewillOperatorControl) cancelActiveSelections(agentID string, scope f
 	c.mu.Lock()
 	cancels := make([]context.CancelFunc, 0, len(c.activeSelections[key]))
 	for _, cancel := range c.activeSelections[key] {
+		cancels = append(cancels, cancel)
+	}
+	c.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+}
+
+func (c *FreewillOperatorControl) cancelActiveExecutions(agentID string, scope freewill.Scope) {
+	key := freewillOperatorControlKey(agentID, scope)
+	c.mu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(c.activeExecutions[key]))
+	for _, cancel := range c.activeExecutions[key] {
 		cancels = append(cancels, cancel)
 	}
 	c.mu.Unlock()

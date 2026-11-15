@@ -16,7 +16,7 @@
     <div>
       <p class="eyebrow">Freewill decision loop</p>
       <h1 class="page-title">Freewill proposals</h1>
-      <p class="page-sub">Autonomous intention proposals awaiting operator decisions. Grants and denials are recorded with your actor name; decision-only mode never executes an intention.</p>
+      <p class="page-sub">Execution stays off by default. When bounded execution is enabled, approving an intention admits its child; a proposed patch still needs a separate review below.</p>
     </div>
     <button class="btn secondary" id="refresh" type="button">Refresh</button>
   </header>
@@ -25,10 +25,26 @@
 
   <section aria-labelledby="pending-heading">
     <div class="section-heading">
-      <div><h2 id="pending-heading" class="section-title">Awaiting decision</h2><p class="section-copy">Approve or deny each intention. A grant pauses the run (execution stays disabled); a denial closes it.</p></div>
+      <div><h2 id="pending-heading" class="section-title">Intention approval</h2><p class="section-copy">Grant or deny the parent intention. A grant records parent approval; if bounded execution is enabled, its child may start. Any child patch requires a separate grant.</p></div>
       <span id="pending-count" class="meta" aria-live="polite"></span>
     </div>
     <div id="pending" class="loading-state" aria-live="polite" aria-busy="true">Checking for pending proposals…</div>
+  </section>
+
+  <section aria-labelledby="child-patches-heading" style="margin-top: var(--space-5);">
+    <div class="section-heading">
+      <div><h2 id="child-patches-heading" class="section-title">Child patch approval</h2><p class="section-copy">Only pending patches from accepted parent intentions with a paused child are listed. Review the exact diff, target, digest, and host binding before granting or denying the patch.</p></div>
+      <span id="child-patch-count" class="meta" aria-live="polite"></span>
+    </div>
+    <div id="child-patches" class="loading-state" aria-live="polite" aria-busy="true">Checking accepted paused children…</div>
+  </section>
+
+  <section aria-labelledby="execution-outcomes-heading" style="margin-top: var(--space-5);">
+    <div class="section-heading">
+      <div><h2 id="execution-outcomes-heading" class="section-title">Execution outcomes</h2><p class="section-copy">Completed and failed child runs, denied intention decisions, and selector retries retain their status, validation result, and report digest. Load a terminal child report to review changed files and validation details.</p></div>
+      <span id="execution-outcome-count" class="meta" aria-live="polite"></span>
+    </div>
+    <div id="execution-outcomes" class="loading-state" aria-live="polite" aria-busy="true">Checking terminal Freewill outcomes…</div>
   </section>
 
   <section aria-labelledby="settings-heading" style="margin-top: var(--space-5);">
@@ -142,6 +158,7 @@
     </article>`;
   }
 
+  let childApprovalGeneration = 0;
   function renderRuns(runs) {
     const pendingList = $('#pending');
     const recentList = $('#recent');
@@ -154,10 +171,164 @@
     if (!recent.length) {
       pendingList.innerHTML = '<p class="section-copy">No Freewill runs recorded yet.</p>';
       recentList.innerHTML = '';
+      renderChildApprovals([]);
+      renderExecutionOutcomes([]);
       return;
     }
     pendingList.innerHTML = pending.length ? pending.map(runCard).join('') : '<p class="section-copy">Nothing awaiting a decision. Next wake arrives on the scheduled tick.</p>';
     recentList.innerHTML = recent.map(runCard).join('');
+    renderChildApprovals(runs);
+    renderExecutionOutcomes(runs);
+  }
+
+  function executionOutcomeCard(status) {
+    const executionStatus = status.execution_status || 'not dispatched';
+    const retryCount = Number(status.selection_recoveries || 0);
+    const retry = retryCount
+      ? `<p class="hint">Selector retries: ${retryCount}${status.selection_failure_class ? ` · ${ui.escape(status.selection_failure_class)}` : ''}${status.selection_failure_code ? ` · ${ui.escape(status.selection_failure_code)}` : ''}${status.selection_next_at ? ` · next ${ui.escape(ui.formatTime(status.selection_next_at))}` : ''}</p>`
+      : '';
+    const reportAvailable = status.child_run_id && status.execution_report_ref === 'multiagent_report.json';
+    const reportControl = reportAvailable
+      ? `<button class="btn small secondary" data-freewill-report="true" data-child="${ui.escape(status.child_run_id)}" type="button">Load child report</button><div data-freewill-report-body="true" aria-live="polite"></div>`
+      : '<p class="hint">No terminal child report is available.</p>';
+    return `<article class="card" style="margin-bottom: var(--space-3);">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; gap:var(--space-2); flex-wrap:wrap;">
+        <span>${ui.badge(executionStatus)}</span><span class="meta mono">${ui.escape(status.run_id || '')}</span>
+      </div>
+      <p class="section-copy">${ui.escape((status.selected && status.selected.title) || status.reason_summary || 'Freewill outcome')}</p>
+      <p class="hint">Intention: ${ui.escape(status.approval_status || status.lifecycle || 'unknown')} · child ${ui.escape(status.child_status || 'not started')}${status.child_run_id ? ` · ${ui.escape(status.child_run_id)}` : ''}</p>
+      <p class="hint">Validation: ${ui.escape(status.validation_summary || 'not reported')}${status.execution_failure_code ? ` · failure: ${ui.escape(status.execution_failure_code)}` : ''}${status.pause_reason ? ` · ${ui.escape(status.pause_reason)}` : ''}</p>
+      <p class="hint">Report: ${ui.escape(status.execution_report_ref || '—')} · SHA-256 ${ui.escape(status.execution_report_sha256 || 'not available')}</p>
+      ${retry}
+      ${reportControl}
+    </article>`;
+  }
+
+  function executionReportDetails(report) {
+    const artifacts = Array.isArray(report && report.artifacts) ? report.artifacts : [];
+    const files = artifacts.map(item => item && item.uri).filter(value => typeof value === 'string' && value.trim());
+    const tests = Array.isArray(report && report.tests_executed) ? report.tests_executed : [];
+    return `<p><strong>Child outcome:</strong> ${ui.escape((report && report.final_status) || 'not reported')}</p>
+      <p><strong>Changed files:</strong> ${files.length ? files.map(value => ui.escape(value)).join(', ') : 'none reported'}</p>
+      <p><strong>Validation checks:</strong> ${tests.length ? tests.map(value => ui.escape(value)).join(', ') : 'none listed'}</p>
+      <details><summary>Full terminal report</summary><pre class="mono" style="white-space:pre-wrap; overflow-wrap:anywhere; max-height:32rem; overflow:auto;">${ui.escape(JSON.stringify(report, null, 2))}</pre></details>`;
+  }
+
+  function renderExecutionOutcomes(runs) {
+    const target = $('#execution-outcomes');
+    const count = $('#execution-outcome-count');
+    const notable = runs.filter(run => {
+      const terminal = ['completed', 'failed', 'cancelled', 'denied'].includes(run.execution_status);
+      const denied = run.approval_status === 'denied' || run.lifecycle === 'denied';
+      const retrying = Number(run.selection_recoveries || 0) > 0;
+      return terminal || denied || retrying;
+    }).slice(0, 25);
+    target.classList.remove('loading-state');
+    count.textContent = `${notable.length} outcome${notable.length === 1 ? '' : 's'}`;
+    target.innerHTML = notable.length
+      ? notable.map(executionOutcomeCard).join('')
+      : '<p class="section-copy">No completed, failed, denied, or retrying outcomes yet.</p>';
+  }
+
+  async function loadExecutionReport(button) {
+    const childRunID = button.dataset.child;
+    const card = button.closest('article');
+    const body = card && card.querySelector('[data-freewill-report-body]');
+    if (!childRunID || !body) return;
+    button.disabled = true;
+    button.textContent = 'Loading report…';
+    try {
+      const report = await ui.request(`/multiagent/runs/${encodeURIComponent(childRunID)}/report`);
+      body.innerHTML = executionReportDetails(report);
+      button.textContent = 'Reload child report';
+    } catch (_) {
+      body.innerHTML = '<p class="banner banner-warn" role="status">Child report is unavailable. Refresh and retry later.</p>';
+      button.textContent = 'Retry child report';
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function childApprovalCard(parent, approval) {
+    const binding = approval.sandbox_binding || {};
+    const plan = approval.patch_plan || {};
+    const paths = Array.isArray(plan.paths) ? plan.paths : [];
+    const identity = [
+      ['Task', binding.task_id], ['Execution key', binding.execution_key], ['Agent', binding.agent_id],
+      ['Workspace ID', binding.workspace_id], ['Workspace path', binding.workspace_path],
+      ['Base SHA', binding.base_sha], ['Base tree', binding.base_tree],
+      ['Planning base SHA', plan.base_sha], ['Planning base tree', plan.base_tree], ['Expected tree', plan.expected_tree]
+    ].map(([label, value]) => `<div><dt class="hint">${ui.escape(label)}</dt><dd class="mono" style="margin:0; overflow-wrap:anywhere;">${ui.escape(value || '—')}</dd></div>`).join('');
+    return `<article class="card" style="margin-bottom: var(--space-3);">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; gap:var(--space-2); flex-wrap:wrap;">
+        <div>${ui.badge(approval.status || 'unknown')} <span class="hint">separate child patch grant</span></div>
+        <span class="meta mono">parent ${ui.escape(parent.run_id || '')} · child ${ui.escape(approval.child_run_id || parent.child_run_id || '')}</span>
+      </div>
+      <p class="hint">Approval ${ui.escape(approval.approval_id || '')} · proposal ${ui.escape(approval.proposal_id || '')} · requested by ${ui.escape(approval.requested_by || '—')}</p>
+      <p><strong>Target:</strong> <span class="mono">${ui.escape(paths.join(', ') || approval.target_path || '—')}</span></p>
+      <p class="hint">Artifact digest (SHA-256): <span class="mono">${ui.escape(binding.artifact_digest || '—')}</span><br>Patch digest (SHA-256): <span class="mono">${ui.escape(plan.patch_sha256 || '—')}</span></p>
+      <details open><summary>Exact proposed diff</summary><pre class="mono" style="white-space:pre-wrap; overflow-wrap:anywhere; max-height:32rem; overflow:auto;">${ui.escape(approval.patch || '')}</pre></details>
+      <details><summary>Parent, child, and sandbox binding</summary><dl class="grid-2" style="margin-top:var(--space-2);">${identity}</dl></details>
+      <div class="actions-row">
+        <button class="btn small" data-child-decision="grant" data-parent="${ui.escape(parent.run_id || '')}" data-child="${ui.escape(approval.child_run_id || parent.child_run_id || '')}" data-approval="${ui.escape(approval.approval_id || '')}" type="button">Grant patch</button>
+        <button class="btn small danger" data-child-decision="deny" data-parent="${ui.escape(parent.run_id || '')}" data-child="${ui.escape(approval.child_run_id || parent.child_run_id || '')}" data-approval="${ui.escape(approval.approval_id || '')}" type="button">Deny patch</button>
+      </div>
+    </article>`;
+  }
+
+  async function renderChildApprovals(runs) {
+    const generation = ++childApprovalGeneration;
+    const target = $('#child-patches');
+    const count = $('#child-patch-count');
+    const eligible = runs.filter(run => run.execution_status === 'accepted' && run.child_run_id && run.child_status === 'paused');
+    count.textContent = eligible.length ? `${eligible.length} accepted child${eligible.length === 1 ? '' : 'ren'} paused` : '0 paused children';
+    target.classList.remove('loading-state');
+    if (!eligible.length) {
+      target.innerHTML = '<p class="section-copy">No accepted child is paused for patch review.</p>';
+      return;
+    }
+    target.classList.add('loading-state');
+    target.textContent = 'Loading pending child patches…';
+    const results = await Promise.allSettled(eligible.map(async parent => {
+      const path = `/freewill/runs/${encodeURIComponent(parent.run_id)}/children/${encodeURIComponent(parent.child_run_id)}/approvals`;
+      const payload = await ui.request(path);
+      return { parent, approvals: Array.isArray(payload && payload.approvals) ? payload.approvals : [] };
+    }));
+    if (generation !== childApprovalGeneration) return;
+    const failed = results.filter(result => result.status === 'rejected');
+    const cards = results.filter(result => result.status === 'fulfilled')
+      .flatMap(result => result.value.approvals.filter(item => item.status === 'pending').map(item => childApprovalCard(result.value.parent, item)));
+    target.classList.remove('loading-state');
+    if (failed.length) {
+      target.innerHTML = `<div class="banner banner-warn" role="status">Could not verify patch review for ${failed.length} paused child${failed.length === 1 ? '' : 'ren'}. Refresh to retry; no patch decision was made.</div>` + cards.join('');
+      return;
+    }
+    target.innerHTML = cards.length ? cards.join('') : '<p class="section-copy">No pending patch approvals for accepted paused children.</p>';
+    count.textContent = `${cards.length} pending patch${cards.length === 1 ? '' : 'es'}`;
+  }
+
+  async function decideChild(button) {
+    const parent = button.dataset.parent;
+    const child = button.dataset.child;
+    const approval = button.dataset.approval;
+    const decision = button.dataset.childDecision;
+    const actor = window.prompt('Patch decision actor (recorded with the receipt):', 'rhem');
+    if (actor === null) return;
+    if (!actor.trim()) { banner('An actor name is required for the patch decision.', 'err'); return; }
+    const reason = window.prompt(`Reason for ${decision === 'grant' ? 'granting' : 'denying'} this patch:`, '');
+    if (reason === null) return;
+    if (!reason.trim()) { banner('A reason is required for the patch decision.', 'err'); return; }
+    button.disabled = true;
+    banner('');
+    try {
+      const path = `/freewill/runs/${encodeURIComponent(parent)}/children/${encodeURIComponent(child)}/approvals/${encodeURIComponent(approval)}/decision?by=${encodeURIComponent(actor.trim())}`;
+      await ui.request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, reason: reason.trim() }) });
+      banner(`Child patch decision recorded: ${decision} for ${child}`, 'ok');
+      await load({ quiet: true });
+    } catch (err) {
+      banner(`Child patch decision failed: ${err.message}`, 'err');
+      button.disabled = false;
+    }
   }
 
   async function decide(button) {
@@ -212,6 +383,12 @@
     recentList.classList.remove('loading-state');
     pendingList.innerHTML = '<p class="section-copy">Freewill history is unavailable.</p>';
     recentList.innerHTML = `<div class="banner banner-err" role="alert">${ui.escape(message)}</div>`;
+    $('#child-patches').classList.remove('loading-state');
+    $('#child-patches').innerHTML = '<p class="section-copy">Freewill history is unavailable.</p>';
+    $('#child-patch-count').textContent = 'unavailable';
+    $('#execution-outcomes').classList.remove('loading-state');
+    $('#execution-outcomes').innerHTML = '<p class="section-copy">Freewill history is unavailable.</p>';
+    $('#execution-outcome-count').textContent = 'unavailable';
   }
 
   // --- Settings (approval-gated) ---
@@ -364,6 +541,10 @@
   document.addEventListener('click', event => {
     const button = event.target.closest('[data-decision]');
     if (button && !button.disabled) decide(button);
+    const childButton = event.target.closest('[data-child-decision]');
+    if (childButton && !childButton.disabled) decideChild(childButton);
+    const reportButton = event.target.closest('[data-freewill-report]');
+    if (reportButton && !reportButton.disabled) loadExecutionReport(reportButton);
   });
   $('#refresh').addEventListener('click', () => load());
   load();

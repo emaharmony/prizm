@@ -15,6 +15,7 @@ import (
 	"github.com/emaharmony/prizm/internal/orchestrator"
 	"github.com/emaharmony/prizm/internal/provider"
 	"github.com/emaharmony/prizm/internal/safety"
+	"github.com/emaharmony/prizm/internal/sandbox"
 	"github.com/emaharmony/prizm/internal/subagent"
 	"github.com/emaharmony/prizm/internal/tool"
 	v2 "github.com/emaharmony/prizm/internal/workflow/v2"
@@ -81,6 +82,7 @@ type subAgentBackend struct {
 	toolEventSinkFactory subagent.ToolEventSinkFactory
 	sandboxMode          bool
 	sandboxApprovalMode  bool
+	sandboxConfig        *sandbox.Config
 }
 
 // SetToolEventSinkFactory wires a durable per-task event sink into this worker

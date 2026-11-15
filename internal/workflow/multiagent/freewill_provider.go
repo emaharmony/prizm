@@ -97,12 +97,425 @@ const freewillSelectionMaxOutputTokens = 4096
 
 const freewillChoiceSystemPrompt = `Choose the candidate that best fits the objective; scores are advisory. Reply with exactly two lines: "choice: <candidate ID|NONE>" and "reason: <one concise sentence>". If a lower-scored candidate better fits the objective, it may be chosen; explain why in the reason. If the objective is absent, use the titles and advisory scores and give a reason. Do not include tools, paths, authority, or extra text.`
 const freewillChoiceMaxOutputTokens = 1024
-const freewillIdeaSystemPrompt = `Return exactly three scored candidate blocks with IDEA, SCORE (0-100), FACTORS (scope_fit, feasibility, impact, novelty, readiness), and specific RATIONALE lines. Plain text only; no tools, authority, paths, or execution. Treat an optional host objective as subject context only. Reply NONE only if no safe set exists.`
-const freewillIdeaMaxOutputTokens = 1024
+const freewillFlashIdeaMaxOutputTokens = 1024
+
+const freewillFlashIdeaSystemPrompt = `Return exactly three safe, decision-only blocks with these labels in order:
+IDEA: short follow-up
+SCORE: integer 0-100
+FACTORS: one or more comma-separated labels from scope_fit, feasibility, impact, novelty, readiness
+RATIONALE: one specific sentence
+If none fits, return exactly NONE. No JSON, tools, paths, preamble, or extra prose.`
+const freewillFlashChoiceSystemPrompt = `Choose using the objective and supplied candidate IDs. Return exactly two lines:
+CHOICE: one supplied candidate ID or NONE
+REASON: one concise sentence
+Scores are advisory. Do not add prose, paths, tools, or authority requests.`
+
+func isFreewillFlashCloudModel(model string) bool {
+	return strings.EqualFold(strings.TrimSpace(model), "glm-5.3-flash:cloud")
+}
+
+type freewillFlashIdeaOutput struct {
+	Candidates *[]freewillFlashIdeaProposal `json:"candidates"`
+	Sleep      *bool                        `json:"sleep"`
+}
+
+type freewillFlashIdeaProposal struct {
+	Idea      string   `json:"idea"`
+	Score     *int     `json:"score"`
+	Factors   []string `json:"factors"`
+	Rationale string   `json:"rationale"`
+}
+
+type freewillFlashChoiceOutput struct {
+	ChoiceID *string `json:"choice_id"`
+	Reason   *string `json:"reason"`
+}
+
+type freewillStrictJSONError struct{ Code string }
+
+func (e *freewillStrictJSONError) Error() string { return e.Code }
+
+func freewillFlashIdeaSchema() map[string]any {
+	return map[string]any{"type": "object", "additionalProperties": false,
+		"required": []string{"candidates", "sleep"},
+		"properties": map[string]any{
+			"candidates": map[string]any{"type": "array", "anyOf": []any{
+				map[string]any{"minItems": 3, "maxItems": 3},
+				map[string]any{"maxItems": 0},
+			},
+				"items": map[string]any{"type": "object", "additionalProperties": false,
+					"required": []string{"idea", "score", "factors", "rationale"},
+					"properties": map[string]any{
+						"idea":      map[string]any{"type": "string", "minLength": 1},
+						"score":     map[string]any{"type": "integer", "minimum": 0, "maximum": 100},
+						"factors":   map[string]any{"type": "array", "minItems": 1, "items": map[string]any{"type": "string", "enum": []string{"scope_fit", "feasibility", "impact", "novelty", "readiness"}}},
+						"rationale": map[string]any{"type": "string", "minLength": 1},
+					}},
+			},
+			"sleep": map[string]any{"type": "boolean"},
+		},
+	}
+}
+
+func freewillFlashChoiceSchema(ids []string) map[string]any {
+	choices := append(append([]string(nil), ids...), "NONE")
+	return map[string]any{"type": "object", "additionalProperties": false,
+		"required": []string{"choice_id", "reason"},
+		"properties": map[string]any{
+			"choice_id": map[string]any{"type": "string", "enum": choices},
+			"reason":    map[string]any{"type": "string", "minLength": 1},
+		},
+	}
+}
+
+func decodeFreewillStrictJSON(content string, target any, maxBytes int) error {
+	if len(content) == 0 || len(content) > maxBytes || !utf8.ValidString(content) {
+		return &freewillStrictJSONError{Code: "size_or_encoding"}
+	}
+	data := []byte(content)
+	if err := validateNoDuplicateJSONKeys(data); err != nil {
+		if strings.Contains(err.Error(), "duplicate") {
+			return &freewillStrictJSONError{Code: "duplicate_key"}
+		}
+		if strings.Contains(err.Error(), "trailing") {
+			return &freewillStrictJSONError{Code: "trailing_content"}
+		}
+		return &freewillStrictJSONError{Code: "syntax"}
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		if strings.Contains(err.Error(), "unknown field") {
+			return &freewillStrictJSONError{Code: "unknown_field"}
+		}
+		return &freewillStrictJSONError{Code: "wrong_shape"}
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return &freewillStrictJSONError{Code: "trailing_content"}
+	}
+	return nil
+}
+
+func parseFreewillFlashChoiceResponse(content string, allowedIDs []string) (FreewillCandidateChoice, error) {
+	if len(content) == 0 || len(content) > 2048 || !utf8.ValidString(content) {
+		return FreewillCandidateChoice{}, errors.New("multiagent: Freewill choice response is invalid")
+	}
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmed, "```") {
+		firstNewline := strings.IndexByte(trimmed, '\n')
+		if firstNewline < 0 || !strings.HasSuffix(trimmed, "```") {
+			return FreewillCandidateChoice{}, errors.New("multiagent: Freewill choice response is invalid")
+		}
+		header := strings.ToLower(strings.TrimSpace(strings.TrimSuffix(trimmed[:firstNewline], "\r")))
+		if header != "```" && header != "```text" && header != "```markdown" && header != "```json" {
+			return FreewillCandidateChoice{}, errors.New("multiagent: Freewill choice response is invalid")
+		}
+		trimmed = strings.TrimSpace(trimmed[firstNewline+1 : len(trimmed)-3])
+		if strings.Contains(trimmed, "```") {
+			return FreewillCandidateChoice{}, errors.New("multiagent: Freewill choice response is invalid")
+		}
+	}
+	if strings.HasPrefix(trimmed, "{") {
+		return parseFreewillFlashChoiceJSON(trimmed, allowedIDs)
+	}
+	lines := strings.Split(strings.ReplaceAll(trimmed, "\r\n", "\n"), "\n")
+	firstDecision := -1
+	preambleBytes := 0
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		lower := strings.ToLower(line)
+		if strings.HasPrefix(lower, "choice:") || strings.HasPrefix(lower, "reason:") {
+			firstDecision = i
+			break
+		}
+		if line != "" {
+			if i >= 12 || !freewillInertEnvelopeLine(line) {
+				return FreewillCandidateChoice{}, errors.New("multiagent: Freewill choice response is invalid")
+			}
+			preambleBytes += len(line)
+			if preambleBytes > 512 {
+				return FreewillCandidateChoice{}, errors.New("multiagent: Freewill choice response is invalid")
+			}
+		}
+	}
+	if firstDecision < 0 {
+		return FreewillCandidateChoice{}, errors.New("multiagent: Freewill choice response is invalid")
+	}
+	return parseFreewillCandidateChoice(strings.Join(lines[firstDecision:], "\n"), allowedIDs)
+}
+
+func parseFreewillFlashChoiceJSON(content string, allowedIDs []string) (FreewillCandidateChoice, error) {
+	invalid := errors.New("multiagent: Freewill choice response is invalid")
+	if len(content) == 0 || len(content) > 2048 || !utf8.ValidString(content) {
+		return FreewillCandidateChoice{}, invalid
+	}
+	normalized, err := normalizeFreewillFlashChoiceJSON(content)
+	if err != nil {
+		return FreewillCandidateChoice{}, invalid
+	}
+	var output freewillFlashChoiceOutput
+	if decodeFreewillStrictJSON(string(normalized), &output, 2048) != nil || output.ChoiceID == nil || output.Reason == nil {
+		return FreewillCandidateChoice{}, invalid
+	}
+	if *output.ChoiceID == "NONE" {
+		if !validFreewillChoiceReason(*output.Reason, "", allowedIDs) {
+			return FreewillCandidateChoice{}, invalid
+		}
+		return FreewillCandidateChoice{Sleep: true, Reason: strings.TrimSpace(*output.Reason)}, nil
+	}
+	if !containsFreewillString(allowedIDs, *output.ChoiceID) || !validFreewillChoiceReason(*output.Reason, *output.ChoiceID, allowedIDs) {
+		return FreewillCandidateChoice{}, invalid
+	}
+	return FreewillCandidateChoice{ChoiceID: *output.ChoiceID, Reason: strings.TrimSpace(*output.Reason)}, nil
+}
+
+func normalizeFreewillFlashChoiceJSON(content string) ([]byte, error) {
+	if len(content) == 0 || len(content) > 2048 || !utf8.ValidString(content) {
+		return nil, &freewillStrictJSONError{Code: "size_or_encoding"}
+	}
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmed, "```") {
+		firstNewline := strings.IndexByte(trimmed, '\n')
+		if firstNewline < 0 || !strings.HasSuffix(trimmed, "```") {
+			return nil, &freewillStrictJSONError{Code: "syntax"}
+		}
+		header := strings.TrimSpace(strings.TrimSuffix(trimmed[:firstNewline], "\r"))
+		if header != "```" && !strings.EqualFold(header, "```json") {
+			return nil, &freewillStrictJSONError{Code: "syntax"}
+		}
+		trimmed = strings.TrimSpace(trimmed[firstNewline+1 : len(trimmed)-3])
+		if strings.Contains(trimmed, "```") {
+			return nil, &freewillStrictJSONError{Code: "syntax"}
+		}
+	}
+	if strings.HasPrefix(trimmed, "{") {
+		var envelope struct {
+			Type    string `json:"type"`
+			Content string `json:"content"`
+		}
+		if decodeFreewillStrictJSON(trimmed, &envelope, 2048) == nil && envelope.Type == "final" && strings.TrimSpace(envelope.Content) != "" {
+			trimmed = strings.TrimSpace(envelope.Content)
+		}
+	}
+	if err := validateNoDuplicateJSONKeys([]byte(trimmed)); err != nil {
+		if strings.Contains(err.Error(), "duplicate") {
+			return nil, &freewillStrictJSONError{Code: "duplicate_key"}
+		}
+		return nil, &freewillStrictJSONError{Code: "syntax"}
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(trimmed), &fields); err != nil || fields == nil {
+		return nil, &freewillStrictJSONError{Code: "wrong_shape"}
+	}
+	canonical := make(map[string]json.RawMessage, len(fields))
+	for key, value := range fields {
+		var target string
+		switch {
+		case strings.EqualFold(key, "choice_id"), strings.EqualFold(key, "choice"):
+			target = "choice_id"
+		case strings.EqualFold(key, "reason"):
+			target = "reason"
+		default:
+			return nil, &freewillStrictJSONError{Code: "unknown_field"}
+		}
+		if _, exists := canonical[target]; exists {
+			return nil, &freewillStrictJSONError{Code: "duplicate_key"}
+		}
+		canonical[target] = value
+	}
+	encoded, err := json.Marshal(canonical)
+	if err != nil {
+		return nil, &freewillStrictJSONError{Code: "wrong_shape"}
+	}
+	return encoded, nil
+}
+
+func parseFreewillFlashIdeasJSON(content string) ([]freewillScoredIdea, bool, error) {
+	var output freewillFlashIdeaOutput
+	if err := decodeFreewillStrictJSON(content, &output, 4096); err != nil {
+		var decodeErr *freewillStrictJSONError
+		if errors.As(err, &decodeErr) {
+			return nil, false, freewillScoredIdeaFailure(freewillScoredIdeaFailureCode("json_"+decodeErr.Code), 0)
+		}
+		return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureStructure, 0)
+	}
+	if output.Candidates == nil || output.Sleep == nil {
+		return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureStructure, 0)
+	}
+	candidates, sleep := *output.Candidates, *output.Sleep
+	if len(candidates) == 0 && sleep {
+		return nil, true, nil
+	}
+	if len(candidates) != 3 || sleep {
+		return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureCount, len(candidates))
+	}
+	seenIdeas := make(map[string]struct{}, 3)
+	ideas := make([]freewillScoredIdea, 0, 3)
+	for _, idea := range candidates {
+		idea.Idea = strings.TrimSpace(idea.Idea)
+		idea.Rationale = strings.TrimSpace(idea.Rationale)
+		if len(idea.Idea) == 0 || len(idea.Idea) > 160 || strings.ContainsAny(idea.Idea, "{}[]\\") || strings.Contains(idea.Idea, "://") || strings.Contains(idea.Idea, "..") {
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureShape, len(seenIdeas))
+		}
+		if freewillIdeaContainsForbiddenAuthority(idea.Idea) {
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureUnsafe, len(seenIdeas))
+		}
+		key := strings.ToLower(strings.Join(strings.Fields(idea.Idea), " "))
+		if _, ok := seenIdeas[key]; ok {
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureDuplicate, len(seenIdeas))
+		}
+		seenIdeas[key] = struct{}{}
+		if idea.Score == nil || *idea.Score < 0 || *idea.Score > 100 {
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureScore, len(seenIdeas))
+		}
+		if len(idea.Factors) == 0 {
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureFactors, len(seenIdeas))
+		}
+		factors := make(map[string]struct{}, len(idea.Factors))
+		for _, factor := range idea.Factors {
+			if _, ok := freewillScoreFactorSet[factor]; !ok {
+				return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureFactors, len(seenIdeas))
+			}
+			if _, ok := factors[factor]; ok {
+				return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureFactors, len(seenIdeas))
+			}
+			factors[factor] = struct{}{}
+		}
+		if len(idea.Rationale) < 30 || len(idea.Rationale) > 500 || len(strings.Fields(idea.Rationale)) < 6 || strings.IndexFunc(idea.Rationale, unicode.IsControl) >= 0 || freewillIdeaContainsForbiddenAuthority(idea.Rationale) || strings.ContainsAny(idea.Rationale, "\\") || strings.Contains(idea.Rationale, "://") {
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureRationale, len(seenIdeas))
+		}
+		ideas = append(ideas, freewillScoredIdea{Idea: idea.Idea, Score: *idea.Score, Factors: append([]string(nil), idea.Factors...), Rationale: idea.Rationale})
+	}
+	return ideas, false, nil
+}
+
+// parseFreewillFlashIdeaResponse accepts the bounded plain-text idea protocol,
+// with optional inert preamble and one outer text/Markdown fence. It retains
+// the earlier narrow JSON compatibility forms for stored provider traces.
+func parseFreewillFlashIdeaResponse(content string) ([]freewillScoredIdea, bool, error) {
+	if len(content) == 0 || len(content) > 4096 || !utf8.ValidString(content) {
+		return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureSize, 0)
+	}
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmed, "```") {
+		firstNewline := strings.IndexByte(trimmed, '\n')
+		if firstNewline < 0 || !strings.HasSuffix(trimmed, "```") {
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureStructure, 0)
+		}
+		header := strings.TrimSpace(strings.TrimSuffix(trimmed[:firstNewline], "\r"))
+		if header != "```" && !strings.EqualFold(header, "```json") && !strings.EqualFold(header, "```text") && !strings.EqualFold(header, "```markdown") {
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureStructure, 0)
+		}
+		trimmed = strings.TrimSpace(trimmed[firstNewline+1 : len(trimmed)-3])
+		if strings.Contains(trimmed, "```") {
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureStructure, 0)
+		}
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		if err := validateNoDuplicateJSONKeys([]byte(trimmed)); err != nil {
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureStructure, 0)
+		}
+		var candidates []json.RawMessage
+		if err := json.Unmarshal([]byte(trimmed), &candidates); err != nil || len(candidates) != 3 {
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureCount, 0)
+		}
+		wrapped, err := json.Marshal(map[string]any{"candidates": candidates, "sleep": false})
+		if err != nil {
+			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureStructure, 0)
+		}
+		return parseFreewillFlashIdeasJSON(string(wrapped))
+	}
+	if strings.HasPrefix(trimmed, "{") {
+		var envelope struct {
+			Type    string `json:"type"`
+			Content string `json:"content"`
+		}
+		if decodeFreewillStrictJSON(trimmed, &envelope, 4096) == nil && envelope.Type == "final" && strings.TrimSpace(envelope.Content) != "" {
+			trimmed = strings.TrimSpace(envelope.Content)
+		}
+		if strings.HasPrefix(trimmed, "{") {
+			canonical, err := normalizeFreewillFlashIdeaJSON(trimmed)
+			if err != nil {
+				var decodeErr *freewillStrictJSONError
+				if errors.As(err, &decodeErr) {
+					return nil, false, freewillScoredIdeaFailure(freewillScoredIdeaFailureCode("json_"+decodeErr.Code), 0)
+				}
+				return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureStructure, 0)
+			}
+			return parseFreewillFlashIdeasJSON(string(canonical))
+		}
+	}
+	return parseFreewillScoredIdeaLines(trimmed)
+}
+
+func normalizeFreewillFlashIdeaJSON(content string) ([]byte, error) {
+	data := []byte(content)
+	if err := validateNoDuplicateJSONKeys(data); err != nil {
+		if strings.Contains(err.Error(), "duplicate") {
+			return nil, &freewillStrictJSONError{Code: "duplicate_key"}
+		}
+		if strings.Contains(err.Error(), "trailing") {
+			return nil, &freewillStrictJSONError{Code: "trailing_content"}
+		}
+		return nil, &freewillStrictJSONError{Code: "syntax"}
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil || fields == nil {
+		return nil, &freewillStrictJSONError{Code: "wrong_shape"}
+	}
+	canonical := make(map[string]json.RawMessage, len(fields))
+	for key, value := range fields {
+		var target string
+		switch {
+		case strings.EqualFold(key, "candidates"), strings.EqualFold(key, "ideas"):
+			target = "candidates"
+		case strings.EqualFold(key, "sleep"):
+			target = "sleep"
+		case strings.EqualFold(key, "recommendation"):
+			var recommendation string
+			if err := json.Unmarshal(value, &recommendation); err != nil || len(recommendation) > 512 || strings.IndexFunc(recommendation, unicode.IsControl) >= 0 {
+				return nil, &freewillStrictJSONError{Code: "wrong_shape"}
+			}
+			continue // Host does not consume this untrusted summary field.
+		default:
+			return nil, &freewillStrictJSONError{Code: "unknown_field"}
+		}
+		if _, exists := canonical[target]; exists {
+			return nil, &freewillStrictJSONError{Code: "duplicate_key"}
+		}
+		canonical[target] = value
+	}
+	if _, hasSleep := canonical["sleep"]; !hasSleep {
+		if candidates, ok := canonical["candidates"]; ok && len(bytes.TrimSpace(candidates)) > 2 && string(bytes.TrimSpace(candidates)) != "null" {
+			canonical["sleep"] = json.RawMessage("false")
+		}
+	}
+	encoded, err := json.Marshal(canonical)
+	if err != nil {
+		return nil, &freewillStrictJSONError{Code: "wrong_shape"}
+	}
+	return encoded, nil
+}
+
+func containsFreewillString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
 
 func freewillMapperDiagnostic(stage string, response provider.ChatGenerateResponse, model string, code string, ideaMarkers int, parsedBlocks int, glmPlain bool) string {
 	thinkLen, _ := response.Raw["thinking_len"].(int)
-	return fmt.Sprintf("stage=%s model=%s content_len=%d think_len=%d tool_calls=%d idea_markers=%d parsed_blocks=%d parser_code=%s glm_plain=%t", stage, model, len(response.Content), thinkLen, len(response.ToolCalls), ideaMarkers, parsedBlocks, code, glmPlain)
+	trimmed := strings.TrimSpace(response.Content)
+	fenced := strings.HasPrefix(trimmed, "```")
+	startsObject := strings.HasPrefix(trimmed, "{")
+	jsonValid := json.Valid([]byte(trimmed))
+	hasCandidates := strings.Contains(trimmed, `"candidates"`)
+	hasIdeaKey := strings.Contains(trimmed, `"idea"`)
+	return fmt.Sprintf("stage=%s model=%s content_len=%d think_len=%d tool_calls=%d idea_markers=%d parsed_blocks=%d json_valid=%t starts_object=%t fenced=%t candidates_key=%t idea_key=%t parser_code=%s glm_plain=%t", stage, model, len(response.Content), thinkLen, len(response.ToolCalls), ideaMarkers, parsedBlocks, jsonValid, startsObject, fenced, hasCandidates, hasIdeaKey, code, glmPlain)
 }
 
 func freewillIdeaMarkerCount(content string) int {
@@ -119,13 +532,14 @@ func freewillIdeaMarkerCount(content string) int {
 // decision phase. Candidate IDs are already bound by the host; the provider
 // cannot create or modify an intention here.
 type FreewillCandidateChoiceInput struct {
-	RunID           string
-	CorrelationID   string
-	AgentID         string
-	Objective       string
-	CandidateIDs    []string
-	CandidateLabels []string
-	CandidateScores []int
+	RunID            string
+	CorrelationID    string
+	AgentID          string
+	Objective        string
+	CandidateIDs     []string
+	CandidateLabels  []string
+	CandidateScores  []int
+	CandidateFactors [][]string
 }
 
 // FreewillCandidateChoice is the typed result of the bounded choice protocol. The
@@ -138,10 +552,10 @@ type FreewillCandidateChoice struct {
 }
 
 type freewillScoredIdea struct {
-	Idea      string
-	Score     int
-	Factors   []string
-	Rationale string
+	Idea      string   `json:"idea"`
+	Score     int      `json:"score"`
+	Factors   []string `json:"factors"`
+	Rationale string   `json:"rationale"`
 }
 
 // parseFreewillScoreFactors accepts canonical labels and the observed GLM form
@@ -617,13 +1031,13 @@ type ChatFreewillSelector struct {
 }
 
 // SelectCandidateChoice performs the optional second, decision-only phase.
-// It deliberately uses no native schema: GLM cloud models have been observed
-// to emit schema-disclaiming prose. The host parser remains authoritative.
+// The GLM Cloud path uses a visible text contract because Ollama Cloud does
+// not support structured outputs; the host parser remains authoritative.
 func (s ChatFreewillSelector) SelectCandidateChoice(ctx context.Context, input FreewillCandidateChoiceInput) (FreewillCandidateChoice, FreewillSelectionEvidence, error) {
 	if s.Provider == nil || strings.TrimSpace(s.AgentID) == "" || strings.TrimSpace(s.Model) == "" || input.AgentID != s.AgentID {
 		return FreewillCandidateChoice{}, FreewillSelectionEvidence{}, errors.New("multiagent: Freewill choice provider configuration is incomplete")
 	}
-	if strings.TrimSpace(input.RunID) == "" || strings.TrimSpace(input.CorrelationID) == "" || len(input.Objective) > 4096 || len(input.CandidateIDs) > 16 || len(input.CandidateLabels) != len(input.CandidateIDs) || len(input.CandidateScores) != len(input.CandidateIDs) {
+	if strings.TrimSpace(input.RunID) == "" || strings.TrimSpace(input.CorrelationID) == "" || len(input.Objective) > 4096 || len(input.CandidateIDs) > 16 || len(input.CandidateLabels) != len(input.CandidateIDs) || len(input.CandidateScores) != len(input.CandidateIDs) || len(input.CandidateFactors) != len(input.CandidateIDs) {
 		return FreewillCandidateChoice{}, FreewillSelectionEvidence{}, errors.New("multiagent: Freewill choice input is invalid")
 	}
 	if len(input.CandidateIDs) == 0 {
@@ -649,25 +1063,45 @@ func (s ChatFreewillSelector) SelectCandidateChoice(ctx context.Context, input F
 		}
 	}
 	type choiceCandidate struct {
-		ID    string `json:"id"`
-		Title string `json:"title"`
-		Score int    `json:"score"`
+		ID      string   `json:"id"`
+		Title   string   `json:"title"`
+		Score   int      `json:"score"`
+		Factors []string `json:"factors"`
 	}
 	choiceContext := struct {
 		Objective  string            `json:"objective"`
 		Candidates []choiceCandidate `json:"candidates"`
 	}{Objective: input.Objective}
 	for i := range ids {
-		choiceContext.Candidates = append(choiceContext.Candidates, choiceCandidate{ID: ids[i], Title: labels[i], Score: scores[i]})
+		factors := append([]string(nil), input.CandidateFactors[i]...)
+		if len(factors) == 0 || len(factors) > len(freewillScoreFactorSet) {
+			return FreewillCandidateChoice{}, FreewillSelectionEvidence{}, errors.New("multiagent: Freewill choice factors are invalid")
+		}
+		seenFactors := make(map[string]struct{}, len(factors))
+		for _, factor := range factors {
+			if _, ok := freewillScoreFactorSet[factor]; !ok {
+				return FreewillCandidateChoice{}, FreewillSelectionEvidence{}, errors.New("multiagent: Freewill choice factors are invalid")
+			}
+			if _, ok := seenFactors[factor]; ok {
+				return FreewillCandidateChoice{}, FreewillSelectionEvidence{}, errors.New("multiagent: Freewill choice factors are invalid")
+			}
+			seenFactors[factor] = struct{}{}
+		}
+		choiceContext.Candidates = append(choiceContext.Candidates, choiceCandidate{ID: ids[i], Title: labels[i], Score: scores[i], Factors: factors})
 	}
 	user, err := json.Marshal(choiceContext)
 	if err != nil {
 		return FreewillCandidateChoice{}, FreewillSelectionEvidence{}, errors.New("multiagent: Freewill choice context could not be encoded")
 	}
 	think := false
+	glm := isFreewillFlashCloudModel(s.Model)
+	systemPrompt := freewillChoiceSystemPrompt
+	if glm {
+		systemPrompt = freewillFlashChoiceSystemPrompt
+	}
 	response, err := s.Provider.ChatGenerate(ctx, provider.ChatGenerateRequest{
 		RunID: input.RunID, CorrelationID: input.CorrelationID, Agent: s.AgentID, Model: s.Model,
-		Messages:  []provider.ChatMessage{{Role: "system", Content: freewillChoiceSystemPrompt}, {Role: "user", Content: string(user)}},
+		Messages:  []provider.ChatMessage{{Role: "system", Content: systemPrompt}, {Role: "user", Content: string(user)}},
 		MaxTokens: freewillChoiceMaxOutputTokens, Think: &think,
 	})
 	if err != nil {
@@ -684,7 +1118,12 @@ func (s ChatFreewillSelector) SelectCandidateChoice(ctx context.Context, input F
 	if len(response.ToolCalls) != 0 {
 		return FreewillCandidateChoice{}, evidence, errors.New("multiagent: Freewill choice provider requested a tool")
 	}
-	choice, err := parseFreewillCandidateChoice(response.Content, ids)
+	var choice FreewillCandidateChoice
+	if glm {
+		choice, err = parseFreewillFlashChoiceResponse(response.Content, ids)
+	} else {
+		choice, err = parseFreewillCandidateChoice(response.Content, ids)
+	}
 	if err != nil {
 		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("choice", response, s.Model, "invalid_choice", 0, 0, true))
 		return FreewillCandidateChoice{}, evidence, &SchemaCorrectionError{Role: RolePlanner, Code: "invalid_choice"}
@@ -702,7 +1141,7 @@ func (s ChatFreewillSelector) SelectFreewill(ctx context.Context, input Freewill
 	if err := freewill.ValidateSelectionObjective(input.Objective); err != nil {
 		return freewill.Selection{}, FreewillSelectionEvidence{}, errors.New("multiagent: Freewill selector objective is invalid")
 	}
-	if strings.Contains(strings.ToLower(s.Model), "glm-5.3-flash") {
+	if isFreewillFlashCloudModel(s.Model) {
 		return s.selectFreewillFlashIdeas(ctx, input)
 	}
 	resumeJSON, err := json.Marshal(summarizeFreewillResumeCandidates(input.ResumeCandidates))
@@ -767,42 +1206,6 @@ func (s ChatFreewillSelector) SelectFreewill(ctx context.Context, input Freewill
 		}
 		return freewill.Selection{}, FreewillSelectionEvidence{}, &SchemaCorrectionError{Role: RolePlanner, Code: code}
 	}
-	// GLM-5.3 cloud has repeatedly returned schema-disclaiming prose for the
-	// large proposal object. Once the host has bound and validated candidate
-	// IDs, use the smaller ID/NONE protocol for fresh choices only. Resume and
-	// explicit sleep remain governed by the existing proposal contract.
-	var choiceEvidence *FreewillSelectionEvidence
-	if strings.Contains(strings.ToLower(s.Model), "glm-5.3-flash") && proposal.ResumeCandidateID == "" && strings.TrimSpace(proposal.SleepReason) == "" {
-		ids := make([]string, 0, len(selection.Candidates))
-		labels := make([]string, 0, len(selection.Candidates))
-		scores := make([]int, 0, len(selection.Candidates))
-		for _, candidate := range selection.Candidates {
-			ids = append(ids, candidate.CandidateID)
-			labels = append(labels, candidate.Request.Title)
-			scores = append(scores, candidate.Score)
-		}
-		choice, choiceMeta, choiceErr := s.SelectCandidateChoice(ctx, FreewillCandidateChoiceInput{RunID: input.RunID, CorrelationID: input.CorrelationID, AgentID: input.AgentID, Objective: input.Objective, CandidateIDs: ids, CandidateLabels: labels, CandidateScores: scores})
-		if choiceErr != nil {
-			var schemaErr *SchemaCorrectionError
-			if errors.As(choiceErr, &schemaErr) && schemaErr.Code == "invalid_choice" {
-				choiceEvidence = &choiceMeta
-				selection.ChoiceID = deterministicFreewillChoiceID(selection.Candidates)
-				selection.ReasonSummary = "Host selected the highest-scoring candidate after rejecting an invalid or incomplete phase-two choice response."
-			} else {
-				return freewill.Selection{}, FreewillSelectionEvidence{}, choiceErr
-			}
-		} else {
-			choiceEvidence = &choiceMeta
-			if choice.Sleep {
-				selection.ChoiceID = ""
-				selection.ReasonSummary = ""
-				selection.SleepReason = choice.Reason
-			} else {
-				selection.ChoiceID = choice.ChoiceID
-				selection.ReasonSummary = choice.Reason
-			}
-		}
-	}
 	providerName, model := response.Provider, response.Model
 	if providerName == "" {
 		providerName = "configured"
@@ -811,11 +1214,6 @@ func (s ChatFreewillSelector) SelectFreewill(ctx context.Context, input Freewill
 		model = s.Model
 	}
 	usage := cost.TokenUsage{PromptTokens: response.PromptTokens, CompletionTokens: response.OutputTokens, TotalTokens: response.PromptTokens + response.OutputTokens}
-	if choiceEvidence != nil {
-		usage.PromptTokens += choiceEvidence.Usage.PromptTokens
-		usage.CompletionTokens += choiceEvidence.Usage.CompletionTokens
-		usage.TotalTokens += choiceEvidence.Usage.TotalTokens
-	}
 	return selection, FreewillSelectionEvidence{Provider: providerName, Model: model, Usage: usage}, nil
 }
 
@@ -832,8 +1230,8 @@ func (s ChatFreewillSelector) selectFreewillFlashIdeas(ctx context.Context, inpu
 	}
 	response, err := s.Provider.ChatGenerate(ctx, provider.ChatGenerateRequest{
 		RunID: input.RunID, CorrelationID: input.CorrelationID, Agent: s.AgentID, Model: s.Model,
-		Messages:  []provider.ChatMessage{{Role: "system", Content: freewillIdeaSystemPrompt}, {Role: "user", Content: string(user)}},
-		MaxTokens: freewillIdeaMaxOutputTokens, Think: &think,
+		Messages:  []provider.ChatMessage{{Role: "system", Content: freewillFlashIdeaSystemPrompt}, {Role: "user", Content: string(user)}},
+		MaxTokens: freewillFlashIdeaMaxOutputTokens, Think: &think,
 	})
 	if err != nil {
 		return freewill.Selection{}, FreewillSelectionEvidence{}, err
@@ -842,7 +1240,7 @@ func (s ChatFreewillSelector) selectFreewillFlashIdeas(ctx context.Context, inpu
 		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("idea", response, s.Model, "idea_tool_request", freewillIdeaMarkerCount(response.Content), 0, true))
 		return freewill.Selection{}, FreewillSelectionEvidence{}, &SchemaCorrectionError{Role: RolePlanner, Code: "idea_tool_request"}
 	}
-	ideas, none, err := parseFreewillScoredIdeaLines(response.Content)
+	ideas, none, err := parseFreewillFlashIdeaResponse(response.Content)
 	if err != nil {
 		category := freewillIdeaFailureStructure
 		parsedBlocks := 0
@@ -880,26 +1278,14 @@ func (s ChatFreewillSelector) selectFreewillFlashIdeas(ctx context.Context, inpu
 	ids := []string{selection.Candidates[0].CandidateID, selection.Candidates[1].CandidateID, selection.Candidates[2].CandidateID}
 	labels := make([]string, len(selection.Candidates))
 	scores := make([]int, len(selection.Candidates))
+	factors := make([][]string, len(selection.Candidates))
 	for i, candidate := range selection.Candidates {
 		labels[i] = candidate.Request.Title
 		scores[i] = candidate.Score
+		factors[i] = append([]string(nil), candidate.ScoreFactors...)
 	}
-	choice, choiceMeta, err := s.SelectCandidateChoice(ctx, FreewillCandidateChoiceInput{RunID: input.RunID, CorrelationID: input.CorrelationID, AgentID: input.AgentID, Objective: input.Objective, CandidateIDs: ids, CandidateLabels: labels, CandidateScores: scores})
+	choice, choiceMeta, err := s.SelectCandidateChoice(ctx, FreewillCandidateChoiceInput{RunID: input.RunID, CorrelationID: input.CorrelationID, AgentID: input.AgentID, Objective: input.Objective, CandidateIDs: ids, CandidateLabels: labels, CandidateScores: scores, CandidateFactors: factors})
 	if err != nil {
-		var schemaErr *SchemaCorrectionError
-		if errors.As(err, &schemaErr) && schemaErr.Code == "invalid_choice" {
-			usage.PromptTokens += choiceMeta.Usage.PromptTokens
-			usage.CompletionTokens += choiceMeta.Usage.CompletionTokens
-			usage.TotalTokens += choiceMeta.Usage.TotalTokens
-			selection.ChoiceID = deterministicFreewillChoiceID(selection.Candidates)
-			if selection.ChoiceID == "" {
-				selection.ReasonSummary = "No eligible candidate remained after bounded choice validation."
-				selection.SleepReason = "No eligible candidate remained after bounded choice validation."
-			} else {
-				selection.ReasonSummary = "Host selected the highest-scoring candidate after rejecting an invalid or incomplete phase-two choice response."
-			}
-			return selection, FreewillSelectionEvidence{Provider: providerName, Model: model, Usage: usage}, nil
-		}
 		return freewill.Selection{}, FreewillSelectionEvidence{}, err
 	}
 	usage.PromptTokens += choiceMeta.Usage.PromptTokens
@@ -913,19 +1299,6 @@ func (s ChatFreewillSelector) selectFreewillFlashIdeas(ctx context.Context, inpu
 		selection.ReasonSummary = choice.Reason
 	}
 	return selection, FreewillSelectionEvidence{Provider: providerName, Model: model, Usage: usage}, nil
-}
-
-func deterministicFreewillChoiceID(candidates []freewill.CandidateIntention) string {
-	if len(candidates) == 0 {
-		return ""
-	}
-	best := candidates[0]
-	for _, candidate := range candidates[1:] {
-		if candidate.Score > best.Score || (candidate.Score == best.Score && candidate.CandidateID < best.CandidateID) {
-			best = candidate
-		}
-	}
-	return best.CandidateID
 }
 
 // normalizeFreewillSelectionResponse accepts bounded JSON and known harmless

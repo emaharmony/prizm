@@ -18,6 +18,7 @@ import (
 )
 
 var ErrFreewillApprovalStale = errors.New("multiagent: Freewill approval no longer matches the current request")
+var ErrFreewillDispatchNotAccepted = errors.New("multiagent: Freewill child dispatch is not yet accepted")
 
 func selectedFreewillCandidate(state *FreewillRunState) (freewill.CandidateIntention, bool) {
 	if state == nil {
@@ -56,7 +57,21 @@ func freewillAdmissionActive(record DurableRun) bool {
 	case freewill.StateSleeping, freewill.StateDenied, freewill.StateHalted:
 		return false
 	case freewill.StatePaused:
-		return !validFreewillApprovalReceipt(record.Freewill, FreewillApprovalGranted)
+		if !validFreewillApprovalReceipt(record.Freewill, FreewillApprovalGranted) {
+			return true
+		}
+		dispatch := record.Freewill.ExecutionDispatch
+		if dispatch == nil {
+			return false
+		}
+		switch dispatch.Status {
+		case "completed", "execution_failed", "execution_cancelled":
+			return false
+		default:
+			// Dispatching, accepted, retryable failed, and unknown states keep
+			// the actor slot until recovery records a durable terminal outcome.
+			return true
+		}
 	default:
 		return true
 	}
@@ -89,19 +104,124 @@ type FreewillApprovalStore interface {
 	Save(*approval.Approval) error
 }
 
+// FreewillExecutionDispatcher admits one already-approved intention into the
+// existing governed workflow. Start must use the supplied stable request
+// identity so a retry after a lost parent checkpoint returns the same child.
+type FreewillExecutionDispatcher interface {
+	Start(context.Context, FreewillExecutionRequest) (FreewillExecutionResult, error)
+}
+
+type FreewillExecutionRequest struct {
+	ParentRunID        string
+	ApprovalID         string
+	RequestFingerprint string
+	ApprovalGeneration uint64
+	RunID              string
+	Identity           *RequestIdentity
+	Candidate          freewill.CandidateIntention
+}
+
+type FreewillExecutionResult struct {
+	RunID     string
+	ReportRef string
+}
+
+// FreewillExecutionTerminalResult is derived by the host from the durable
+// child run and its validated terminal report, never from selector output.
+type FreewillExecutionTerminalResult struct {
+	ChildRunID        string
+	ChildStatus       RunStatus
+	ReportRef         string
+	ReportSHA256      string
+	ValidationSummary string
+	FailureCode       string
+}
+
 // FreewillApprovalService evaluates configured policy and stores a human
 // decision for the selected intention. It has no task, tool, or executor.
 type FreewillApprovalService struct {
-	runtime   *DurableRuntime
-	store     DurableRunStore
-	approvals FreewillApprovalStore
-	policy    FreewillPolicyEvaluator
-	actor     string
-	readOnly  bool
+	runtime    *DurableRuntime
+	store      DurableRunStore
+	approvals  FreewillApprovalStore
+	policy     FreewillPolicyEvaluator
+	dispatcher FreewillExecutionDispatcher
+	actor      string
+	readOnly   bool
+}
+
+// SetExecutionDispatcher enables the explicit FW-P2 path in a composed
+// runtime. The default service remains decision-only when no dispatcher is
+// configured.
+func (s *FreewillApprovalService) SetExecutionDispatcher(dispatcher FreewillExecutionDispatcher) {
+	if s != nil && !s.readOnly {
+		s.dispatcher = dispatcher
+	}
+}
+
+func freewillExecutionStatus(dispatch *FreewillExecutionDispatch) string {
+	if dispatch == nil {
+		return ""
+	}
+	return dispatch.Status
+}
+
+func freewillExecutionRunID(dispatch *FreewillExecutionDispatch) string {
+	if dispatch == nil {
+		return ""
+	}
+	return dispatch.ChildRunID
+}
+
+func freewillExecutionReportRef(dispatch *FreewillExecutionDispatch) string {
+	if dispatch == nil {
+		return ""
+	}
+	return dispatch.ReportRef
+}
+
+func freewillExecutionChildStatus(dispatch *FreewillExecutionDispatch) string {
+	if dispatch == nil {
+		return ""
+	}
+	return dispatch.ChildStatus
+}
+
+func freewillExecutionReportSHA256(dispatch *FreewillExecutionDispatch) string {
+	if dispatch == nil {
+		return ""
+	}
+	return dispatch.ReportSHA256
+}
+
+func freewillExecutionValidationSummary(dispatch *FreewillExecutionDispatch) string {
+	if dispatch == nil {
+		return ""
+	}
+	return dispatch.ValidationSummary
+}
+
+func freewillExecutionFailureCode(dispatch *FreewillExecutionDispatch) string {
+	if dispatch == nil {
+		return ""
+	}
+	return dispatch.FailureCode
+}
+
+func validFreewillFailureCode(code string) bool {
+	if strings.TrimSpace(code) == "" || len(code) > 128 {
+		return false
+	}
+	for _, r := range code {
+		if !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '_' && r != '-' && r != '.' {
+			return false
+		}
+	}
+	return true
 }
 
 type FreewillApprovalStatus struct {
 	RunID                 string                    `json:"run_id"`
+	ResumeFromRunID       string                    `json:"resume_from_run_id,omitempty"`
 	RequestID             string                    `json:"request_id,omitempty"`
 	Lifecycle             freewill.State            `json:"lifecycle"`
 	ChoiceID              string                    `json:"choice_id,omitempty"`
@@ -116,6 +236,13 @@ type FreewillApprovalStatus struct {
 	RequestFingerprint    string                    `json:"request_fingerprint,omitempty"`
 	PolicyDecision        string                    `json:"policy_decision,omitempty"`
 	ExecutionDisabled     bool                      `json:"execution_disabled"`
+	ExecutionStatus       string                    `json:"execution_status,omitempty"`
+	ChildRunID            string                    `json:"child_run_id,omitempty"`
+	ChildStatus           string                    `json:"child_status,omitempty"`
+	ExecutionReportRef    string                    `json:"execution_report_ref,omitempty"`
+	ExecutionReportSHA256 string                    `json:"execution_report_sha256,omitempty"`
+	ValidationSummary     string                    `json:"validation_summary,omitempty"`
+	ExecutionFailureCode  string                    `json:"execution_failure_code,omitempty"`
 	PauseReason           string                    `json:"pause_reason,omitempty"`
 	SelectionRecoveries   int                       `json:"selection_recoveries,omitempty"`
 	SelectionFailureClass string                    `json:"selection_failure_class,omitempty"`
@@ -145,6 +272,38 @@ func (s *FreewillApprovalService) Status(ctx context.Context, runID string) (Fre
 	return s.statusFromRecord(ctx, record)
 }
 
+// List returns a bounded page of durable Freewill status projections. The
+// read-only status reader uses the same method, so the API collection remains
+// available when the feature is disabled without enabling decisions or wakes.
+func (s *FreewillApprovalService) List(ctx context.Context, limit int) ([]FreewillApprovalStatus, error) {
+	if s == nil || s.store == nil {
+		return nil, errors.New("multiagent: Freewill status listing is unavailable")
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	lister, ok := s.store.(FreewillRunLister)
+	if !ok {
+		return nil, errors.New("multiagent: durable store does not support Freewill status listing")
+	}
+	records, err := lister.ListFreewillRuns(ctx, "", limit)
+	if err != nil {
+		return nil, err
+	}
+	statuses := make([]FreewillApprovalStatus, 0, len(records))
+	for _, record := range records {
+		if record.Kind != DurableRunKindFreewill || record.Freewill == nil {
+			continue
+		}
+		status, err := s.statusFromRecord(ctx, record)
+		if err != nil {
+			return nil, err
+		}
+		statuses = append(statuses, status)
+	}
+	return statuses, nil
+}
+
 func (s *FreewillApprovalService) DecideStatus(ctx context.Context, runID, approvalID, decision, actor, reason string) (FreewillApprovalStatus, error) {
 	record, err := s.Decide(ctx, runID, approvalID, decision, actor, reason)
 	if err != nil {
@@ -153,14 +312,160 @@ func (s *FreewillApprovalService) DecideStatus(ctx context.Context, runID, appro
 	return s.statusFromRecord(ctx, record)
 }
 
+// DispatchApproved retries a previously granted intention using the same
+// deterministic child identity. It is safe to call after restart or duplicate
+// delivery; the dispatcher must make Start idempotent for that child ID.
+func (s *FreewillApprovalService) DispatchApproved(ctx context.Context, runID string) (DurableRun, error) {
+	if s.dispatcher == nil {
+		return DurableRun{}, errors.New("multiagent: Freewill execution is disabled")
+	}
+	claim, err := s.runtime.claimer.Acquire(ctx, runID)
+	if err != nil {
+		return DurableRun{}, err
+	}
+	defer claim.Release()
+	record, err := s.store.Load(ctx, runID)
+	if err != nil {
+		return DurableRun{}, err
+	}
+	if record.Kind != DurableRunKindFreewill || record.Freewill == nil || record.State.RequestIdentity == nil ||
+		!validFreewillApprovalReceipt(record.Freewill, FreewillApprovalGranted) {
+		return record, ErrFreewillApprovalStale
+	}
+	// A granted record without a durable dispatch marker was approved while
+	// execution was disabled. Enabling a dispatcher later must not expand that
+	// decision into execution authority.
+	if record.Freewill.ExecutionDispatch == nil {
+		return record, ErrFreewillApprovalStale
+	}
+	if err := ensureFreewillNotHalted(ctx, s.store, record.State.RequestIdentity.RequesterID, record.Freewill.Scope); err != nil {
+		return record, err
+	}
+	if err := ensureFreewillApprovalGeneration(ctx, s.store, record); err != nil {
+		return record, err
+	}
+	return s.dispatchApprovedLocked(ctx, record)
+}
+
+// ValidateAcceptedExecutionResume fails closed when operator halt or approval
+// generation changed after dispatch admission. It is a read-only checkpoint
+// used before startup recovery resumes a nonterminal child.
+func (s *FreewillApprovalService) ValidateAcceptedExecutionResume(ctx context.Context, runID string) error {
+	if s == nil || s.runtime == nil || s.store == nil {
+		return errors.New("multiagent: Freewill execution recovery is unavailable")
+	}
+	claim, err := s.runtime.claimer.Acquire(ctx, runID)
+	if err != nil {
+		return err
+	}
+	defer claim.Release()
+	record, err := s.store.Load(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if record.Kind != DurableRunKindFreewill || record.Freewill == nil || record.State.RequestIdentity == nil ||
+		record.Freewill.ExecutionDispatch == nil || record.Freewill.ExecutionDispatch.Status != "accepted" ||
+		!validFreewillApprovalReceipt(record.Freewill, FreewillApprovalGranted) {
+		return ErrFreewillApprovalStale
+	}
+	if err := ensureFreewillNotHalted(ctx, s.store, record.State.RequestIdentity.RequesterID, record.Freewill.Scope); err != nil {
+		return err
+	}
+	return ensureFreewillApprovalGeneration(ctx, s.store, record)
+}
+
+// ReconcileExecutionTerminal persists the result of the exact accepted child.
+// Replays of the same result are no-ops; a conflicting terminal result cannot
+// overwrite the first durable outcome.
+func (s *FreewillApprovalService) ReconcileExecutionTerminal(ctx context.Context, parentRunID string, result FreewillExecutionTerminalResult) (DurableRun, error) {
+	if s == nil || s.runtime == nil || s.store == nil {
+		return DurableRun{}, errors.New("multiagent: Freewill execution reconciliation is unavailable")
+	}
+	if !result.ChildStatus.Terminal() || !result.ChildStatus.Valid() || result.ReportRef != "multiagent_report.json" ||
+		!validFreewillValidationSummary(result.ValidationSummary) || !validSHA256Hex(result.ReportSHA256) {
+		return DurableRun{}, errors.New("multiagent: Freewill terminal child result is invalid")
+	}
+	if result.ChildStatus == RunStatusCompleted {
+		if result.FailureCode != "" {
+			return DurableRun{}, errors.New("multiagent: completed child result has a failure code")
+		}
+	} else if !validFreewillFailureCode(result.FailureCode) {
+		return DurableRun{}, errors.New("multiagent: failed child result requires a safe failure code")
+	}
+	claim, err := s.runtime.claimer.Acquire(ctx, parentRunID)
+	if err != nil {
+		return DurableRun{}, err
+	}
+	defer claim.Release()
+	record, err := s.store.Load(ctx, parentRunID)
+	if err != nil {
+		return DurableRun{}, err
+	}
+	if record.Kind != DurableRunKindFreewill || record.Freewill == nil || record.State.RequestIdentity == nil ||
+		!validFreewillApprovalReceipt(record.Freewill, FreewillApprovalGranted) || record.Freewill.ExecutionDispatch == nil {
+		return record, ErrFreewillApprovalStale
+	}
+	dispatch := record.Freewill.ExecutionDispatch
+	if dispatch.ChildRunID != result.ChildRunID || dispatch.ReportRef != result.ReportRef {
+		return record, ErrRequestIdentityConflict
+	}
+	if dispatch.Status == "dispatching" {
+		return record, ErrFreewillDispatchNotAccepted
+	}
+	status := "execution_failed"
+	eventType := event.EventFreewillExecutionFailed
+	if result.ChildStatus == RunStatusCompleted {
+		status = "completed"
+		eventType = event.EventFreewillExecutionCompleted
+	} else if result.ChildStatus == RunStatusCancelled {
+		status = "execution_cancelled"
+		eventType = event.EventFreewillExecutionCancelled
+	}
+	if dispatch.Status == "completed" || dispatch.Status == "execution_failed" || dispatch.Status == "execution_cancelled" {
+		if dispatch.Status == status && dispatch.ChildStatus == string(result.ChildStatus) &&
+			dispatch.ValidationSummary == result.ValidationSummary && dispatch.ReportSHA256 == result.ReportSHA256 &&
+			dispatch.FailureCode == result.FailureCode {
+			return record, nil
+		}
+		return record, ErrRequestIdentityConflict
+	}
+	if dispatch.Status != "accepted" {
+		return record, ErrFreewillApprovalStale
+	}
+	dispatch.Status = status
+	dispatch.ChildStatus = string(result.ChildStatus)
+	dispatch.ValidationSummary = result.ValidationSummary
+	dispatch.ReportSHA256 = result.ReportSHA256
+	dispatch.FailureCode = result.FailureCode
+	dispatch.UpdatedAt = s.runtime.now().UTC()
+	candidate, ok := selectedFreewillCandidate(record.Freewill)
+	if !ok {
+		return record, ErrFreewillApprovalStale
+	}
+	return s.saveExecutionDispatch(ctx, record, eventType, map[string]any{
+		"request_id": candidate.Request.RequestID, "approval_id": record.Freewill.ApprovalRef,
+		"child_run_id": result.ChildRunID, "child_status": result.ChildStatus, "report_ref": result.ReportRef,
+		"report_sha256": result.ReportSHA256, "validation_summary": result.ValidationSummary,
+		"execution_disabled": true, "failure_code": result.FailureCode,
+	})
+}
+
 func (s *FreewillApprovalService) statusFromRecord(ctx context.Context, record DurableRun) (FreewillApprovalStatus, error) {
 	if record.Kind != DurableRunKindFreewill || record.Freewill == nil {
 		return FreewillApprovalStatus{}, errors.New("multiagent: run is not a Freewill intention")
 	}
-	status := FreewillApprovalStatus{RunID: record.State.RunID, Lifecycle: record.Freewill.Lifecycle, ChoiceID: record.Freewill.ChoiceID,
+	status := FreewillApprovalStatus{RunID: record.State.RunID, ResumeFromRunID: record.Freewill.ResumeFromRunID,
+		Lifecycle: record.Freewill.Lifecycle, ChoiceID: record.Freewill.ChoiceID,
 		ApprovalID: record.Freewill.ApprovalRef, RequestFingerprint: record.Freewill.ApprovalFingerprint,
 		PolicyDecision: record.Freewill.PolicyDecision, ExecutionDisabled: record.Freewill.ExecutionDisabled, PauseReason: record.Freewill.PauseReason,
-		ReasonSummary: record.Freewill.ReasonSummary, Provider: record.Freewill.SelectionProvider, Model: record.Freewill.SelectionModel,
+		ExecutionStatus:       freewillExecutionStatus(record.Freewill.ExecutionDispatch),
+		ChildRunID:            freewillExecutionRunID(record.Freewill.ExecutionDispatch),
+		ExecutionReportRef:    freewillExecutionReportRef(record.Freewill.ExecutionDispatch),
+		ChildStatus:           freewillExecutionChildStatus(record.Freewill.ExecutionDispatch),
+		ExecutionReportSHA256: freewillExecutionReportSHA256(record.Freewill.ExecutionDispatch),
+		ValidationSummary:     freewillExecutionValidationSummary(record.Freewill.ExecutionDispatch),
+		ExecutionFailureCode:  freewillExecutionFailureCode(record.Freewill.ExecutionDispatch),
+		ReasonSummary:         record.Freewill.ReasonSummary, Provider: record.Freewill.SelectionProvider, Model: record.Freewill.SelectionModel,
 		Usage: record.Freewill.SelectionUsage, SelectionRecoveries: record.Freewill.SelectionRecoveryNumber,
 		SelectionFailureClass: record.Freewill.SelectionFailureClass, SelectionFailureCode: record.Freewill.SelectionFailureCode,
 		SelectionNextAt: record.Freewill.SelectionNextAt}
@@ -439,8 +744,9 @@ func (s *FreewillApprovalService) RecoverApprovalDecision(ctx context.Context, r
 	})
 }
 
-// Decide records a human grant or denial. A grant only parks the request in a
-// visibly paused, execution-disabled state; it never resumes or dispatches it.
+// Decide records a human grant or denial. A configured dispatcher receives a
+// grant only after the receipt is durably stored; without one, it remains a
+// visibly paused, execution-disabled decision-only record.
 func (s *FreewillApprovalService) Decide(ctx context.Context, runID, approvalID, decision, actor, reason string) (DurableRun, error) {
 	if s.readOnly {
 		return DurableRun{}, errors.New("multiagent: Freewill status reader is read-only")
@@ -534,7 +840,117 @@ func (s *FreewillApprovalService) Decide(ctx context.Context, runID, approvalID,
 	if record.Freewill.PolicyRuleID != "" {
 		payload["policy_rule_id"] = record.Freewill.PolicyRuleID
 	}
-	return s.saveFreewillDecision(ctx, record, evt, payload)
+	saved, err := s.saveFreewillDecision(ctx, record, evt, payload)
+	if err != nil || decision != "grant" || s.dispatcher == nil {
+		return saved, err
+	}
+	return s.dispatchApprovedLocked(ctx, saved)
+}
+
+func freewillExecutionChildRunID(requesterID, parentRunID, approvalID string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{requesterID, parentRunID, approvalID}, "\x00")))
+	return "run_" + hex.EncodeToString(sum[:13])
+}
+
+func (s *FreewillApprovalService) dispatchApprovedLocked(ctx context.Context, record DurableRun) (DurableRun, error) {
+	if record.Kind != DurableRunKindFreewill || record.Freewill == nil || record.State.RequestIdentity == nil ||
+		!validFreewillApprovalReceipt(record.Freewill, FreewillApprovalGranted) {
+		return record, ErrFreewillApprovalStale
+	}
+	if dispatch := record.Freewill.ExecutionDispatch; dispatch != nil && (dispatch.Status == "accepted" || dispatch.Status == "completed" ||
+		dispatch.Status == "execution_failed" || dispatch.Status == "execution_cancelled") {
+		return record, nil
+	}
+	candidate, ok := selectedFreewillCandidate(record.Freewill)
+	if !ok {
+		return record, ErrFreewillApprovalStale
+	}
+	fingerprint, _ := freewillRequestFingerprint(candidate.Request)
+	if fingerprint != record.Freewill.ApprovalFingerprint {
+		return record, ErrFreewillApprovalStale
+	}
+	identity := &RequestIdentity{RequesterID: record.State.RequestIdentity.RequesterID,
+		SessionID: record.State.RunID, Source: "freewill", IdempotencyKey: record.Freewill.ApprovalRef}
+	childRunID := freewillExecutionChildRunID(identity.RequesterID, identity.SessionID, identity.IdempotencyKey)
+	now := s.runtime.now().UTC()
+	dispatch := record.Freewill.ExecutionDispatch
+	if dispatch == nil {
+		return record, ErrFreewillApprovalStale
+	}
+	if dispatch.Status != "dispatching" && dispatch.Status != "failed" {
+		return record, ErrFreewillApprovalStale
+	}
+	if dispatch.ChildRunID == "" {
+		record.Freewill.ExecutionDispatch = &FreewillExecutionDispatch{Status: "dispatching", ChildRunID: childRunID,
+			ReportRef: "multiagent_report.json", UpdatedAt: now}
+		var err error
+		record, err = s.saveExecutionDispatch(ctx, record, event.EventFreewillExecutionDispatching, map[string]any{
+			"request_id": candidate.Request.RequestID, "approval_id": record.Freewill.ApprovalRef,
+			"child_run_id": childRunID, "execution_disabled": true,
+		})
+		if err != nil {
+			return record, err
+		}
+	} else if dispatch.ChildRunID != childRunID || dispatch.ReportRef != "multiagent_report.json" {
+		return record, ErrRequestIdentityConflict
+	} else if dispatch.Status == "failed" {
+		record.Freewill.ExecutionDispatch = &FreewillExecutionDispatch{Status: "dispatching", ChildRunID: childRunID,
+			ReportRef: "multiagent_report.json", UpdatedAt: now}
+		var err error
+		record, err = s.saveExecutionDispatch(ctx, record, event.EventFreewillExecutionDispatching, map[string]any{
+			"request_id": candidate.Request.RequestID, "approval_id": record.Freewill.ApprovalRef,
+			"child_run_id": childRunID, "execution_disabled": true,
+		})
+		if err != nil {
+			return record, err
+		}
+	}
+	result, err := s.dispatcher.Start(ctx, FreewillExecutionRequest{
+		ParentRunID: record.State.RunID, ApprovalID: record.Freewill.ApprovalRef,
+		RequestFingerprint: fingerprint, ApprovalGeneration: record.Freewill.ApprovalGeneration,
+		RunID: childRunID, Identity: identity, Candidate: candidate,
+	})
+	if err != nil || result.RunID != childRunID || strings.TrimSpace(result.ReportRef) == "" {
+		record.Freewill.ExecutionDispatch = &FreewillExecutionDispatch{Status: "failed", ChildRunID: childRunID,
+			ReportRef: "multiagent_report.json", FailureCode: "workflow_start_failed", UpdatedAt: s.runtime.now().UTC()}
+		failed, saveErr := s.saveExecutionDispatch(ctx, record, event.EventFreewillExecutionDispatchFailed, map[string]any{
+			"request_id": candidate.Request.RequestID, "approval_id": record.Freewill.ApprovalRef,
+			"failure_code": "workflow_start_failed", "execution_disabled": true,
+		})
+		if saveErr != nil {
+			return record, saveErr
+		}
+		return failed, nil
+	}
+	record.Freewill.ExecutionDispatch = &FreewillExecutionDispatch{Status: "accepted", ChildRunID: childRunID,
+		ReportRef: result.ReportRef, UpdatedAt: s.runtime.now().UTC()}
+	return s.saveExecutionDispatch(ctx, record, event.EventFreewillExecutionDispatched, map[string]any{
+		"request_id": candidate.Request.RequestID, "approval_id": record.Freewill.ApprovalRef,
+		"child_run_id": childRunID, "report_ref": result.ReportRef, "execution_disabled": true,
+	})
+}
+
+func (s *FreewillApprovalService) saveExecutionDispatch(ctx context.Context, record DurableRun, eventType string, payload map[string]any) (DurableRun, error) {
+	if err := record.Validate(s.runtime.supervisor.graph); err != nil {
+		return record, err
+	}
+	record.State.UpdatedAt = s.runtime.now().UTC()
+	payload["run_id"] = record.State.RunID
+	for key, value := range freewillEventContext(record) {
+		payload[key] = value
+	}
+	evt := event.NewEvent(eventType, freewillWakeEventSource, payload)
+	evt.Timestamp = record.State.UpdatedAt.Format(time.RFC3339Nano)
+	evt.CorrelationID = record.Freewill.CorrelationID
+	evt.Metadata.RunID = record.State.RunID
+	saved, err := s.store.Checkpoint(ctx, record.Revision, record, []event.Event{evt})
+	if err != nil {
+		return record, err
+	}
+	if err := s.runtime.dispatchOutbox(ctx, record.State.RunID); err != nil {
+		return saved, err
+	}
+	return saved, nil
 }
 
 func (s *FreewillApprovalService) findOrCreateApproval(record DurableRun, ref approval.IntentionApprovalRef) (*approval.Approval, error) {
@@ -561,10 +977,21 @@ func (s *FreewillApprovalService) findOrCreateApproval(record DurableRun, ref ap
 }
 
 func (s *FreewillApprovalService) saveFreewillDecision(ctx context.Context, record DurableRun, eventType string, payload map[string]any) (DurableRun, error) {
+	record.State.UpdatedAt = s.runtime.now().UTC()
+	dispatchMarkerWritten := false
+	if s.dispatcher != nil && record.Freewill != nil && record.State.RequestIdentity != nil && record.Freewill.ExecutionDispatch == nil &&
+		validFreewillApprovalReceipt(record.Freewill, FreewillApprovalGranted) {
+		// Persist dispatch intent with the grant receipt. Recovery can then
+		// distinguish execution-enabled approval from decision-only approval
+		// even if the process stops before dispatcher.Start is called.
+		childRunID := freewillExecutionChildRunID(record.State.RequestIdentity.RequesterID, record.State.RunID, record.Freewill.ApprovalRef)
+		record.Freewill.ExecutionDispatch = &FreewillExecutionDispatch{Status: "dispatching", ChildRunID: childRunID,
+			ReportRef: "multiagent_report.json", UpdatedAt: record.State.UpdatedAt}
+		dispatchMarkerWritten = true
+	}
 	if err := record.Validate(s.runtime.supervisor.graph); err != nil {
 		return record, err
 	}
-	record.State.UpdatedAt = s.runtime.now().UTC()
 	payload["run_id"] = record.State.RunID
 	for k, v := range freewillEventContext(record) {
 		payload[k] = v
@@ -573,7 +1000,19 @@ func (s *FreewillApprovalService) saveFreewillDecision(ctx context.Context, reco
 	evt.Timestamp = record.State.UpdatedAt.Format(time.RFC3339Nano)
 	evt.CorrelationID = record.Freewill.CorrelationID
 	evt.Metadata.RunID = record.State.RunID
-	saved, err := s.store.Checkpoint(ctx, record.Revision, record, []event.Event{evt})
+	events := []event.Event{evt}
+	if dispatchMarkerWritten {
+		candidate, _ := selectedFreewillCandidate(record.Freewill)
+		dispatchEvent := event.NewEvent(event.EventFreewillExecutionDispatching, freewillWakeEventSource, map[string]any{
+			"run_id": record.State.RunID, "request_id": candidate.Request.RequestID, "approval_id": record.Freewill.ApprovalRef,
+			"child_run_id": record.Freewill.ExecutionDispatch.ChildRunID, "execution_disabled": true,
+		})
+		dispatchEvent.Timestamp = record.State.UpdatedAt.Format(time.RFC3339Nano)
+		dispatchEvent.CorrelationID = record.Freewill.CorrelationID
+		dispatchEvent.Metadata.RunID = record.State.RunID
+		events = append(events, dispatchEvent)
+	}
+	saved, err := s.store.Checkpoint(ctx, record.Revision, record, events)
 	if err != nil {
 		return record, err
 	}

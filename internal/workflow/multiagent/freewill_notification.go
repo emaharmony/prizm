@@ -2,7 +2,9 @@ package multiagent
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/emaharmony/prizm/internal/event"
+	prismsqlite "github.com/emaharmony/prizm/internal/sqlite"
 )
 
 // FreewillNotifyWorthyEventTypes are the curated lifecycle events worth
@@ -21,6 +24,9 @@ var FreewillNotifyWorthyEventTypes = []string{
 	event.EventFreewillApprovalReconciled,
 	event.EventFreewillPolicyDenied,
 	event.EventFreewillSelectionHalted,
+	event.EventFreewillExecutionCompleted,
+	event.EventFreewillExecutionFailed,
+	event.EventFreewillExecutionCancelled,
 }
 
 func freewillNotifyWorthy(t string) bool {
@@ -82,6 +88,7 @@ func (p freewillNotificationPublisher) Publish(ctx context.Context, subject stri
 // cursor so events emitted while the process was down are never lost.
 type FreewillNotificationService struct {
 	outbox     *event.SQLiteOutbox
+	cursorDB   *sql.DB
 	dispatcher event.Dispatcher
 	events     *event.SQLiteEventStore
 	storePath  string
@@ -109,6 +116,17 @@ func NewFreewillNotificationService(dbPath string, events *event.SQLiteEventStor
 	if err != nil {
 		return nil, fmt.Errorf("freewill notification: open outbox: %w", err)
 	}
+	cursorDB, err := sql.Open(prismsqlite.DriverName, dbPath+"-notifications.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate")
+	if err != nil {
+		_ = outbox.Close()
+		return nil, fmt.Errorf("freewill notification: open cursor store: %w", err)
+	}
+	if _, err := cursorDB.Exec(`CREATE TABLE IF NOT EXISTS freewill_notification_cursor (
+		id INTEGER PRIMARY KEY CHECK (id=1), row_id INTEGER NOT NULL, last_event_id TEXT NOT NULL)`); err != nil {
+		_ = cursorDB.Close()
+		_ = outbox.Close()
+		return nil, fmt.Errorf("freewill notification: initialize cursor store: %w", err)
+	}
 	return &FreewillNotificationService{
 		outbox: outbox,
 		dispatcher: event.Dispatcher{
@@ -118,7 +136,7 @@ func NewFreewillNotificationService(dbPath string, events *event.SQLiteEventStor
 			MaxAttempts: 8,
 			RetryAfter:  10 * time.Second,
 		},
-		events: events, storePath: dbPath, sink: sink,
+		events: events, storePath: dbPath, sink: sink, cursorDB: cursorDB,
 		scanEvery: 15 * time.Second,
 		stop:      make(chan struct{}), stopped: make(chan struct{}),
 	}, nil
@@ -208,18 +226,16 @@ func (s *FreewillNotificationService) reconcileLoop(ctx context.Context) {
 	}
 }
 
-// freewillNotifyCursorKey names the durable reconciler cursor, stored as a
-// regular outbox command row so delivery of the cursor itself survives
-// restarts with the same SQLite guarantees as notifications.
+// freewillNotifyCursorKey names the legacy cursor command row, retained only
+// for one-time migration into the dedicated cursor table.
 const (
-	freewillNotifyCursorKey   = "freewill-notify-cursor"
-	freewillNotifyCursorRunID = "freewill-notification-cursor"
+	freewillNotifyCursorKey = "freewill-notify-cursor"
 )
 
 // Reconcile scans canonical freewill events after the last-processed row and
 // enqueues any notify-worthy ones. The cursor (last seen rowid + event id) is
-// a durable outbox row, so a crash mid-scan replays at most one page and
-// dedupe happens at delivery (outbox idempotency by event id).
+// stored separately from immutable notification commands, so a crash mid-scan
+// replays at most one page and dedupe happens by canonical event id.
 func (s *FreewillNotificationService) Reconcile(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -255,41 +271,41 @@ func (s *FreewillNotificationService) Reconcile(ctx context.Context) error {
 	}
 }
 
-// loadCursor reads {row_id,last_event_id} from the cursor command row.
+// loadCursor reads {row_id,last_event_id} from the dedicated cursor row. It
+// migrates the original outbox-command cursor on first use after upgrade.
 func (s *FreewillNotificationService) loadCursor(ctx context.Context) (int64, string, error) {
-	d, err := s.outbox.Get(ctx, freewillNotifyCursorKey)
-	if err != nil || d == nil {
-		if err != nil && !strings.Contains(err.Error(), "no rows") {
-			return 0, "", err
-		}
-		return 0, "", nil
-	}
 	var cur struct {
 		RowID       int64  `json:"row_id"`
 		LastEventID string `json:"last_event_id"`
 	}
+	err := s.cursorDB.QueryRowContext(ctx, `SELECT row_id,last_event_id FROM freewill_notification_cursor WHERE id=1`).Scan(&cur.RowID, &cur.LastEventID)
+	if err == nil {
+		return cur.RowID, cur.LastEventID, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, "", err
+	}
+	d, err := s.outbox.Get(ctx, freewillNotifyCursorKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, "", nil
+	}
+	if err != nil {
+		return 0, "", err
+	}
 	if err := json.Unmarshal(d.Command.Payload, &cur); err != nil {
 		return 0, "", nil
+	}
+	if err := s.saveCursor(ctx, cur.RowID, cur.LastEventID); err != nil {
+		return 0, "", err
 	}
 	return cur.RowID, cur.LastEventID, nil
 }
 
-// saveCursor upserts the cursor command row (Accept dedupes by key; a second
-// accept with the same EventID is rejected, so the cursor event id rotates).
+// saveCursor upserts the cursor checkpoint independently of the immutable
+// notification outbox commands.
 func (s *FreewillNotificationService) saveCursor(ctx context.Context, rowID int64, lastEventID string) error {
-	encoded, err := json.Marshal(map[string]any{"row_id": rowID, "last_event_id": lastEventID})
-	if err != nil {
-		return err
-	}
-	_, err = s.outbox.Accept(ctx, "freewill.notification.cursor", event.Command{
-		SchemaVersion:  event.CommandSchemaVersion,
-		EventID:        event.NewID(),
-		Type:           "freewill.notify.cursor",
-		RunID:          freewillNotifyCursorRunID,
-		CorrelationID:  "freewill-notify-cursor",
-		IdempotencyKey: freewillNotifyCursorKey,
-		Payload:        encoded,
-	})
+	_, err := s.cursorDB.ExecContext(ctx, `INSERT INTO freewill_notification_cursor(id,row_id,last_event_id)
+		VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET row_id=excluded.row_id,last_event_id=excluded.last_event_id`, rowID, lastEventID)
 	return err
 }
 
@@ -299,5 +315,5 @@ func (s *FreewillNotificationService) Close() error {
 	case <-s.stopped:
 	case <-time.After(3 * time.Second):
 	}
-	return s.outbox.Close()
+	return errors.Join(s.outbox.Close(), s.cursorDB.Close())
 }

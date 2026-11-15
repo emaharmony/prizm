@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/emaharmony/prizm/internal/api"
 	"github.com/emaharmony/prizm/internal/approval"
 	"github.com/emaharmony/prizm/internal/event"
 	"github.com/emaharmony/prizm/internal/freewill"
@@ -19,6 +20,7 @@ import (
 	"github.com/emaharmony/prizm/internal/policy"
 	"github.com/emaharmony/prizm/internal/provider"
 	"github.com/emaharmony/prizm/internal/provider/codexcli"
+	"github.com/emaharmony/prizm/internal/sandbox"
 	multiagent "github.com/emaharmony/prizm/internal/workflow/multiagent"
 	"github.com/nats-io/nats.go"
 )
@@ -30,9 +32,14 @@ type freewillServeRuntime struct {
 	approvals         *multiagent.FreewillApprovalService
 	store             *multiagent.SQLiteDurableRunStore
 	control           *multiagent.FreewillOperatorControl
+	childApprovals    *approval.Store
+	sandboxConfig     sandbox.Config
 	events            *event.SQLiteEventStore
 	eventsPath        string
+	runDir            string
+	configPath        string
 	schedulingEnabled bool
+	executionEnabled  bool
 	readOnly          bool
 	mu                sync.Mutex
 	started           bool
@@ -41,6 +48,49 @@ type freewillServeRuntime struct {
 	cancel            context.CancelFunc
 	done              chan struct{}
 	beforeSubscribe   func()
+	resumeMu          sync.Mutex
+	resumingChildren  map[string]bool
+	childApprovalMu   sync.Mutex
+}
+
+type freewillReferenceExecutionDispatcher struct {
+	runDir        string
+	configPath    string
+	approvals     *multiagent.FreewillApprovalService
+	control       *multiagent.FreewillOperatorControl
+	sandboxConfig sandbox.Config
+}
+
+func (d freewillReferenceExecutionDispatcher) Start(ctx context.Context, request multiagent.FreewillExecutionRequest) (multiagent.FreewillExecutionResult, error) {
+	reconcile := func(ctx context.Context, childRunID string) error {
+		return d.reconcileChild(ctx, request.ParentRunID, childRunID)
+	}
+	if d.sandboxConfig.Image == "" {
+		return startFreewillReferenceRunWithExecutionControl(ctx, d.runDir, d.configPath, request, reconcile, d.control)
+	}
+	return startFreewillReferenceRunWithExecutionControl(ctx, d.runDir, d.configPath, request, reconcile, d.control, d.sandboxConfig)
+}
+
+func (d freewillReferenceExecutionDispatcher) reconcileChild(ctx context.Context, parentRunID, childRunID string) error {
+	if d.approvals == nil {
+		return errors.New("freewill: terminal child reconciler is unavailable")
+	}
+	result, err := freewillTerminalResultFromReferenceRun(ctx, d.runDir, childRunID)
+	if err != nil {
+		return err
+	}
+	for attempt := 0; attempt < 40; attempt++ {
+		_, err = d.approvals.ReconcileExecutionTerminal(ctx, parentRunID, result)
+		if !errors.Is(err, multiagent.ErrFreewillDispatchNotAccepted) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+	return err
 }
 
 // openFreewillStatusRuntime exposes historical status only when Freewill is
@@ -97,6 +147,13 @@ func openFreewillServeRuntime(cfg *orchestrator.Config, providers *provider.Prov
 	projectInfo, err := os.Stat(projectPath)
 	if err != nil || !projectInfo.IsDir() {
 		return nil, errors.New("freewill: configured project repository is unavailable")
+	}
+	var sandboxConfig sandbox.Config
+	if freewillCfg.Execution.Enabled {
+		sandboxConfig, err = freewillSandboxConfigFromEnvironment(projectPath)
+		if err != nil {
+			return nil, err
+		}
 	}
 	var selectorAgent *orchestrator.AgentConfig
 	for i := range cfg.Agents {
@@ -164,8 +221,9 @@ func openFreewillServeRuntime(cfg *orchestrator.Config, providers *provider.Prov
 		_ = store.Close()
 		return nil, fmt.Errorf("freewill: compose durable runtime: %w", err)
 	}
+	approvalStore := approval.NewStore(resolveConfigPath(configPath, cfg.Prizm.RunsDir))
 	policyApproval, err := multiagent.NewFreewillApprovalService(runtime, store,
-		approval.NewStore(resolveConfigPath(configPath, cfg.Prizm.RunsDir)), policy.NewEvaluator(policyRegistry), "freewill-policy")
+		approvalStore, policy.NewEvaluator(policyRegistry), "freewill-policy")
 	if err != nil {
 		_ = events.Close()
 		_ = store.Close()
@@ -177,11 +235,18 @@ func openFreewillServeRuntime(cfg *orchestrator.Config, providers *provider.Prov
 		_ = store.Close()
 		return nil, fmt.Errorf("freewill: compose durable operator control: %w", err)
 	}
+	if freewillCfg.Execution.Enabled {
+		policyApproval.SetExecutionDispatcher(freewillReferenceExecutionDispatcher{
+			runDir: resolveConfigPath(configPath, cfg.Prizm.RunsDir), configPath: configPath,
+			approvals: policyApproval, control: control, sandboxConfig: sandboxConfig,
+		})
+	}
 	wake, err := multiagent.NewFreewillWakeService(runtime, store,
 		multiagent.ChatFreewillSelector{Provider: chatProvider, AgentID: selectorAgent.ID, Model: model,
 			ReasoningEffort: freewillFirstNonEmpty(freewillCfg.ReasoningEffort, selectorAgent.ReasoningEffort)},
 		multiagent.FreewillWakeServiceConfig{Enabled: true, SchedulingEnabled: freewillCfg.Scheduling.Enabled,
-			AgentID: selectorAgent.ID, Scope: freewill.Scope{ProjectID: freewillCfg.ProjectID, Workspace: projectPath},
+			ExecutionEnabled: freewillCfg.Execution.Enabled,
+			AgentID:          selectorAgent.ID, Scope: freewill.Scope{ProjectID: freewillCfg.ProjectID, Workspace: projectPath},
 			Objective: freewillCfg.Objective,
 			Owner:     "prizm-freewill-scheduler", LeaseFor: 2 * time.Minute, OperatorControl: control}, nil)
 	if err != nil {
@@ -190,7 +255,188 @@ func openFreewillServeRuntime(cfg *orchestrator.Config, providers *provider.Prov
 		return nil, err
 	}
 	return &freewillServeRuntime{wake: wake, approvals: policyApproval, store: store, control: control, events: events, eventsPath: dbPath,
-		schedulingEnabled: freewillCfg.Scheduling.Enabled}, nil
+		childApprovals: approvalStore, sandboxConfig: sandboxConfig,
+		runDir: resolveConfigPath(configPath, cfg.Prizm.RunsDir), configPath: configPath, resumingChildren: make(map[string]bool),
+		schedulingEnabled: freewillCfg.Scheduling.Enabled, executionEnabled: freewillCfg.Execution.Enabled}, nil
+}
+
+func freewillSandboxConfigFromEnvironment(sourceRoot string) (sandbox.Config, error) {
+	dockerPath := strings.TrimSpace(os.Getenv("PRIZM_SUBAGENT_SANDBOX_DOCKER"))
+	if dockerPath == "" {
+		dockerPath = "docker"
+	}
+	if _, err := exec.LookPath(dockerPath); err != nil {
+		return sandbox.Config{}, errors.New("freewill: execution requires an available local OCI engine")
+	}
+	image := strings.TrimSpace(os.Getenv("PRIZM_SUBAGENT_SANDBOX_IMAGE"))
+	if !pinnedSandboxImage(image) {
+		return sandbox.Config{}, errors.New("freewill: execution requires a sandbox image pinned by sha256 digest")
+	}
+	workRoot := strings.TrimSpace(os.Getenv("PRIZM_SUBAGENT_SANDBOX_WORK_ROOT"))
+	artifactRoot := strings.TrimSpace(os.Getenv("PRIZM_SUBAGENT_SANDBOX_ARTIFACT_ROOT"))
+	if !filepath.IsAbs(workRoot) || !filepath.IsAbs(artifactRoot) || freewillSandboxPathsOverlap(sourceRoot, workRoot) || freewillSandboxPathsOverlap(sourceRoot, artifactRoot) {
+		return sandbox.Config{}, errors.New("freewill: execution requires absolute sandbox storage roots outside the project")
+	}
+	return sandbox.Config{DockerPath: dockerPath, Image: image, WorkRoot: workRoot, ArtifactRoot: artifactRoot}, nil
+}
+
+func pinnedSandboxImage(image string) bool {
+	name, digest, ok := strings.Cut(image, "@sha256:")
+	if !ok || name == "" || len(digest) != 64 {
+		return false
+	}
+	for _, char := range digest {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func freewillSandboxPathsOverlap(left, right string) bool {
+	leftAbs, leftErr := filepath.Abs(filepath.Clean(left))
+	rightAbs, rightErr := filepath.Abs(filepath.Clean(right))
+	if leftErr != nil || rightErr != nil {
+		return true
+	}
+	leftRel, leftRelErr := filepath.Rel(leftAbs, rightAbs)
+	rightRel, rightRelErr := filepath.Rel(rightAbs, leftAbs)
+	return leftRelErr != nil || rightRelErr != nil || leftRel == "." || rightRel == "." ||
+		(leftRel != ".." && !strings.HasPrefix(leftRel, ".."+string(filepath.Separator))) ||
+		(rightRel != ".." && !strings.HasPrefix(rightRel, ".."+string(filepath.Separator)))
+}
+
+func sameFreewillSandboxConfig(left, right *sandbox.Config) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func (r *freewillServeRuntime) ListChildApprovals(ctx context.Context, parentRunID, childRunID string) ([]api.FreewillChildApproval, error) {
+	if _, _, err := r.validateFreewillChild(ctx, parentRunID, childRunID, "", false); err != nil {
+		return nil, err
+	}
+	items, err := r.childApprovals.List(childRunID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]api.FreewillChildApproval, 0, len(items))
+	for _, item := range items {
+		if item == nil || item.Status != approval.StatusPending || item.MutationType != approval.MutationApplyPatch ||
+			item.PatchPlan == nil || item.SandboxBinding == nil {
+			continue
+		}
+		projected, err := freewillChildApprovalProjection(parentRunID, childRunID, item)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, projected)
+	}
+	return result, nil
+}
+
+func (r *freewillServeRuntime) DecideChildApproval(ctx context.Context, parentRunID, childRunID, approvalID, decision, actor, reason string) (api.FreewillChildApproval, error) {
+	if !r.executionEnabled || r.readOnly || r.childApprovals == nil || strings.TrimSpace(actor) == "" ||
+		(decision != "grant" && decision != "deny") {
+		return api.FreewillChildApproval{}, errors.New("freewill: child approval is not enabled")
+	}
+	r.childApprovalMu.Lock()
+	defer r.childApprovalMu.Unlock()
+	item, _, err := r.validateFreewillChild(ctx, parentRunID, childRunID, approvalID, true)
+	if err != nil {
+		return api.FreewillChildApproval{}, err
+	}
+	if item.Status != approval.StatusPending {
+		return api.FreewillChildApproval{}, errors.New("freewill: child approval is no longer pending")
+	}
+	if decision == "grant" {
+		if err := item.Approve(actor); err != nil {
+			return api.FreewillChildApproval{}, err
+		}
+	} else if err := item.Deny(actor, safeFreewillApprovalReason(reason)); err != nil {
+		return api.FreewillChildApproval{}, err
+	}
+	if err := r.childApprovals.Save(item); err != nil {
+		return api.FreewillChildApproval{}, err
+	}
+	if err := r.resumeAcceptedChild(ctx, parentRunID, childRunID); err != nil {
+		return api.FreewillChildApproval{}, err
+	}
+	return freewillChildApprovalProjection(parentRunID, childRunID, item)
+}
+
+func (r *freewillServeRuntime) validateFreewillChild(ctx context.Context, parentRunID, childRunID, approvalID string, requireApproval bool) (*approval.Approval, referenceWorkflowManifest, error) {
+	if r == nil || r.readOnly || !r.executionEnabled || r.store == nil || r.childApprovals == nil ||
+		strings.TrimSpace(parentRunID) == "" || strings.TrimSpace(childRunID) == "" {
+		return nil, referenceWorkflowManifest{}, errors.New("freewill: child approval service is unavailable")
+	}
+	parent, err := r.store.Load(ctx, parentRunID)
+	if err != nil {
+		return nil, referenceWorkflowManifest{}, err
+	}
+	if parent.Freewill == nil || parent.Freewill.ApprovalReceipt == nil || parent.Freewill.ApprovalReceipt.Decision != multiagent.FreewillApprovalGranted ||
+		parent.Freewill.ExecutionDispatch == nil || parent.Freewill.ExecutionDispatch.ChildRunID != childRunID ||
+		parent.Freewill.ExecutionDispatch.Status != "accepted" {
+		return nil, referenceWorkflowManifest{}, multiagent.ErrFreewillApprovalStale
+	}
+	manifest, err := loadReferenceManifest(r.runDir, childRunID)
+	if err != nil || manifest.RunID != childRunID || !manifest.SandboxApprovalMode || manifest.FreewillSandboxConfig == nil ||
+		manifest.SourceWorkspacePath == "" || manifest.WorkspacePath == "" || filepath.Clean(manifest.SourceWorkspacePath) != filepath.Clean(parent.Freewill.Scope.Workspace) {
+		return nil, referenceWorkflowManifest{}, multiagent.ErrFreewillApprovalStale
+	}
+	inspection, err := openInspectionReferenceRuntime(r.runDir, manifest)
+	if err != nil {
+		return nil, referenceWorkflowManifest{}, err
+	}
+	child, inspectErr := inspection.runtime.Inspect(ctx, childRunID)
+	closeErr := inspection.close()
+	if inspectErr != nil || closeErr != nil {
+		return nil, referenceWorkflowManifest{}, errors.Join(inspectErr, closeErr)
+	}
+	if child.State.Status.Terminal() || requireApproval && child.State.Status != multiagent.RunStatusPaused {
+		return nil, referenceWorkflowManifest{}, multiagent.ErrFreewillApprovalStale
+	}
+	if approvalID == "" {
+		return nil, manifest, nil
+	}
+	item, err := r.childApprovals.Load(childRunID, approvalID)
+	if err != nil {
+		return nil, referenceWorkflowManifest{}, err
+	}
+	if item.RunID != childRunID || item.ApprovalID != approvalID || item.Status != approval.StatusPending ||
+		item.MutationType != approval.MutationApplyPatch || item.PatchPlan == nil || item.SandboxBinding == nil ||
+		item.SandboxBinding.AgentID != item.RequestedBy || item.SandboxBinding.ExecutionKey != item.CorrelationID ||
+		item.SandboxBinding.WorkspacePath != manifest.WorkspacePath || item.SandboxBinding.WorkspaceID != manifest.WorkspaceID ||
+		item.SandboxBinding.ArtifactDigest == "" {
+		return nil, referenceWorkflowManifest{}, multiagent.ErrFreewillApprovalStale
+	}
+	return item, manifest, nil
+}
+
+func freewillChildApprovalProjection(parentRunID, childRunID string, item *approval.Approval) (api.FreewillChildApproval, error) {
+	if item == nil || item.MutationType != approval.MutationApplyPatch || item.PatchPlan == nil || len(item.Content) > 1<<20 {
+		return api.FreewillChildApproval{}, errors.New("freewill: child patch is unavailable or exceeds the review limit")
+	}
+	return api.FreewillChildApproval{ParentRunID: parentRunID, ChildRunID: childRunID, ApprovalID: item.ApprovalID,
+		ProposalID: item.ProposalID, Status: string(item.Status), RequestedBy: item.RequestedBy,
+		TargetPath: strings.Join(item.PatchPlan.Paths, ", "), Patch: item.Content,
+		SandboxBinding: api.FreewillChildSandboxBinding{TaskID: item.SandboxBinding.TaskID,
+			ExecutionKey: item.SandboxBinding.ExecutionKey, AgentID: item.SandboxBinding.AgentID,
+			WorkspaceID: item.SandboxBinding.WorkspaceID, WorkspacePath: item.SandboxBinding.WorkspacePath,
+			BaseSHA: item.SandboxBinding.BaseSHA, BaseTree: item.SandboxBinding.BaseTree,
+			ArtifactDigest: item.SandboxBinding.ArtifactDigest},
+		PatchPlan: api.FreewillChildPatchPlan{BaseSHA: item.PatchPlan.BaseSHA, BaseTree: item.PatchPlan.BaseTree,
+			ExpectedTree: item.PatchPlan.ExpectedTree, PatchSHA256: item.PatchPlan.PatchSHA256,
+			Paths: append([]string(nil), item.PatchPlan.Paths...)}}, nil
+}
+
+func safeFreewillApprovalReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if len(reason) > 256 {
+		return reason[:256]
+	}
+	return reason
 }
 
 func resolveFreewillSelectorProvider(cfg *orchestrator.Config, providers *provider.ProviderRegistry, agent orchestrator.AgentConfig, model string) (provider.ChatProvider, error) {
@@ -262,9 +508,15 @@ func (r *freewillServeRuntime) Close() {
 	sub, cancel, done := r.sub, r.cancel, r.done
 	r.sub, r.cancel, r.done = nil, nil, nil
 	r.mu.Unlock()
-	if sub != nil { _ = sub.Unsubscribe() }
-	if cancel != nil { cancel() }
-	if done != nil { <-done }
+	if sub != nil {
+		_ = sub.Unsubscribe()
+	}
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
 	if r.events != nil {
 		_ = r.events.Close()
 	}
@@ -319,20 +571,21 @@ func (r *freewillServeRuntime) Start(ctx context.Context, nc *nats.Conn, schedul
 				return
 			default:
 			}
-			if err := r.recoverPending(workerCtx); err != nil {
-				log.Printf("[FREEWILL] recovery scan failed: %v", err)
-			}
-			// The scheduler message carries no scope, identity, candidate, or policy
-			// authority. Those values come only from the validated host config.
-			run, runErr := r.wake.HandleScheduledTick(workerCtx, time.Now().UTC())
-			if runErr != nil {
-				log.Printf("[FREEWILL] scheduled wake failed: %v", runErr)
-				return
-			}
-			if run.Freewill != nil && run.Freewill.Lifecycle == freewill.StateProposed {
-				if _, approvalErr := r.approvals.RequestApproval(workerCtx, run.State.RunID); approvalErr != nil {
-					log.Printf("[FREEWILL] approval proposal could not be recorded: %v", approvalErr)
+			if err := runFreewillScheduledTick(workerCtx, r.recoverPending, func(ctx context.Context) error {
+				// The scheduler message carries no scope, identity, candidate, or policy
+				// authority. Those values come only from the validated host config.
+				run, runErr := r.wake.HandleScheduledTick(ctx, time.Now().UTC())
+				if runErr != nil {
+					return runErr
 				}
+				if run.Freewill != nil && run.Freewill.Lifecycle == freewill.StateProposed {
+					if _, approvalErr := r.approvals.RequestApproval(ctx, run.State.RunID); approvalErr != nil {
+						log.Printf("[FREEWILL] approval proposal could not be recorded: %v", approvalErr)
+					}
+				}
+				return nil
+			}); err != nil {
+				log.Printf("[FREEWILL] scheduled tick deferred: %v", err)
 			}
 		})
 		if err != nil {
@@ -362,6 +615,16 @@ func (r *freewillServeRuntime) Start(ctx context.Context, nc *nats.Conn, schedul
 	return nil
 }
 
+// runFreewillScheduledTick resumes durable accepted work before admitting a
+// new intention. A recovery error defers this tick so a later message retries
+// the same parent/child instead of overlapping it with new work.
+func runFreewillScheduledTick(ctx context.Context, recoverPending func(context.Context) error, handleTick func(context.Context) error) error {
+	if err := recoverPending(ctx); err != nil {
+		return fmt.Errorf("recover accepted Freewill work before scheduled wake: %w", err)
+	}
+	return handleTick(ctx)
+}
+
 func (r *freewillServeRuntime) recoverPending(ctx context.Context) error {
 	if r.schedulingEnabled {
 		if err := r.wake.RecoverPending(ctx, time.Now().UTC(), 500); err != nil {
@@ -388,12 +651,121 @@ func (r *freewillServeRuntime) recoverPending(ctx context.Context) error {
 					return err
 				}
 			}
+			if r.executionEnabled {
+				recovered, err := r.store.Load(ctx, record.State.RunID)
+				if err != nil {
+					return err
+				}
+				if recovered.Freewill != nil && recovered.Freewill.ApprovalReceipt != nil &&
+					recovered.Freewill.ApprovalReceipt.Decision == multiagent.FreewillApprovalGranted {
+					dispatchStatus := ""
+					if recovered.Freewill.ExecutionDispatch != nil {
+						dispatchStatus = recovered.Freewill.ExecutionDispatch.Status
+					}
+					switch dispatchStatus {
+					case "accepted":
+						if err := r.resumeAcceptedChild(ctx, recovered.State.RunID, recovered.Freewill.ExecutionDispatch.ChildRunID); err != nil {
+							return err
+						}
+					case "completed", "execution_failed":
+						// The terminal child outcome is already durable on the parent.
+					case "execution_cancelled":
+						// Operator halt permanently canceled this approved child.
+					case "dispatching", "failed":
+						if _, err := r.approvals.DispatchApproved(ctx, record.State.RunID); err != nil {
+							return err
+						}
+					default:
+						// A granted record without a durable dispatch marker was
+						// decision-only; enabling execution later cannot dispatch it.
+					}
+				}
+			}
 		}
 		after = page[len(page)-1].State.RunID
 		if len(page) < 500 {
 			return nil
 		}
 	}
+}
+
+func (r *freewillServeRuntime) resumeAcceptedChild(ctx context.Context, parentRunID, childRunID string) error {
+	if strings.TrimSpace(r.runDir) == "" || strings.TrimSpace(r.configPath) == "" || strings.TrimSpace(childRunID) == "" {
+		return errors.New("freewill: accepted child recovery paths are unavailable")
+	}
+	parent, err := r.store.Load(ctx, parentRunID)
+	if err != nil {
+		return fmt.Errorf("freewill: load accepted parent %s: %w", parentRunID, err)
+	}
+	if parent.Freewill == nil || parent.State.RequestIdentity == nil || parent.Freewill.ExecutionDispatch == nil ||
+		parent.Freewill.ExecutionDispatch.Status != "accepted" || parent.Freewill.ExecutionDispatch.ChildRunID != childRunID {
+		return multiagent.ErrFreewillApprovalStale
+	}
+	agentID, scope, generation := parent.State.RequestIdentity.RequesterID, parent.Freewill.Scope, parent.Freewill.ApprovalGeneration
+	terminal, err := freewillReferenceChildIsTerminal(ctx, r.runDir, childRunID)
+	if err != nil {
+		return fmt.Errorf("freewill: inspect accepted child %s before recovery: %w", childRunID, err)
+	}
+	if !terminal {
+		if r.approvals == nil {
+			return errors.New("freewill: approval service is unavailable for child recovery")
+		}
+		if err := r.approvals.ValidateAcceptedExecutionResume(ctx, parentRunID); err != nil {
+			if !errors.Is(err, multiagent.ErrFreewillHalted) && !errors.Is(err, multiagent.ErrFreewillApprovalRevoked) {
+				return fmt.Errorf("freewill: operator controls block resuming accepted child %s: %w", childRunID, err)
+			}
+			reason := "freewill approval generation revoked"
+			if errors.Is(err, multiagent.ErrFreewillHalted) {
+				reason = "freewill operator emergency halt"
+			}
+			_, cancelErr := cancelFreewillReferenceChild(ctx, r.runDir, childRunID, reason)
+			if cancelErr != nil {
+				return fmt.Errorf("freewill: durably cancel accepted child %s after control change: %w", childRunID, cancelErr)
+			}
+			// Resume consumes an interrupted child cancellation request through the
+			// workflow's existing reconciliation path. If another process still
+			// owns the claim, its registered context callback is already canceled.
+			terminal = true
+		}
+	}
+	r.resumeMu.Lock()
+	if r.resumingChildren == nil {
+		r.resumingChildren = make(map[string]bool)
+	}
+	if r.resumingChildren[childRunID] {
+		r.resumeMu.Unlock()
+		return nil
+	}
+	r.resumingChildren[childRunID] = true
+	r.resumeMu.Unlock()
+	if err := resumeFreewillReferenceChildWithExecutionControl(r.runDir, r.configPath, childRunID,
+		func(ctx context.Context, actualChildRunID string) error {
+			return (freewillReferenceExecutionDispatcher{runDir: r.runDir, configPath: r.configPath, approvals: r.approvals,
+				control: r.control}).reconcileChild(ctx, parentRunID, actualChildRunID)
+		}, func() {
+			r.resumeMu.Lock()
+			delete(r.resumingChildren, childRunID)
+			r.resumeMu.Unlock()
+		}, r.control, agentID, scope, generation); err != nil {
+		r.resumeMu.Lock()
+		delete(r.resumingChildren, childRunID)
+		r.resumeMu.Unlock()
+		return fmt.Errorf("freewill: recover accepted child for parent %s: %w", parentRunID, err)
+	}
+	return nil
+}
+
+func cancelFreewillReferenceChild(ctx context.Context, runDir, childRunID, reason string) (multiagent.RunState, error) {
+	manifest, err := loadReferenceManifest(runDir, childRunID)
+	if err != nil {
+		return multiagent.RunState{}, err
+	}
+	inspection, err := openInspectionReferenceRuntime(runDir, manifest)
+	if err != nil {
+		return multiagent.RunState{}, err
+	}
+	state, cancelErr := inspection.runtime.Cancel(ctx, childRunID, reason)
+	return state, errors.Join(cancelErr, inspection.close())
 }
 
 func freewillFirstNonEmpty(values ...string) string {

@@ -72,6 +72,10 @@ type freewillDecisionRequest struct {
 }
 
 func (s *Server) handleFreewillApproval(w http.ResponseWriter, r *http.Request) {
+	if strings.Contains(r.URL.Path, "/children/") {
+		s.handleFreewillChildApproval(w, r)
+		return
+	}
 	if s.freewillApprovals == nil {
 		writeJSONError(w, "Freewill approval service is not configured", http.StatusServiceUnavailable)
 		return
@@ -148,4 +152,69 @@ func (s *Server) handleFreewillApproval(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, status)
+}
+
+func (s *Server) handleFreewillChildApproval(w http.ResponseWriter, r *http.Request) {
+	if s.freewillChildApprovals == nil {
+		writeJSONError(w, "Freewill child approval service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/freewill/runs/"), "/"), "/")
+	if (len(parts) != 4 && len(parts) != 6) || !validMultiAgentRunID(parts[0]) || parts[1] != "children" ||
+		!validMultiAgentRunID(parts[2]) || parts[3] != "approvals" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if len(parts) == 4 {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		approvals, err := s.freewillChildApprovals.ListChildApprovals(r.Context(), parts[0], parts[2])
+		if err != nil {
+			writeJSONError(w, "Freewill child approvals unavailable", http.StatusConflict)
+			return
+		}
+		if approvals == nil {
+			approvals = []FreewillChildApproval{}
+		}
+		writeJSON(w, map[string]any{"approvals": approvals})
+		return
+	}
+	if parts[5] != "decision" || strings.TrimSpace(parts[4]) == "" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var request freewillDecisionRequest
+	decoder := json.NewDecoder(io.LimitReader(http.MaxBytesReader(w, r.Body, s.maxRequestBytes), 4097))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		writeJSONError(w, "invalid Freewill child decision", http.StatusBadRequest)
+		return
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		writeJSONError(w, "invalid Freewill child decision", http.StatusBadRequest)
+		return
+	}
+	if (request.Decision != "grant" && request.Decision != "deny") || len(request.Reason) > 256 {
+		writeJSONError(w, "invalid Freewill child decision", http.StatusBadRequest)
+		return
+	}
+	actor := strings.TrimSpace(r.URL.Query().Get("by"))
+	if actor == "" {
+		actor = "api:user"
+	}
+	approval, err := s.freewillChildApprovals.DecideChildApproval(r.Context(), parts[0], parts[2], parts[4], request.Decision, actor, request.Reason)
+	if err != nil {
+		writeJSONError(w, "Freewill child decision could not be recorded", http.StatusConflict)
+		return
+	}
+	writeJSON(w, approval)
 }

@@ -359,10 +359,10 @@ func (r *DurableRuntime) RenewFreewillWake(ctx context.Context, lease FreewillWa
 // unexpired wake lease. A choice is only a proposal for approval; this method
 // never advances to running or invokes ordinary workflow roles.
 func (r *DurableRuntime) CommitFreewillSelection(ctx context.Context, lease FreewillWakeLease, selection freewill.Selection, verifiedResumeIDs map[string]struct{}) (DurableRun, error) {
-	return r.CommitFreewillSelectionWithEvidence(ctx, lease, selection, verifiedResumeIDs, FreewillSelectionEvidence{})
+	return r.CommitFreewillSelectionWithEvidence(ctx, lease, selection, verifiedResumeIDs, "", FreewillSelectionEvidence{})
 }
 
-func (r *DurableRuntime) CommitFreewillSelectionWithEvidence(ctx context.Context, lease FreewillWakeLease, selection freewill.Selection, verifiedResumeIDs map[string]struct{}, evidence FreewillSelectionEvidence) (DurableRun, error) {
+func (r *DurableRuntime) CommitFreewillSelectionWithEvidence(ctx context.Context, lease FreewillWakeLease, selection freewill.Selection, verifiedResumeIDs map[string]struct{}, resumeFromRunID string, evidence FreewillSelectionEvidence) (DurableRun, error) {
 	if evidence.Provider != "" || evidence.Model != "" || evidence.Usage != (cost.TokenUsage{}) {
 		if strings.TrimSpace(evidence.Provider) == "" || strings.TrimSpace(evidence.Model) == "" || len(evidence.Provider) > 64 || len(evidence.Model) > 256 ||
 			evidence.Usage.PromptTokens < 0 || evidence.Usage.CompletionTokens < 0 || evidence.Usage.TotalTokens < 0 {
@@ -390,6 +390,17 @@ func (r *DurableRuntime) CommitFreewillSelectionWithEvidence(ctx context.Context
 	if err := selection.Validate(record.State.RequestIdentity.RequesterID, record.Freewill.Scope, verifiedResumeIDs); err != nil {
 		return record, err
 	}
+	selected, selectedOK := selectedFreewillCandidate(&FreewillRunState{Candidates: selection.Candidates, ChoiceID: selection.ChoiceID})
+	if resumeFromRunID != "" {
+		if resumeFromRunID == record.State.RunID || !selectedOK || selected.Request.CandidateSource != freewill.SourceResume {
+			return record, errors.New("multiagent: Freewill resume lineage does not match the selected verified candidate")
+		}
+		if _, ok := verifiedResumeIDs[selected.CandidateID]; !ok {
+			return record, errors.New("multiagent: Freewill resume lineage is not host-verified")
+		}
+	} else if selectedOK && selected.Request.CandidateSource == freewill.SourceResume {
+		return record, errors.New("multiagent: selected Freewill resume requires host-verified predecessor lineage")
+	}
 	target := freewill.StateProposed
 	if selection.ChoiceID == "" {
 		target = freewill.StateSleeping
@@ -399,6 +410,7 @@ func (r *DurableRuntime) CommitFreewillSelectionWithEvidence(ctx context.Context
 	}
 	record.Freewill.Lifecycle = target
 	record.Freewill.Candidates = cloneFreewillCandidates(selection.Candidates)
+	record.Freewill.ResumeFromRunID = resumeFromRunID
 	record.Freewill.VerifiedResumeIDs = make([]string, 0, len(verifiedResumeIDs))
 	for id := range verifiedResumeIDs {
 		record.Freewill.VerifiedResumeIDs = append(record.Freewill.VerifiedResumeIDs, id)
@@ -437,6 +449,9 @@ func (r *DurableRuntime) CommitFreewillSelectionWithEvidence(ctx context.Context
 		"attempt": lease.Attempt, "lifecycle": string(target), "candidate_count": len(selection.Candidates), "choice_id": selection.ChoiceID,
 		"recovery_count": record.Freewill.SelectionRecoveryNumber,
 	})
+	if record.Freewill.ResumeFromRunID != "" {
+		evt.Payload["resume_from_run_id"] = record.Freewill.ResumeFromRunID
+	}
 	for key, value := range freewillSelectionTraceFields(selection) {
 		evt.Payload[key] = value
 	}

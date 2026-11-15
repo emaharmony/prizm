@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/emaharmony/prizm/internal/safety"
@@ -115,6 +116,45 @@ func TestHandleIndexHTML(t *testing.T) {
 	// Check that it contains "Prizm overview"
 	if !contains(body, "Prizm overview") {
 		t.Error("index.html does not contain 'Prizm Dashboard'")
+	}
+}
+
+func TestFreewillDashboardExposesSeparateBoundChildPatchReview(t *testing.T) {
+	page, err := staticFS.ReadFile("static/freewill.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(page)
+	for _, contract := range []string{
+		"Intention approval", "Child patch approval", "execution_status === 'accepted'",
+		"child_status === 'paused'", "/children/${encodeURIComponent(parent.child_run_id)}/approvals",
+		"sandbox_binding", "artifact_digest", "patch_sha256", "Exact proposed diff",
+		"data-child-decision=\"grant\"", "data-child-decision=\"deny\"",
+		"reason: reason.trim()", "ui.escape(approval.patch || '')",
+	} {
+		if !strings.Contains(body, contract) {
+			t.Errorf("Freewill dashboard is missing child patch review contract %q", contract)
+		}
+	}
+}
+
+func TestFreewillDashboardExposesTerminalExecutionOutcomes(t *testing.T) {
+	page, err := staticFS.ReadFile("static/freewill.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(page)
+	for _, contract := range []string{
+		"Execution outcomes", "execution_status", "child_status", "validation_summary",
+		"execution_failure_code", "execution_report_sha256", "selection_failure_code", "selection_next_at",
+		"approval_status === 'denied'", "Load child report",
+		"/multiagent/runs/${encodeURIComponent(childRunID)}/report",
+		"report.artifacts", "Changed files:", "Validation checks:", "Full terminal report",
+		"ui.escape(JSON.stringify(report, null, 2))",
+	} {
+		if !strings.Contains(body, contract) {
+			t.Errorf("Freewill dashboard is missing terminal outcome contract %q", contract)
+		}
 	}
 }
 

@@ -104,25 +104,25 @@ type CoreIdentityInterface interface {
 
 // Server provides the Prizm HTTP API.
 type Server struct {
-	resumeCtx   contextctx.Context
-	resumeStop  contextctx.CancelFunc
-	addr        string
-	orch        *orchestrator.Orchestrator
-	store       *task.Store
-	sessions    *session.Manager
-	engine      *delegation.Engine
-	approval    *delegation.ApprovalManager
-	tracker     *delegation.Tracker
-	autopatch   AutoPatchStarter
-	nc          *nats.Conn
-	mux         *http.ServeMux
-	editorMu    sync.RWMutex
-	editorWS    *editor.EditorState
+	resumeCtx  contextctx.Context
+	resumeStop contextctx.CancelFunc
+	addr       string
+	orch       *orchestrator.Orchestrator
+	store      *task.Store
+	sessions   *session.Manager
+	engine     *delegation.Engine
+	approval   *delegation.ApprovalManager
+	tracker    *delegation.Tracker
+	autopatch  AutoPatchStarter
+	nc         *nats.Conn
+	mux        *http.ServeMux
+	editorMu   sync.RWMutex
+	editorWS   *editor.EditorState
 	// freewillDrafts holds validated-but-unconfirmed freewill config drafts
 	// between the preview and confirm requests of the approval gate.
 	freewillDrafts *freewillDraftStore
-	providers   *provider.ProviderRegistry
-	invocations *invocation.Store
+	providers      *provider.ProviderRegistry
+	invocations    *invocation.Store
 	// invokeIdleTimeout resets a stateful invoke conversation after this idle
 	// window (0 = no idle safety net). See SessionConfig.InvokeIdleTimeoutHours.
 	invokeIdleTimeout time.Duration
@@ -183,17 +183,63 @@ type Server struct {
 	// maxWorkspaceFileBytes caps a single workspace file write. 0 → 4 MiB.
 	maxWorkspaceFileBytes int64
 
-	multiAgentRuns       multiagent.RunLocator
-	multiAgentController MultiAgentController
-	definitionStore      *multiagent.DefinitionStore
-	workflowRunStarter   WorkflowRunStarter
-	freewillApprovals    FreewillApprovalController
-	freewillControl      FreewillOperatorControlController
+	multiAgentRuns         multiagent.RunLocator
+	multiAgentController   MultiAgentController
+	definitionStore        *multiagent.DefinitionStore
+	workflowRunStarter     WorkflowRunStarter
+	freewillApprovals      FreewillApprovalController
+	freewillChildApprovals FreewillChildApprovalController
+	freewillControl        FreewillOperatorControlController
 }
 
 type FreewillApprovalController interface {
 	Status(contextctx.Context, string) (multiagent.FreewillApprovalStatus, error)
 	DecideStatus(contextctx.Context, string, string, string, string, string) (multiagent.FreewillApprovalStatus, error)
+}
+
+// FreewillChildApproval is the review-only projection for a pending sandbox
+// patch. Patch is the exact persisted diff covered by ApprovalID.
+type FreewillChildApproval struct {
+	ParentRunID    string                      `json:"parent_run_id"`
+	ChildRunID     string                      `json:"child_run_id"`
+	ApprovalID     string                      `json:"approval_id"`
+	ProposalID     string                      `json:"proposal_id"`
+	Status         string                      `json:"status"`
+	RequestedBy    string                      `json:"requested_by"`
+	TargetPath     string                      `json:"target_path"`
+	Patch          string                      `json:"patch"`
+	SandboxBinding FreewillChildSandboxBinding `json:"sandbox_binding"`
+	PatchPlan      FreewillChildPatchPlan      `json:"patch_plan"`
+}
+
+// FreewillChildSandboxBinding is the review projection of the host-verified
+// sandbox identity attached to a pending patch approval.
+type FreewillChildSandboxBinding struct {
+	TaskID         string `json:"task_id"`
+	ExecutionKey   string `json:"execution_key"`
+	AgentID        string `json:"agent_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	WorkspacePath  string `json:"workspace_path"`
+	BaseSHA        string `json:"base_sha"`
+	BaseTree       string `json:"base_tree"`
+	ArtifactDigest string `json:"artifact_digest"`
+}
+
+// FreewillChildPatchPlan is the immutable target identity covered by the
+// separate child patch approval.
+type FreewillChildPatchPlan struct {
+	BaseSHA      string   `json:"base_sha"`
+	BaseTree     string   `json:"base_tree"`
+	ExpectedTree string   `json:"expected_tree"`
+	PatchSHA256  string   `json:"patch_sha256"`
+	Paths        []string `json:"paths"`
+}
+
+// FreewillChildApprovalController binds patch review to the durable parent
+// dispatch and its one admitted child run.
+type FreewillChildApprovalController interface {
+	ListChildApprovals(contextctx.Context, string, string) ([]FreewillChildApproval, error)
+	DecideChildApproval(contextctx.Context, string, string, string, string, string, string) (FreewillChildApproval, error)
 }
 
 type FreewillOperatorControlController interface {
@@ -280,12 +326,13 @@ type Config struct {
 	// RemClient is the Remembrance client for the memories API. Nil → Remembrance source disabled.
 	RemClient *remembrance.Client
 
-	MultiAgentRuns       multiagent.RunLocator
-	MultiAgentController MultiAgentController
-	DefinitionStore      *multiagent.DefinitionStore
-	WorkflowRunStarter   WorkflowRunStarter
-	FreewillApprovals    FreewillApprovalController
-	FreewillControl      FreewillOperatorControlController
+	MultiAgentRuns         multiagent.RunLocator
+	MultiAgentController   MultiAgentController
+	DefinitionStore        *multiagent.DefinitionStore
+	WorkflowRunStarter     WorkflowRunStarter
+	FreewillApprovals      FreewillApprovalController
+	FreewillChildApprovals FreewillChildApprovalController
+	FreewillControl        FreewillOperatorControlController
 }
 
 // AutoPatchStarter is the API surface needed from the autopatch service.
@@ -324,22 +371,23 @@ func NewServer(cfg Config) *Server {
 		invokeIdleTimeout:  cfg.InvokeIdleTimeout,
 		mux:                http.NewServeMux(),
 
-		maxRequestBytes:       cfg.MaxRequestBytes,
-		maxWorkspaceFileBytes: cfg.MaxWorkspaceFileBytes,
-		memStore:              cfg.MemStore,
-		remClient:             cfg.RemClient,
-		ctxBuilder:            cfg.CtxBuilder,
-		memStoreForInvoke:     cfg.MemStoreForInvoke,
-		memInjectorForInvoke:  cfg.MemInjectorForInvoke,
-		coreIdentityForInject: cfg.CoreIdentityForInvoke,
-		toolRegForInvoke:      cfg.ToolRegForInvoke,
-		toolExecForInvoke:     cfg.ToolExecForInvoke,
-		multiAgentRuns:        cfg.MultiAgentRuns,
-		multiAgentController:  cfg.MultiAgentController,
-		definitionStore:       cfg.DefinitionStore,
-		workflowRunStarter:    cfg.WorkflowRunStarter,
-		freewillApprovals:     cfg.FreewillApprovals,
-		freewillControl:       cfg.FreewillControl,
+		maxRequestBytes:        cfg.MaxRequestBytes,
+		maxWorkspaceFileBytes:  cfg.MaxWorkspaceFileBytes,
+		memStore:               cfg.MemStore,
+		remClient:              cfg.RemClient,
+		ctxBuilder:             cfg.CtxBuilder,
+		memStoreForInvoke:      cfg.MemStoreForInvoke,
+		memInjectorForInvoke:   cfg.MemInjectorForInvoke,
+		coreIdentityForInject:  cfg.CoreIdentityForInvoke,
+		toolRegForInvoke:       cfg.ToolRegForInvoke,
+		toolExecForInvoke:      cfg.ToolExecForInvoke,
+		multiAgentRuns:         cfg.MultiAgentRuns,
+		multiAgentController:   cfg.MultiAgentController,
+		definitionStore:        cfg.DefinitionStore,
+		workflowRunStarter:     cfg.WorkflowRunStarter,
+		freewillApprovals:      cfg.FreewillApprovals,
+		freewillChildApprovals: cfg.FreewillChildApprovals,
+		freewillControl:        cfg.FreewillControl,
 	}
 	if s.maxRequestBytes <= 0 {
 		s.maxRequestBytes = 1 << 20 // 1 MiB
@@ -500,14 +548,15 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 }
 
 // requiresAuth reports whether a request targets a protected operation: any
-// state-changing method, or the SSE event stream (which can expose all bus
-// traffic). Read-only GETs remain open for local observation.
+// state-changing method, sensitive Freewill status, or the SSE event stream
+// (which can expose all bus traffic). Other read-only GETs remain open.
 func requiresAuth(r *http.Request) bool {
 	switch r.Method {
 	case http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch:
 		return true
 	}
 	return r.URL.Path == "/api/v1/events/stream" || r.URL.Path == "/api/v1/freewill/control" ||
+		r.URL.Path == "/api/v1/freewill/runs" || r.URL.Path == "/api/v1/freewill/runs/" ||
 		strings.HasPrefix(r.URL.Path, "/api/v1/freewill/runs/") ||
 		(strings.HasPrefix(r.URL.Path, "/api/v1/multiagent/runs/") &&
 			(strings.HasSuffix(r.URL.Path, "/events/stream") ||

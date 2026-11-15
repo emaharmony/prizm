@@ -2,6 +2,7 @@ package multiagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -148,6 +149,132 @@ func TestFreewillNotificationReconcilerScansCanonicalEvents(t *testing.T) {
 	}
 	if svc.scanEvery != 15*time.Second {
 		t.Fatal("scan interval default changed unexpectedly")
+	}
+}
+
+func TestFreewillNotificationWorthyIncludesTerminalExecutionOnly(t *testing.T) {
+	for _, eventType := range []string{event.EventFreewillExecutionCompleted, event.EventFreewillExecutionFailed, event.EventFreewillExecutionCancelled} {
+		if !freewillNotifyWorthy(eventType) {
+			t.Errorf("terminal execution event %q is not notification-worthy", eventType)
+		}
+	}
+	for _, eventType := range []string{event.EventFreewillExecutionDispatching, event.EventFreewillExecutionDispatched} {
+		if freewillNotifyWorthy(eventType) {
+			t.Errorf("nonterminal execution event %q is notification-worthy", eventType)
+		}
+	}
+}
+
+func TestFreewillNotificationReconcilerAdvancesCursorAcrossScans(t *testing.T) {
+	sink := &recordingSink{}
+	svc, _ := newTestService(t, sink)
+	ctx := context.Background()
+
+	first := event.NewEvent(event.EventFreewillApprovalDecided, "test", map[string]any{"run_id": "freewill_a"})
+	if err := svc.events.StoreBatch(ctx, []event.Event{first}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	firstCursor, _, err := svc.loadCursor(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second := event.NewEvent(event.EventFreewillPolicyDenied, "test", map[string]any{"run_id": "freewill_a"})
+	if err := svc.events.StoreBatch(ctx, []event.Event{second}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Reconcile(ctx); err != nil {
+		t.Fatalf("reconcile after cursor advance: %v", err)
+	}
+	secondCursor, lastEventID, err := svc.loadCursor(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondCursor <= firstCursor || lastEventID != second.ID {
+		t.Fatalf("cursor did not advance: first=%d second=%d last_event_id=%q want=%q", firstCursor, secondCursor, lastEventID, second.ID)
+	}
+	if err := svc.Reconcile(ctx); err != nil {
+		t.Fatalf("repeated reconcile at current cursor: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		sink.mu.Lock()
+		n := len(sink.got)
+		sink.mu.Unlock()
+		if n == 2 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected exactly 2 reconciled notifications, got %d", n)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func TestFreewillNotificationReconcilerMigratesLegacyCursor(t *testing.T) {
+	sink := &recordingSink{}
+	svc, _ := newTestService(t, sink)
+	ctx := context.Background()
+
+	previous := event.NewEvent(event.EventFreewillApprovalDecided, "test", map[string]any{"run_id": "freewill_a"})
+	if err := svc.events.StoreBatch(ctx, []event.Event{previous}); err != nil {
+		t.Fatal(err)
+	}
+	_, legacyRowID, err := svc.events.QueryInInsertionOrderPage(ctx, event.EventFilter{Type: "prism.freewill.", Limit: 10}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPayload, err := json.Marshal(map[string]any{"row_id": legacyRowID, "last_event_id": previous.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.outbox.Accept(ctx, "freewill.notification.cursor", event.Command{
+		SchemaVersion:  event.CommandSchemaVersion,
+		EventID:        "legacy-freewill-notify-cursor",
+		Type:           "freewill.notify.cursor",
+		RunID:          "freewill-notification-cursor",
+		CorrelationID:  "freewill-notify-cursor",
+		IdempotencyKey: freewillNotifyCursorKey,
+		Payload:        legacyPayload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	current, _, err := svc.loadCursor(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current != legacyRowID {
+		t.Fatalf("legacy cursor was not migrated: got %d want %d", current, legacyRowID)
+	}
+	next := event.NewEvent(event.EventFreewillPolicyDenied, "test", map[string]any{"run_id": "freewill_a"})
+	if err := svc.events.StoreBatch(ctx, []event.Event{next}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Reconcile(ctx); err != nil {
+		t.Fatalf("reconcile after legacy cursor migration: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		sink.mu.Lock()
+		got := append([]FreewillNotification(nil), sink.got...)
+		sink.mu.Unlock()
+		if len(got) == 1 {
+			if got[0].EventID != next.ID {
+				t.Fatalf("legacy cursor replayed a prior notification: got event %q want %q", got[0].EventID, next.ID)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected only the post-cursor notification, got %d", len(got))
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 

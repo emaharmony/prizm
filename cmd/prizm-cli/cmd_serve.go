@@ -1399,8 +1399,24 @@ func executeServe(args []string) {
 		Usage:              usageStore,
 		UsageWindows:       usageWindowsFromConfig(cfg),
 		Workspace:          cfg.Prizm.Workspace,
-		FreewillApprovals:  func() api.FreewillApprovalController { if freewillRuntime == nil { return nil }; return freewillRuntime.approvals }(),
-		FreewillControl:    func() api.FreewillOperatorControlController { if freewillRuntime == nil { return nil }; return freewillRuntime.control }(),
+		FreewillApprovals: func() api.FreewillApprovalController {
+			if freewillRuntime == nil {
+				return nil
+			}
+			return freewillRuntime.approvals
+		}(),
+		FreewillChildApprovals: func() api.FreewillChildApprovalController {
+			if freewillRuntime == nil {
+				return nil
+			}
+			return freewillRuntime
+		}(),
+		FreewillControl: func() api.FreewillOperatorControlController {
+			if freewillRuntime == nil {
+				return nil
+			}
+			return freewillRuntime.control
+		}(),
 
 		MaxRequestBytes:       cfg.API.MaxRequestBytes,
 		MaxWorkspaceFileBytes: cfg.API.MaxWorkspaceFileBytes,

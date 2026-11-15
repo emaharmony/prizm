@@ -301,7 +301,13 @@ func (b *subAgentBackend) sandboxApprovalExecutor(rt subagent.AgentRuntime) (*to
 	}
 	// Reuse the exact host-owned session tool instance so the pathless submit
 	// operation can only inspect the session opened by sandbox_exec.
-	sandboxTool, err := newSubAgentSandboxTool(rt.WorkDir)
+	var sandboxTool *subAgentSandboxTool
+	var err error
+	if b.sandboxConfig != nil {
+		sandboxTool, err = newSubAgentSandboxTool(rt.WorkDir, *b.sandboxConfig)
+	} else {
+		sandboxTool, err = newSubAgentSandboxTool(rt.WorkDir)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -323,13 +329,17 @@ func (b *subAgentBackend) sandboxApprovalExecutor(rt subagent.AgentRuntime) (*to
 	return executor, nil
 }
 
-func newSubAgentSandboxTool(sourceRoot string) (*subAgentSandboxTool, error) {
+func newSubAgentSandboxTool(sourceRoot string, configs ...sandbox.Config) (*subAgentSandboxTool, error) {
 	if strings.TrimSpace(sourceRoot) == "" {
 		return nil, fmt.Errorf("sandbox code lane requires an isolated task worktree")
 	}
-	t := &subAgentSandboxTool{provider: sandbox.NewProvider(sandbox.Config{
+	config := sandbox.Config{
 		DockerPath: os.Getenv("PRIZM_SUBAGENT_SANDBOX_DOCKER"), Image: os.Getenv("PRIZM_SUBAGENT_SANDBOX_IMAGE"),
 		WorkRoot: os.Getenv("PRIZM_SUBAGENT_SANDBOX_WORK_ROOT"), ArtifactRoot: os.Getenv("PRIZM_SUBAGENT_SANDBOX_ARTIFACT_ROOT"),
-	}), sourceRoot: sourceRoot}
+	}
+	if len(configs) > 0 {
+		config = configs[0]
+	}
+	t := &subAgentSandboxTool{provider: sandbox.NewProvider(config), sourceRoot: sourceRoot}
 	return t, nil
 }

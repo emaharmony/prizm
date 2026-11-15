@@ -53,6 +53,38 @@ func TestSnapshotTrackedCopiesOnlyAllowlistedRegularSource(t *testing.T) {
 	}
 }
 
+func TestDetachedWorktreeNormalizationMatchesTrustedCleanGuard(t *testing.T) {
+	root := t.TempDir()
+	cleanTempGitObjectsOnWindows(t, root)
+	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(globalConfig, []byte("[core]\n\tautocrlf = true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+
+	git(t, root, "init", "--quiet")
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git(t, root, "add", "main.go")
+	git(t, root, "-c", "user.name=Sandbox Test", "-c", "user.email=sandbox@example.invalid", "commit", "--quiet", "-m", "base")
+
+	child := filepath.Join(root, ".prizm", "worktrees", "run")
+	if err := gitx.CreateDetachedWorktree(context.Background(), root, child); err != nil {
+		t.Fatalf("create detached worktree: %v", err)
+	}
+	if _, err := snapshotTracked(context.Background(), child, filepath.Join(t.TempDir(), "clean"), withDefaults(Config{})); err != nil {
+		t.Fatalf("fresh worktree should pass trusted clean-source guard: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(child, "main.go"), []byte("package main\n// genuine edit\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := snapshotTracked(context.Background(), child, filepath.Join(t.TempDir(), "dirty"), withDefaults(Config{})); err == nil || err.Error() != "sandbox source worktree is not clean" {
+		t.Fatalf("trusted clean-source guard should reject a tracked edit, got %v", err)
+	}
+}
+
 func TestSandboxPathsArePortableAcrossArchiveConsumers(t *testing.T) {
 	for _, path := range []string{"main.go", "internal/sandbox.go", "../escape", `..\escape`, `C:\secret`, `/absolute`, "dir//file", "CON", "nul.txt", "COM1.log", "LPT9"} {
 		want := !strings.ContainsAny(path, `\\:`) && !strings.HasPrefix(path, "/") && path != "../escape" && path != "dir//file"

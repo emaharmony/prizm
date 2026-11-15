@@ -2850,3 +2850,13 @@ Review identified cross-platform path hazards: backslashes, trailing dots/spaces
 - Focused checks passed: sandbox `TestReviewPatchRejectsBinaryChanges`; subagent `TestPrerequisiteInstructionDefinesPathlessSandboxProposalEnvelope`; workflow `TestSandboxApprovalBridgeCompletesPrerequisiteAndResolvesProposal`, `TestSandboxApprovalBridgeCorrectiveTurnUsesOnlyPathlessProposalTool`, and default prerequisite coverage; CLI bridge prompt, registry, and proposal lifecycle/identity tests. `git diff --check` passed. No Mac, service, Freewill approval, or deployment action was taken.
 
 **Next action:** independent rereview found no actionable P1/P2 findings. Prepare the exact PR for coordinator authorization; after publication, require exact-head CI. Native build/Linux compile/`go vet` limits documented in the preceding handoff remain.
+
+## 2026-11-13 — FW-P2 approved-reference child-dispatch PR1 candidate
+
+**Roadmap IDs:** FW-P2 and FW-G2; R1/G1 remains a prerequisite for served or unattended FW-P2.
+
+Prepared local branch `codex/freewill-p2-staging-pr1` from `947afe43738c72a98f862c49a3f678109e73dff9`; its merge base is the supplied staging head `4083cb803f6b4ab83cd93d6cc27ef64281f1701e`. The implementation slice is 43 files (`+5915/-303`) for approved reference-child dispatch, approval, recovery, halt, and reporting. No remote operation was performed.
+
+**Validation:** Eight focused CLI dispatch/approval/recovery/halt tests passed; 16 selected multiagent approval/control/provider tests passed; focused API, dashboard, Ollama provider, and orchestrator Freewill tests passed; the sandbox package passed; the Windows CLI build passed; `git diff --check` passed. The full suite was not run.
+
+**Risks and next action:** The Linux-only production-cycle OCI test requires Linux OCI CI. Exact-head CI and independent review remain required before publication. R1/G1 and real OCI execution-safety acceptance remain open; this candidate does not claim served or unattended P2 acceptance.
