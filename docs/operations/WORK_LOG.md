@@ -3069,7 +3069,7 @@ path gates, and does not satisfy R1/G1's real approval/apply/verify/resume or
 worker-loss acceptance. Review the local changes, then request independent
 review before any PR into `codex/freewill-integration`; do not target staging.
 
-## 2026-11-15 — FW-G2/E68 stale approval revocation before OCI launch
+## 2026-11-16 04:28:40 UTC (2026-11-15 23:28:40 America/New_York, UTC-05:00) — FW-G2/E68 stale approval revocation before OCI launch
 
 **Roadmap IDs:** FW-P2 and FW-G2; R1/G1 remains open. Branch
 `codex/freewill-g2-revocation-before-oci` is based on integration merge
