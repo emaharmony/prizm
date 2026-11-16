@@ -1,3 +1,45 @@
+## Current Handoff: FW-G2/E69 composed OCI network and host-path boundary probe (2026-11-16)
+
+**Roadmap IDs:** FW-P2 and FW-G2; B1/B2 and R1/G1 remain open. Branch
+`codex/freewill-g2-b2-network-host-boundary` starts at current integration
+`bfdf1bcf334dff01824eadf222408281ffdca715` (PR #154).
+
+`TestFreewillProductionNetworkAndHostPathBoundariesOCI` composes the served
+Freewill dispatcher with a synthetic parent grant and one real OCI child. The
+child attempts to read and write a synthetic sentinel outside its authorized
+mounts and connect to a local test listener. Before the boundary probe, a
+separate no-network cached-image container running as UID 1000 successfully
+reads the 0666 sentinel and writes a disposable sibling in its test-owned 0777
+directory, ruling out DAC denial as the reason for the composed denial. The host verifies
+the sentinel is unchanged and the listener accepted no connection. A small synthetic
+`boundary_probe.md` is exported to the sandbox review ZIP and contains the
+observed markers. The test confirms one child patch remains pending, the
+served parent identifies that child, both source and child worktrees are
+clean, the marker was not applied, and the scripted provider trace is bounded
+at four calls. It stops before the child patch grant/apply. The harness uses a
+test-created synthetic parent grant only to enter the governed child path.
+
+**Verification:** `GOOS=linux GOARCH=amd64 go test -c` passed on Windows. The
+native Linux OCI test passed in 1.72s on Docker Engine 29.9.2 with cached image
+`debian@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc`;
+the Freewill test run ID was `run_8d6df0c0f83785cb55b586fe0c`. A disposable
+runner used a fresh named volume mounted at the daemon-visible mountpoint; a
+nested read-only mount preflight confirmed the same marker was visible to the
+runner and daemon. A separate UID 1000 DAC-positive preflight read the sentinel
+and wrote a disposable sibling before the composed test. The runner and volume were removed, and no image was pulled or deleted. The synthetic child only attempted local loopback; there was no
+external probe, secret, private data, or project write. Existing
+`TestRunArgsEnforceContainerBoundary` asserts `--network=none`; this composed
+test separately verifies the listener outcome. Test binary SHA-256:
+`1C11C158079636F4B090B6021FF7F190DA802EDF0C776CD7F62D40E8F861CD4C`.
+Visual review is not applicable.
+
+**Limits and next action:** This is one synthetic composed listener/sentinel
+proof, not broad B2 acceptance. It does not cover general internet egress,
+symlink/traversal attacks, host secret discovery, identity, budgets, tool
+chaining, worker loss, or R1/G1 approval/apply/verify/resume. The pending
+proposal is evidence only and is not applied. Obtain independent review of the
+local commit before any PR; do not target staging or deploy.
+
 ## Current Handoff: FW-G2/E68 revoked parent approval before OCI launch (2026-11-15)
 
 **Roadmap IDs:** FW-P2 and FW-G2; R1/G1 remains an upstream acceptance gate.

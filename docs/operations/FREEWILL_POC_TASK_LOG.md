@@ -200,3 +200,44 @@ actual child OCI execution. Network/secret, identity, budget, isolation/path
 escape, and other authorization gates remain open. Obtain independent review
 of the local diff before opening a PR to `codex/freewill-integration`; no
 staging merge or deployment.
+
+## 2026-11-16 — FW-G2/E69 composed OCI network and host-path boundary probe
+
+**Roadmap IDs:** FW-P2 and FW-G2; B1/B2 and R1/G1 remain open. Branch
+`codex/freewill-g2-b2-network-host-boundary` starts at integration merge
+`bfdf1bcf334dff01824eadf222408281ffdca715` (PR #154).
+
+**Expected:** The synthetic served child cannot read a host sentinel outside
+its authorized mounts, cannot change that sentinel, and cannot connect to a
+host-local loopback listener. The child proposal remains pending; no patch
+grant or apply occurs; source and child worktrees stay clean.
+
+**Observed:** `TestFreewillProductionNetworkAndHostPathBoundariesOCI` ran one
+synthetic parent grant through the served production dispatcher, OCI sandbox,
+and pending child-patch route. The bounded sandbox ZIP contains exactly
+`host_read=denied`, `host_write=attempted`, and `host_loopback=denied`. The
+synthetic host sentinel remained unchanged; the listener accepted no
+connection; the served parent retained the child ID; the child patch stayed
+pending; the source and child worktrees were clean; and the marker was not
+applied. The test observed the expected four scripted provider calls and
+returned before child approval/apply.
+
+**Verification:** Linux test binary cross-compiled on Windows. The native
+Linux OCI test passed in 1.72s on Docker Engine 29.9.2 with the already-cached
+image
+`debian@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc`.
+Freewill run ID: `run_8d6df0c0f83785cb55b586fe0c`. The disposable runner used a
+fresh named volume at the daemon-visible mountpoint; a no-network nested mount
+preflight verified path visibility. The DAC-positive UID 1000 read/write
+preflight passed before the composed boundary case. The test volume and runner were removed; no image was pulled or deleted. The child only probed local loopback. Existing
+`TestRunArgsEnforceContainerBoundary` checks the `--network=none` launch flag;
+the composed test separately checks listener reachability. Test binary
+SHA-256: `1C11C158079636F4B090B6021FF7F190DA802EDF0C776CD7F62D40E8F861CD4C`.
+`git diff --check` passed. Visual evidence is not applicable.
+
+**Limits / next action:** This closes one synthetic composition seam only. It
+does not close broad B2: general internet egress, symlink/traversal, secret
+discovery, identity, budgets, tool chaining, worker loss, and R1/G1
+approval/apply/verify/resume remain open. The sentinel is synthetic; no real
+credentials or project data were used. Obtain independent review before any
+PR; no staging or deployment.

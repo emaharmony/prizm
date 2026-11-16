@@ -3,10 +3,12 @@
 package main
 
 import (
+	"archive/zip"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -35,24 +37,31 @@ func TestFreewillProductionOneCycleOCI(t *testing.T) {
 	if os.Getenv("PRIZM_SANDBOX_OCI_CONFORMANCE") != "1" {
 		t.Skip("set PRIZM_SANDBOX_OCI_CONFORMANCE=1 to require a Linux OCI engine")
 	}
-	runFreewillProductionCycleOCI(t, false, false)
+	runFreewillProductionCycleOCI(t, false, false, false)
 }
 
 func TestFreewillProductionOperatorHaltDuringOCI(t *testing.T) {
 	if os.Getenv("PRIZM_SANDBOX_OCI_CONFORMANCE") != "1" || strings.TrimSpace(os.Getenv("PRIZM_SANDBOX_OCI_IMAGE")) == "" {
 		t.Skip("set PRIZM_SANDBOX_OCI_CONFORMANCE=1 and PRIZM_SANDBOX_OCI_IMAGE to a locally cached digest-pinned image")
 	}
-	runFreewillProductionCycleOCI(t, true, false)
+	runFreewillProductionCycleOCI(t, true, false, false)
 }
 
 func TestFreewillProductionRevokedApprovalBeforeOCILaunch(t *testing.T) {
 	if os.Getenv("PRIZM_SANDBOX_OCI_CONFORMANCE") != "1" || strings.TrimSpace(os.Getenv("PRIZM_SANDBOX_OCI_IMAGE")) == "" {
 		t.Skip("set PRIZM_SANDBOX_OCI_CONFORMANCE=1 and PRIZM_SANDBOX_OCI_IMAGE to a locally cached digest-pinned image")
 	}
-	runFreewillProductionCycleOCI(t, false, true)
+	runFreewillProductionCycleOCI(t, false, true, false)
 }
 
-func runFreewillProductionCycleOCI(t *testing.T, haltDuringOCI, revokeBeforeOCILaunch bool) {
+func TestFreewillProductionNetworkAndHostPathBoundariesOCI(t *testing.T) {
+	if os.Getenv("PRIZM_SANDBOX_OCI_CONFORMANCE") != "1" || strings.TrimSpace(os.Getenv("PRIZM_SANDBOX_OCI_IMAGE")) == "" {
+		t.Skip("set PRIZM_SANDBOX_OCI_CONFORMANCE=1 and PRIZM_SANDBOX_OCI_IMAGE to a locally cached digest-pinned image")
+	}
+	runFreewillProductionCycleOCI(t, false, false, true)
+}
+
+func runFreewillProductionCycleOCI(t *testing.T, haltDuringOCI, revokeBeforeOCILaunch, boundaryProbe bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	dockerPath := strings.TrimSpace(os.Getenv("PRIZM_SUBAGENT_SANDBOX_DOCKER"))
@@ -60,7 +69,7 @@ func runFreewillProductionCycleOCI(t *testing.T, haltDuringOCI, revokeBeforeOCIL
 		dockerPath = "docker"
 	}
 	image := ""
-	if haltDuringOCI || revokeBeforeOCILaunch {
+	if haltDuringOCI || revokeBeforeOCILaunch || boundaryProbe {
 		image = requireCachedProductionOCIImage(t, ctx, dockerPath, os.Getenv("PRIZM_SANDBOX_OCI_IMAGE"))
 	} else {
 		image = requireFreewillProductionOCIImage(t, ctx, dockerPath)
@@ -86,11 +95,63 @@ func runFreewillProductionCycleOCI(t *testing.T, haltDuringOCI, revokeBeforeOCIL
 	if err := gitx.EnsureClean(ctx, source); err != nil {
 		t.Fatalf("source fixture is not clean: %v", err)
 	}
+	var sentinelPath string
+	var listener net.Listener
+	var listenerAccepted chan struct{}
+	var err error
+	if boundaryProbe {
+		sentinelDir, err := os.MkdirTemp("", "prizm-freewill-boundary-sentinel-")
+		if err != nil {
+			t.Fatalf("create test-owned outside-mount sentinel directory: %v", err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(sentinelDir) })
+		if err := os.Chmod(sentinelDir, 0o777); err != nil {
+			t.Fatalf("make test-owned sentinel directory traversable: %v", err)
+		}
+		sentinelPath = filepath.Join(sentinelDir, "outside-mount-sentinel.txt")
+		if err := os.WriteFile(sentinelPath, []byte("synthetic-sentinel-unchanged\n"), 0o666); err != nil {
+			t.Fatalf("create synthetic host sentinel: %v", err)
+		}
+		if err := os.Chmod(sentinelPath, 0o666); err != nil {
+			t.Fatalf("make synthetic host sentinel readable and writable: %v", err)
+		}
+		if err := verifyProductionCycleSentinelDAC(ctx, dockerPath, image, sentinelDir, sentinelPath); err != nil {
+			t.Fatalf("UID 1000 DAC-positive sentinel preflight failed: %v", err)
+		}
+		listener, err = net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("create local loopback boundary listener: %v", err)
+		}
+		defer listener.Close()
+		listenerAccepted = make(chan struct{}, 1)
+		go func() {
+			conn, acceptErr := listener.Accept()
+			if acceptErr == nil {
+				listenerAccepted <- struct{}{}
+				_ = conn.Close()
+			}
+		}()
+	}
 
 	ociStartMarker := "e45-" + filepath.Base(root)
 	sandboxExecReply := productionCycleSandboxExecRequest
 	if haltDuringOCI {
 		sandboxExecReply = fmt.Sprintf(`{"type":"tool_request","tool":"sandbox_exec","input":{"command":"printf 'running\\n' > %s; while :; do sleep 1; done; printf 'approved-change\\n' > approved.txt"}}`, ociStartMarker)
+	} else if boundaryProbe {
+		listenerPort := listener.Addr().(*net.TCPAddr).Port
+		probeCommand := fmt.Sprintf(`set -eu
+command -v timeout >/dev/null
+command -v /bin/bash >/dev/null
+if cat %s >/dev/null 2>&1; then echo host_read=allowed; exit 61; fi
+printf 'changed\\n' > %s 2>/dev/null || true
+if timeout 3s /bin/bash -c 'printf x > /dev/tcp/127.0.0.1/%d' >/dev/null 2>&1; then echo host_loopback=reachable; exit 63; fi
+printf 'host_read=denied\nhost_write=attempted\nhost_loopback=denied\n' > boundary_probe.md
+printf 'synthetic boundary probe completed\n'`, quoteProductionCycleShellWord(sentinelPath), quoteProductionCycleShellWord(sentinelPath), listenerPort)
+		request, err := json.Marshal(map[string]any{"type": "tool_request", "tool": "sandbox_exec", "input": map[string]string{"command": probeCommand}})
+		if err != nil {
+			t.Fatalf("encode synthetic boundary probe request: %v", err)
+		}
+		sandboxExecReply = string(request)
 	}
 	providerScript := newProductionCycleModelScript([]string{
 		productionCyclePlannerReply,
@@ -472,6 +533,42 @@ func runFreewillProductionCycleOCI(t *testing.T, haltDuringOCI, revokeBeforeOCIL
 	}
 	childPath := fmt.Sprintf("/api/v1/freewill/runs/%s/children/%s/approvals", woken.State.RunID, childID)
 	listedPatch := getFreewillProductionCycleApprovals(t, apiServer.URL+childPath, "synthetic-token")
+	if boundaryProbe {
+		if len(listedPatch) != 1 || listedPatch[0].ApprovalID != patchApproval.ApprovalID ||
+			listedPatch[0].Status != string(approval.StatusPending) || listedPatch[0].TargetPath != "boundary_probe.md" || listedPatch[0].Patch == "" {
+			t.Fatalf("boundary probe must stop at one pending, unapplied review proposal: %#v", listedPatch)
+		}
+		artifactEvidence, err := readProductionCycleBoundaryProbeArtifact(filepath.Join(root, "sandbox-artifacts"))
+		if err != nil || string(artifactEvidence) != "host_read=denied\nhost_write=attempted\nhost_loopback=denied\n" {
+			t.Fatalf("sandbox review artifact evidence=%q err=%v", artifactEvidence, err)
+		}
+		if status, err := service.Status(ctx, woken.State.RunID); err != nil || status.ChildRunID != childID {
+			t.Fatalf("served parent trace lost the synthetic child identity: status=%#v err=%v", status, err)
+		}
+		if got, err := os.ReadFile(sentinelPath); err != nil || string(got) != "synthetic-sentinel-unchanged\n" {
+			t.Fatalf("host sentinel changed during isolated child execution: %q err=%v", got, err)
+		}
+		if err := gitx.EnsureClean(ctx, source); err != nil {
+			t.Fatalf("source fixture changed during boundary probe: %v", err)
+		}
+		if err := gitx.EnsureClean(ctx, manifest.WorkspacePath); err != nil {
+			t.Fatalf("child project workspace changed before patch approval: %v", err)
+		}
+		for _, workspace := range []string{source, manifest.WorkspacePath} {
+			if _, err := os.Stat(filepath.Join(workspace, "boundary_probe.md")); !os.IsNotExist(err) {
+				t.Fatalf("unapproved boundary probe was applied to workspace %s: %v", workspace, err)
+			}
+		}
+		select {
+		case <-listenerAccepted:
+			t.Fatal("sandbox child reached the host loopback listener")
+		case <-time.After(100 * time.Millisecond):
+		}
+		if calls := providerScript.callCount(); calls != 4 {
+			t.Fatalf("boundary probe provider calls=%d, want bounded planner/developer proposal trace", calls)
+		}
+		return
+	}
 	if len(listedPatch) != 1 || listedPatch[0].ApprovalID != patchApproval.ApprovalID || listedPatch[0].Patch == "" || listedPatch[0].TargetPath != "approved.txt" {
 		t.Fatalf("served pending patch projection=%#v", listedPatch)
 	}
@@ -830,6 +927,74 @@ func waitForNoProductionCycleOCIContainer(t *testing.T, ctx context.Context, doc
 		case <-ticker.C:
 		}
 	}
+}
+
+func readProductionCycleBoundaryProbeArtifact(root string) ([]byte, error) {
+	directories, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	for _, directory := range directories {
+		if !directory.IsDir() || !strings.HasPrefix(directory.Name(), "review-") {
+			continue
+		}
+		archive, err := zip.OpenReader(filepath.Join(root, directory.Name(), "changes.zip"))
+		if err != nil {
+			continue
+		}
+		for _, file := range archive.File {
+			if file.Name != "files/boundary_probe.md" {
+				continue
+			}
+			reader, openErr := file.Open()
+			if openErr != nil {
+				_ = archive.Close()
+				return nil, openErr
+			}
+			content, readErr := io.ReadAll(reader)
+			closeErr := reader.Close()
+			archiveErr := archive.Close()
+			if readErr != nil {
+				return nil, readErr
+			}
+			if closeErr != nil {
+				return nil, closeErr
+			}
+			if archiveErr != nil {
+				return nil, archiveErr
+			}
+			return content, nil
+		}
+		_ = archive.Close()
+	}
+	return nil, fmt.Errorf("boundary probe file is absent from the sandbox review artifacts")
+}
+
+func verifyProductionCycleSentinelDAC(ctx context.Context, dockerPath, image, sentinelDir, sentinelPath string) error {
+	siblingPath := filepath.Join(sentinelDir, "uid1000-write-probe.txt")
+	if _, err := runFreewillProductionDocker(ctx, dockerPath,
+		"run", "--rm", "--pull=never", "--network=none", "--user=1000:1000",
+		"--mount", "type=bind,source="+sentinelDir+",target=/preflight",
+		image, "/bin/sh", "-c", `set -eu
+test "$(cat /preflight/outside-mount-sentinel.txt)" = synthetic-sentinel-unchanged
+printf 'uid1000-write-ok\n' > /preflight/uid1000-write-probe.txt`,
+	); err != nil {
+		return fmt.Errorf("read sentinel and write disposable sibling as UID 1000: %w", err)
+	}
+	if got, err := os.ReadFile(sentinelPath); err != nil || string(got) != "synthetic-sentinel-unchanged\n" {
+		return fmt.Errorf("DAC preflight changed synthetic sentinel: %q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(siblingPath); err != nil || string(got) != "uid1000-write-ok\n" {
+		return fmt.Errorf("UID 1000 could not write disposable sibling: %q err=%v", got, err)
+	}
+	if err := os.Remove(siblingPath); err != nil {
+		return fmt.Errorf("remove DAC preflight sibling: %w", err)
+	}
+	return nil
+}
+
+func quoteProductionCycleShellWord(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func runFreewillProductionDocker(ctx context.Context, dockerPath string, args ...string) ([]byte, error) {
