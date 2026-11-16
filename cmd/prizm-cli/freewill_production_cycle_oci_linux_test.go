@@ -35,17 +35,24 @@ func TestFreewillProductionOneCycleOCI(t *testing.T) {
 	if os.Getenv("PRIZM_SANDBOX_OCI_CONFORMANCE") != "1" {
 		t.Skip("set PRIZM_SANDBOX_OCI_CONFORMANCE=1 to require a Linux OCI engine")
 	}
-	runFreewillProductionCycleOCI(t, false)
+	runFreewillProductionCycleOCI(t, false, false)
 }
 
 func TestFreewillProductionOperatorHaltDuringOCI(t *testing.T) {
 	if os.Getenv("PRIZM_SANDBOX_OCI_CONFORMANCE") != "1" || strings.TrimSpace(os.Getenv("PRIZM_SANDBOX_OCI_IMAGE")) == "" {
 		t.Skip("set PRIZM_SANDBOX_OCI_CONFORMANCE=1 and PRIZM_SANDBOX_OCI_IMAGE to a locally cached digest-pinned image")
 	}
-	runFreewillProductionCycleOCI(t, true)
+	runFreewillProductionCycleOCI(t, true, false)
 }
 
-func runFreewillProductionCycleOCI(t *testing.T, haltDuringOCI bool) {
+func TestFreewillProductionRevokedApprovalBeforeOCILaunch(t *testing.T) {
+	if os.Getenv("PRIZM_SANDBOX_OCI_CONFORMANCE") != "1" || strings.TrimSpace(os.Getenv("PRIZM_SANDBOX_OCI_IMAGE")) == "" {
+		t.Skip("set PRIZM_SANDBOX_OCI_CONFORMANCE=1 and PRIZM_SANDBOX_OCI_IMAGE to a locally cached digest-pinned image")
+	}
+	runFreewillProductionCycleOCI(t, false, true)
+}
+
+func runFreewillProductionCycleOCI(t *testing.T, haltDuringOCI, revokeBeforeOCILaunch bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	dockerPath := strings.TrimSpace(os.Getenv("PRIZM_SUBAGENT_SANDBOX_DOCKER"))
@@ -53,7 +60,7 @@ func runFreewillProductionCycleOCI(t *testing.T, haltDuringOCI bool) {
 		dockerPath = "docker"
 	}
 	image := ""
-	if haltDuringOCI {
+	if haltDuringOCI || revokeBeforeOCILaunch {
 		image = requireCachedProductionOCIImage(t, ctx, dockerPath, os.Getenv("PRIZM_SANDBOX_OCI_IMAGE"))
 	} else {
 		image = requireFreewillProductionOCIImage(t, ctx, dockerPath)
@@ -196,6 +203,73 @@ func runFreewillProductionCycleOCI(t *testing.T, haltDuringOCI bool) {
 	}
 	if pending.Freewill.ExecutionDispatch != nil {
 		t.Fatalf("unapproved intention dispatched: %#v", pending.Freewill.ExecutionDispatch)
+	}
+	if revokeBeforeOCILaunch {
+		containersBefore, err := runFreewillProductionDocker(ctx, dockerPath, "ps", "-aq", "--filter", "label=com.prizm.sandbox=true")
+		if err != nil {
+			t.Fatalf("snapshot managed OCI containers before revocation: %v", err)
+		}
+		originalGeneration := pending.Freewill.ApprovalGeneration
+		initialControl, err := control.Status(ctx, "synthetic-agent", scope)
+		if err != nil || initialControl.Halted || initialControl.Generation != originalGeneration {
+			t.Fatalf("pending approval generation differs from durable control state: approval=%d control=%#v err=%v", originalGeneration, initialControl, err)
+		}
+		for _, halted := range []bool{true, false} {
+			controlBody, err := json.Marshal(map[string]any{"agent_id": "synthetic-agent", "project_id": scope.ProjectID,
+				"workspace": scope.Workspace, "halted": halted})
+			if err != nil {
+				t.Fatal(err)
+			}
+			postFreewillProductionCycleDecision(t, apiServer.URL+"/api/v1/freewill/control", "synthetic-token", string(controlBody))
+		}
+		controlState, err := control.Status(ctx, "synthetic-agent", scope)
+		if err != nil || controlState.Halted || controlState.Generation <= originalGeneration {
+			t.Fatalf("control generation did not durably revoke the pending approval: state=%#v original generation=%d err=%v", controlState, originalGeneration, err)
+		}
+		parentPath := fmt.Sprintf("/api/v1/freewill/runs/%s/approvals/%s/decision", woken.State.RunID, pending.Freewill.ApprovalRef)
+		postFreewillProductionCycleDecisionExpectStatus(t, apiServer.URL+parentPath, "synthetic-token", `{"decision":"grant"}`, http.StatusConflict)
+		status, err := service.Status(ctx, woken.State.RunID)
+		if err != nil || status.ApprovalStatus != "revoked" || status.Lifecycle != freewill.StateHalted ||
+			status.PauseReason != "operator_revoked" || !status.ExecutionDisabled || status.ChildRunID != "" || status.ExecutionStatus != "" {
+			t.Fatalf("revoked served status=%#v err=%v, want halted projection without child dispatch", status, err)
+		}
+		storedParent, err := store.Load(ctx, woken.State.RunID)
+		if err != nil || storedParent.Freewill == nil || storedParent.Freewill.ExecutionDispatch != nil ||
+			storedParent.Freewill.ApprovalGeneration != originalGeneration || storedParent.Freewill.Lifecycle != freewill.StateApprovalPending {
+			t.Fatalf("revoked approval changed the pending parent checkpoint or dispatched a child: parent=%#v err=%v", storedParent, err)
+		}
+		storedApproval, err := ownerApprovals.Load(woken.State.RunID, pending.Freewill.ApprovalRef)
+		if err != nil || storedApproval.Status != approval.StatusPending {
+			t.Fatalf("stale parent approval was changed despite generation revocation: approval=%#v err=%v", storedApproval, err)
+		}
+		if calls := providerScript.callCount(); calls != 0 {
+			t.Fatalf("revoked approval caused provider work: calls=%d, want zero", calls)
+		}
+		containersAfter, err := runFreewillProductionDocker(ctx, dockerPath, "ps", "-aq", "--filter", "label=com.prizm.sandbox=true")
+		if err != nil || strings.TrimSpace(string(containersAfter)) != strings.TrimSpace(string(containersBefore)) {
+			t.Fatalf("revoked approval changed managed OCI containers: before=%q after=%q err=%v", containersBefore, containersAfter, err)
+		}
+		if _, err := os.Stat(filepath.Join(source, "approved.txt")); !os.IsNotExist(err) {
+			t.Fatalf("revoked approval created source artifact: %v", err)
+		}
+		if err := gitx.EnsureClean(ctx, source); err != nil {
+			t.Fatalf("revoked approval changed synthetic source repository: %v", err)
+		}
+		readOnlyStore, err := multiagent.OpenExistingSQLiteDurableRunStoreReadOnly(dbPath)
+		if err != nil {
+			t.Fatalf("reopen durable control state read-only: %v", err)
+		}
+		defer readOnlyStore.Close()
+		readOnlyStatus, err := multiagent.NewFreewillApprovalStatusReader(readOnlyStore, approval.NewStore(runsDir))
+		if err != nil {
+			t.Fatalf("construct read-only status projection: %v", err)
+		}
+		reopenedStatus, err := readOnlyStatus.Status(ctx, woken.State.RunID)
+		if err != nil || reopenedStatus.ApprovalStatus != "revoked" || reopenedStatus.Lifecycle != freewill.StateHalted ||
+			reopenedStatus.ChildRunID != "" || reopenedStatus.ExecutionStatus != "" {
+			t.Fatalf("reopened revoked status=%#v err=%v, want durable no-dispatch projection", reopenedStatus, err)
+		}
+		return
 	}
 	parentPath := fmt.Sprintf("/api/v1/freewill/runs/%s/approvals/%s/decision", woken.State.RunID, pending.Freewill.ApprovalRef)
 	parentApproval := postFreewillProductionCycleDecision(t, apiServer.URL+parentPath, "synthetic-token", `{"decision":"grant"}`)
@@ -573,6 +647,10 @@ func waitForProductionCycleApproval(t *testing.T, ctx context.Context, store *ap
 }
 
 func postFreewillProductionCycleDecision(t *testing.T, endpoint, token, body string) []byte {
+	return postFreewillProductionCycleDecisionExpectStatus(t, endpoint, token, body, http.StatusOK)
+}
+
+func postFreewillProductionCycleDecisionExpectStatus(t *testing.T, endpoint, token, body string, expectedStatus int) []byte {
 	t.Helper()
 	request, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(body))
 	if err != nil {
@@ -589,8 +667,8 @@ func postFreewillProductionCycleDecision(t *testing.T, endpoint, token, body str
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("served approval status=%d body=%s", response.StatusCode, result)
+	if response.StatusCode != expectedStatus {
+		t.Fatalf("served approval status=%d, want %d; body=%s", response.StatusCode, expectedStatus, result)
 	}
 	return result
 }

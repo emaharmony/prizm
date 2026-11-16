@@ -1,3 +1,43 @@
+## Current Handoff: FW-G2/E68 revoked parent approval before OCI launch (2026-11-15)
+
+**Roadmap IDs:** FW-P2 and FW-G2; R1/G1 remains an upstream acceptance gate.
+Branch `codex/freewill-g2-revocation-before-oci` is based on integration merge
+`61295cfb1f0505ba8c8e522fe101e2ade9a4e055` (PR #153 includes E45). Test commit
+`e1dc64a456e5aeb703deeba16c8552721d7d7749` adds one Linux-only synthetic
+served authorization regression; no runtime authority code or package was
+changed.
+
+`TestFreewillProductionRevokedApprovalBeforeOCILaunch` creates a pending
+synthetic intention approval, uses the authenticated operator-control API to
+halt and unhalt the exact agent/project/workspace scope, then attempts the
+original grant through the served approval API. The stale grant is rejected
+with HTTP 409. SQLite retains the advanced control generation, and a fresh
+read-only store/status reader projects the approval as `revoked`, lifecycle
+`halted`, and execution-disabled. The stored parent checkpoint and approval
+record themselves remain approval-pending; the test does not claim a persisted
+terminal run transition. It verifies no dispatch/child ID, no child approval,
+apply, validation, provider call, managed OCI container change, source
+artifact, or synthetic-source repository mutation. The parent approval remains
+pending; no decision is granted.
+
+**Verification:** On the Windows host, the Linux CLI test binary cross-compiled
+successfully. The exact test passed on Linux against Docker Engine 29.9.2 and
+the cached image
+`debian@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc`,
+using `-test.run=^TestFreewillProductionRevokedApprovalBeforeOCILaunch$ -test.count=1 -test.timeout=7m`
+in a disposable Debian runner with the existing Docker socket. The runner
+installed `docker.io` and `git` only inside its `--rm` container; no image was
+pulled or deleted. `git diff --check` passed. Visual review is not applicable.
+
+**Limits and next action:** E68 is a single synthetic pre-dispatch revocation
+proof. It does not close broad FW-G2 isolation, budgets, network/secret,
+identity, or adversarial-path gates, nor R1/G1 real approval/apply/verify/resume
+and worker-loss acceptance. The existing parent status projection derives
+revocation from the durable control generation while its stored approval
+checkpoint remains pending. Obtain independent review of the local test and
+documentation diff before any PR. Keep the branch local; do not stage or
+deploy.
+
 ## Current Handoff: FW-G2/E45 in-flight OCI halt acceptance (2026-11-15)
 
 **Roadmap IDs:** FW-P2 and FW-G2; R1/G1 remains an upstream acceptance gate.
