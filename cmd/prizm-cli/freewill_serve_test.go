@@ -315,6 +315,18 @@ func TestServedFreewillP1AdversarialProjectTextCannotExpandAuthority(t *testing.
 		if err := os.WriteFile(readmePath, readmeContents, 0600); err != nil {
 			t.Fatal(err)
 		}
+		for _, args := range [][]string{
+			{"init", "-b", "main"},
+			{"config", "user.name", "Freewill test"},
+			{"config", "user.email", "freewill-test@example.invalid"},
+			{"add", "README.md"},
+			{"commit", "-m", "synthetic project README"},
+		} {
+			command := exec.Command("git", append([]string{"-C", projectPath, "-c", "core.fsmonitor=false"}, args...)...)
+			if output, gitErr := command.CombinedOutput(); gitErr != nil {
+				t.Fatalf("git %v: %v: %s", args, gitErr, output)
+			}
+		}
 	}
 
 	selection := `{"candidates":[` +
@@ -389,7 +401,7 @@ func TestServedFreewillP1AdversarialProjectTextCannotExpandAuthority(t *testing.
 	cfg.Freewill = orchestrator.FreewillConfig{Enabled: true, AgentID: "synthetic-agent", ProjectID: projectID, Model: "synthetic-model",
 		PolicyDir: policyDir, Scheduling: orchestrator.FreewillSchedulingConfig{Enabled: true, Schedule: "0 0 1 1 *"}}
 	cfg.Agents = []orchestrator.AgentConfig{{ID: "synthetic-agent", Provider: "ollama", Model: "synthetic-model"}}
-	cfg.Projects = []orchestrator.ProjectConfig{{ID: projectID, RepoPath: projectPath}}
+	cfg.Projects = []orchestrator.ProjectConfig{{ID: projectID, RepoPath: projectPath, FreewillContextFiles: []string{"README.md"}}}
 	providers := provider.NewProviderRegistry()
 	providers.Register("synthetic-model", &directFreewillChatStub{chat: ollama.NewChatProvider(fakeProvider.URL)}, provider.ModelInfo{ProviderName: "ollama"})
 	runtime, err := openFreewillServeRuntime(cfg, providers, "", filepath.Join(root, "prizm.yaml"), "")
@@ -572,7 +584,7 @@ func TestServedFreewillP1AdversarialProjectTextCannotExpandAuthority(t *testing.
 		t.Fatalf("durable trace missing selection or policy denial: %#v", storedEvents)
 	}
 	manifest := run.Freewill.ProjectContextManifest
-	if manifest == nil || manifest.Version != freewill.ProjectContextManifestVersion || manifest.ProjectID != projectID {
+	if manifest == nil || manifest.Version != freewill.ProjectContextGitTrackedManifestVersion || manifest.ProjectID != projectID {
 		t.Fatalf("durable run lacks the host-authored source manifest: %#v", manifest)
 	}
 	readmeSourceFound := false
@@ -608,7 +620,7 @@ func TestServedFreewillP1AdversarialProjectTextCannotExpandAuthority(t *testing.
 		t.Fatal("durable selection event lacks the host-authored content-free source manifest")
 	}
 	if !useSampleProject {
-		if entries, err := os.ReadDir(projectPath); err != nil || len(entries) != 1 || entries[0].Name() != "README.md" {
+		if entries, err := os.ReadDir(projectPath); err != nil || len(entries) != 2 || entries[0].Name() != ".git" || entries[1].Name() != "README.md" {
 			t.Fatalf("synthetic project changed: entries=%v err=%v", entries, err)
 		}
 	}
@@ -701,7 +713,7 @@ func TestServedFreewillP1AdversarialProjectTextCannotExpandAuthority(t *testing.
 		t.Fatalf("historical decision POST changed durable record: state=%#v err=%v", statusAfter.Freewill, err)
 	}
 	if !useSampleProject {
-		if entries, err := os.ReadDir(projectPath); err != nil || len(entries) != 1 || entries[0].Name() != "README.md" {
+		if entries, err := os.ReadDir(projectPath); err != nil || len(entries) != 2 || entries[0].Name() != ".git" || entries[1].Name() != "README.md" {
 			t.Fatalf("historical status changed project: entries=%v err=%v", entries, err)
 		}
 	}

@@ -182,6 +182,8 @@ func openFreewillServeRuntime(cfg *orchestrator.Config, providers *provider.Prov
 	}
 	var projectPath string
 	var projectStateFile string
+	var projectContextFiles []string
+	var projectContextSections map[string]string
 	var projectRemoteContextProjectID string
 	var projectRemoteContextRepoPath string
 	var terminalFactsProjectID string
@@ -190,6 +192,13 @@ func openFreewillServeRuntime(cfg *orchestrator.Config, providers *provider.Prov
 		if project.ID == freewillCfg.ProjectID {
 			projectPath = project.RepoPath
 			projectStateFile = project.StateFile
+			projectContextFiles = append([]string(nil), project.FreewillContextFiles...)
+			if len(project.FreewillContextSections) > 0 {
+				projectContextSections = make(map[string]string, len(project.FreewillContextSections))
+				for path, heading := range project.FreewillContextSections {
+					projectContextSections[path] = heading
+				}
+			}
 			projectRemoteContextProjectID = project.FreewillRemoteContextProjectID
 			projectRemoteContextRepoPath = project.FreewillRemoteContextRepoPath
 			terminalFactsProjectID = project.FreewillTerminalFactsProjectID
@@ -199,6 +208,9 @@ func openFreewillServeRuntime(cfg *orchestrator.Config, providers *provider.Prov
 	}
 	if !filepath.IsAbs(projectPath) {
 		return nil, errors.New("freewill: configured project repository path must be absolute")
+	}
+	if len(projectContextFiles) == 0 && len(projectContextSections) > 0 {
+		return nil, errors.New("freewill: project context sections require an exact project file allowlist")
 	}
 	projectPath, err := filepath.EvalSymlinks(projectPath)
 	if err != nil {
@@ -442,6 +454,11 @@ func openFreewillServeRuntime(cfg *orchestrator.Config, providers *provider.Prov
 				var snapshot freewill.ProjectContextSnapshot
 				if !projectReadAuthorized {
 					snapshot = freewill.NewProjectContextSnapshot(freewillCfg.ProjectID, freewillCfg.Objective, time.Now().UTC())
+				} else if len(projectContextFiles) > 0 {
+					snapshot, err = tool.BuildFreewillProjectContextForFiles(ctx, freewillCfg.ProjectID, freewillCfg.Objective, projectPath, projectContextFiles, projectContextSections)
+					if err != nil {
+						return freewill.ProjectContextSnapshot{}, err
+					}
 				} else {
 					snapshot, err = tool.BuildFreewillProjectContext(ctx, freewillCfg.ProjectID, freewillCfg.Objective, projectPath, projectStateFile)
 					if err != nil {

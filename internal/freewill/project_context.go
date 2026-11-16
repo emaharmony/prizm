@@ -14,6 +14,7 @@ import (
 
 const ProjectContextManifestVersion uint16 = 1
 const ProjectContextSourceManifestVersion uint16 = 2
+const ProjectContextGitTrackedManifestVersion uint16 = 3
 
 const (
 	ProjectContextFactObserved                    = "observed"
@@ -155,9 +156,12 @@ func NewProjectContextSnapshot(projectID, objective string, capturedAt time.Time
 func (s ProjectContextSnapshot) Manifest() ProjectContextManifest {
 	version := ProjectContextManifestVersion
 	for _, source := range s.Sources {
+		if source.SourceType == "git_tracked_file" {
+			version = ProjectContextGitTrackedManifestVersion
+			break
+		}
 		if source.SourceType != "" {
 			version = ProjectContextSourceManifestVersion
-			break
 		}
 	}
 	manifest := ProjectContextManifest{Version: version, ProjectID: s.ProjectID,
@@ -165,7 +169,7 @@ func (s ProjectContextSnapshot) Manifest() ProjectContextManifest {
 		Sources: make([]ProjectContextSourceEntry, 0, len(s.Sources))}
 	for _, source := range s.Sources {
 		sourceType := source.SourceType
-		if version == ProjectContextSourceManifestVersion && sourceType == "" {
+		if version >= ProjectContextSourceManifestVersion && sourceType == "" {
 			if source.Path == "" {
 				sourceType = "host_fact"
 			} else {
@@ -181,18 +185,19 @@ func (s ProjectContextSnapshot) Manifest() ProjectContextManifest {
 
 // Validate enforces stable manifest semantics and bounded, source-backed facts.
 func (m ProjectContextManifest) Validate() error {
-	if (m.Version != ProjectContextManifestVersion && m.Version != ProjectContextSourceManifestVersion) || strings.TrimSpace(m.ProjectID) == "" || len(m.ProjectID) > 128 ||
+	if (m.Version != ProjectContextManifestVersion && m.Version != ProjectContextSourceManifestVersion && m.Version != ProjectContextGitTrackedManifestVersion) || strings.TrimSpace(m.ProjectID) == "" || len(m.ProjectID) > 128 ||
 		m.CapturedAt.IsZero() || !validContextDigest(m.SnapshotHash) || len(m.Sources) == 0 || len(m.Sources) > 16 {
 		return errors.New("freewill: project context manifest header is invalid")
 	}
 	sources := make(map[string]struct{}, len(m.Sources))
 	for _, source := range m.Sources {
 		if strings.TrimSpace(source.ID) == "" || len(source.ID) > 128 || len(source.Path) > 256 ||
-			len(source.Revision) != 64 || !validContextDigest(source.Revision) || source.Digest != source.Revision ||
+			len(source.Revision) != 64 || !validContextDigest(source.Revision) || !validContextDigest(source.Digest) ||
+			((m.Version != ProjectContextGitTrackedManifestVersion || source.SourceType != "git_tracked_file") && source.Digest != source.Revision) ||
 			source.ObservedAt.IsZero() || len(source.Confidence) == 0 || len(source.Confidence) > 64 || !validProjectContextRelativePath(source.Path) {
 			return errors.New("freewill: project context manifest source is invalid")
 		}
-		if m.Version == ProjectContextSourceManifestVersion {
+		if m.Version == ProjectContextSourceManifestVersion || m.Version == ProjectContextGitTrackedManifestVersion {
 			switch source.SourceType {
 			case "github_repository_profile":
 				if !validGitHubSourceURL(source.SourceURL) || !validCommitSHA(source.CommitSHA) || source.Digest != source.Revision {
@@ -201,6 +206,10 @@ func (m ProjectContextManifest) Validate() error {
 			case "local_file", "host_fact":
 				if source.SourceURL != "" || source.CommitSHA != "" {
 					return errors.New("freewill: local v2 source has external provenance")
+				}
+			case "git_tracked_file":
+				if m.Version != ProjectContextGitTrackedManifestVersion || source.SourceURL != "" || !validCommitSHA(source.CommitSHA) {
+					return errors.New("freewill: git tracked source provenance is invalid")
 				}
 			default:
 				return errors.New("freewill: project context v2 source type is invalid")
@@ -373,7 +382,9 @@ func (s *ProjectContextSnapshot) Seal() {
 	for i := range s.Sources {
 		digest := sha256.Sum256([]byte(s.Sources[i].Content))
 		s.Sources[i].Digest = hex.EncodeToString(digest[:])
-		s.Sources[i].Revision = s.Sources[i].Digest
+		if s.Sources[i].SourceType != "git_tracked_file" || !validContextDigest(s.Sources[i].Revision) {
+			s.Sources[i].Revision = s.Sources[i].Digest
+		}
 	}
 	copy := *s
 	copy.Digest = ""

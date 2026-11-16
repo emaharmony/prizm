@@ -30,6 +30,32 @@ func TestFreewillFeatureSwitchesDefaultOffAndRoundTrip(t *testing.T) {
 	}
 }
 
+func TestProjectFreewillContextFilesAndExactSectionsRoundTrip(t *testing.T) {
+	project := ProjectConfig{ID: "prizm", RepoPath: t.TempDir(), FreewillContextFiles: []string{"README.md", "docs/roadmap.md"},
+		FreewillContextSections: map[string]string{"docs/roadmap.md": "### Current roadmap"}}
+	cfg := DefaultConfig()
+	cfg.Projects = []ProjectConfig{project}
+	encoded, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := LoadConfigFromBytes(encoded)
+	if err != nil {
+		t.Fatalf("load project context allowlist: %v", err)
+	}
+	if len(decoded.Projects) != 1 || len(decoded.Projects[0].FreewillContextFiles) != 2 || decoded.Projects[0].FreewillContextFiles[1] != "docs/roadmap.md" || decoded.Projects[0].FreewillContextSections["docs/roadmap.md"] != "### Current roadmap" {
+		t.Fatalf("project context scope changed on round trip: %#v", decoded.Projects)
+	}
+	cfg.Projects[0].FreewillContextFiles = nil
+	encoded, err = yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal section-only config: %v", err)
+	}
+	if _, err := LoadConfigFromBytes(encoded); err == nil || !strings.Contains(err.Error(), "freewill_context_sections requires freewill_context_files") {
+		t.Fatalf("section-only config silently fell back to legacy context: %v", err)
+	}
+}
+
 func TestFreewillTaskSurpriseRequiresExactHostActionAndTypedOutcome(t *testing.T) {
 	workspace := t.TempDir()
 	agents, projects := []AgentConfig{{ID: "selector"}}, []ProjectConfig{{ID: "project", RepoPath: workspace}}

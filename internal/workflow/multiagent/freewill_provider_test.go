@@ -3,6 +3,8 @@ package multiagent
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1855,6 +1857,63 @@ func TestFreewillFlashCloudIdeaProjectionIsAuthorizedCompactAndBounded(t *testin
 	}
 	if strings.Contains(freewillFlashIdeaPrompt(true, false), "ACTION_ID") || !strings.Contains(freewillFlashIdeaPrompt(true, true), "ACTION_ID is optional") {
 		t.Fatal("Cloud prompt did not limit optional ACTION_ID to requests containing host-issued actions")
+	}
+}
+
+func TestFreewillContextInputAcceptsGitTrackedExcerptsAndRejectsTamperedProvenance(t *testing.T) {
+	now := time.Now().UTC()
+	snapshot := freewill.NewProjectContextSnapshot("fictional-project", "Use only public roadmap evidence.", now)
+	fullDigest := sha256.Sum256([]byte("complete tracked markdown file"))
+	snapshot.Sources = append(snapshot.Sources, freewill.ProjectContextSource{
+		ID: "project:file:plans/roadmap.md", Path: "plans/roadmap.md", Revision: hex.EncodeToString(fullDigest[:]),
+		CommitSHA: strings.Repeat("a", 40), SourceType: "git_tracked_file", ObservedAt: now,
+		Confidence: "direct_file_observation", Content: "Bounded public roadmap excerpt.",
+	})
+	snapshot.Seal()
+	input := FreewillSelectionInput{Scope: freewill.Scope{ProjectID: "fictional-project"}, ProjectContext: snapshot}
+	if err := validateFreewillContextInput(input); err != nil {
+		t.Fatalf("valid Git tracked excerpt rejected: %v", err)
+	}
+	projection, err := projectFreewillFlashCloudIdeaContext(input, "")
+	if err != nil {
+		t.Fatalf("valid Git tracked excerpt could not reach the existing Cloud projection: %v", err)
+	}
+	encodedProjection, err := json.Marshal(projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, privateField := range []string{snapshot.Sources[2].CommitSHA, snapshot.Sources[2].Revision, snapshot.Sources[2].Digest, "git_tracked_file", `"path"`} {
+		if strings.Contains(string(encodedProjection), privateField) {
+			t.Fatalf("Cloud projection exposed host provenance %q", privateField)
+		}
+	}
+	if !strings.Contains(string(encodedProjection), "project:file:plans/roadmap.md") || !strings.Contains(string(encodedProjection), "Bounded public roadmap excerpt") {
+		t.Fatalf("Cloud projection omitted only the approved source ID/content: %s", encodedProjection)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*freewill.ProjectContextSnapshot)
+		seal   bool
+	}{
+		{name: "excerpt digest", mutate: func(s *freewill.ProjectContextSnapshot) { s.Sources[2].Digest = strings.Repeat("b", 64) }},
+		{name: "full file revision", mutate: func(s *freewill.ProjectContextSnapshot) { s.Sources[2].Revision = strings.Repeat("b", 64) }},
+		{name: "commit SHA", mutate: func(s *freewill.ProjectContextSnapshot) { s.Sources[2].CommitSHA = "not-a-commit" }, seal: true},
+		{name: "source path", mutate: func(s *freewill.ProjectContextSnapshot) { s.Sources[2].Path = "../private/roadmap.md" }, seal: true},
+		{name: "source ID", mutate: func(s *freewill.ProjectContextSnapshot) { s.Sources[2].ID = "project:file:unrelated.md" }, seal: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bad := snapshot
+			bad.Sources = append([]freewill.ProjectContextSource(nil), snapshot.Sources...)
+			test.mutate(&bad)
+			if test.seal {
+				bad.Seal()
+			}
+			if err := validateFreewillContextInput(FreewillSelectionInput{Scope: input.Scope, ProjectContext: bad}); err == nil {
+				t.Fatal("tampered source provenance was accepted")
+			}
+		})
 	}
 }
 
