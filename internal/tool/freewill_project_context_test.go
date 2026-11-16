@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -55,6 +56,294 @@ func TestPrivateProjectProfileImportIsPinnedAndReadOnly(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("import changed or removed local profile: %v", err)
+	}
+}
+
+func TestBuildFreewillProjectContextForFilesProjectsOnlyExactTrackedSources(t *testing.T) {
+	root := newTrackedFreewillContextRepo(t)
+	snapshot, err := BuildFreewillProjectContextForFiles(context.Background(), "prizm", "Select a bounded idea grounded in Prizm's public roadmap.", root,
+		[]string{"README.md", "docs/architecture/PRIZM_ROADMAP.md", "docs/architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md"},
+		map[string]string{
+			"docs/architecture/PRIZM_ROADMAP.md":                   "### Unified development order: work lanes and eligibility",
+			"docs/architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md": "### FW-P1 — Read-only Decision Loop (first demonstrable Freewill)",
+		})
+	if err != nil {
+		t.Fatalf("build exact context: %v", err)
+	}
+	if len(snapshot.Sources) != 5 { // host project binding/objective plus exactly three allowlisted files
+		t.Fatalf("sources = %#v", snapshot.Sources)
+	}
+	want := map[string]string{
+		"project:readme": "README.md",
+		"project:file:docs/architecture/PRIZM_ROADMAP.md":                   "docs/architecture/PRIZM_ROADMAP.md",
+		"project:file:docs/architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md": "docs/architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md",
+	}
+	var projected strings.Builder
+	pinnedCommit := ""
+	for _, source := range snapshot.Sources {
+		if expectedPath, ok := want[source.ID]; ok {
+			if source.Path != expectedPath || source.Digest == "" || source.Revision == source.Digest || !validGitSHA1(source.CommitSHA) || source.SourceType != "git_tracked_file" || len(source.Content) > freewillSelectedSourceLimit {
+				t.Fatalf("source provenance or bound invalid: %#v", source)
+			}
+			if pinnedCommit == "" {
+				pinnedCommit = source.CommitSHA
+			} else if source.CommitSHA != pinnedCommit {
+				t.Fatalf("allowlisted files came from mixed HEAD commits: %s and %s", pinnedCommit, source.CommitSHA)
+			}
+			delete(want, source.ID)
+			projected.WriteString(source.Content)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing selected sources: %#v", want)
+	}
+	for _, forbidden := range []string{"LOCAL_CONFIG_SECRET", "PRIVATE_PROJECT_SECRET", "module private.example", "api_key: EXCLUDED"} {
+		if strings.Contains(projected.String(), forbidden) {
+			t.Fatalf("exact context leaked %q", forbidden)
+		}
+	}
+	if strings.Contains(projected.String(), "project:manifest:") || len(snapshot.RoadmapActions) != 0 {
+		t.Fatalf("context broadened or invented a host-bound roadmap action: %#v", snapshot)
+	}
+	manifest := snapshot.Manifest()
+	if manifest.Version != freewill.ProjectContextGitTrackedManifestVersion || manifest.Sources[2].CommitSHA != snapshot.Sources[2].CommitSHA {
+		t.Fatalf("Git provenance was not preserved in the content-free manifest: %#v", manifest)
+	}
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("content-free manifest invalid: %v", err)
+	}
+}
+
+func TestBuildFreewillProjectContextForFilesUsesExactConfiguredSectionAndCapsFileCount(t *testing.T) {
+	root := t.TempDir()
+	runTrackedFreewillContextGit(t, root, "init", "-b", "main")
+	runTrackedFreewillContextGit(t, root, "config", "user.name", "Freewill test")
+	runTrackedFreewillContextGit(t, root, "config", "user.email", "freewill-test@example.invalid")
+	const rel = "plans/release.md"
+	body := strings.Repeat("Unrelated introduction text.\n", 300) +
+		"### Bounded review section\nThis exact section describes the documented release check.\n\n" +
+		"### Later section\nThis later content is outside the selected heading.\n"
+	writeTrackedFreewillContextRepoFile(t, root, rel, body)
+	runTrackedFreewillContextGit(t, root, "add", rel)
+	runTrackedFreewillContextGit(t, root, "commit", "-m", "bounded release plan")
+	snapshot, err := BuildFreewillProjectContextForFiles(context.Background(), "fictional", "Review the documented release check.", root,
+		[]string{rel}, map[string]string{rel: "### Bounded review section"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := snapshot.Sources[2]
+	if !strings.Contains(source.Content, "This exact section") || strings.Contains(source.Content, "Unrelated introduction") || strings.Contains(source.Content, "Later section") || len(source.Content) > freewillSelectedSourceLimit {
+		t.Fatalf("configured heading did not bound the exact excerpt: %#v", source)
+	}
+	if _, err := BuildFreewillProjectContextForFiles(context.Background(), "fictional", "", root, []string{rel}, map[string]string{rel: "### Missing section"}); err == nil {
+		t.Fatal("missing section anchor was accepted")
+	}
+	tooMany := make([]string, freewillSelectedMaxFiles+1)
+	for i := range tooMany {
+		tooMany[i] = rel
+	}
+	if _, err := BuildFreewillProjectContextForFiles(context.Background(), "fictional", "", root, tooMany, nil); err == nil {
+		t.Fatal("file list exceeded the manifest and optional memory source budget")
+	}
+}
+
+func TestExtractFreewillSelectedMarkdownIgnoresFencedHeadings(t *testing.T) {
+	raw := []byte("```markdown\n### Selected section\nfake anchor body\n## End\n```\n" +
+		"### Selected section\nreal section body\n~~~text\n## Not a boundary\n~~~\nsection continues\n## End\noutside section\n")
+	excerpt, err := extractFreewillSelectedMarkdown(raw, "### Selected section")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(excerpt)
+	if !strings.Contains(got, "real section body") || !strings.Contains(got, "## Not a boundary") || !strings.Contains(got, "section continues") ||
+		strings.Contains(got, "fake anchor body") || strings.Contains(got, "outside section") {
+		t.Fatalf("fenced headings changed exact section selection: %q", got)
+	}
+	if _, err := extractFreewillSelectedMarkdown([]byte("```markdown\n### Hidden heading\n```\n"), "### Hidden heading"); err == nil {
+		t.Fatal("heading inside a fenced code block was accepted as a section anchor")
+	}
+}
+
+func TestExtractFreewillSelectedMarkdownIgnoresIndentedCodeHeadings(t *testing.T) {
+	raw := []byte("    ### Selected section\nnot the selected section\n" +
+		"### Selected section\nreal section body\n    ## False boundary\nsection continues\n## End\noutside section\n")
+	excerpt, err := extractFreewillSelectedMarkdown(raw, "### Selected section")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(excerpt)
+	if !strings.Contains(got, "real section body") || !strings.Contains(got, "    ## False boundary") || !strings.Contains(got, "section continues") ||
+		strings.Contains(got, "not the selected section") || strings.Contains(got, "outside section") {
+		t.Fatalf("indented code headings changed exact section selection: %q", got)
+	}
+}
+
+func TestExtractFreewillSelectedMarkdownIgnoresTabIndentedCodeHeadings(t *testing.T) {
+	raw := []byte("\t### Selected section\nnot the selected section\n" +
+		"### Selected section\nreal section body\n \t## False boundary\nsection continues\n## End\noutside section\n")
+	excerpt, err := extractFreewillSelectedMarkdown(raw, "### Selected section")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(excerpt)
+	if !strings.Contains(got, "real section body") || !strings.Contains(got, " \t## False boundary") || !strings.Contains(got, "section continues") ||
+		strings.Contains(got, "not the selected section") || strings.Contains(got, "outside section") {
+		t.Fatalf("tab-indented code headings changed exact section selection: %q", got)
+	}
+}
+
+func TestBuildFreewillProjectContextForFilesSupportsFictionalMarkdownPathsWithoutInventingActions(t *testing.T) {
+	root := t.TempDir()
+	runTrackedFreewillContextGit(t, root, "init", "-b", "main")
+	runTrackedFreewillContextGit(t, root, "config", "user.name", "Freewill test")
+	runTrackedFreewillContextGit(t, root, "config", "user.email", "freewill-test@example.invalid")
+	rel := "plans/sprint-plan.md"
+	writeTrackedFreewillContextRepoFile(t, root, rel, "# Acme Plan\n\n| Milestone | Scope | Status |\n|---|---|---|\n| Q3-ALPHA | Publish the verified event feed | Planned |\n")
+	runTrackedFreewillContextGit(t, root, "add", rel)
+	runTrackedFreewillContextGit(t, root, "commit", "-m", "fictional plan")
+	snapshot, err := BuildFreewillProjectContextForFiles(context.Background(), "fictional", "Consider the next bounded task.", root, []string{rel}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Sources) != 3 || snapshot.Sources[2].ID != "project:file:"+rel || len(snapshot.RoadmapActions) != 0 {
+		t.Fatalf("fictional source did not use generic projection: %#v", snapshot)
+	}
+	if !strings.Contains(snapshot.Sources[2].Content, "Publish the verified event feed") {
+		t.Fatal("bounded source excerpt omitted its public roadmap row")
+	}
+}
+
+func TestFreewillSelectedContextPathRejectsHiddenAndSensitiveLocations(t *testing.T) {
+	for _, rel := range []string{".env.md", ".codex/notes.md", "docs/configuration.md", "docs/private/plan.md", "docs/secrets.md", "../roadmap.md", "docs/plan.txt", ":(top)README.md", "docs/*.md", "docs/[roadmap].md"} {
+		if _, ok := freewillSelectedContextSourceID(rel); ok {
+			t.Errorf("unsafe source path accepted: %q", rel)
+		}
+	}
+}
+
+func TestReadFreewillTrackedContextBlobUsesPinnedCommitAfterHEADAdvances(t *testing.T) {
+	root := newTrackedFreewillContextRepo(t)
+	headOutput, err := exec.Command("git", "-C", root, "rev-parse", "--verify", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinnedHead := strings.TrimSpace(string(headOutput))
+	writeTrackedFreewillContextRepoFile(t, root, "docs/release-notes.md", "# Later commit\n")
+	runTrackedFreewillContextGit(t, root, "add", "docs/release-notes.md")
+	runTrackedFreewillContextGit(t, root, "commit", "-m", "advance unrelated project file")
+	newHead, err := exec.Command("git", "-C", root, "rev-parse", "--verify", "HEAD").Output()
+	if err != nil || strings.TrimSpace(string(newHead)) == pinnedHead {
+		t.Fatalf("fixture HEAD did not advance: err=%v", err)
+	}
+	content, err := readFreewillTrackedContextBlob(context.Background(), root, "README.md", pinnedHead)
+	if err != nil {
+		t.Fatalf("pinned Git blob read failed after HEAD advanced: %v", err)
+	}
+	if string(content) != "# Prizm - Event-Native AI Agent Platform\n\nPublic preview, source-available.\nPrizm is a Go event-native AI agent runtime.\n" {
+		t.Fatalf("pinned Git blob content changed: %q", content)
+	}
+}
+
+func TestBuildFreewillProjectContextForFilesRejectsIgnoredUntrackedModifiedAndSymlinkFiles(t *testing.T) {
+	t.Run("ignored", func(t *testing.T) {
+		root := newTrackedFreewillContextRepo(t)
+		writeTrackedFreewillContextRepoFile(t, root, ".gitignore", "README.md\n")
+		runTrackedFreewillContextGit(t, root, "add", ".gitignore")
+		runTrackedFreewillContextGit(t, root, "commit", "-m", "ignore tracked README")
+		if _, err := BuildFreewillProjectContextForFiles(context.Background(), "prizm", "", root, []string{"README.md"}, nil); err == nil || !strings.Contains(err.Error(), "ignored") {
+			t.Fatalf("ignored file result = %v", err)
+		}
+	})
+	t.Run("untracked", func(t *testing.T) {
+		root := t.TempDir()
+		runTrackedFreewillContextGit(t, root, "init", "-b", "main")
+		runTrackedFreewillContextGit(t, root, "config", "user.name", "Freewill test")
+		runTrackedFreewillContextGit(t, root, "config", "user.email", "freewill-test@example.invalid")
+		runTrackedFreewillContextGit(t, root, "commit", "--allow-empty", "-m", "base")
+		writeTrackedFreewillContextRepoFile(t, root, "README.md", "# local untracked\n")
+		if _, err := BuildFreewillProjectContextForFiles(context.Background(), "prizm", "", root, []string{"README.md"}, nil); err == nil || !strings.Contains(err.Error(), "tracked") {
+			t.Fatalf("untracked file result = %v", err)
+		}
+	})
+	t.Run("dirty_worktree", func(t *testing.T) {
+		root := newTrackedFreewillContextRepo(t)
+		writeTrackedFreewillContextRepoFile(t, root, "README.md", "# changed local content\n")
+		if _, err := BuildFreewillProjectContextForFiles(context.Background(), "prizm", "", root, []string{"README.md"}, nil); err == nil || !strings.Contains(err.Error(), "match HEAD") {
+			t.Fatalf("modified file result = %v", err)
+		}
+	})
+	t.Run("clean_crlf_checkout", func(t *testing.T) {
+		root := newTrackedFreewillContextRepo(t)
+		readme := filepath.Join(root, "README.md")
+		body, err := os.ReadFile(readme)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(readme, []byte(strings.ReplaceAll(string(body), "\n", "\r\n")), 0600); err != nil {
+			t.Fatal(err)
+		}
+		snapshot, err := BuildFreewillProjectContextForFiles(context.Background(), "prizm", "", root, []string{"README.md"}, nil)
+		if err != nil {
+			t.Fatalf("clean CRLF checkout was rejected: %v", err)
+		}
+		for _, source := range snapshot.Sources {
+			if source.ID == "project:readme" && strings.Contains(source.Content, "\r") {
+				t.Fatal("Cloud source projection used worktree CRLF content instead of immutable HEAD text")
+			}
+		}
+	})
+	t.Run("symlink", func(t *testing.T) {
+		root := newTrackedFreewillContextRepo(t)
+		original := filepath.Join(root, "README.md")
+		backup := filepath.Join(root, "readme-content.tmp")
+		if err := os.Rename(original, backup); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(backup, original); err != nil {
+			_ = os.Rename(backup, original)
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		if _, err := BuildFreewillProjectContextForFiles(context.Background(), "prizm", "", root, []string{"README.md"}, nil); err == nil || !strings.Contains(err.Error(), "symlink") {
+			t.Fatalf("symlink file result = %v", err)
+		}
+	})
+}
+
+func newTrackedFreewillContextRepo(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	runTrackedFreewillContextGit(t, root, "init", "-b", "main")
+	runTrackedFreewillContextGit(t, root, "config", "user.name", "Freewill test")
+	runTrackedFreewillContextGit(t, root, "config", "user.email", "freewill-test@example.invalid")
+	writeTrackedFreewillContextRepoFile(t, root, "README.md", "# Prizm - Event-Native AI Agent Platform\n\nPublic preview, source-available.\nPrizm is a Go event-native AI agent runtime.\n")
+	writeTrackedFreewillContextRepoFile(t, root, "docs/architecture/PRIZM_ROADMAP.md", "## Experimental Freewill Program (FW) — Integrated Delivery Plan\n### Unified development order: work lanes and eligibility\n| Order / lane | Roadmap IDs | Deliverable | Can begin when | Completion evidence |\n|---|---|---|---|---|\n| **3 — Parallel safe prototype** | **FW-P1 / FW-002–004** | Allowed wake sources, three new candidates, read-only selection and policy-only proposal evaluation | Accepted | No writes; decision trace. |\n")
+	writeTrackedFreewillContextRepoFile(t, root, "docs/architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md", "# Prizm Freewill\n### FW-P1 — Read-only Decision Loop (first demonstrable Freewill)\n**Requires:** FW-P0; no write capability.\n**Build:** three candidates and policy-only evaluation.\n**Tests:** no side effects.\n**Done when:** a reproducible proposal is recorded without a write.\n\n### FW-P2 — Authorized Execution\n")
+	writeTrackedFreewillContextRepoFile(t, root, "go.mod", "module private.example/LOCAL_CONFIG_SECRET\n")
+	writeTrackedFreewillContextRepoFile(t, root, "prizm.yaml", "api_key: EXCLUDED\n")
+	writeTrackedFreewillContextRepoFile(t, root, ".env", "API_KEY=LOCAL_CONFIG_SECRET\n")
+	writeTrackedFreewillContextRepoFile(t, root, "PrivateProject/README.md", "PRIVATE_PROJECT_SECRET\n")
+	writeTrackedFreewillContextRepoFile(t, root, ".gitignore", ".env\nPrivateProject/\n")
+	runTrackedFreewillContextGit(t, root, "add", "README.md", "docs/architecture/PRIZM_ROADMAP.md", "docs/architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md", "go.mod", "prizm.yaml", ".gitignore")
+	runTrackedFreewillContextGit(t, root, "commit", "-m", "fixture")
+	return root
+}
+
+func writeTrackedFreewillContextRepoFile(t *testing.T, root, rel, content string) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runTrackedFreewillContextGit(t *testing.T, root string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", root, "-c", "core.fsmonitor=false"}, args...)...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v: %s", args, err, output)
 	}
 }
 

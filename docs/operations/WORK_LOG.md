@@ -7,6 +7,86 @@ the next contributor.
 > Prizm is source-available under an all-rights-reserved [license](../../LICENSE)
 > and is preview-stage.
 
+## 2026-11-16 — v3 project-source manifest integrity follow-up
+
+Independent review found that the v3 manifest validator allowed a split
+revision and excerpt digest on any source type. Narrowed that exception to
+`git_tracked_file`; v3 `host_fact` and `local_file` sources retain the existing
+revision/digest equality rule. Added regression cases for host binding,
+objective, and local-file sources alongside a valid split Git-tracked source.
+The builder now pins one HEAD SHA before reading any allowlisted files and
+reads every blob from that same tree. Exact Markdown anchor lookup and section
+termination ignore headings inside backtick and tilde fenced code blocks.
+
+**Verification:** `go test ./internal/freewill -count=1`, the focused Git
+provenance provider test, the exact-file builder/path/fence suite, and the
+served local-fake test passed. `git diff --check` passed. The earlier full
+five-package suite remains valid for the original implementation commit; this
+follow-up was verified with the affected full `internal/freewill` suite and
+focused provider/tool/CLI tests.
+
+## 2026-11-16 — FW-P1 exact project context builder and failed real-Prizm probe
+
+**Roadmap IDs:** FW-P1 and CTX-01–05. **Baseline:**
+`d369cebb79620faa7462ca6279aa8df751ebc31d`.
+
+Added an opt-in project-level allowlist for exact tracked Markdown paths and
+optional exact heading sections. The host reads only regular nonignored
+HEAD-tracked files, compares bounded working bytes with immutable HEAD bytes
+(allowing clean CRLF checkout normalization), and sends bounded excerpts with
+manifest v3 commit, full-blob revision, and excerpt digest provenance. Git
+pathspec metacharacters are rejected; the `ls-tree` probe uses literal
+pathspecs. No new roadmap action parser or Prizm-specific filename/action rule
+was added. The project-config section-only fallback is rejected. Legacy
+project context remains unchanged when the exact-file option is unset.
+
+**Verification:** full affected package suites passed:
+`go test ./internal/tool ./internal/freewill ./internal/orchestrator
+./internal/workflow/multiagent ./cmd/prizm-cli -count=1`; the five packages
+passed (including the 425.9s CLI suite), and `git diff --check` passed. `go build -o
+<temporary>/prizm-freewill-real-proof.exe ./cmd/prizm-cli` passed with binary
+SHA-256
+`66CC41019B1D526089D4F890BFBE6707F08E06E5511D23DDB8DCE7172B8DEC3F`.
+
+**Real-project attempts:** Both used exact project ID `prizm`, repository HEAD
+`d369cebb79620faa7462ca6279aa8df751ebc31d`, the exact remote project/repository
+binding, and only public tracked Markdown excerpts. First configured IDs were
+`project:readme`, `project:file:docs/architecture/PRIZM_ROADMAP.md`, and
+`project:file:docs/architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md`; the second
+used only `project:readme` and
+`project:file:docs/architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md`. The
+second projection was about 1.6 KiB. Both used exact model
+`glm-5.3-flash:cloud`, a process-only machine-scope key, a temporary policy
+requiring approval for `intention.propose`, and `execution.enabled=false`.
+The failed runs did not persist their project-context manifest; source IDs
+above describe the exact host-configured projection, not durable citations.
+
+- Run `freewill-93783ec34f3975df35041425756f6f1f`: expected three candidates
+  and a source-cited pending intention; observed `selecting`, zero persisted
+  candidates, no choice or approval, execution disabled, and three correction
+  failures: `invalid_scored_ideas_rationale`,
+  `invalid_scored_ideas_idea_shape`, `invalid_scored_ideas_unsafe`.
+- Run `freewill-1a315d8a3d2c8d6fad8961fd0bcb5537`: same expected result;
+  observed `selecting`, zero persisted candidates, no choice or approval,
+  execution disabled, and two correction failures:
+  `invalid_scored_ideas_rationale`, `invalid_scored_ideas_idea_shape`.
+- The first run's durable trace contains 8 events: one run created, one
+  selection started, three wake claims, and three selection retries. The
+  second contains 6: one run created, one selection started, two wake claims,
+  and two selection retries. A single additional scheduled wake for each
+  active run was rejected by actor admission. Neither trace contains an
+  approval proposal/decision, dispatch, apply, or tool event.
+
+Both isolated serve processes were stopped after the bounded attempts. The
+raw model response was not retained or recorded. No screenshot was captured
+because there was no pending proposal; no semantic relevance claim is made.
+
+**Risk/next action:** this is failed real-provider output, not project-grounding
+acceptance. Preserve the bounded corrections and fail-closed validators;
+investigate the actual output-shape failure separately, then repeat the
+real-project proof only after independent review. Keep CTX-05 and FW-P1 in
+progress; no staging or deployment.
+
 ## 2026-11-14 — FW-P2 PR2 child approval history restack
 
 **Roadmap IDs:** FW-P2 and FW-G2; R1/G1 remains an upstream acceptance dependency.

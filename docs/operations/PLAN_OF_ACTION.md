@@ -1,4 +1,41 @@
-## Current Handoff: FW-G2/E69 composed OCI network and host-path boundary probe (2026-11-16)
+## Current Handoff: FW-P1 exact tracked project context; real Prizm proof not yet achieved (2026-11-16)
+
+**Roadmap IDs:** FW-P1 and CTX-01–05. Baseline is Freewill integration merge
+`d369cebb79620faa7462ca6279aa8df751ebc31d`.
+
+The project-context seam now supports an opt-in exact allowlist of tracked
+Markdown paths, optional exact heading anchors, bounded excerpts, and
+Git-HEAD-pinned v3 provenance. It rejects unsafe, ignored, untracked, symlink,
+dirty, and Git pathspec-magic inputs. Project configuration remains the source
+of exact remote project/repository binding. All tests in the five affected Go
+packages passed. A follow-up review correction now allows split full-blob
+revision and excerpt digest only for `git_tracked_file`; v3 host facts and local
+files retain revision/digest equality, with focused regressions passing. The
+allowlist snapshot pins one HEAD before reading files, and heading selection
+ignores headings inside fenced code blocks. The native CLI build SHA-256 is
+`66CC41019B1D526089D4F890BFBE6707F08E06E5511D23DDB8DCE7172B8DEC3F`.
+
+Two bounded `prizm serve` attempts used `glm-5.3-flash:cloud` with the
+machine-scope key assigned only to each isolated serve process. The first used
+the public README and two roadmap sections; the second used only the README
+and the FW-P1 implementation-roadmap section. Both used temporary
+`intention.propose: require_approval` policy and disabled execution. Neither
+produced candidates or a proposal: run
+`freewill-93783ec34f3975df35041425756f6f1f` ended while selecting after three
+schema-correction failures, and
+`freewill-1a315d8a3d2c8d6fad8961fd0bcb5537` remained selecting after two.
+No approval, dispatch, apply, or tool event occurred. Failed runs did not
+persist a project-source manifest, so their source citations and semantic
+relevance cannot be claimed. No screenshot was captured because there was no
+pending project proposal to show.
+
+**Next action:** retain the exact-read scope and validators. Independently
+review this local change, investigate the bounded model-output correction
+failure, and repeat a real-project probe only after that contract is resolved.
+Do not mark real-project grounding or visible proof complete; do not stage or
+deploy.
+
+## Previous Handoff: FW-G2/E69 composed OCI network and host-path boundary probe (2026-11-16)
 
 **Roadmap IDs:** FW-P2 and FW-G2; B1/B2 and R1/G1 remain open. Branch
 `codex/freewill-g2-b2-network-host-boundary` starts at current integration

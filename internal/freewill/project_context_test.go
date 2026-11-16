@@ -91,6 +91,42 @@ func TestImportedProfileUsesPinnedV2ProvenanceAndKeepsConflictingClaims(t *testi
 	}
 }
 
+func TestProjectContextManifestV3SplitsRevisionOnlyForGitTrackedSources(t *testing.T) {
+	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	snapshot := NewProjectContextSnapshot("synthetic", "bounded objective", now)
+	snapshot.Sources = append(snapshot.Sources,
+		ProjectContextSource{ID: "project:readme", Path: "README.md", SourceType: "local_file", Content: "short excerpt", ObservedAt: now, Confidence: "direct_file_observation"},
+		ProjectContextSource{ID: "project:file:roadmap.md", Path: "roadmap.md", SourceType: "git_tracked_file", CommitSHA: strings.Repeat("a", 40), Revision: strings.Repeat("b", 64), Content: "bounded roadmap excerpt", ObservedAt: now, Confidence: "direct_file_observation"})
+	snapshot.Seal()
+	manifest := snapshot.Manifest()
+	if manifest.Version != ProjectContextGitTrackedManifestVersion {
+		t.Fatalf("manifest version = %d", manifest.Version)
+	}
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("valid v3 manifest rejected: %v", err)
+	}
+	if manifest.Sources[0].Digest != manifest.Sources[0].Revision {
+		t.Fatal("host_fact revision/digest equality was not preserved")
+	}
+	for _, id := range []string{"host:project-binding", "host:objective", "project:readme"} {
+		t.Run(id, func(t *testing.T) {
+			bad := manifest.Clone()
+			for i := range bad.Sources {
+				if bad.Sources[i].ID == id {
+					bad.Sources[i].Digest = strings.Repeat("0", 64)
+				}
+			}
+			if err := bad.Validate(); err == nil {
+				t.Fatal("v3 non-git source with split revision/digest was accepted")
+			}
+		})
+	}
+	gitSource := manifest.Sources[3]
+	if gitSource.SourceType != "git_tracked_file" || gitSource.Digest == gitSource.Revision {
+		t.Fatalf("Git tracked excerpt provenance was not split: %#v", gitSource)
+	}
+}
+
 func TestProjectContextManifestRejectsNonPortableSourcePaths(t *testing.T) {
 	snapshot := NewProjectContextSnapshot("synthetic", "objective", time.Now().UTC())
 	snapshot.Sources = append(snapshot.Sources, ProjectContextSource{ID: "project:readme", Path: "README.md", Content: "safe content",

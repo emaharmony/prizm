@@ -4,13 +4,17 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -19,9 +23,13 @@ import (
 )
 
 const (
-	freewillReadmeLimit = 12 << 10
-	freewillStateLimit  = 8 << 10
-	freewillTotalLimit  = 32 << 10
+	freewillReadmeLimit           = 12 << 10
+	freewillStateLimit            = 8 << 10
+	freewillTotalLimit            = 32 << 10
+	freewillSelectedSourceLimit   = 4 << 10
+	freewillSelectedTotalLimit    = 8 << 10
+	freewillSelectedFileReadLimit = 128 << 10
+	freewillSelectedMaxFiles      = 12
 )
 
 // ApplyFreewillPrivateProfile reads only the deterministic ignored local host
@@ -145,6 +153,299 @@ func BuildFreewillProjectContext(ctx context.Context, projectID, objective, repo
 	}
 	snapshot.Seal()
 	return snapshot, nil
+}
+
+// BuildFreewillProjectContextForFiles builds a short, source-backed context
+// from an exact host-configured allowlist of safe Markdown files.
+// The files must be clean HEAD-tracked files, and only bounded excerpts leave
+// the host. An empty allowlist is invalid; callers use the legacy builder when
+// no project-level allowlist is configured.
+func BuildFreewillProjectContextForFiles(ctx context.Context, projectID, objective, repoRoot string, files []string, sections map[string]string) (freewill.ProjectContextSnapshot, error) {
+	if ctx == nil || strings.TrimSpace(projectID) == "" || !filepath.IsAbs(repoRoot) || len(files) == 0 || len(files) > freewillSelectedMaxFiles {
+		return freewill.ProjectContextSnapshot{}, errors.New("tool: Freewill exact project context binding is invalid")
+	}
+	allowedFiles := make(map[string]struct{}, len(files))
+	for _, rel := range files {
+		allowedFiles[rel] = struct{}{}
+	}
+	for rel, heading := range sections {
+		if _, allowed := allowedFiles[rel]; !allowed || strings.TrimSpace(heading) == "" || len(heading) > 256 {
+			return freewill.ProjectContextSnapshot{}, errors.New("tool: Freewill Markdown section must bind an exact allowlisted file and heading")
+		}
+	}
+	root, err := filepath.EvalSymlinks(repoRoot)
+	if err != nil {
+		return freewill.ProjectContextSnapshot{}, errors.New("tool: Freewill project root is unavailable")
+	}
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		return freewill.ProjectContextSnapshot{}, errors.New("tool: Freewill project root is unavailable")
+	}
+	headSHA, err := readFreewillTrackedContextHead(ctx, root)
+	if err != nil {
+		return freewill.ProjectContextSnapshot{}, err
+	}
+	snapshot := freewill.NewProjectContextSnapshot(projectID, objective, time.Now().UTC())
+	seen := make(map[string]struct{}, len(files))
+	total := 0
+	for _, rel := range files {
+		id, ok := freewillSelectedContextSourceID(rel)
+		if !ok {
+			return freewill.ProjectContextSnapshot{}, errors.New("tool: Freewill exact project context path is not allowed")
+		}
+		if _, exists := seen[rel]; exists {
+			return freewill.ProjectContextSnapshot{}, errors.New("tool: Freewill exact project context paths are duplicated")
+		}
+		seen[rel] = struct{}{}
+		raw, err := readFreewillTrackedContextBlob(ctx, root, rel, headSHA)
+		if err != nil {
+			return freewill.ProjectContextSnapshot{}, err
+		}
+		content, err := extractFreewillSelectedMarkdown(raw, sections[rel])
+		if err != nil || len(content) == 0 || len(content) > freewillSelectedSourceLimit || total+len(content) > freewillSelectedTotalLimit {
+			return freewill.ProjectContextSnapshot{}, errors.New("tool: Freewill exact project context excerpt is invalid or exceeds its limit")
+		}
+		snapshot.Sources = append(snapshot.Sources, freewill.ProjectContextSource{ID: id, Path: rel, Revision: sha256Hex(raw), CommitSHA: headSHA,
+			SourceType: "git_tracked_file", ObservedAt: snapshot.CapturedAt, Confidence: "direct_file_observation", Content: string(content)})
+		total += len(content)
+	}
+	snapshot.Seal()
+	return snapshot, nil
+}
+
+func freewillSelectedContextSourceID(rel string) (string, bool) {
+	if rel == "" || len(rel) > 115 || filepath.IsAbs(rel) || strings.ContainsAny(rel, "\\*?[]!^") || strings.Contains(rel, ":") || filepath.ToSlash(filepath.Clean(rel)) != rel || !strings.HasSuffix(strings.ToLower(rel), ".md") {
+		return "", false
+	}
+	for _, part := range strings.Split(strings.ToLower(rel), "/") {
+		if part == "" || part == "." || part == ".." || strings.HasPrefix(part, ".") {
+			return "", false
+		}
+		for _, denied := range []string{"config", "private", "secret", "credential", "password", "token"} {
+			if strings.Contains(part, denied) {
+				return "", false
+			}
+		}
+	}
+	if rel == "README.md" {
+		return "project:readme", true
+	}
+	return "project:file:" + rel, true
+}
+
+func readFreewillTrackedContextHead(ctx context.Context, root string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	headOutput, err := freewillProjectGitCommand(ctx, root, false, "rev-parse", "--verify", "HEAD").Output()
+	if err != nil {
+		return "", errors.New("tool: Freewill exact project context requires a Git HEAD")
+	}
+	headSHA := strings.TrimSpace(string(headOutput))
+	if !validGitSHA1(headSHA) {
+		return "", errors.New("tool: Freewill exact project context Git HEAD is invalid")
+	}
+	return headSHA, nil
+}
+
+func readFreewillTrackedContextBlob(ctx context.Context, root, rel, headSHA string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !validGitSHA1(headSHA) {
+		return nil, errors.New("tool: Freewill exact project context Git HEAD is invalid")
+	}
+	path := filepath.FromSlash(rel)
+	current := root
+	for _, part := range strings.Split(path, string(filepath.Separator)) {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return nil, errors.New("tool: Freewill exact project context rejects missing files and symlinks")
+		}
+	}
+	entryOutput, err := freewillProjectGitCommand(ctx, root, true, "ls-tree", headSHA, "--", rel).Output()
+	if err != nil {
+		return nil, errors.New("tool: Freewill exact project context requires a HEAD-tracked file")
+	}
+	entryLine := strings.TrimSuffix(strings.TrimSuffix(string(entryOutput), "\n"), "\r")
+	metadata, listedPath, ok := strings.Cut(entryLine, "\t")
+	fields := strings.Fields(metadata)
+	if !ok || listedPath != rel || len(fields) != 3 || (fields[0] != "100644" && fields[0] != "100755") || fields[1] != "blob" || !validGitSHA1(fields[2]) {
+		return nil, errors.New("tool: Freewill exact project context requires a tracked regular Git blob")
+	}
+	ignored := freewillProjectGitCommand(ctx, root, false, "check-ignore", "--no-index", "-q", "--", rel)
+	_, ignoreErr := ignored.Output()
+	if ignoreErr == nil {
+		return nil, errors.New("tool: Freewill exact project context rejects ignored files")
+	} else if exit, ok := ignoreErr.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
+		if ok && len(exit.Stderr) > 0 {
+			detail := string(exit.Stderr)
+			if len(detail) > 256 {
+				detail = detail[:256]
+			}
+			return nil, fmt.Errorf("tool: Freewill exact project context ignore check failed: %s", strings.TrimSpace(detail))
+		}
+		return nil, fmt.Errorf("tool: Freewill exact project context ignore check failed: %w", ignoreErr)
+	}
+	sizeOutput, err := freewillProjectGitCommand(ctx, root, false, "cat-file", "-s", fields[2]).Output()
+	if err != nil {
+		return nil, errors.New("tool: Freewill exact project context HEAD blob size is unavailable")
+	}
+	size, err := strconv.Atoi(strings.TrimSpace(string(sizeOutput)))
+	if err != nil || size < 0 || size > freewillSelectedFileReadLimit {
+		return nil, errors.New("tool: Freewill exact project context HEAD blob exceeds its read limit")
+	}
+	content, err := freewillProjectGitCommand(ctx, root, false, "cat-file", "blob", fields[2]).Output()
+	if err != nil || len(content) != size || !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0 {
+		return nil, errors.New("tool: Freewill exact project context HEAD blob is unavailable or unsafe")
+	}
+	working, _, err := readFreewillProjectFile(root, rel, freewillSelectedFileReadLimit)
+	workingNormalized, workingText := normalizeMarkdownLineEndings(working)
+	headNormalized, headText := normalizeMarkdownLineEndings(content)
+	if err != nil || !workingText || !headText || !bytes.Equal(workingNormalized, headNormalized) {
+		return nil, errors.New("tool: Freewill exact project context requires the working file to match HEAD")
+	}
+	return content, nil
+}
+
+func freewillProjectGitCommand(ctx context.Context, root string, literalPathspec bool, args ...string) *exec.Cmd {
+	prefix := []string{"-C", root, "-c", "core.fsmonitor=false"}
+	if literalPathspec {
+		prefix = append([]string{"--literal-pathspecs"}, prefix...)
+	}
+	full := append(prefix, args...)
+	cmd := exec.CommandContext(ctx, "git", full...)
+	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0", "GIT_PAGER=cat")
+	return cmd
+}
+
+func normalizeMarkdownLineEndings(content []byte) ([]byte, bool) {
+	normalized := bytes.ReplaceAll(content, []byte("\r\n"), []byte("\n"))
+	return normalized, bytes.IndexByte(normalized, '\r') < 0
+}
+
+func extractFreewillSelectedMarkdown(raw []byte, heading string) ([]byte, error) {
+	lines := strings.Split(string(raw), "\n")
+	start, end := 0, len(lines)
+	if strings.TrimSpace(heading) != "" {
+		start = -1
+		var fence markdownFenceState
+		for i, line := range lines {
+			if fence.consume(line) || fence.active() {
+				continue
+			}
+			if strings.TrimSpace(line) != strings.TrimSpace(heading) {
+				continue
+			}
+			level, ok := markdownHeadingLevel(line)
+			if !ok {
+				return nil, errors.New("tool: configured Freewill section anchor is not a Markdown heading")
+			}
+			start, end = i, len(lines)
+			var sectionFence markdownFenceState
+			for j := i + 1; j < len(lines); j++ {
+				if sectionFence.consume(lines[j]) || sectionFence.active() {
+					continue
+				}
+				if next, isHeading := markdownHeadingLevel(lines[j]); isHeading && next <= level {
+					end = j
+					break
+				}
+			}
+			break
+		}
+		if start < 0 {
+			return nil, errors.New("tool: configured Freewill section anchor is absent from the HEAD blob")
+		}
+	}
+	var excerpt strings.Builder
+	for _, line := range lines[start:end] {
+		if excerpt.Len()+len(line)+1 > freewillSelectedSourceLimit {
+			break
+		}
+		excerpt.WriteString(line)
+		excerpt.WriteByte('\n')
+	}
+	clean, err := redactFreewillProjectText([]byte(excerpt.String()))
+	if err != nil || freewillTokenLike.Match(clean) {
+		return nil, errors.New("tool: selected Freewill project context contains unsafe text")
+	}
+	return clean, nil
+}
+
+type markdownFenceState struct {
+	marker byte
+	length int
+}
+
+func (f *markdownFenceState) active() bool {
+	return f.marker != 0
+}
+
+func (f *markdownFenceState) consume(line string) bool {
+	marker, length, trailing, ok := markdownFenceLine(line)
+	if !ok {
+		return false
+	}
+	if !f.active() {
+		f.marker, f.length = marker, length
+		return true
+	}
+	if marker == f.marker && length >= f.length && strings.TrimSpace(trailing) == "" {
+		f.marker, f.length = 0, 0
+	}
+	return true
+}
+
+func markdownFenceLine(line string) (byte, int, string, bool) {
+	trimmed := strings.TrimLeft(line, " ")
+	if len(line)-len(trimmed) > 3 || len(trimmed) < 3 || (trimmed[0] != '`' && trimmed[0] != '~') {
+		return 0, 0, "", false
+	}
+	marker := trimmed[0]
+	length := 0
+	for length < len(trimmed) && trimmed[length] == marker {
+		length++
+	}
+	if length < 3 {
+		return 0, 0, "", false
+	}
+	return marker, length, trimmed[length:], true
+}
+
+func markdownHeadingLevel(line string) (int, bool) {
+	trimmed := strings.TrimLeft(line, " ")
+	indent := len(line) - len(trimmed)
+	if indent > 3 || strings.HasPrefix(trimmed, "\t") {
+		return 0, false
+	}
+	line = strings.TrimSpace(trimmed)
+	level := 0
+	for level < len(line) && line[level] == '#' {
+		level++
+	}
+	if level == 0 || level > 6 || level == len(line) || line[level] != ' ' {
+		return 0, false
+	}
+	return level, true
+}
+
+func validGitSHA1(value string) bool {
+	if len(value) != 40 {
+		return false
+	}
+	for _, char := range value {
+		if !(char >= '0' && char <= '9' || char >= 'a' && char <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func sha256Hex(content []byte) string {
+	digest := sha256.Sum256(content)
+	return hex.EncodeToString(digest[:])
 }
 
 // freewillReadmeRoadmapActions extracts exact Scope cells from an explicitly

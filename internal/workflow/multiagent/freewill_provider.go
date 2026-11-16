@@ -3,6 +3,8 @@ package multiagent
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1064,7 +1066,13 @@ func validateFreewillContextInput(input FreewillSelectionInput) error {
 	total := 0
 	seen := make(map[string]struct{}, len(snapshot.Sources))
 	for _, source := range snapshot.Sources {
-		if strings.TrimSpace(source.ID) == "" || len(source.ID) > 128 || source.Digest == "" || source.Revision != source.Digest || source.ObservedAt.IsZero() || len(source.Content) > freewillContextSourceLimit {
+		contentDigest := sha256.Sum256([]byte(source.Content))
+		contentDigestHex := hex.EncodeToString(contentDigest[:])
+		gitTracked := source.SourceType == "git_tracked_file"
+		validGitSource := !gitTracked || (validFreewillGitTrackedSource(source) && source.Digest == contentDigestHex)
+		validLegacySource := gitTracked || source.Revision == source.Digest
+		if strings.TrimSpace(source.ID) == "" || len(source.ID) > 128 || source.Digest == "" || !validGitSource || !validLegacySource ||
+			source.ObservedAt.IsZero() || len(source.Content) > freewillContextSourceLimit || source.Digest != contentDigestHex {
 			return errors.New("multiagent: Freewill project context source is invalid")
 		}
 		if _, ok := seen[source.ID]; ok {
@@ -1095,6 +1103,37 @@ func validateFreewillContextInput(input FreewillSelectionInput) error {
 		}
 	}
 	return nil
+}
+
+func validFreewillGitTrackedSource(source freewill.ProjectContextSource) bool {
+	if source.SourceURL != "" || len(source.CommitSHA) != 40 || len(source.Revision) != 64 || len(source.Digest) != 64 ||
+		!validFreewillHex(source.CommitSHA) || !validFreewillHex(source.Revision) || source.Path == "" || strings.Contains(source.Path, "\\") || !strings.HasSuffix(strings.ToLower(source.Path), ".md") {
+		return false
+	}
+	for _, part := range strings.Split(strings.ToLower(source.Path), "/") {
+		if part == "" || part == "." || part == ".." || strings.HasPrefix(part, ".") {
+			return false
+		}
+		for _, denied := range []string{"config", "private", "secret", "credential", "password", "token"} {
+			if strings.Contains(part, denied) {
+				return false
+			}
+		}
+	}
+	expectedID := "project:file:" + source.Path
+	if source.Path == "README.md" {
+		expectedID = "project:readme"
+	}
+	return source.ID == expectedID
+}
+
+func validFreewillHex(value string) bool {
+	for _, char := range value {
+		if !(char >= '0' && char <= '9' || char >= 'a' && char <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 const (

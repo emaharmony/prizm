@@ -902,6 +902,14 @@ type ProjectConfig struct {
 	// assignment (e.g. "PROJECT_STATE.md"). Relative to RepoPath if not absolute.
 	StateFile string `yaml:"state_file"`
 
+	// FreewillContextFiles optionally limits Freewill's project context to this
+	// exact allowlist of clean, tracked, non-ignored relative files. When empty,
+	// the legacy bounded README/manifest/state projection remains in effect.
+	FreewillContextFiles []string `yaml:"freewill_context_files,omitempty"`
+	// FreewillContextSections optionally selects exact Markdown heading sections
+	// from the listed files. Keys must also appear in FreewillContextFiles.
+	FreewillContextSections map[string]string `yaml:"freewill_context_sections,omitempty"`
+
 	// These fields explicitly authorize remote Freewill context egress only for
 	// the exact project identity and repository path. Empty means denied.
 	FreewillRemoteContextProjectID string `yaml:"freewill_remote_context_project_id,omitempty"`
@@ -1679,6 +1687,9 @@ func (c *Config) Validate() error {
 	for i, p := range c.Projects {
 		if p.TokenBudget < -1 {
 			return fmt.Errorf("config: projects[%d].token_budget must be -1 (unlimited), 0 (workflow/default), or a positive cap", i)
+		}
+		if len(p.FreewillContextSections) > 0 && len(p.FreewillContextFiles) == 0 {
+			return fmt.Errorf("config: projects[%d].freewill_context_sections requires freewill_context_files", i)
 		}
 	}
 	if c.Codex.Enabled {
