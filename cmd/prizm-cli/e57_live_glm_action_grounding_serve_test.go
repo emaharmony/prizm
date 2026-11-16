@@ -317,8 +317,8 @@ func TestE57StandaloneLiveGLMSyntheticActionGrounding(t *testing.T) {
 		mapperMetadata = "none"
 	}
 	finalClass, finalCode := e57SafeMetadataCode(run.Freewill.SelectionFailureClass), e57SafeMetadataCode(run.Freewill.SelectionFailureCode)
-	t.Logf("E57_META model=%s status=%s wakes=%d recovery_attempts=%d failure_class=%s failure_code=%s recovery_feedback_observed=%t retry_metadata=%s mapper_diagnostics=%s candidates=%d choice=%t host_action_bound=%t basis_bound=%t uncertainty_present=%t source_manifest_valid=%t effects=zero cloud_call_upper_bound=%d raw_output_recorded=false",
-		model, status, wakes, selectionRetries, finalClass, finalCode, feedbackObserved, retryMetadata, mapperMetadata, len(run.Freewill.Candidates), choiceMade, selectedActionBound, basisBound, uncertaintyPresent, sourceManifestValid, wakes*2)
+	t.Logf("E57_META test=TestE57StandaloneLiveGLMSyntheticActionGrounding run_id=%s model=%s status=%s wakes=%d recovery_attempts=%d failure_class=%s failure_code=%s recovery_feedback_observed=%t retry_metadata=%s mapper_diagnostics=%s candidates=%d choice=%t host_action_bound=%t basis_bound=%t uncertainty_present=%t source_manifest_valid=%t effects=zero cloud_call_upper_bound=%d raw_output_recorded=false",
+		run.State.RunID, model, status, wakes, selectionRetries, finalClass, finalCode, feedbackObserved, retryMetadata, mapperMetadata, len(run.Freewill.Candidates), choiceMade, selectedActionBound, basisBound, uncertaintyPresent, sourceManifestValid, wakes*2)
 }
 
 func e57MinimalProcessEnvironment(workDir string) []string {
