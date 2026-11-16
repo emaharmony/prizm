@@ -2946,3 +2946,16 @@ Extended the existing E56 standalone serve test with two synthetic host-imported
 **Verification:** `go test -count=1 ./cmd/prizm-cli -run '^TestE56StandaloneServeBindsSourceBackedActionAcrossRestart$'` passed. `gofmt` and `git diff --check` passed. The existing no-effect and workspace-snapshot checks remain exercised by the same test.
 
 **Risk/next action:** No production change or authority expansion. Keep the local branch unpublished and return the strengthened snapshot to the independent reviewer. Live GitHub Plugin refresh and real-model semantic entailment remain open; no staging or deployment.
+
+## 2026-11-15 — FW-02 event and scheduled-wake serve acceptance
+
+**Roadmap IDs:** FW-P1 / FW-002 (FW-02).
+**Branch/base:** `codex/fw02-served-event-timer`, based on `937a2f10898be4fec5deed23bb12d4f768520c82`.
+
+- Extended `TestFreewillEventWakeNATSServeAllowlistAndDedupeAfterRuntimeReopen` in the existing CLI serve test package. The configuration enables both the allowlisted event trigger and scheduled wake source. Unlisted and mismatched event envelopes do not invoke the selector. One allowed event and one synthetic scheduled NATS tick, processed serially through the same runtime, produce distinct persisted sleeping runs.
+- Each run retains exactly one wake-claimed, selection-started, and selection-committed event. Both remain execution-disabled with no approval, dispatch, tool, action, or apply event. After closing and reopening the runtime/store, replay of the same event ID leaves the two-run set and provider-call count unchanged.
+- Active-wake handling remains unbuffered: the current event admission path does not persist an event queue, and this test serializes wake sources. No new retry queue was added. A producer that needs delivery after an admission conflict must explicitly redeliver; this is not guaranteed by the POC.
+
+**Verification:** `go test -count=1 ./cmd/prizm-cli -run '^TestFreewillEventWakeNATSServeAllowlistAndDedupeAfterRuntimeReopen$'` passed. `gofmt` and `git diff --check` passed. The fake provider and embedded NATS bus are local and synthetic; no Cloud call occurred.
+
+**Limits/next action:** The scheduled tick was injected over NATS rather than emitted by a cron wait, and runtime reopen occurred in-process rather than as a separate `prizm serve` process. FW-02 remains in progress; R1/G1, FW-G2, CTX/GLM semantic acceptance, and standalone OS-process acceptance remain open. Visual evidence is not applicable. Keep this local and unpublished pending earlier GLM/CTX ordering and independent review; no staging or public PR.
