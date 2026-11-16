@@ -242,11 +242,11 @@ const freewillFlashScoreMaxExponent = 1000
 func (score *freewillFlashScore) UnmarshalJSON(data []byte) error {
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == 0 || len(trimmed) > 64 || !json.Valid(trimmed) || !(trimmed[0] == '-' || trimmed[0] >= '0' && trimmed[0] <= '9') || !freewillFlashScoreExponentIsBounded(trimmed) {
-		return errors.New("Freewill score must be a JSON number")
+		return errors.New("freewill score must be a JSON number")
 	}
 	value, ok := new(big.Rat).SetString(string(trimmed))
 	if !ok || value.Sign() < 0 || value.Cmp(big.NewRat(100, 1)) > 0 {
-		return errors.New("Freewill score must be finite and within 0 through 100")
+		return errors.New("freewill score must be finite and within 0 through 100")
 	}
 	quotient, remainder := new(big.Int).QuoRem(value.Num(), value.Denom(), new(big.Int))
 	if new(big.Int).Lsh(remainder, 1).Cmp(value.Denom()) >= 0 {
