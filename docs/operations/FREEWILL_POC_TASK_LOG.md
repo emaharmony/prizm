@@ -69,3 +69,13 @@ Strengthened E66's restart assertion to compare the entire revision A persisted 
 **Verification:** `go test -count=1 ./cmd/prizm-cli -run '^TestE56StandaloneServeBindsSourceBackedActionAcrossRestart$'` passed after the assertion changes. `gofmt` and `git diff --check` passed.
 
 **Limitations/next action:** Test and documentation only; no production fix or authority expansion. Keep unpublished pending independent reviewer clearance. Live GitHub Plugin refresh and model semantic acceptance remain open.
+
+## 2026-11-15 — FW-02 served event and scheduled-wake acceptance
+
+**Roadmap IDs:** FW-P1 / FW-002 (FW-02). Branch `codex/fw02-served-event-timer` is based on integration commit `937a2f10898be4fec5deed23bb12d4f768520c82`.
+
+Extended the existing NATS serve-composition test to enable both the event allowlist and scheduled wake source. An unlisted event and a subject/envelope type mismatch invoke no selector. One allowed event and one synthetic scheduled tick, delivered serially through the same started Freewill runtime, persist two distinct sleeping runs. Each has exactly one wake claim, selection-started event, and selection-committed event; both remain execution-disabled and have no approval, dispatch, tool, action, or apply event. Reopening the runtime/store and replaying the same event ID adds no run and makes no provider request. The test uses a local fake provider and an embedded NATS bus; no live provider or Cloud request was made.
+
+**Verification:** `go test -count=1 ./cmd/prizm-cli -run '^TestFreewillEventWakeNATSServeAllowlistAndDedupeAfterRuntimeReopen$'` passed. `gofmt` and `git diff --check` passed.
+
+**Limitations and next action:** The test injects a scheduled NATS tick rather than waiting for the cron scheduler, and closes/reopens the composed runtime in one test process rather than restarting the `prizm serve` OS process. A wake delivered while the actor admission slot is occupied is not buffered; this slice serializes timer/event wakes and adds no retry queue. Visual evidence is not applicable to this backend behavior. Keep this local and unpublished until the earlier GLM/CTX ordering is resolved and an independent review clears it; do not target staging.

@@ -77,7 +77,7 @@ func TestFreewillEventWakeNATSServeAllowlistAndDedupeAfterRuntimeReopen(t *testi
 	cfg.Prizm.DataDir, cfg.Prizm.RunsDir, cfg.Prizm.Workspace = dataDir, runsDir, projectPath
 	cfg.Prizm.ReadRoots = []string{projectPath}
 	cfg.Freewill = orchestrator.FreewillConfig{Enabled: true, AgentID: "synthetic-agent", ProjectID: "synthetic-project", Model: "synthetic-model", PolicyDir: policyDir,
-		Scheduling: orchestrator.FreewillSchedulingConfig{EventKinds: []string{"prizm.task.completed"}}}
+		Scheduling: orchestrator.FreewillSchedulingConfig{Enabled: true, Schedule: "* * * * *", EventKinds: []string{"prizm.task.completed"}}}
 	cfg.Agents = []orchestrator.AgentConfig{{ID: "synthetic-agent", Provider: "ollama", Model: "synthetic-model"}}
 	cfg.Projects = []orchestrator.ProjectConfig{{ID: "synthetic-project", RepoPath: projectPath}}
 	providers := provider.NewProviderRegistry()
@@ -137,6 +137,36 @@ func TestFreewillEventWakeNATSServeAllowlistAndDedupeAfterRuntimeReopen(t *testi
 		t.Fatalf("fake provider rejected request: %s", failure)
 	}
 	assertFreewillRunHasNoAuthorityEvents(t, ctx, firstRuntime, first.State.RunID)
+
+	// The same serve runtime must accept both configured wake sources. Process
+	// the timer tick only after the event wake reaches its terminal sleep state:
+	// active actor admissions are fenced, and concurrent wake events are not
+	// buffered by this POC.
+	if err := nc.Publish(freewillScheduleSubject, []byte(`{"fixture":"synthetic-timer"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := nc.FlushTimeout(2 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	runsBeforeRestart := waitForFreewillRunCount(t, ctx, firstRuntime, 2)
+	if providerCalls.Load() != 2 {
+		t.Fatalf("event and timer wakes invoked selector %d times, want once each", providerCalls.Load())
+	}
+	var timerRun *multiagent.DurableRun
+	for i := range runsBeforeRestart {
+		run := &runsBeforeRestart[i]
+		if run.Freewill == nil || run.Freewill.Lifecycle != freewill.StateSleeping || run.Freewill.ChoiceID != "" ||
+			run.Freewill.ApprovalRef != "" || !run.Freewill.ExecutionDisabled {
+			t.Fatalf("event/timer wake did not remain decision-only: %#v", run.Freewill)
+		}
+		if run.Freewill.Trigger == "scheduled_tick" {
+			timerRun = run
+		}
+		assertFreewillRunHasNoAuthorityEvents(t, ctx, firstRuntime, run.State.RunID)
+	}
+	if timerRun == nil || timerRun.State.RunID == first.State.RunID || first.Freewill.Trigger != "event:prizm.task.completed" {
+		t.Fatalf("configured timer and event sources did not produce distinct persisted wakes: event=%#v timer=%#v", first.Freewill, timerRun)
+	}
 	firstRuntime.Close()
 
 	secondRuntime, err := openFreewillServeRuntime(cfg, providers, "", filepath.Join(root, "prizm.yaml"), "")
@@ -176,10 +206,10 @@ func TestFreewillEventWakeNATSServeAllowlistAndDedupeAfterRuntimeReopen(t *testi
 	}
 	time.Sleep(200 * time.Millisecond)
 	runs, err := secondRuntime.store.ListFreewillRuns(ctx, "", 10)
-	if err != nil || len(runs) != 1 || runs[0].State.RunID != first.State.RunID {
-		t.Fatalf("duplicate after runtime/store reopen changed durable run set: runs=%d err=%v", len(runs), err)
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("duplicate event after runtime/store reopen changed durable run set: runs=%d err=%v", len(runs), err)
 	}
-	if providerCalls.Load() != 1 {
+	if providerCalls.Load() != 2 {
 		t.Fatalf("duplicate event after reopen invoked selector again: calls=%d", providerCalls.Load())
 	}
 
@@ -249,16 +279,56 @@ func waitForSingleFreewillRun(t *testing.T, ctx context.Context, runtime *freewi
 	}
 }
 
+func waitForFreewillRunCount(t *testing.T, ctx context.Context, runtime *freewillServeRuntime, want int) []multiagent.DurableRun {
+	t.Helper()
+	for {
+		runs, err := runtime.store.ListFreewillRuns(ctx, "", 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(runs) == want {
+			allSleeping := true
+			for _, run := range runs {
+				if run.Freewill == nil || run.Freewill.Lifecycle != freewill.StateSleeping {
+					allSleeping = false
+					break
+				}
+			}
+			if allSleeping {
+				return runs
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("Freewill runs did not reach sleeping state: want=%d got=%d err=%v", want, len(runs), ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
 func assertFreewillRunHasNoAuthorityEvents(t *testing.T, ctx context.Context, runtime *freewillServeRuntime, runID string) {
 	t.Helper()
 	stored, err := runtime.events.Query(ctx, event.EventFilter{RunID: runID, Limit: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
+	wakeClaims, selectionStarts, selectionCommits := 0, 0, 0
 	for _, evt := range stored {
 		lower := strings.ToLower(evt.Type)
-		if strings.Contains(lower, "approval") || strings.Contains(lower, "dispatch") || strings.Contains(lower, "tool.") {
+		if strings.Contains(lower, "approval") || strings.Contains(lower, "dispatch") || strings.Contains(lower, "tool.") ||
+			strings.Contains(lower, "execution") || strings.Contains(lower, "action") || strings.Contains(lower, "apply") {
 			t.Fatalf("decision-only wake emitted forbidden authority/tool event %q", evt.Type)
 		}
+		switch evt.Type {
+		case event.EventFreewillWakeClaimed:
+			wakeClaims++
+		case event.EventFreewillSelectionStarted:
+			selectionStarts++
+		case event.EventFreewillSelectionCommitted:
+			selectionCommits++
+		}
+	}
+	if wakeClaims != 1 || selectionStarts != 1 || selectionCommits != 1 {
+		t.Fatalf("decision-only wake has incomplete or duplicate persisted trace: wake_claimed=%d selection_started=%d selection_committed=%d", wakeClaims, selectionStarts, selectionCommits)
 	}
 }

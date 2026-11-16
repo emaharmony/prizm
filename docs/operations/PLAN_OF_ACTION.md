@@ -1,3 +1,15 @@
+## Current Handoff: FW-02 served event and scheduled-wake acceptance (2026-11-15)
+
+**Roadmap:** FW-P1 / FW-002 (FW-02). Local branch `codex/fw02-served-event-timer` is based on `937a2f10898be4fec5deed23bb12d4f768520c82`, the supplied Freewill integration baseline.
+
+**Change and evidence:** The existing CLI NATS/serve acceptance now runs with both an allowlisted event kind and an enabled scheduled source. It rejects unlisted and subject/envelope-mismatched events, persists distinct decision-only runs for one allowed event and one injected scheduled tick, and proves one wake/selection trace per run. Replaying the event ID after closing and reopening the runtime/store adds no run and no selector call. Both traces have zero approval, dispatch, tool, action, or apply events. The local synthetic-provider test passed: `go test -count=1 ./cmd/prizm-cli -run '^TestFreewillEventWakeNATSServeAllowlistAndDedupeAfterRuntimeReopen$'`; `gofmt` and `git diff --check` passed.
+
+**Limits:** The scheduled tick is injected over NATS, not produced by an actual cron wait. Runtime close/open is in-process, not an OS-process restart. Events delivered while another wake holds actor admission are not buffered; no retry or queue behavior was added. This is backend evidence; visual review is not applicable. FW-02 remains in progress, and this does not close R1/G1, FW-G2, provider-backed semantic acceptance, or serve-process acceptance.
+
+**Next action:** Keep the milestone local. Resolve the earlier GLM/CTX dependency order and obtain independent review before any public PR; do not promote to `staging`.
+
+---
+
 ## Current Handoff: CTX-05 GLM schema/feedback PR4 candidate (2026-11-15)
 
 **Roadmap IDs:** FW-003; CTX-01–05. Restacked on PR3 merge `46f42596275091b2b734344afe6bc8c5102bf9cf` (tree `8b63bd28dc54358b30e016487af2fbdd168512fc`), the exact current `codex/freewill-integration` head.
