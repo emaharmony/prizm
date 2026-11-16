@@ -79,3 +79,49 @@ Extended the existing NATS serve-composition test to enable both the event allow
 **Verification:** `go test -count=1 ./cmd/prizm-cli -run '^TestFreewillEventWakeNATSServeAllowlistAndDedupeAfterRuntimeReopen$'` passed. `gofmt` and `git diff --check` passed.
 
 **Limitations and next action:** The test injects a scheduled NATS tick rather than waiting for the cron scheduler, and closes/reopens the composed runtime in one test process rather than restarting the `prizm serve` OS process. A wake delivered while the actor admission slot is occupied is not buffered; this slice serializes timer/event wakes and adds no retry queue. Visual evidence is not applicable to this backend behavior. Keep this local and unpublished until the earlier GLM/CTX ordering is resolved and an independent review clears it; do not target staging.
+
+## 2026-11-15 — CTX-05 host-owned GLM line mapper
+
+**Roadmap IDs:** FW-003; CTX-01–05. Isolated branch `codex/freewill-ctx05-host-mapper` restacked on PR #150 merge `86701aca71a2f8cdebe6df71b942d5f5861a7379` (all required CI green).
+
+The Flash idea stage now requests three bounded labeled-text candidate blocks without a native JSON schema. The host maps only recognized fields into typed candidates and creates candidate IDs. Score, nonempty factor allowlist, exact source IDs, uncertainty, ACTION_ID uniqueness and exact host binding, scope, budget, rationale, and `decision_only` remain strictly validated. Phase-two choice keeps its host-ID-bound schema and tools remain absent. The numeric score decoder remains exact and range-bounded.
+
+**Verification:** Focused multiagent parser/selection/recovery/score tests, direct Cloud wire tests, and E57 offline binding/fake-serve/denied-egress/safe-diagnostic tests passed. No full-suite result is claimed.
+
+**Provider evidence:** Controlled synthetic direct probes `SRCREF-L1/L2`, `FACT-L1/L2`, and `CHOICE-C1` succeeded at the field-shape stage; raw text was discarded. The first real served line-mapper harness attempt remained semantically unsuccessful: after two wakes/two recovery attempts it failed at `duplicate_project_action`, following `invalid_project_basis`; zero candidates/choice and zero effects, four-call maximum. The harness metadata for that first attempt did not include a full run ID. One prompt refinement limits ACTION_ID to one candidate; rerun the same bounded synthetic harness and retain the sanitized run ID. CTX-05 acceptance remains open pending host-bound basis/action and choice success plus independent review.
+
+## 2026-11-15 — CTX-05 served line-contract retry evidence
+
+`TestE57StandaloneLiveGLMSyntheticActionGrounding` on exact integration base `86701aca71a2f8cdebe6df71b942d5f5861a7379` produced run `freewill-db90a3d08f2f1fde7a0bd23e09a6c82d`. The test remained inside its 4-call upper bound and recorded zero tools/effects and no raw output. Two wakes/two recoveries ended with `duplicate_project_action`, then `invalid_scored_ideas_idea_shape`; no candidate or choice was produced. The test PASS is safety-only; CTX-05 semantic acceptance remains open. Further Cloud calls are paused pending independent review of host-side duplicate action handling.
+
+## 2026-11-15 — CTX-05 independent action-binding review correction
+
+The duplicate-action failure was caused by an unnecessary cross-candidate uniqueness check. Removed that restriction in selector and service normalization: distinct ideas may reference the same exact host action, while each binding still requires the exact issued ID and source. Tests retain rejection for unissued action IDs, source mismatch, duplicate ideas, and unsafe/oversized idea text. Cloud line protocol is scoped to `glm-5.3-flash:cloud`; local `glm-5.3-flash` keeps JSON schema and feedback behavior. A bounded served retry remains before semantic acceptance can be considered.
+
+## 2026-11-15 — CTX-05 final bounded served retry
+
+`TestE57StandaloneLiveGLMSyntheticActionGrounding` run `freewill-93b2b7ef05b77493d319a33d3a13f605` used the exact PR #150 integration base `86701aca71a2f8cdebe6df71b942d5f5861a7379` and the isolated host mapper. It stayed within 4 Cloud calls and recorded zero tools/effects and no raw output. Two wakes/two recoveries ended with `invalid_scored_ideas_rationale`, then `invalid_project_basis`; candidate count and choice were zero. The Go test PASS covers safety assertions only. Semantic acceptance remains open; pause further Cloud calls pending independent review of the remaining response-contract mismatch.
+
+## 2026-11-15 — CTX-05 compact authorized Cloud projection
+
+Restacked on PR #150 integration `86701aca71a2f8cdebe6df71b942d5f5861a7379`. Exact `glm-5.3-flash:cloud` now receives a bounded compact projection with only egress-authorized source IDs/content and supplied roadmap action ID/text/source ID; the full snapshot and provenance remain host-side. Profile and source metadata, including paths, revisions, digests and commit identifiers, are excluded. Existing selector Cloud-egress authorization is required. Local Flash JSON/schema behavior is retained. The prompt requests `IDEA`, `SCORE`, `FACTORS`, `BASIS_REFS`, `UNCERTAINTY`, and `RATIONALE`; `ACTION_ID` is optional only when host actions are supplied. Host parsing/binding remains fail-closed.
+
+**Verification:** `go test ./internal/workflow/multiagent -count=1`, `go test ./internal/provider/ollama -count=1`, and selected offline E57 binding/fake-serve/egress/metadata tests passed. Projection privacy/size/egress tests and `BASIS_REFS: NONE` parsing passed. Independent privacy/authority review cleared the projection.
+
+**Served evidence:** `TestE57StandaloneLiveGLMSyntheticActionGrounding`, run `freewill-64ee7cc2efde1caf46e10d6236ccd8c8`, completed two wakes and two recovery attempts within the four-call cap. Metadata outcomes were `invalid_project_basis` then `invalid_choice`; final diagnostics described a fenced response with seven choice-incompatible top-level keys. Candidate count and choice were zero, host action/basis/uncertainty bindings were false, effects were zero, and raw output was not recorded. The harness exited successfully on safety assertions only; semantic acceptance remains open. Visual review is not applicable.
+
+**Next action:** Keep this work unpublished. Diagnose the remaining basis and choice contract failures through sanitized host metadata and independent review. Do not weaken exact basis/action checks or broaden Cloud egress; require a later bounded synthetic served run to produce a host-bound candidate and allowed choice before marking CTX-05 accepted.
+
+## 2026-11-15 — CTX-05 Cloud choice mapper and served semantic pass
+
+Added a Cloud-only compact phase-two choice request containing the objective and host-issued candidate IDs, validated ephemeral model IDEA labels, advisory scores, and factors. The line parser accepts exactly one `CHOICE_ID` plus one bounded safe `REASON`, or exact `NONE`; it rejects arbitrary JSON, fences, duplicate/conflicting IDs, unknown candidate IDs, unsafe reasons, and tool calls. The host retains the action-bound title/goal, scope, budget, candidate ID, and persisted reason. The local Flash JSON/schema choice path is unchanged. Candidate display labels are ephemeral and validated; they cannot rewrite the host-bound proposal.
+
+**Served evidence:** `TestE57StandaloneLiveGLMSyntheticActionGrounding`, run `freewill-c7cf9b56e8c6c73893d138f4d38c8283`, completed 2 wakes/1 recovery within the four-call maximum. First attempt returned `invalid_project_basis`; the recovery succeeded with 3 candidates, an allowed choice, exact host action and basis binding, uncertainty and source manifest present, and status pending approval. Effects were zero; `raw_output_recorded=false`. The harness exited successfully. This is one bounded synthetic semantic pass, not general entailment proof. No private BassBook source or raw model output was sent or retained. Visual review is not applicable.
+
+**Verification/next action:** Full `go test ./internal/workflow/multiagent -count=1` passed (76.6s); `go test ./internal/provider/ollama -count=1` and selected offline E57 binding/fake-serve/egress/metadata tests passed; focused choice parser/projection/host-binding tests passed; `gofmt` and `git diff --check` passed. Commit the local milestone and send the stable HEAD/diff/evidence for independent review. Keep unpublished pending review and exact-head CI; no staging or deployment.
+
+## 2026-11-15 — CTX-05 Cloud choice egress boundary correction
+
+Independent review identified that the compact Cloud choice context must not forward optional preference hypothesis text or source-pair references without a separate Cloud-egress authorization. Omitted those fields from the exact Cloud route; the existing local Flash JSON route retains the preference context. Added a regression proving Cloud payload exclusion and made `NONE` a reserved, case-insensitive no-op token that cannot be issued as a candidate ID. This does not change the served E57 path, which uses no preference influence. Targeted tests passed; rerun the full relevant suite before the final local commit/review.
+
+**Verification:** Full `go test ./internal/workflow/multiagent -count=1` passed (81.1s); `go test ./internal/provider/ollama -count=1` and selected offline E57 tests passed; targeted Cloud omission/`NONE` tests passed; `gofmt` and `git diff --check` passed. The prior served run remains applicable because this correction removes optional data from Cloud choice context and reserves an impossible host candidate ID; it does not change the synthetic served request or line protocol.

@@ -548,17 +548,10 @@ func normalizeFreewillRoadmapSelection(selection freewill.Selection, snapshot fr
 		}
 		return selection, nil
 	}
-	seenActions := make(map[string]struct{}, len(selection.Candidates))
 	for index := range selection.Candidates {
 		candidate := &selection.Candidates[index]
 		if candidate.Request.CandidateSource == freewill.SourceResume {
 			continue
-		}
-		if candidate.ProjectActionID != "" {
-			if _, duplicate := seenActions[candidate.ProjectActionID]; duplicate {
-				return freewill.Selection{}, errors.New("multiagent: Freewill selector duplicated a roadmap action")
-			}
-			seenActions[candidate.ProjectActionID] = struct{}{}
 		}
 		if err := bindFreewillProjectAction(snapshot, candidate); err != nil {
 			return freewill.Selection{}, errors.New("multiagent: Freewill selector supplied an invalid roadmap action")
@@ -633,7 +626,7 @@ func freewillSelectionRecoveryFeedback(code string, snapshots ...freewill.Projec
 	}
 }
 
-func freewillFlashSelectionRecoveryFeedback(code string, snapshot freewill.ProjectContextSnapshot) string {
+func freewillFlashJSONSelectionRecoveryFeedback(code string, snapshot freewill.ProjectContextSnapshot) string {
 	switch code {
 	case "invalid_scored_ideas_json_size_or_encoding", "invalid_scored_ideas_json_duplicate_key", "invalid_scored_ideas_json_trailing_content", "invalid_scored_ideas_json_syntax", "invalid_scored_ideas_json_wrong_shape":
 		return "Return one JSON object matching the supplied schema with exactly three candidates, or an empty candidates array and sleep=true. Each candidate needs idea, integer score from 0 to 100, nonempty factors array, rationale, basis_refs, uncertainty, and optional project_action_id. No aliases, prose, fences, or extra keys."
@@ -666,13 +659,51 @@ func freewillFlashSelectionRecoveryFeedback(code string, snapshot freewill.Proje
 		return "Return JSON matching the supplied schema. Cite exact supplied project source IDs in basis_refs, include uncertainty, and do not invent refs. Return the schema's sleep/no-op form if unsupported."
 	case "invalid_project_action":
 		return "Return JSON matching the supplied schema. Set project_action_id only to an exact host-supplied action ID supported by the candidate's basis_refs; omit it when no supplied action applies. Do not invent action IDs."
-	case "duplicate_project_action":
-		return "Return JSON matching the supplied schema. Do not assign the same host-supplied project_action_id to multiple candidates; omit unsupported action IDs."
 	case "invalid_choice":
 		return "Retry the idea-selection stage: return JSON matching the supplied idea schema with exactly three candidates, or an empty candidates array and sleep=true. Preserve the required idea fields; do not return a choice object."
 	default:
 		if strings.HasPrefix(code, "invalid_scored_ideas_") {
 			return "Return one JSON object matching the supplied schema with exactly three candidates, or an empty candidates array and sleep=true. Use the declared field names and types only; no text blocks, aliases, or extra prose."
+		}
+		return freewillSelectionRecoveryFeedback(code, snapshot)
+	}
+}
+
+func freewillFlashSelectionRecoveryFeedback(code string, snapshot freewill.ProjectContextSnapshot) string {
+	lineContract := "Return exactly three blocks, each with IDEA, integer SCORE (0-100), nonempty FACTORS from scope_fit, feasibility, impact, novelty, readiness, optional exact ACTION_ID, exact supplied BASIS_REFS, concise UNCERTAINTY, and specific RATIONALE; one field per line. No JSON, fences, preamble, extra fields, or tools. Return exactly NONE if no safe supported idea fits."
+	switch code {
+	case "invalid_scored_ideas_count":
+		return lineContract + " Do not return one or two candidates."
+	case "invalid_scored_ideas_size":
+		return lineContract + " Keep each field concise and within the host's size limits."
+	case "invalid_scored_ideas_idea_shape":
+		return lineContract + " Keep each IDEA concise (160 characters maximum) and plain text, without paths, URLs, brackets, backslashes, or traversal markers."
+	case "invalid_scored_ideas_duplicate":
+		return lineContract + " Ensure all three IDEA values are distinct."
+	case "invalid_scored_ideas_structure":
+		return lineContract
+	case "invalid_scored_ideas_unsafe":
+		return lineContract + " Keep the ideas decision-only; do not include paths, authority, approval, network, secrets, or execution requests."
+	case "idea_tool_request":
+		return lineContract + " This selector has no tools."
+	case "invalid_scored_ideas_factors":
+		return lineContract + " FACTORS must contain one or more unique bare labels, with no ratings or annotations."
+	case "invalid_scored_ideas_score":
+		return lineContract + " Each SCORE must be an integer from 0 to 100."
+	case "invalid_scored_ideas_rationale":
+		return lineContract + " Each RATIONALE must be specific and contain at least six words."
+	case "invalid_project_basis":
+		if sourceID := freewillSelectionCorrectionSourceID([]freewill.ProjectContextSnapshot{snapshot}); sourceID != "" {
+			return lineContract + " Each BASIS_REFS field may contain only supplied source ID " + sourceID + "; do not invent refs."
+		}
+		return lineContract + " Cite exact supplied project source IDs in BASIS_REFS; do not invent refs."
+	case "invalid_project_action":
+		return lineContract + " Use ACTION_ID only for an exact supplied action supported by BASIS_REFS; do not invent action IDs."
+	case "invalid_choice":
+		return lineContract + " Retry the idea-selection stage; do not return a choice object."
+	default:
+		if strings.HasPrefix(code, "invalid_scored_ideas_") {
+			return lineContract
 		}
 		return freewillSelectionRecoveryFeedback(code, snapshot)
 	}

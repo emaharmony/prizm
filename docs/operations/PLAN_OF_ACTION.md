@@ -1,4 +1,16 @@
-## Current Handoff: FW-02 served event and scheduled-wake acceptance (2026-11-15)
+## Current Handoff: CTX-05 host-owned GLM idea mapper (2026-11-15)
+
+**Roadmap IDs:** FW-003; CTX-01–05. The integration base advanced with PR #150, merged at `86701aca71a2f8cdebe6df71b942d5f5861a7379`; all required CI is green. The isolated branch `codex/freewill-ctx05-host-mapper` is restacked on that exact commit. No staging merge or deployment is authorized.
+
+**Reviewed change:** For exact `glm-5.3-flash:cloud`, both idea and choice stages use compact bounded JSON inputs and host-parsed line contracts without native output schemas; local `glm-5.3-flash` keeps its JSON/schema paths. Idea projection sends only egress-authorized source IDs/content and supplied roadmap action ID/text/source ID, gated by existing `SelectorEgressAllowed`; profile, paths, revisions, digests, commit metadata, and unapproved pathless sources remain host-side. The full snapshot remains available to host provenance/action validation. The host maps IDEA/SCORE/FACTORS/optional ACTION_ID/BASIS_REFS/UNCERTAINTY/RATIONALE into typed proposals and constructs candidate IDs. Choice projection sends the objective and host candidate IDs, validated ephemeral model IDEA labels, scores, and factors; it excludes project evidence and optional preference hypothesis/source-pair data because no separate Cloud-egress authorization exists. Local Flash preference influence remains on its existing authorized JSON path. Final proposal titles/goals remain bound to host roadmap action text. Exact source/action binding, rationale and idea safety, scope, budget, and `decision_only` remain host-owned. `NONE` is reserved and rejected as a host candidate ID. Distinct ideas may cite the same exact host action. No package or authority path was added.
+
+**Validation:** Full `internal/workflow/multiagent`, Ollama provider, and selected offline E57 binding/fake-serve/egress/metadata tests passed. Focused tests cover projection privacy/egress/size, strict choice-line parsing and allowlisting, host-label/action binding, no-tools, and the retained local Flash JSON/schema path. The served synthetic run `freewill-c7cf9b56e8c6c73893d138f4d38c8283` (`TestE57StandaloneLiveGLMSyntheticActionGrounding`) completed 2 wakes/1 recovery within the four-call cap. First attempt failed `invalid_project_basis`; the bounded recovery succeeded with 3 candidates, an allowed choice, exact host action and basis bindings, uncertainty and source manifest present, pending approval, and zero effects. `raw_output_recorded=false`. `gofmt` and `git diff --check` passed. Visual review is not applicable.
+
+**Open gates and next action:** Independent code/privacy review cleared local HEAD `c11d006917867517ff9a4b96bf25154b10e15215`; the bounded synthetic served semantic gate passes for this scenario. Publish the reviewed branch as a PR into `codex/freewill-integration` and require exact-head CI. Keep the broader CTX slice in progress: this does not establish general semantic entailment, real-project grounding, or live GitHub refresh. Do not promote to staging or deploy.
+
+---
+
+## Prior Handoff: FW-02 served event and scheduled-wake acceptance (2026-11-15)
 
 **Roadmap:** FW-P1 / FW-002 (FW-02). Local branch `codex/fw02-served-event-timer` is based on `937a2f10898be4fec5deed23bb12d4f768520c82`, the supplied Freewill integration baseline.
 
@@ -10,7 +22,7 @@
 
 ---
 
-## Current Handoff: CTX-05 GLM schema/feedback PR4 candidate (2026-11-15)
+## Previous Handoff: CTX-05 GLM schema/feedback PR4 candidate (2026-11-15)
 
 **Roadmap IDs:** FW-003; CTX-01–05. Restacked on PR3 merge `46f42596275091b2b734344afe6bc8c5102bf9cf` (tree `8b63bd28dc54358b30e016487af2fbdd168512fc`), the exact current `codex/freewill-integration` head.
 

@@ -317,8 +317,8 @@ func TestE57StandaloneLiveGLMSyntheticActionGrounding(t *testing.T) {
 		mapperMetadata = "none"
 	}
 	finalClass, finalCode := e57SafeMetadataCode(run.Freewill.SelectionFailureClass), e57SafeMetadataCode(run.Freewill.SelectionFailureCode)
-	t.Logf("E57_META model=%s status=%s wakes=%d recovery_attempts=%d failure_class=%s failure_code=%s recovery_feedback_observed=%t retry_metadata=%s mapper_diagnostics=%s candidates=%d choice=%t host_action_bound=%t basis_bound=%t uncertainty_present=%t source_manifest_valid=%t effects=zero cloud_call_upper_bound=%d raw_output_recorded=false",
-		model, status, wakes, selectionRetries, finalClass, finalCode, feedbackObserved, retryMetadata, mapperMetadata, len(run.Freewill.Candidates), choiceMade, selectedActionBound, basisBound, uncertaintyPresent, sourceManifestValid, wakes*2)
+	t.Logf("E57_META test=TestE57StandaloneLiveGLMSyntheticActionGrounding run_id=%s model=%s status=%s wakes=%d recovery_attempts=%d failure_class=%s failure_code=%s recovery_feedback_observed=%t retry_metadata=%s mapper_diagnostics=%s candidates=%d choice=%t host_action_bound=%t basis_bound=%t uncertainty_present=%t source_manifest_valid=%t effects=zero cloud_call_upper_bound=%d raw_output_recorded=false",
+		run.State.RunID, model, status, wakes, selectionRetries, finalClass, finalCode, feedbackObserved, retryMetadata, mapperMetadata, len(run.Freewill.Candidates), choiceMade, selectedActionBound, basisBound, uncertaintyPresent, sourceManifestValid, wakes*2)
 }
 
 func e57MinimalProcessEnvironment(workDir string) []string {
@@ -862,7 +862,7 @@ func e57RunStandaloneEventAdmission(t *testing.T, directCloud bool) {
 		}
 		content := e56IdeaResponse(false, actionID)
 		if call == 2 {
-			content = "choice: NONE\nreason: No candidate fits this synthetic objective."
+			content = "CHOICE_ID: NONE\nREASON: No candidate fits this synthetic objective."
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"model": request.Model, "done": true, "message": map[string]any{"role": "assistant", "content": content}})
 	}))
@@ -1005,7 +1005,12 @@ func e57RunStandaloneEventAdmission(t *testing.T, directCloud bool) {
 		candidateCount = len(run.Freewill.Candidates)
 	}
 	if run.Freewill == nil || run.Freewill.Lifecycle != freewill.StateSleeping || candidateCount != wantCandidates || run.Freewill.ChoiceID != "" {
-		t.Fatalf("fake served event did not safely sleep: candidates=%d wanted=%d", candidateCount, wantCandidates)
+		lifecycle, failureClass, failureCode := "", "", ""
+		if run.Freewill != nil {
+			lifecycle = string(run.Freewill.Lifecycle)
+			failureClass, failureCode = run.Freewill.SelectionFailureClass, run.Freewill.SelectionFailureCode
+		}
+		t.Fatalf("fake served event did not safely sleep: lifecycle=%s candidates=%d wanted=%d failure_class=%s failure_code=%s", lifecycle, candidateCount, wantCandidates, failureClass, failureCode)
 	}
 	if calls.Load() != wantCalls {
 		t.Fatalf("local fake provider call count=%d, want %d", calls.Load(), wantCalls)

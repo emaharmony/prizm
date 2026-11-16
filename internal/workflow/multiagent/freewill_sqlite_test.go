@@ -755,7 +755,7 @@ func TestFreewillChoiceReasonPersistsWithDecisionOnlyReplay(t *testing.T) {
 	scored := `{"candidates":[{"idea":"Map dependencies","score":72,"factors":["scope_fit"],"rationale":"This maps direct dependencies and identifies risky coupling that merits focused future review."},{"idea":"Document service boundaries","score":88,"factors":["impact"],"rationale":"Clear ownership notes help contributors route future work and avoid accidental cross-domain changes."},{"idea":"Review test coverage gaps","score":61,"factors":["feasibility"],"rationale":"A focused gap list can guide later tests while keeping the review read only and within scope."}],"sleep":false}`
 	chat := &scoredFreewillChatStub{responses: []provider.ChatGenerateResponse{
 		{Content: scored, Provider: "ollama", Model: "glm-5.3-flash:cloud", PromptTokens: 11, OutputTokens: 7},
-		{Content: `{"choice_id":"candidate-freewill-choice-reason-1","reason":"Write a README to explain the service boundaries."}`, Provider: "ollama", Model: "glm-5.3-flash:cloud", PromptTokens: 5, OutputTokens: 3},
+		{Content: "CHOICE_ID: candidate-freewill-choice-reason-1\nREASON: Write a README to explain the service boundaries.", Provider: "ollama", Model: "glm-5.3-flash:cloud", PromptTokens: 5, OutputTokens: 3},
 	}}
 	selector := ChatFreewillSelector{Provider: chat, AgentID: "agent", Model: "glm-5.3-flash:cloud", PreferenceInfluenceEnabled: true,
 		PreferenceInfluenceOwnerID: "owner", PreferenceInfluenceSource: fixedPreferenceInfluenceSource{ok: true, advisory: FreewillPreferenceInfluence{
@@ -1253,14 +1253,14 @@ func (s *liveFreewillPhaseTwoChat) ChatGenerate(ctx context.Context, req provide
 	if len(req.Messages) == 0 {
 		return provider.ChatGenerateResponse{}, errors.New("unexpected empty Freewill request")
 	}
-	switch req.Messages[0].Content {
-	case freewillFlashIdeaSystemPrompt:
+	switch {
+	case strings.Contains(req.Messages[0].Content, "IDEA, SCORE, FACTORS, BASIS_REFS, UNCERTAINTY, RATIONALE") && req.OutputSchema == nil:
 		s.ideaCalls++
 		if s.ideaCalls != 1 || len(req.Tools) != 0 {
 			return provider.ChatGenerateResponse{}, errors.New("unexpected phase-one request")
 		}
 		return s.ideaResponse, nil
-	case freewillFlashChoiceSystemPrompt:
+	case strings.Contains(req.Messages[0].Content, "CHOICE_ID:") && req.OutputSchema == nil:
 		s.choiceCalls++
 		if s.choiceCalls != 1 || len(req.Tools) != 0 {
 			return provider.ChatGenerateResponse{}, errors.New("unexpected phase-two request")
