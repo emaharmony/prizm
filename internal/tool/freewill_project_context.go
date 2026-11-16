@@ -329,6 +329,9 @@ func extractFreewillSelectedMarkdown(raw []byte, heading string) ([]byte, error)
 	lines := strings.Split(string(raw), "\n")
 	start, end := 0, len(lines)
 	if strings.TrimSpace(heading) != "" {
+		if _, ok := markdownHeadingLevel(heading); !ok {
+			return nil, errors.New("tool: configured Freewill section anchor is not a Markdown heading")
+		}
 		start = -1
 		var fence markdownFenceState
 		for i, line := range lines {
@@ -340,7 +343,7 @@ func extractFreewillSelectedMarkdown(raw []byte, heading string) ([]byte, error)
 			}
 			level, ok := markdownHeadingLevel(line)
 			if !ok {
-				return nil, errors.New("tool: configured Freewill section anchor is not a Markdown heading")
+				continue
 			}
 			start, end = i, len(lines)
 			var sectionFence markdownFenceState
