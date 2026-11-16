@@ -34,9 +34,14 @@ func (f *fakeFreewillLister) List(_ context.Context, pageSize int) ([]multiagent
 	f.lists++
 	return []multiagent.FreewillApprovalStatus{{
 		RunID:          "freewill-test-1",
+		ProjectID:      "synthetic-event-board",
+		ProjectSources: []multiagent.FreewillPublicProjectSource{{ID: "project:readme", Path: "README.md", SHA256: strings.Repeat("a", 64)}},
 		Lifecycle:      "approval_pending",
 		ApprovalID:     "appr_test",
 		ApprovalStatus: "pending",
+		Selected: &multiagent.FreewillPublicCandidate{CandidateID: "candidate-1", Title: "Document the event schedule",
+			Reason: "This follows the host roadmap action.", BasisRefs: []string{"project:readme"},
+			Uncertainty: "The synthetic README may be incomplete.", ProjectActionID: "project:roadmap:M1"},
 	}}, nil
 }
 
@@ -57,6 +62,12 @@ func TestFreewillRunsListEndpointReturnsRuns(t *testing.T) {
 	}
 	if len(payload.Runs) != 1 || payload.Runs[0].RunID != "freewill-test-1" || payload.Runs[0].ApprovalStatus != "pending" {
 		t.Fatalf("runs=%+v", payload.Runs)
+	}
+	run := payload.Runs[0]
+	if run.ProjectID != "synthetic-event-board" || len(run.ProjectSources) != 1 || run.ProjectSources[0].Path != "README.md" ||
+		run.Selected == nil || len(run.Selected.BasisRefs) != 1 || run.Selected.BasisRefs[0] != "project:readme" ||
+		run.Selected.Uncertainty == "" || run.Selected.ProjectActionID != "project:roadmap:M1" {
+		t.Fatalf("run evidence projection=%+v", run)
 	}
 
 	post := httptest.NewRecorder()

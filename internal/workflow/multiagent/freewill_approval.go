@@ -311,48 +311,61 @@ func validFreewillFailureCode(code string) bool {
 }
 
 type FreewillApprovalStatus struct {
-	RunID                 string                    `json:"run_id"`
-	ResumeFromRunID       string                    `json:"resume_from_run_id,omitempty"`
-	RequestID             string                    `json:"request_id,omitempty"`
-	Lifecycle             freewill.State            `json:"lifecycle"`
-	ChoiceID              string                    `json:"choice_id,omitempty"`
-	Selected              *FreewillPublicCandidate  `json:"selected,omitempty"`
-	Alternatives          []FreewillPublicCandidate `json:"alternatives,omitempty"`
-	ReasonSummary         string                    `json:"reason_summary,omitempty"`
-	Provider              string                    `json:"provider,omitempty"`
-	Model                 string                    `json:"model,omitempty"`
-	Usage                 cost.TokenUsage           `json:"usage,omitempty"`
-	ApprovalID            string                    `json:"approval_id,omitempty"`
-	ApprovalStatus        string                    `json:"approval_status,omitempty"`
-	RequestFingerprint    string                    `json:"request_fingerprint,omitempty"`
-	PolicyDecision        string                    `json:"policy_decision,omitempty"`
-	ExecutionDisabled     bool                      `json:"execution_disabled"`
-	ExecutionStatus       string                    `json:"execution_status,omitempty"`
-	ChildRunID            string                    `json:"child_run_id,omitempty"`
-	ChildStatus           string                    `json:"child_status,omitempty"`
-	ExecutionReportRef    string                    `json:"execution_report_ref,omitempty"`
-	ExecutionReportSHA256 string                    `json:"execution_report_sha256,omitempty"`
-	ValidationSummary     string                    `json:"validation_summary,omitempty"`
-	ExecutionFailureCode  string                    `json:"execution_failure_code,omitempty"`
-	PauseReason           string                    `json:"pause_reason,omitempty"`
-	SelectionRecoveries   int                       `json:"selection_recoveries,omitempty"`
-	SelectionFailureClass string                    `json:"selection_failure_class,omitempty"`
-	SelectionFailureCode  string                    `json:"selection_failure_code,omitempty"`
-	SelectionNextAt       time.Time                 `json:"selection_next_at,omitempty"`
+	RunID                 string                        `json:"run_id"`
+	ProjectID             string                        `json:"project_id,omitempty"`
+	ProjectSources        []FreewillPublicProjectSource `json:"project_sources,omitempty"`
+	ResumeFromRunID       string                        `json:"resume_from_run_id,omitempty"`
+	RequestID             string                        `json:"request_id,omitempty"`
+	Lifecycle             freewill.State                `json:"lifecycle"`
+	ChoiceID              string                        `json:"choice_id,omitempty"`
+	Selected              *FreewillPublicCandidate      `json:"selected,omitempty"`
+	Alternatives          []FreewillPublicCandidate     `json:"alternatives,omitempty"`
+	ReasonSummary         string                        `json:"reason_summary,omitempty"`
+	Provider              string                        `json:"provider,omitempty"`
+	Model                 string                        `json:"model,omitempty"`
+	Usage                 cost.TokenUsage               `json:"usage,omitempty"`
+	ApprovalID            string                        `json:"approval_id,omitempty"`
+	ApprovalStatus        string                        `json:"approval_status,omitempty"`
+	RequestFingerprint    string                        `json:"request_fingerprint,omitempty"`
+	PolicyDecision        string                        `json:"policy_decision,omitempty"`
+	ExecutionDisabled     bool                          `json:"execution_disabled"`
+	ExecutionStatus       string                        `json:"execution_status,omitempty"`
+	ChildRunID            string                        `json:"child_run_id,omitempty"`
+	ChildStatus           string                        `json:"child_status,omitempty"`
+	ExecutionReportRef    string                        `json:"execution_report_ref,omitempty"`
+	ExecutionReportSHA256 string                        `json:"execution_report_sha256,omitempty"`
+	ValidationSummary     string                        `json:"validation_summary,omitempty"`
+	ExecutionFailureCode  string                        `json:"execution_failure_code,omitempty"`
+	PauseReason           string                        `json:"pause_reason,omitempty"`
+	SelectionRecoveries   int                           `json:"selection_recoveries,omitempty"`
+	SelectionFailureClass string                        `json:"selection_failure_class,omitempty"`
+	SelectionFailureCode  string                        `json:"selection_failure_code,omitempty"`
+	SelectionNextAt       time.Time                     `json:"selection_next_at,omitempty"`
 }
 
 type FreewillPublicCandidate struct {
-	CandidateID    string                   `json:"candidate_id"`
-	Title          string                   `json:"title"`
-	Goal           string                   `json:"goal"`
-	Reason         string                   `json:"reason_summary"`
-	Source         freewill.CandidateSource `json:"candidate_source"`
-	Scope          freewill.Scope           `json:"scope"`
-	Capabilities   []string                 `json:"requested_capabilities"`
-	Budget         freewill.ResourceBudget  `json:"budget"`
-	Score          *int                     `json:"score,omitempty"`
-	ScoreFactors   []string                 `json:"score_factors,omitempty"`
-	ScoreRationale string                   `json:"score_rationale,omitempty"`
+	CandidateID     string                   `json:"candidate_id"`
+	Title           string                   `json:"title"`
+	Goal            string                   `json:"goal"`
+	Reason          string                   `json:"reason_summary"`
+	Source          freewill.CandidateSource `json:"candidate_source"`
+	Scope           freewill.Scope           `json:"scope"`
+	Capabilities    []string                 `json:"requested_capabilities"`
+	Budget          freewill.ResourceBudget  `json:"budget"`
+	Score           *int                     `json:"score,omitempty"`
+	ScoreFactors    []string                 `json:"score_factors,omitempty"`
+	ScoreRationale  string                   `json:"score_rationale,omitempty"`
+	BasisRefs       []string                 `json:"basis_refs,omitempty"`
+	Uncertainty     string                   `json:"uncertainty,omitempty"`
+	ProjectActionID string                   `json:"project_action_id,omitempty"`
+}
+
+// FreewillPublicProjectSource is the content-free, relative-path projection of
+// an authorized project source used to support a read-only candidate.
+type FreewillPublicProjectSource struct {
+	ID     string `json:"id"`
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
 }
 
 func (s *FreewillApprovalService) Status(ctx context.Context, runID string) (FreewillApprovalStatus, error) {
@@ -761,6 +774,7 @@ func (s *FreewillApprovalService) statusFromRecord(ctx context.Context, record D
 		return FreewillApprovalStatus{}, errors.New("multiagent: run is not a Freewill intention")
 	}
 	status := FreewillApprovalStatus{RunID: record.State.RunID, ResumeFromRunID: record.Freewill.ResumeFromRunID,
+		ProjectID: record.Freewill.Scope.ProjectID,
 		Lifecycle: record.Freewill.Lifecycle, ChoiceID: record.Freewill.ChoiceID,
 		ApprovalID: record.Freewill.ApprovalRef, RequestFingerprint: record.Freewill.ApprovalFingerprint,
 		PolicyDecision: record.Freewill.PolicyDecision, ExecutionDisabled: record.Freewill.ExecutionDisabled, PauseReason: record.Freewill.PauseReason,
@@ -775,6 +789,7 @@ func (s *FreewillApprovalService) statusFromRecord(ctx context.Context, record D
 		Usage: record.Freewill.SelectionUsage, SelectionRecoveries: record.Freewill.SelectionRecoveryNumber,
 		SelectionFailureClass: record.Freewill.SelectionFailureClass, SelectionFailureCode: record.Freewill.SelectionFailureCode,
 		SelectionNextAt: record.Freewill.SelectionNextAt}
+	_, status.ProjectSources = publicFreewillProjectEvidence(status.ProjectID, record.Freewill.ProjectContextManifest)
 	for _, candidate := range record.Freewill.Candidates {
 		public := publicFreewillCandidate(candidate)
 		if candidate.CandidateID == record.Freewill.ChoiceID {
@@ -841,7 +856,21 @@ func publicFreewillCandidate(candidate freewill.CandidateIntention) FreewillPubl
 	return FreewillPublicCandidate{CandidateID: candidate.CandidateID, Title: candidate.Request.Title, Goal: candidate.Request.Goal,
 		Reason: candidate.Request.ReasonSummary, Source: candidate.Request.CandidateSource, Scope: candidate.Request.Scope,
 		Capabilities: append([]string(nil), candidate.Request.RequestedCapabilities...), Budget: candidate.Request.Budget,
-		Score: score, ScoreFactors: factors, ScoreRationale: rationale}
+		Score: score, ScoreFactors: factors, ScoreRationale: rationale,
+		BasisRefs: append([]string(nil), candidate.BasisRefs...), Uncertainty: candidate.Uncertainty, ProjectActionID: candidate.ProjectActionID}
+}
+
+func publicFreewillProjectEvidence(projectID string, manifest *freewill.ProjectContextManifest) (string, []FreewillPublicProjectSource) {
+	if manifest == nil || manifest.ProjectID != projectID || manifest.Validate() != nil {
+		return "", nil
+	}
+	sources := make([]FreewillPublicProjectSource, 0, len(manifest.Sources))
+	for _, source := range manifest.Sources {
+		if strings.HasPrefix(source.ID, "project:") && source.Path != "" {
+			sources = append(sources, FreewillPublicProjectSource{ID: source.ID, Path: source.Path, SHA256: source.Digest})
+		}
+	}
+	return projectID, sources
 }
 
 func NewFreewillApprovalService(runtime *DurableRuntime, store DurableRunStore, approvals FreewillApprovalStore, evaluator FreewillPolicyEvaluator, policyActor string) (*FreewillApprovalService, error) {

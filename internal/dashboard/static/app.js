@@ -53,6 +53,7 @@
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
     try {
+      const endpoint = `${API}${path}`;
       const method = String((options && options.method) || 'GET').toUpperCase();
       const mutates = method !== 'GET' && method !== 'HEAD';
       let token = apiToken();

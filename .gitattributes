@@ -8,3 +8,4 @@
 *.bat text eol=crlf
 *.exe binary
 *.db binary
+*.png binary

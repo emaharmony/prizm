@@ -105,6 +105,28 @@
     el.textContent = message;
   }
 
+  function candidateEvidenceMarkup(candidate) {
+    const refs = Array.from(new Set(candidate.basis_refs || [])).filter(ref => typeof ref === 'string' && ref.trim());
+    const action = candidate.project_action_id || '';
+    const rationale = candidate.score_rationale || '';
+    const uncertainty = candidate.uncertainty || '';
+    return `${action ? `<p class="hint">Host roadmap action: ${ui.escape(action)}</p>` : ''}
+      ${refs.length ? `<p class="hint">Sources cited: ${refs.map(ref => ui.escape(ref)).join(', ')}</p>` : ''}
+      ${rationale ? `<p class="hint">Why this was rated: ${ui.escape(rationale)}</p>` : ''}
+      ${uncertainty ? `<p class="hint">Uncertainty: ${ui.escape(uncertainty)}</p>` : ''}`;
+  }
+
+  function projectEvidenceMarkup(status) {
+    const project = status.project_id || (status.selected && status.selected.scope && status.selected.scope.project_id) || '';
+    const sources = Array.isArray(status.project_sources) ? status.project_sources : [];
+    const sourceList = sources.map(source => {
+      const digest = source.sha256 ? ` · SHA-256 ${ui.escape(source.sha256)}` : '';
+      return `${ui.escape(source.id || 'source')}${source.path ? ` · ${ui.escape(source.path)}` : ''}${digest}`;
+    }).join('; ');
+    return `${project ? `<p class="hint">Project: ${ui.escape(project)}</p>` : ''}
+      ${sourceList ? `<p class="hint">Source evidence: ${sourceList}</p>` : ''}`;
+  }
+
   function candidateCard(candidate, options = {}) {
     const chosen = options.chosen;
     const factors = (candidate.score_factors || []).join(', ');
@@ -115,6 +137,7 @@
         <span class="meta mono">${ui.escape(String(candidate.score ?? '—'))}/100</span>
       </div>
       <p class="section-copy">${ui.escape(candidate.reason_summary || '')}</p>
+      ${candidateEvidenceMarkup(candidate)}
       <p class="hint">capabilities: ${ui.escape(caps || '—')} | factors: ${ui.escape(factors || '—')}</p>
       ${options.actions ? `<div class="actions-row">
         <button class="btn small" data-decision="grant" data-run="${ui.escape(options.runId)}" data-approval="${ui.escape(options.approvalId)}" type="button">Approve</button>
@@ -135,9 +158,11 @@
     const selected = status.selected || {};
     const alternatives = status.alternatives || [];
     const decision = decisionControls(status);
+    const runId = status.run_id || '';
+    const approvalId = status.approval_id || '';
     const usage = status.usage || {};
     const tokens = usage.total_tokens ? `${usage.total_tokens} tokens` : '';
-    const metaBits = [status.model, tokens, status.selection_recoveries ? `${status.selection_recoveries} recoveries` : ''].filter(Boolean).join(' · ');
+    const metaBits = [status.model, tokens, status.execution_disabled ? 'execution disabled' : '', status.selection_recoveries ? `${status.selection_recoveries} recoveries` : ''].filter(Boolean).join(' · ');
     const approvalLine = (status.approval_status && status.approval_status !== 'pending')
       ? `<p class="hint">decision: ${ui.escape(status.approval_status)}${status.pause_reason ? ` (${ui.escape(status.pause_reason)})` : ''}</p>` : '';
     return `<article class="card" style="margin-bottom: var(--space-4);">
@@ -145,8 +170,10 @@
         <span>${ui.badge(status.lifecycle || 'unknown')}</span>
         <span class="meta mono">${ui.escape(status.run_id || '')}</span>
       </div>
+      ${projectEvidenceMarkup(status)}
       <h3 style="margin:var(--space-2) 0 0; font-size:15px;">${ui.escape(selected.title || 'No selection recorded')}</h3>
       <p class="section-copy">${ui.escape(selected.reason_summary || status.reason_summary || '')}</p>
+      ${candidateEvidenceMarkup(selected)}
       <p class="hint">${ui.escape(metaBits || '—')}</p>
       ${approvalLine}
       ${alternatives.length || selected.title ? `<details><summary>Candidates considered (${alternatives.length + (selected.title ? 1 : 0)})</summary><div style="margin-top: var(--space-2);">${candidateCard(selected, { chosen: true })}${(alternatives || []).map(a => candidateCard(a)).join('')}</div></details>` : ''}
