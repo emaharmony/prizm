@@ -894,15 +894,35 @@ func TestServedFreewillP1GLMFlashBlankObjectiveStillPersistsPolicyOnly(t *testin
 		_, choicePhase := phaseInput["candidates"]
 		if ideaPhase && !choicePhase {
 			var user struct {
-				Mode           string                          `json:"mode"`
-				MaxIdeas       int                             `json:"max_ideas"`
-				Objective      string                          `json:"objective"`
-				ProjectContext freewill.ProjectContextSnapshot `json:"project_context"`
+				Mode      string `json:"mode"`
+				MaxIdeas  int    `json:"max_ideas"`
+				Objective string `json:"objective"`
+				Sources   []struct {
+					SourceID string `json:"source_id"`
+					Content  string `json:"content"`
+				} `json:"sources"`
+				RoadmapActions []struct {
+					ID       string `json:"id"`
+					Text     string `json:"text"`
+					SourceID string `json:"source_id"`
+				} `json:"roadmap_actions"`
 			}
-			if err := json.Unmarshal([]byte(request.Messages[1].Content), &user); err != nil || user.Mode != "decision_only" || user.MaxIdeas != 3 || user.Objective != cfgObjective || len(user.ProjectContext.Sources) < 1 || len(request.Messages[0].Content) > 1000 {
+			if err := json.Unmarshal([]byte(request.Messages[1].Content), &user); err != nil || user.Mode != "decision_only" || user.MaxIdeas != 3 || user.Objective != cfgObjective || len(user.Sources) < 1 || len(request.Messages[0].Content) > 1000 {
 				requestFailure = "idea stage did not carry the compact synthetic-only request"
 				http.Error(w, "invalid request", http.StatusBadRequest)
 				return
+			}
+			if user.Sources[0].SourceID != "project:readme" || !strings.Contains(user.Sources[0].Content, "Synthetic community event schedule") {
+				requestFailure = "idea stage source projection did not preserve synthetic host bindings"
+				http.Error(w, "invalid request", http.StatusBadRequest)
+				return
+			}
+			for _, action := range user.RoadmapActions {
+				if action.ID == "" || action.Text == "" || action.SourceID != "project:readme" {
+					requestFailure = "idea stage roadmap projection did not preserve synthetic host bindings"
+					http.Error(w, "invalid request", http.StatusBadRequest)
+					return
+				}
 			}
 			content = ideas
 		} else if choicePhase && !ideaPhase {
@@ -921,7 +941,7 @@ func TestServedFreewillP1GLMFlashBlankObjectiveStillPersistsPolicyOnly(t *testin
 			}
 			// A valid choice is a distinct model judgment from the explanatory score.
 			// The roadmap requires both scoring and choosing, but does not require argmax.
-			content = "CHOICE: " + user.Candidates[0].ID + "\nREASON: This candidate maps a focused read-only dependency review."
+			content = "CHOICE_ID: " + user.Candidates[0].ID + "\nREASON: This candidate maps a focused read-only dependency review."
 		} else {
 			requestFailure = "unexpected GLM selector instruction"
 			http.Error(w, "invalid request", http.StatusBadRequest)

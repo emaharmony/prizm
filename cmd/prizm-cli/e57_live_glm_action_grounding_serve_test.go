@@ -862,7 +862,7 @@ func e57RunStandaloneEventAdmission(t *testing.T, directCloud bool) {
 		}
 		content := e56IdeaResponse(false, actionID)
 		if call == 2 {
-			content = "choice: NONE\nreason: No candidate fits this synthetic objective."
+			content = "CHOICE_ID: NONE\nREASON: No candidate fits this synthetic objective."
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"model": request.Model, "done": true, "message": map[string]any{"role": "assistant", "content": content}})
 	}))
@@ -1005,7 +1005,12 @@ func e57RunStandaloneEventAdmission(t *testing.T, directCloud bool) {
 		candidateCount = len(run.Freewill.Candidates)
 	}
 	if run.Freewill == nil || run.Freewill.Lifecycle != freewill.StateSleeping || candidateCount != wantCandidates || run.Freewill.ChoiceID != "" {
-		t.Fatalf("fake served event did not safely sleep: candidates=%d wanted=%d", candidateCount, wantCandidates)
+		lifecycle, failureClass, failureCode := "", "", ""
+		if run.Freewill != nil {
+			lifecycle = string(run.Freewill.Lifecycle)
+			failureClass, failureCode = run.Freewill.SelectionFailureClass, run.Freewill.SelectionFailureCode
+		}
+		t.Fatalf("fake served event did not safely sleep: lifecycle=%s candidates=%d wanted=%d failure_class=%s failure_code=%s", lifecycle, candidateCount, wantCandidates, failureClass, failureCode)
 	}
 	if calls.Load() != wantCalls {
 		t.Fatalf("local fake provider call count=%d, want %d", calls.Load(), wantCalls)
