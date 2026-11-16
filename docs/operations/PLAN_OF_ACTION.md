@@ -1,3 +1,39 @@
+## Current Handoff: FW-G2/E45 in-flight OCI halt acceptance (2026-11-15)
+
+**Roadmap IDs:** FW-P2 and FW-G2; R1/G1 remains an upstream acceptance gate.
+This local branch `codex/freewill-g2-e45-halt` is based on the exact
+`codex/freewill-integration` merge commit `445953cc7e07977654f4989829d9d52a535b77ed`
+(PR #152; includes PR #151). No staging merge or deployment is authorized.
+
+**Observed acceptance:** The Linux-only
+`TestFreewillProductionOperatorHaltDuringOCI` now runs against the available
+Docker Desktop Linux engine (29.9.2) using the already-cached immutable Debian
+image `debian@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc`.
+It drives a synthetic parent intention through the local test approval API,
+starts a synthetic OCI child, issues a same-scope operator halt while the child
+is active, and verifies container removal, durable parent/child cancellation,
+preserved wake and selected-intention correlation IDs, no validation or
+approved artifact, and no replay or provider work after same-runtime recovery,
+unhalt, and recovery through a freshly constructed durable runtime and approval
+service backed by reopened SQLite stores. The test stops before child patch
+approval/apply; the source fixture is synthetic and unchanged.
+
+**Verification:** The Linux test binary was cross-compiled from the Windows
+checkout, then executed on Linux in a disposable runner container with the
+existing Docker socket and cached image. Only `docker.io` and `git` were
+installed inside that throwaway runner; no Docker image was pulled or deleted.
+`TestFreewillProductionOperatorHaltDuringOCI` passed (8.14s). Visual review is
+not applicable. The test was extended with assertions for persisted wake and
+intention correlation lineage and no provider calls after fresh-runtime
+recovery.
+
+**Limits and next action:** This is one synthetic halt/cancellation proof. It
+does not close broad FW-G2 isolation, network/secret, identity, budget,
+revocation, or adversarial-path gates, nor R1/G1's real approval/apply/verify/
+resume and worker-loss acceptance. Obtain independent review of this test and
+documentation diff before any PR; keep the milestone on
+`codex/freewill-integration` and do not promote to staging.
+
 ## Current Handoff: CTX-05 host-owned GLM idea mapper (2026-11-15)
 
 **Roadmap IDs:** FW-003; CTX-01–05. PR #151 merged into `codex/freewill-integration` at `1f31d058bccb5753c7e2558e0aaaab218ef46aa8`, based on PR #150 merge `86701aca71a2f8cdebe6df71b942d5f5861a7379`. Exact-head CI run #296 (`43798511932`) passed all required jobs. The reviewed branch was `codex/freewill-ctx05-host-mapper`. No staging merge or deployment is authorized.

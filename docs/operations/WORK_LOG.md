@@ -3033,3 +3033,38 @@ The independent choice review noted that optional `PreferenceInfluence` hypothes
 PR #151 (`feat(freewill): host-shape GLM Cloud Freewill responses`) merged into `codex/freewill-integration` at `1f31d058bccb5753c7e2558e0aaaab218ef46aa8`, based on `86701aca71a2f8cdebe6df71b942d5f5861a7379`. Exact-head CI run #296 (`43798511932`) passed Linux build/tests/race, Windows, Python, OCI sandbox, and lint. CI-identified ST1005 formatting was corrected; served GLM fake fixtures were updated to the compact source projection and `CHOICE_ID`/`REASON` contract. Focused CLI regressions passed. The bounded served synthetic evidence remains run `freewill-c7cf9b56e8c6c73893d138f4d38c8283`: three candidates, allowlisted choice, action and basis bound, uncertainty and source manifest valid, pending approval, zero effects, raw output not recorded.
 
 **Limits/next action:** This closes one synthetic served scenario only. General semantic entailment, real-project grounding, and live GitHub refresh remain open; continue the CTX roadmap gates. No staging or deployment.
+
+## 2026-11-15 — FW-G2/E45 native OCI emergency-halt acceptance
+
+**Roadmap IDs:** FW-P2 and FW-G2; R1/G1 remains open. Branch
+`codex/freewill-g2-e45-halt` is based on exact integration merge
+`445953cc7e07977654f4989829d9d52a535b77ed` (PR #152; includes PR #151).
+
+The existing Linux-only `TestFreewillProductionOperatorHaltDuringOCI` was
+strengthened to verify that the reopened parent preserves its wake correlation
+and selected intention correlation, its child preserves the wake correlation,
+and no provider work restarts after halt replay or recovery in a newly
+constructed durable runtime and approval service backed by reopened SQLite
+stores. The test uses the local
+synthetic approval API only to dispatch its synthetic parent; the operator halt
+is issued while the OCI child runs an inert loop. It verifies the child
+container is reaped, parent and child stay canceled after recovery and unhalt,
+the cancellation report has no validation results, no patch approval/apply or
+approved artifact occurs, and the synthetic source remains unchanged.
+
+**Verification:** Docker Desktop Linux engine 29.9.2 was started hidden after
+initially being stopped. The immutable Debian digest was already cached; no
+Docker image was pulled or deleted. Since the host is Windows, the Linux test
+binary was cross-compiled and executed as a Linux process inside a disposable
+Debian runner using the existing Docker socket; `docker.io` and `git` were
+installed only in that throwaway runner. The updated E45 test passed in 8.14s.
+The earlier test draft had an incorrect assertion equating wake correlation
+with the candidate's separate intention correlation; the final assertion now
+checks both lineages independently. `gofmt` and `git diff --check` passed.
+Visual review is not applicable.
+
+**Limits/next action:** This synthetic in-flight halt proof does not close the
+broader FW-G2 network, secret, identity, budget, revocation, or adversarial
+path gates, and does not satisfy R1/G1's real approval/apply/verify/resume or
+worker-loss acceptance. Review the local changes, then request independent
+review before any PR into `codex/freewill-integration`; do not target staging.

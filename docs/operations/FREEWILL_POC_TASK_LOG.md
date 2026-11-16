@@ -120,6 +120,39 @@ Added a Cloud-only compact phase-two choice request containing the objective and
 
 **Verification/next action:** Full `go test ./internal/workflow/multiagent -count=1` passed (76.6s); `go test ./internal/provider/ollama -count=1` and selected offline E57 binding/fake-serve/egress/metadata tests passed; focused choice parser/projection/host-binding tests passed; `gofmt` and `git diff --check` passed. Commit the local milestone and send the stable HEAD/diff/evidence for independent review. Keep unpublished pending review and exact-head CI; no staging or deployment.
 
+## 2026-11-15 — FW-G2/E45 native OCI emergency-halt acceptance
+
+**Roadmap IDs:** FW-P2 and FW-G2; R1/G1 remains open. Branch
+`codex/freewill-g2-e45-halt` is based on Freewill integration merge
+`445953cc7e07977654f4989829d9d52a535b77ed` (PR #152), which includes the
+earlier PR #151 integration.
+
+Ran the existing Linux-only
+`TestFreewillProductionOperatorHaltDuringOCI` against Docker Desktop Linux
+engine 29.9.2 and the already-cached immutable Debian image
+`debian@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc`.
+The synthetic served workflow grants only its test-created parent intention,
+starts an OCI child, then issues a same-scope halt during an active child
+command. The test confirms the container is reaped; parent and child remain
+canceled; run, child, and selected-intention correlation IDs survive reopen;
+no child patch approval/apply, validation, or approved artifact occurs; and
+same-runtime recovery/unhalt and a fresh durable runtime plus approval service
+reopened from SQLite do not replay the child or make additional provider calls.
+The synthetic source repository remains unchanged.
+
+**Verification:** Because the host is Windows and the test has a Linux build
+tag, the package test binary was cross-compiled then run as a Linux process in
+a disposable Debian runner with the existing Docker socket. `docker.io` and
+`git` were installed only inside that throwaway runner; no image was pulled or
+deleted. The strengthened test passed in 8.14s. Visual evidence is not
+applicable.
+
+**Limits and next action:** This closes only the E45 execution-evidence gap for
+one synthetic in-flight halt. Broad FW-G2 isolation, identity, budget, network,
+secret, and revocation gates remain open, as does full R1/G1 acceptance.
+Request independent review of the local test/docs diff before a PR; no staging
+merge or deployment.
+
 ## 2026-11-15 — CTX-05 Cloud choice egress boundary correction
 
 Independent review identified that the compact Cloud choice context must not forward optional preference hypothesis text or source-pair references without a separate Cloud-egress authorization. Omitted those fields from the exact Cloud route; the existing local Flash JSON route retains the preference context. Added a regression proving Cloud payload exclusion and made `NONE` a reserved, case-insensitive no-op token that cannot be issued as a candidate ID. This does not change the served E57 path, which uses no preference influence. Targeted tests passed; rerun the full relevant suite before the final local commit/review.

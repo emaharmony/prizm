@@ -296,6 +296,73 @@ func runFreewillProductionCycleOCI(t *testing.T, haltDuringOCI bool) {
 			reopenedParent.Freewill.ExecutionDispatch == nil || reopenedParent.Freewill.ExecutionDispatch.Status != "execution_cancelled" {
 			t.Fatalf("reopened parent state changed after halt replay: parent=%#v load=%v close=%v", reopenedParent, loadErr, closeErr)
 		}
+		freshStore, err := multiagent.NewSQLiteDurableRunStore(dbPath)
+		if err != nil {
+			t.Fatalf("open fresh runtime store after halt: %v", err)
+		}
+		freshEvents, err := event.NewSQLiteEventStore(dbPath)
+		if err != nil {
+			_ = freshStore.Close()
+			t.Fatalf("open fresh runtime event store after halt: %v", err)
+		}
+		freshParent, err := multiagent.NewDurableRuntime(graph, unavailableRoleRunner{}, freshStore,
+			multiagent.FileRunClaimer{Root: runsDir}, freshEvents, multiagent.DurableRuntimeOptions{})
+		if err != nil {
+			_ = freshEvents.Close()
+			_ = freshStore.Close()
+			t.Fatalf("construct fresh durable runtime after halt: %v", err)
+		}
+		freshControl, err := multiagent.NewFreewillOperatorControl(freshStore, nil)
+		if err != nil {
+			_ = freshEvents.Close()
+			_ = freshStore.Close()
+			t.Fatalf("construct fresh operator control after halt: %v", err)
+		}
+		freshService, err := multiagent.NewFreewillApprovalService(freshParent, freshStore, approval.NewStore(runsDir), oneCyclePolicy{}, "freewill-production-cycle-restart")
+		if err != nil {
+			_ = freshEvents.Close()
+			_ = freshStore.Close()
+			t.Fatalf("construct fresh approval service after halt: %v", err)
+		}
+		freshService.SetExecutionDispatcher(freewillReferenceExecutionDispatcher{runDir: runsDir, configPath: configPath,
+			approvals: freshService, control: freshControl, sandboxConfig: sandboxConfig})
+		freshServe := &freewillServeRuntime{approvals: freshService, store: freshStore, control: freshControl,
+			childApprovals: approval.NewStore(runsDir), sandboxConfig: sandboxConfig, runDir: runsDir,
+			configPath: configPath, executionEnabled: true, resumingChildren: make(map[string]bool)}
+		if err := freshServe.recoverPending(ctx); err != nil {
+			_ = freshEvents.Close()
+			_ = freshStore.Close()
+			t.Fatalf("fresh runtime recovery after halt: %v", err)
+		}
+		freshAfter, err := freshStore.Load(ctx, woken.State.RunID)
+		if err != nil || freshAfter.Revision != before.Revision || freshAfter.Freewill == nil ||
+			freshAfter.Freewill.ExecutionDispatch == nil || freshAfter.Freewill.ExecutionDispatch.Status != "execution_cancelled" {
+			_ = freshEvents.Close()
+			_ = freshStore.Close()
+			t.Fatalf("fresh runtime recovery changed halted parent: parent=%#v err=%v", freshAfter, err)
+		}
+		if err := freshEvents.Close(); err != nil {
+			_ = freshStore.Close()
+			t.Fatalf("close fresh runtime event store: %v", err)
+		}
+		if err := freshStore.Close(); err != nil {
+			t.Fatalf("close fresh runtime run store: %v", err)
+		}
+		parentCorrelationID := reopenedParent.Freewill.CorrelationID
+		if parentCorrelationID == "" || parentCorrelationID != reopenedParent.State.RunID || reopenedParent.State.RequestIdentity == nil ||
+			reopenedParent.State.RequestIdentity.SessionID != parentCorrelationID {
+			t.Fatalf("reopened parent lost the accepted intention correlation: parent=%#v", reopenedParent)
+		}
+		intentionCorrelationFound := false
+		for _, candidate := range reopenedParent.Freewill.Candidates {
+			if candidate.CandidateID == reopenedParent.Freewill.ChoiceID && candidate.Request.CorrelationID == "cycle-correlation-1" {
+				intentionCorrelationFound = true
+				break
+			}
+		}
+		if !intentionCorrelationFound {
+			t.Fatalf("reopened parent lost the selected intention correlation: candidates=%#v choice=%q", reopenedParent.Freewill.Candidates, reopenedParent.Freewill.ChoiceID)
+		}
 		reopenedInspection, err := openInspectionReferenceRuntime(runsDir, manifest)
 		if err != nil {
 			t.Fatalf("reopen canceled child after halt replay: %v", err)
@@ -304,6 +371,12 @@ func runFreewillProductionCycleOCI(t *testing.T, haltDuringOCI bool) {
 		reopenedInspection.close()
 		if inspectErr != nil || reopenedChild.State.Status != multiagent.RunStatusCancelled {
 			t.Fatalf("child state changed after halt replay: child=%#v err=%v", reopenedChild.State, inspectErr)
+		}
+		if reopenedChild.State.RequestIdentity == nil || reopenedChild.State.RequestIdentity.SessionID != parentCorrelationID {
+			t.Fatalf("reopened canceled child lost the parent wake correlation: child=%#v correlation=%q", reopenedChild.State, parentCorrelationID)
+		}
+		if calls := providerScript.callCount(); calls != 2 {
+			t.Fatalf("same-runtime or fresh-runtime halt recovery restarted provider work: calls=%d, want planner plus active developer request", calls)
 		}
 		return
 	}
