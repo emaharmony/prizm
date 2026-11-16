@@ -7,12 +7,18 @@ The project-context seam now supports an opt-in exact allowlist of tracked
 Markdown paths, optional exact heading anchors, bounded excerpts, and
 Git-HEAD-pinned v3 provenance. It rejects unsafe, ignored, untracked, symlink,
 dirty, and Git pathspec-magic inputs. Project configuration remains the source
-of exact remote project/repository binding. All tests in the five affected Go
-packages passed. A follow-up review correction now allows split full-blob
-revision and excerpt digest only for `git_tracked_file`; v3 host facts and local
-files retain revision/digest equality, with focused regressions passing. The
-allowlist snapshot pins one HEAD before reading files, and heading selection
-ignores headings inside fenced code blocks. The native CLI build SHA-256 is
+of exact remote project/repository binding. Split full-blob revision and
+excerpt digest is accepted only for `git_tracked_file`; host facts and local
+files retain revision/digest equality. The allowlist pins one HEAD before file
+reads. Heading selection ignores fenced and indented code lookalikes.
+
+PR #158 merged into `codex/freewill-integration` at
+`98fcbcbb6f4b40110f19f95b79d9f2aa426d2e44`, from exact reviewed head
+`d838575f0e9a3a7031a307fb9bf508486efe10fa` and base
+`d369cebb79620faa7462ca6279aa8df751ebc31d`. Exact-head CI run
+`43981422788` passed all five jobs: Linux tests/race, Linux lint, Windows
+build/basic tests/CLI smoke, Python tests, and OCI sandbox. The native CLI
+build SHA-256 was
 `66CC41019B1D526089D4F890BFBE6707F08E06E5511D23DDB8DCE7172B8DEC3F`.
 
 Two bounded `prizm serve` attempts used `glm-5.3-flash:cloud` with the
@@ -29,11 +35,11 @@ persist a project-source manifest, so their source citations and semantic
 relevance cannot be claimed. No screenshot was captured because there was no
 pending project proposal to show.
 
-**Next action:** retain the exact-read scope and validators. Independently
-review this local change, investigate the bounded model-output correction
-failure, and repeat a real-project probe only after that contract is resolved.
-Do not mark real-project grounding or visible proof complete; do not stage or
-deploy.
+**Next action:** retain the exact-read scope and validators. Real-project
+grounding remains unproven because the bounded Cloud runs produced no
+candidates; investigate the response-contract failures before any further
+probe. Do not mark real-project grounding or visible proof complete; do not
+stage or deploy.
 
 ## Previous Handoff: FW-G2/E69 composed OCI network and host-path boundary probe (2026-11-16)
 
