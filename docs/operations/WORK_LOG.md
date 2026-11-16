@@ -3068,3 +3068,40 @@ broader FW-G2 network, secret, identity, budget, revocation, or adversarial
 path gates, and does not satisfy R1/G1's real approval/apply/verify/resume or
 worker-loss acceptance. Review the local changes, then request independent
 review before any PR into `codex/freewill-integration`; do not target staging.
+
+## 2026-11-15 — FW-G2/E68 stale approval revocation before OCI launch
+
+**Roadmap IDs:** FW-P2 and FW-G2; R1/G1 remains open. Branch
+`codex/freewill-g2-revocation-before-oci` is based on integration merge
+`61295cfb1f0505ba8c8e522fe101e2ade9a4e055` (PR #153 includes E45). Test commit
+`e1dc64a456e5aeb703deeba16c8552721d7d7749` adds the Linux-only
+`TestFreewillProductionRevokedApprovalBeforeOCILaunch` regression in the
+existing CLI OCI acceptance file. No production behavior, new API, or package
+boundary changed.
+
+The test uses a synthetic pending intention approval and the authenticated
+operator-control and approval APIs. Halt/unhalt advances the exact scoped
+durable control generation; the original pending grant is then rejected with
+HTTP 409 before dispatch. The original parent checkpoint and approval record
+remain pending. The served status projection reports `revoked` / `halted` and
+execution-disabled from the persisted generation, including after a fresh
+read-only SQLite store/status-reader reopen. There is no child ID/dispatch,
+child approval/apply, validation, provider call, managed OCI container delta,
+source artifact, or source-repository change. No approval decision was granted.
+
+**Verification:** `GOOS=linux GOARCH=amd64 go test -c -o
+.tmp/freewill-b2-revocation.test ./cmd/prizm-cli` passed. The exact Linux test
+passed against Docker Engine 29.9.2 and cached image
+`debian@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc`
+using `-test.run=^TestFreewillProductionRevokedApprovalBeforeOCILaunch$ -test.count=1 -test.timeout=7m`
+in a disposable Debian runner with the existing Docker socket. `docker.io` and
+`git` were installed only in that `--rm` runner. No image was pulled or deleted.
+`git diff --check` passed. Visual evidence is not applicable.
+
+**Open risks / next action:** E68 closes one synthetic generation-revocation
+before-dispatch gap only. The run row itself is still approval-pending, so the
+revoked/halted terminal-looking state is a durable-control-derived projection,
+not a persisted terminal run transition. Broad FW-G2 isolation, identity,
+budget, network/secret, and path/tool-chain gates remain open; R1/G1 remains
+open. Obtain independent review of the exact local diff before a PR to
+`codex/freewill-integration`; no staging or deployment.

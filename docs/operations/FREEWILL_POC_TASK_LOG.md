@@ -164,3 +164,39 @@ Independent review identified that the compact Cloud choice context must not for
 PR #151 merged into `codex/freewill-integration` at `1f31d058bccb5753c7e2558e0aaaab218ef46aa8`. Exact-head CI run #296 (`43798511932`) passed Linux build/tests/race, Windows, Python, OCI sandbox, and lint. The CI lint correction lowercased two score-validation error strings. The full suite also identified stale synthetic provider fixtures; they now assert the compact authorized source/action projection and use the Cloud choice line contract. Focused CLI regressions passed, including the standalone fake event test with three candidates, two local fake calls, sleeping decision-only state, and zero effects. The bounded live synthetic result remains `freewill-c7cf9b56e8c6c73893d138f4d38c8283`: three candidates and allowed choice, host action and basis binding, uncertainty/source manifest valid, pending approval, zero effects, and raw output not recorded.
 
 **Open gates:** This is one bounded synthetic semantic pass. General semantic entailment, real-project grounding, and live GitHub refresh remain open. No staging or deployment.
+
+## 2026-11-15 — FW-G2/E68 stale approval revocation before OCI launch
+
+**Roadmap IDs:** FW-P2 and FW-G2; R1/G1 remains open. Branch
+`codex/freewill-g2-revocation-before-oci` is based on integration merge
+`61295cfb1f0505ba8c8e522fe101e2ade9a4e055` (PR #153, containing E45). Test-only
+commit `e1dc64a456e5aeb703deeba16c8552721d7d7749` extends the existing Linux OCI
+production-cycle test file; no production code or package boundary changed.
+
+`TestFreewillProductionRevokedApprovalBeforeOCILaunch` creates a synthetic
+pending intention approval, toggles halt and unhalt through the authenticated
+operator-control API for the exact synthetic agent/project/workspace scope,
+then submits the stale grant through the served approval API. The API returns
+HTTP 409. The approval's captured generation remains the old value while the
+durable control generation advances; a reopened read-only SQLite status reader
+projects the approval as revoked/halted and execution-disabled. The durable
+parent checkpoint and approval row remain approval-pending; this test does not
+claim that a terminal parent state is persisted. No grant decision, child
+dispatch, child approval/apply, validation, provider call, managed OCI container
+change, source artifact, or source-repository mutation occurred.
+
+**Verification:** `GOOS=linux GOARCH=amd64 go test -c -o
+.tmp/freewill-b2-revocation.test ./cmd/prizm-cli` passed on Windows. The exact
+test passed on Linux against Docker Engine 29.9.2 and cached image
+`debian@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc`
+using `-test.run=^TestFreewillProductionRevokedApprovalBeforeOCILaunch$ -test.count=1 -test.timeout=7m`
+in a disposable Debian runner with the existing Docker socket. `docker.io` and
+`git` were installed only in the runner's `--rm` container; no image was pulled
+or deleted. `git diff --check` passed. Visual evidence is not applicable.
+
+**Limits/next action:** E68 establishes one synthetic invalidated-grant denial
+before child dispatch. It does not complete B2 or R1/G1, and it does not test
+actual child OCI execution. Network/secret, identity, budget, isolation/path
+escape, and other authorization gates remain open. Obtain independent review
+of the local diff before opening a PR to `codex/freewill-integration`; no
+staging merge or deployment.
