@@ -161,6 +161,24 @@ func TestFreewillDashboardExposesTerminalExecutionOutcomes(t *testing.T) {
 	}
 }
 
+func TestFreewillDashboardRendersProjectEvidenceAndCandidateUncertainty(t *testing.T) {
+	page, err := staticFS.ReadFile("static/freewill.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(page)
+	for _, contract := range []string{
+		"Project: ${ui.escape(project)}", "Source evidence: ${sourceList}",
+		"Sources cited:", "Host roadmap action:", "Why this was rated:", "Uncertainty:",
+		"candidate.basis_refs", "candidate.uncertainty", "status.project_sources",
+		"status.execution_disabled ? 'execution disabled' : ''",
+	} {
+		if !strings.Contains(body, contract) {
+			t.Errorf("Freewill dashboard is missing project evidence contract %q", contract)
+		}
+	}
+}
+
 func TestOverviewUsesLiveAPIAndSharedDashboardShell(t *testing.T) {
 	dir := t.TempDir()
 	s := NewServer(":0", dir, "policies")

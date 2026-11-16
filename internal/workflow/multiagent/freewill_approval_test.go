@@ -2,6 +2,7 @@ package multiagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -59,6 +60,37 @@ func TestFreewillApprovalServiceListsBoundedStatusPage(t *testing.T) {
 	}
 	if len(statuses) != 1 || statuses[0].RunID != record.State.RunID || statuses[0].Lifecycle != record.Freewill.Lifecycle {
 		t.Fatalf("listed statuses=%#v, want one projection for %s", statuses, record.State.RunID)
+	}
+}
+
+func TestFreewillPublicCandidateAndProjectEvidenceKeepCitationsContentFree(t *testing.T) {
+	candidate := freewill.CandidateIntention{CandidateID: "candidate-1", Request: freewill.IntentionRequest{
+		Title: "Document the event schedule", Goal: "Clarify how organizers review schedule changes.",
+		ReasonSummary: "This follows the open roadmap item and stays documentation-only.",
+	}, BasisRefs: []string{"project:readme"}, Uncertainty: "Only one synthetic README is available.", ProjectActionID: "project:roadmap:M1"}
+	public := publicFreewillCandidate(candidate)
+	if len(public.BasisRefs) != 1 || public.BasisRefs[0] != "project:readme" || public.Uncertainty != candidate.Uncertainty || public.ProjectActionID != "project:roadmap:M1" {
+		t.Fatalf("candidate evidence projection = %#v", public)
+	}
+
+	snapshot := freewill.NewProjectContextSnapshot("synthetic-event-board", "choose a read-only documentation proposal", time.Now().UTC())
+	snapshot.Sources = append(snapshot.Sources, freewill.ProjectContextSource{ID: "project:readme", Path: "README.md",
+		Content: "synthetic source body must stay private to the selector", ObservedAt: snapshot.CapturedAt, Confidence: "direct_file_observation"})
+	snapshot.Seal()
+	manifest := snapshot.Manifest()
+	projectID, sources := publicFreewillProjectEvidence("synthetic-event-board", &manifest)
+	if projectID != "synthetic-event-board" || len(sources) != 1 || sources[0].ID != "project:readme" || sources[0].Path != "README.md" || sources[0].SHA256 == "" {
+		t.Fatalf("project evidence projection = project %q sources %#v", projectID, sources)
+	}
+	encoded, err := json.Marshal(sources)
+	if err != nil {
+		t.Fatalf("marshal source projection: %v", err)
+	}
+	if strings.Contains(string(encoded), "synthetic source body") {
+		t.Fatal("public source projection included source content")
+	}
+	if gotID, gotSources := publicFreewillProjectEvidence("different-project", &manifest); gotID != "" || len(gotSources) != 0 {
+		t.Fatalf("mismatched project binding was exposed: %q %#v", gotID, gotSources)
 	}
 }
 
