@@ -3105,3 +3105,49 @@ not a persisted terminal run transition. Broad FW-G2 isolation, identity,
 budget, network/secret, and path/tool-chain gates remain open; R1/G1 remains
 open. Obtain independent review of the exact local diff before a PR to
 `codex/freewill-integration`; no staging or deployment.
+
+## 2026-11-16 18:58:13 UTC (2026-11-16 13:58:13 America/New_York, UTC-05:00) — FW-G2/E69 composed OCI network and host-path boundary probe
+
+**Roadmap IDs:** FW-P2 and FW-G2; B1/B2 and R1/G1 remain open. The isolated
+branch `codex/freewill-g2-b2-network-host-boundary` starts at current
+integration `bfdf1bcf334dff01824eadf222408281ffdca715` (PR #154). The only code
+change is a Linux-only production-cycle acceptance extension; no runtime
+authority code or package boundary changed.
+
+**Expected:** A synthetic Freewill child running inside the digest-pinned OCI
+sandbox cannot read or modify an outside-mount host sentinel and cannot reach
+a local host listener. The only child patch remains pending and is never
+approved/applied; source and child worktrees stay clean.
+
+**Observed:** `TestFreewillProductionNetworkAndHostPathBoundariesOCI` exercised
+the served production dispatcher with one test-created synthetic parent grant,
+the real OCI `sandbox_exec`, and the child proposal route. The host-generated
+review ZIP records `host_read=denied`, `host_write=attempted`, and
+`host_loopback=denied`. Before the probe, a separate network-disabled UID 1000 preflight read the
+0666 synthetic sentinel and wrote a disposable sibling in its test-owned 0777
+directory. The sentinel then stayed byte-for-byte unchanged, and the listener
+accepted no connection, the child ID remained in served status, the
+single child patch was still pending, and the source plus child workspace were
+clean. The test returned before patch grant/apply after four scripted provider
+calls. No external endpoint was probed and no user data or real credential was
+used.
+
+**Verification:** `GOOS=linux GOARCH=amd64 go test -c` passed on Windows. The
+native Linux OCI case passed in 1.72s on Docker Engine 29.9.2 with cached image
+`debian@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc`;
+run ID `run_8d6df0c0f83785cb55b586fe0c`. The disposable Debian runner used a
+unique named volume mounted at its daemon-visible mountpoint; a separate
+network-disabled nested mount preflight verified that path from both runner
+and daemon. A separate network-disabled UID 1000 preflight proved sentinel read
+and sibling write access before the composed denial assertions. Runner and volume were removed. No image was pulled or deleted.
+The established `TestRunArgsEnforceContainerBoundary` asserts `--network=none`;
+this new composed test checks actual local-listener non-reachability. Binary
+SHA-256: `1C11C158079636F4B090B6021FF7F190DA802EDF0C776CD7F62D40E8F861CD4C`.
+`git diff --check` passed. Visual evidence is not applicable.
+
+**Limits / next action:** E69 is one synthetic composed listener/sentinel
+proof; it does not close broad B2 or R1/G1. Internet egress, symlink/traversal,
+secret discovery, identity, budgets, tool chaining, worker loss, and real
+approval/apply/verify/resume remain open. The pending proposal is not an apply.
+Request independent review of the local commit before any PR. No staging or
+deployment.
