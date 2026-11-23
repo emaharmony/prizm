@@ -2850,3 +2850,19 @@ Review identified cross-platform path hazards: backslashes, trailing dots/spaces
 - Focused checks passed: sandbox `TestReviewPatchRejectsBinaryChanges`; subagent `TestPrerequisiteInstructionDefinesPathlessSandboxProposalEnvelope`; workflow `TestSandboxApprovalBridgeCompletesPrerequisiteAndResolvesProposal`, `TestSandboxApprovalBridgeCorrectiveTurnUsesOnlyPathlessProposalTool`, and default prerequisite coverage; CLI bridge prompt, registry, and proposal lifecycle/identity tests. `git diff --check` passed. No Mac, service, Freewill approval, or deployment action was taken.
 
 **Next action:** independent rereview found no actionable P1/P2 findings. Prepare the exact PR for coordinator authorization; after publication, require exact-head CI. Native build/Linux compile/`go vet` limits documented in the preceding handoff remain.
+
+
+## 2026-11-23 — Creator VOD mock orchestration
+
+**Roadmap IDs:** R1, R4. **Baseline:** Prizm staging at `4083cb803`.
+
+- Added the v1 Stage 1 contract and mock adapter in an isolated checkout.
+- Verified admission deduplication, restart after a lost worker reply, stale
+  receipt handling, and restart after a sink effect with no stored receipt.
+  QA and verified export gate completion.
+- The prototype uses a dedicated Prizm SQLite runtime store and an
+  independently persistent fake worker and sink. Its outbox has no live
+  publisher. The existing event and multi-agent package tests passed.
+- Stage 2 depends on the reviewed v8 compositor, per-VOD calibration reference,
+  and approved Pentakewl rubric. Live executor and preview delivery verification
+  belong to the isolated integration stage.

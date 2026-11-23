@@ -1,0 +1,17 @@
+{
+  "contract_version": "clip-contract/v1",
+  "profile_id": "pentakewl",
+  "source_ref": "synthetic-vod",
+  "filename": "sample.ready.mp4",
+  "source_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+  "execution_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+  "generation_id": "pilot",
+  "workflow_version": "stage1",
+  "policy_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+  "owner": "lumi",
+  "size_before": 4096,
+  "size_after": 4096,
+  "stable": true,
+  "probe_ok": true,
+  "duration_ms": 900000
+}

@@ -1,0 +1,482 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Prizm Creator VOD Stage 1",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ready"
+    },
+    {
+      "$ref": "#/$defs/owner_receipt"
+    },
+    {
+      "$ref": "#/$defs/export_receipt"
+    },
+    {
+      "$ref": "#/$defs/manifest"
+    },
+    {
+      "$ref": "#/$defs/event"
+    }
+  ],
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "state": {
+      "enum": [
+        "accepted",
+        "dispatching",
+        "running",
+        "exporting",
+        "completed",
+        "no_qualifying_clips",
+        "needs_review",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "ready": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contract_version": {
+          "const": "clip-contract/v1"
+        },
+        "profile_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "source_ref": {
+          "$ref": "#/$defs/identifier"
+        },
+        "filename": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}\\.[rR][eE][aA][dD][yY]\\.[mM][pP]4$"
+        },
+        "source_hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "execution_hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "generation_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "workflow_version": {
+          "$ref": "#/$defs/identifier"
+        },
+        "policy_hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "owner": {
+          "const": "lumi"
+        },
+        "size_before": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "size_after": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stable": {
+          "const": true
+        },
+        "probe_ok": {
+          "const": true
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "contract_version",
+        "profile_id",
+        "source_ref",
+        "filename",
+        "source_hash",
+        "execution_hash",
+        "generation_id",
+        "workflow_version",
+        "policy_hash",
+        "owner",
+        "size_before",
+        "size_after",
+        "stable",
+        "probe_ok",
+        "duration_ms"
+      ]
+    },
+    "clip": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "clip_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "start_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_ms": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "source_hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "artifact_ref": {
+          "$ref": "#/$defs/identifier"
+        },
+        "render_hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "policy_hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "verdict_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "qa_hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "score_hundredths": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "gates": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "propertyNames": {
+            "enum": [
+              "webcam",
+              "gameplay",
+              "audio",
+              "boundaries",
+              "caption_policy",
+              "hook_policy"
+            ]
+          },
+          "maxProperties": 6,
+          "additionalProperties": {
+            "enum": [
+              "pass",
+              "fail",
+              "unknown",
+              "not_applicable"
+            ]
+          }
+        },
+        "qa_evidence_refs": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "maxItems": 32
+            }
+          ]
+        }
+      },
+      "required": [
+        "clip_id",
+        "start_ms",
+        "end_ms",
+        "source_hash",
+        "artifact_ref",
+        "render_hash",
+        "policy_hash",
+        "verdict_id",
+        "qa_hash",
+        "score_hundredths",
+        "gates",
+        "qa_evidence_refs"
+      ]
+    },
+    "owner_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contract_version": {
+          "const": "clip-contract/v1"
+        },
+        "execution_key": {
+          "$ref": "#/$defs/identifier"
+        },
+        "dispatch_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "remote_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "enum": [
+            "running",
+            "succeeded",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "analysis_complete": {
+          "type": "boolean"
+        },
+        "clips": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/clip"
+              },
+              "maxItems": 100
+            }
+          ]
+        }
+      },
+      "required": [
+        "contract_version",
+        "execution_key",
+        "dispatch_revision",
+        "remote_id",
+        "sequence",
+        "status",
+        "analysis_complete",
+        "clips"
+      ]
+    },
+    "export_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contract_version": {
+          "const": "clip-contract/v1"
+        },
+        "key": {
+          "$ref": "#/$defs/sha256"
+        },
+        "artifact_hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "verdict_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "destination_ref": {
+          "$ref": "#/$defs/identifier"
+        }
+      },
+      "required": [
+        "contract_version",
+        "key",
+        "artifact_hash",
+        "verdict_id",
+        "destination_ref"
+      ]
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "input": {
+          "$ref": "#/$defs/ready"
+        },
+        "state": {
+          "$ref": "#/$defs/state"
+        },
+        "reason": {
+          "$ref": "#/$defs/identifier"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "last_event_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "execution_key": {
+          "$ref": "#/$defs/identifier"
+        },
+        "dispatch_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cancel_requested": {
+          "type": "boolean"
+        },
+        "owner_receipt": {
+          "$ref": "#/$defs/owner_receipt"
+        },
+        "selected": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/clip"
+          },
+          "maxItems": 10
+        },
+        "exports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/export_receipt"
+          },
+          "maxItems": 10
+        }
+      },
+      "required": [
+        "job_id",
+        "revision",
+        "input",
+        "state",
+        "correlation_id",
+        "last_event_id"
+      ]
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "type": {
+          "type": "string",
+          "pattern": "^creator\\.vod\\.(ready|process\\.requested|processing|exporting|export\\.verified|completed|no_qualifying_clips|needs_review|failed|cancelled|cancel\\.requested)\\.v1$"
+        },
+        "source": {
+          "const": "creator-vod-stage1"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "parent_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "run_id": {
+              "$ref": "#/$defs/identifier"
+            }
+          },
+          "required": [
+            "run_id"
+          ]
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "contract_version": {
+              "const": "clip-contract/v1"
+            },
+            "job_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "task_id": {
+              "const": "lumi"
+            },
+            "attempt_id": {
+              "const": "attempt-1"
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "policy_hash": {
+              "$ref": "#/$defs/sha256"
+            },
+            "kind": {
+              "enum": [
+                "fact",
+                "command"
+              ]
+            },
+            "state": {
+              "$ref": "#/$defs/state"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/identifier"
+                },
+                {
+                  "const": ""
+                }
+              ]
+            },
+            "execution_key": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/identifier"
+                },
+                {
+                  "const": ""
+                }
+              ]
+            },
+            "payload_ref": {
+              "$ref": "#/$defs/identifier"
+            },
+            "payload_hash": {
+              "$ref": "#/$defs/sha256"
+            }
+          },
+          "required": [
+            "contract_version",
+            "job_id",
+            "task_id",
+            "attempt_id",
+            "revision",
+            "policy_hash",
+            "kind",
+            "state",
+            "reason",
+            "execution_key",
+            "payload_ref",
+            "payload_hash"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "source",
+        "timestamp",
+        "correlation_id",
+        "metadata",
+        "payload"
+      ]
+    }
+  }
+}
