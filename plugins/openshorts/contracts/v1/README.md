@@ -4,7 +4,7 @@ This prototype targets Prizm staging revision `4083cb803`. Run the mock
 entry point from the checkout root.
 
 ```powershell
-go test ./internal/creatorvod -count=1 -v
+go test ./plugins/openshorts/... -count=1 -v
 ```
 
 The test harness uses synthetic readiness observations. The adapter pins source,
@@ -15,7 +15,7 @@ Unreferenced files can remain after a crash or a losing revision race. The
 outbox is queried in tests and has no publisher configured.
 
 Use `schema.json` for the admission, owner status, export, manifest, and event
-shapes. See `internal/creatorvod/testdata/ready.json` for an input. Go validation
+shapes. See `plugins/openshorts/internal/creatorvod/testdata/ready.json` for an input. Go validation
 also checks relationships across records, including content provenance and
 timelines. Mock scores are integer hundredths. The mock uses six predefined
 critical gates. Production gate applicability, the approved rubric, and real
@@ -33,10 +33,10 @@ the job. The fake sink deduplicates keys durably.
 
 | Field | Decision |
 | --- | --- |
-| Package | `internal/creatorvod` |
+| Package | `plugins/openshorts/internal/creatorvod` |
 | Domain statement | Coordinate creator VOD jobs and their evidence-based release. |
 | Invariants owned | Readiness, source/generation identity, correlated Lumi receipts, safe reconciliation, QA and export gates. |
-| Primary callers | The isolated test harness. A future explicitly enabled composition root could provide real owner and sink ports. |
+| Primary callers | The standalone OpenShorts MCP plugin and its test harness. A future explicitly enabled composition root could provide real owner and sink ports. |
 | Allowed dependencies | Prizm workflow persistence and event envelopes, SQLite error classification, Go standard library. |
 | Responsibilities excluded | Source probing, transcription, editorial decisions, media composition, production approval prompting, and publishing. |
 | Existing packages considered | `internal/workflow/multiagent`, `internal/event`, and `internal/adapter`. |

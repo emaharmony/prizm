@@ -945,7 +945,8 @@ The bridge exposes a pathless `sandbox_propose_artifact` tool only to the opted-
 
 - Roadmap R1 and R4. Stage 1 exercises typed admission, durable dispatch
   reconciliation and QA release with the existing Prizm checkpoint and outbox.
+  The OpenShorts plugin imports through Prizm's existing MCP configuration and owns its state.
 - Run the scoped verification from the isolated checkout with
-  `go test ./internal/creatorvod -count=1 -v`.
+  `go test ./plugins/openshorts/... -count=1 -v`.
 - Next approved stage needs the v8 compositor, a source calibration reference,
   and the Pentakewl rubric. See the Stage 1 contract for boundaries and rollback.

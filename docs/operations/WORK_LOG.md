@@ -2866,3 +2866,14 @@ Review identified cross-platform path hazards: backslashes, trailing dots/spaces
 - Stage 2 depends on the reviewed v8 compositor, per-VOD calibration reference,
   and approved Pentakewl rubric. Live executor and preview delivery verification
   belong to the isolated integration stage.
+
+
+### Creator VOD plugin packaging
+
+- Preserved the Stage 1 workflow in `plugins/openshorts` as a separate MCP executable.
+- Import registers the server and initializes its isolated SQLite and manifest
+  directory. The existing Prizm MCP client discovers the plugin tools.
+- Verified that repeated imports leave the configuration intact and that a
+  synthetic job remains queryable after the plugin restarts. The standalone
+  executable passed the Prizm CLI MCP probe.
+- The import path and rollback steps are documented in the plugin README.
