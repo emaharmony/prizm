@@ -39,7 +39,7 @@ func importPlugin(configPath, executable, stateDir string) (bool, error) {
 		return false, err
 	}
 	if !info.Mode().IsRegular() {
-		return false, errors.New("Prizm configuration must be a regular file")
+		return false, errors.New("expected a regular file for the Prizm configuration")
 	}
 	original, err := os.ReadFile(configPath)
 	if err != nil {
@@ -75,10 +75,10 @@ func addRegistration(original []byte, wanted registration) ([]byte, error) {
 		return nil, fmt.Errorf("read Prizm configuration: %w", err)
 	}
 	if err := decoder.Decode(new(yaml.Node)); err != io.EOF {
-		return nil, errors.New("Prizm configuration must contain one YAML document")
+		return nil, errors.New("expected one YAML document in the Prizm configuration")
 	}
 	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
-		return nil, errors.New("Prizm configuration must be a YAML mapping")
+		return nil, errors.New("expected a YAML mapping in the Prizm configuration")
 	}
 	// Decode checks duplicate YAML keys, while editing the node retains comments.
 	var resolved map[string]any
@@ -164,7 +164,7 @@ func writeConfig(path string, mode os.FileMode, original, next []byte) error {
 		return err
 	}
 	if !bytes.Equal(latest, original) {
-		return errors.New("Prizm configuration changed during import")
+		return errors.New("the Prizm configuration changed during import")
 	}
 	return os.Rename(temp.Name(), path)
 }
