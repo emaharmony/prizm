@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -1008,7 +1009,8 @@ func queryFreewillRunEventsForTest(t *testing.T, env durableTestEnvironment, run
 func assertFreewillNoActionEventsForTest(t *testing.T, events []event.Event) {
 	t.Helper()
 	for _, ev := range events {
-		if ev.Type == event.EventMultiAgentToolDiagnostic || ev.Type == event.V1EventTypes.ToolCalled ||
+		if ev.Type == event.EventFreewillApprovalProposed || ev.Type == event.EventFreewillExecutionDispatching ||
+			ev.Type == event.EventFreewillExecutionDispatched || ev.Type == event.EventMultiAgentToolDiagnostic || ev.Type == event.V1EventTypes.ToolCalled ||
 			ev.Type == event.V3EventTypes.ToolRequested || ev.Type == event.EventFreewillApprovalDecided ||
 			ev.Type == event.EventFreewillApprovalReconciled || ev.Type == event.EventProposalApplied ||
 			ev.Type == event.EventInteractionActionExecuted {
@@ -1069,6 +1071,124 @@ func TestFreewillRecoveryHaltsWakeWithoutActorAdmission(t *testing.T) {
 		t.Fatalf("selection halted events = %d, want exactly 1", halted)
 	}
 	assertFreewillNoActionEventsForTest(t, events)
+}
+
+func TestFreewillRecoveryMissingAdmissionPersistsAcrossProcesses(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "freewill.db")
+	runWorker := func(mode string) {
+		t.Helper()
+		cmd := exec.Command(os.Args[0], "-test.run=TestFreewillRecoveryProcessBoundaryWorker")
+		cmd.Env = append(os.Environ(), "PRIZM_FREEWILL_RECOVERY_TEST_DB="+dbPath, "PRIZM_FREEWILL_RECOVERY_TEST_MODE="+mode)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("recovery worker %s failed: %v\n%s", mode, err, output)
+		}
+	}
+	runWorker("seed")
+	runWorker("recover")
+	runWorker("replay")
+}
+
+// TestFreewillRecoveryProcessBoundaryWorker is invoked by the parent test in
+// distinct OS processes to verify durable recovery across a process boundary.
+func TestFreewillRecoveryProcessBoundaryWorker(t *testing.T) {
+	mode := os.Getenv("PRIZM_FREEWILL_RECOVERY_TEST_MODE")
+	if mode == "" {
+		return
+	}
+	dbPath := os.Getenv("PRIZM_FREEWILL_RECOVERY_TEST_DB")
+	if dbPath == "" {
+		t.Fatal("recovery test database path is required")
+	}
+	ctx := context.Background()
+	scope := freewill.Scope{ProjectID: "p", Workspace: "w"}
+	const runID = "orphan-missing"
+	switch mode {
+	case "seed":
+		store, err := NewSQLiteDurableRunStore(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		events, err := event.NewSQLiteEventStore(dbPath)
+		if err != nil {
+			_ = store.Close()
+			t.Fatal(err)
+		}
+		_, orphan := freewillWakeAcceptanceFixture(runID, "agent", scope, "dedupe-orphan-missing")
+		created, err := store.Create(ctx, orphan, nil)
+		closeErr := errors.Join(store.Close(), events.Close())
+		if err != nil || closeErr != nil {
+			t.Fatalf("seed missing-admission wake: create=%v close=%v", err, closeErr)
+		}
+		if created.Revision != 1 {
+			t.Fatalf("seed revision=%d want=1", created.Revision)
+		}
+	case "recover", "replay":
+		store, err := NewSQLiteDurableRunStore(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		events, err := event.NewSQLiteEventStore(dbPath)
+		if err != nil {
+			_ = store.Close()
+			t.Fatal(err)
+		}
+		defer func() { _ = errors.Join(store.Close(), events.Close()) }()
+		env := durableTestEnvironment{store: store, events: events, claimer: newMemoryRunClaimer(), dbPath: dbPath}
+		selector := &sleepingFreewillSelector{}
+		service := newFreewillRecoveryServiceForTest(t, env, selector)
+		before, err := store.Load(ctx, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode == "replay" && (before.Freewill.Lifecycle != freewill.StateHalted || before.Revision != 2) {
+			t.Fatalf("replay starting state=%#v revision=%d", before.Freewill, before.Revision)
+		}
+		if err := service.RecoverPending(ctx, time.Now().Add(time.Minute), 10); err != nil {
+			t.Fatalf("recover missing-admission wake: %v", err)
+		}
+		after, err := store.Load(ctx, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.Freewill.Lifecycle != freewill.StateHalted ||
+			after.Freewill.SelectionFailureClass != freewillAdmissionReconciliationClass ||
+			after.Freewill.SelectionFailureCode != freewillAdmissionMissingCode ||
+			!after.Freewill.ExecutionDisabled || after.Freewill.LeaseOwner != "" ||
+			!after.Freewill.LeaseUntil.IsZero() || !after.Freewill.SelectionNextAt.IsZero() {
+			t.Fatalf("recovered state=%#v", after.Freewill)
+		}
+		if selector.calls != 0 {
+			t.Fatalf("selector calls=%d want=0", selector.calls)
+		}
+		wantRevision := int64(2)
+		if mode == "replay" {
+			wantRevision = before.Revision
+		}
+		if after.Revision != wantRevision {
+			t.Fatalf("recovery revision=%d want=%d", after.Revision, wantRevision)
+		}
+		runEvents, err := events.Query(ctx, event.EventFilter{RunID: runID, Limit: 20})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFreewillNoActionEventsForTest(t, runEvents)
+		if len(runEvents) != 1 || runEvents[0].Type != event.EventFreewillSelectionHalted {
+			gotTypes := make([]string, 0, len(runEvents))
+			for _, evt := range runEvents {
+				gotTypes = append(gotTypes, evt.Type)
+			}
+			t.Fatalf("recovery events=%v, want exactly one selection-halted event", gotTypes)
+		}
+		haltEvent := runEvents[0]
+		if haltEvent.Payload["failure_code"] != freewillAdmissionMissingCode ||
+			haltEvent.Payload["failure_class"] != freewillAdmissionReconciliationClass ||
+			haltEvent.Payload["reason"] != freewillAdmissionReconciledReason {
+			t.Fatalf("halt event payload=%#v", haltEvent.Payload)
+		}
+	default:
+		t.Fatalf("unknown recovery test mode %q", mode)
+	}
 }
 
 func TestFreewillRecoveryHaltsOrphanOwnedByOtherRunAndNeverReplaysAfterRelease(t *testing.T) {
