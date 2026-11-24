@@ -551,7 +551,7 @@ func parseFreewillFlashIdeasJSON(content string) ([]freewillScoredIdea, bool, er
 			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureShape, len(seenIdeas))
 		}
 		if freewillIdeaContainsForbiddenAuthority(idea.Idea) {
-			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureUnsafe, len(seenIdeas))
+			return nil, false, freewillScoredIdeaFailureWithSubreason(freewillIdeaFailureUnsafe, len(seenIdeas), freewillIdeaSubreasonCandidateAuthority)
 		}
 		key := strings.ToLower(strings.Join(strings.Fields(idea.Idea), " "))
 		if _, ok := seenIdeas[key]; ok {
@@ -748,7 +748,7 @@ func normalizeFreewillLabeledIdeaFields(content string) ([]byte, error) {
 			}
 			if current == nil || len(candidates) == 3 {
 				if !freewillInertEnvelopeLine(line) {
-					return nil, freewillScoredIdeaFailure(freewillIdeaFailureUnsafe, len(candidates))
+					return nil, freewillScoredIdeaFailureWithSubreason(freewillIdeaFailureUnsafe, len(candidates), freewillInertEnvelopeRejectReason(line))
 				}
 				preambleBytes += len(line)
 				preambleLines++
@@ -887,7 +887,7 @@ func containsFreewillString(values []string, want string) bool {
 	return false
 }
 
-func freewillMapperDiagnostic(stage string, response provider.ChatGenerateResponse, model string, code string, ideaMarkers int, parsedBlocks int, glmPlain bool) string {
+func freewillMapperDiagnostic(stage string, response provider.ChatGenerateResponse, model string, code string, subreason freewillScoredIdeaSubreason, ideaMarkers int, parsedBlocks int, glmPlain bool) string {
 	thinkLen, _ := response.Raw["thinking_len"].(int)
 	trimmed := strings.TrimSpace(response.Content)
 	fenced := strings.HasPrefix(trimmed, "```")
@@ -895,7 +895,19 @@ func freewillMapperDiagnostic(stage string, response provider.ChatGenerateRespon
 	jsonValid := json.Valid([]byte(trimmed))
 	hasCandidates := strings.Contains(trimmed, `"candidates"`)
 	hasIdeaKey := strings.Contains(trimmed, `"idea"`)
-	return fmt.Sprintf("stage=%s model=%s content_len=%d think_len=%d tool_calls=%d idea_markers=%d parsed_blocks=%d json_valid=%t starts_object=%t fenced=%t candidates_key=%t idea_key=%t parser_code=%s glm_plain=%t json_shape={%s}", stage, model, len(response.Content), thinkLen, len(response.ToolCalls), ideaMarkers, parsedBlocks, jsonValid, startsObject, fenced, hasCandidates, hasIdeaKey, code, glmPlain, freewillJSONShapeMetadata(trimmed))
+	return fmt.Sprintf("stage=%s model=%s content_len=%d think_len=%d tool_calls=%d idea_markers=%d parsed_blocks=%d json_valid=%t starts_object=%t fenced=%t candidates_key=%t idea_key=%t parser_code=%s parser_subreason=%s glm_plain=%t json_shape={%s}", stage, model, len(response.Content), thinkLen, len(response.ToolCalls), ideaMarkers, parsedBlocks, jsonValid, startsObject, fenced, hasCandidates, hasIdeaKey, code, safeFreewillIdeaSubreason(subreason), glmPlain, freewillJSONShapeMetadata(trimmed))
+}
+
+func safeFreewillIdeaSubreason(value freewillScoredIdeaSubreason) freewillScoredIdeaSubreason {
+	switch value {
+	case freewillIdeaSubreasonCandidateAuthority, freewillIdeaSubreasonEnvelopeAuthority,
+		freewillIdeaSubreasonEnvelopeSize, freewillIdeaSubreasonEnvelopeControl,
+		freewillIdeaSubreasonEnvelopePath, freewillIdeaSubreasonEnvelopePromptMarker,
+		freewillIdeaSubreasonEnvelopeLabel:
+		return value
+	default:
+		return freewillIdeaSubreasonUnspecified
+	}
 }
 
 // freewillJSONShapeMetadata records only bounded JSON field names and shape
@@ -1265,29 +1277,44 @@ func parseFreewillScoreFactors(raw string) ([]string, error) {
 }
 
 func freewillInertEnvelopeLine(line string) bool {
+	return freewillInertEnvelopeRejectReason(line) == ""
+}
+
+func freewillInertEnvelopeRejectReason(line string) freewillScoredIdeaSubreason {
 	line = strings.TrimSpace(line)
 	if line == "" {
-		return true
+		return ""
 	}
-	if len(line) > 500 || strings.IndexFunc(line, unicode.IsControl) >= 0 || strings.ContainsAny(line, "{}[]\\") || strings.Contains(line, "://") || strings.Contains(line, "..") || freewillIdeaContainsForbiddenAuthority(line) {
-		return false
+	if len(line) > 500 {
+		return freewillIdeaSubreasonEnvelopeSize
+	}
+	if strings.IndexFunc(line, unicode.IsControl) >= 0 {
+		return freewillIdeaSubreasonEnvelopeControl
+	}
+	if strings.ContainsAny(line, "{}[]\\") || strings.Contains(line, "://") || strings.Contains(line, "..") {
+		return freewillIdeaSubreasonEnvelopePath
+	}
+	if freewillIdeaContainsForbiddenAuthority(line) {
+		return freewillIdeaSubreasonEnvelopeAuthority
 	}
 	lower := strings.ToLower(line)
 	for _, marker := range []string{"idea:", "score:", "factors:", "rationale:", "ignore", "disregard", "override", "bypass", "system prompt", "developer message", "execute", "tool call"} {
 		if strings.Contains(lower, marker) {
-			return false
+			return freewillIdeaSubreasonEnvelopePromptMarker
 		}
 	}
 	if colon := strings.IndexByte(line, ':'); colon > 0 {
 		header := strings.TrimSpace(line[:colon])
 		if header != "" && header == strings.ToUpper(header) {
-			return false
+			return freewillIdeaSubreasonEnvelopeLabel
 		}
 	}
-	return true
+	return ""
 }
 
 type freewillScoredIdeaFailureCode string
+
+type freewillScoredIdeaSubreason string
 
 const (
 	freewillIdeaFailureCount     freewillScoredIdeaFailureCode = "count"
@@ -1301,9 +1328,21 @@ const (
 	freewillIdeaFailureUnsafe    freewillScoredIdeaFailureCode = "unsafe"
 )
 
+const (
+	freewillIdeaSubreasonUnspecified          freewillScoredIdeaSubreason = "unspecified"
+	freewillIdeaSubreasonCandidateAuthority   freewillScoredIdeaSubreason = "candidate_authority_phrase"
+	freewillIdeaSubreasonEnvelopeAuthority    freewillScoredIdeaSubreason = "envelope_authority_phrase"
+	freewillIdeaSubreasonEnvelopeSize         freewillScoredIdeaSubreason = "envelope_size_limit"
+	freewillIdeaSubreasonEnvelopeControl      freewillScoredIdeaSubreason = "envelope_control_character"
+	freewillIdeaSubreasonEnvelopePath         freewillScoredIdeaSubreason = "envelope_path_or_url_marker"
+	freewillIdeaSubreasonEnvelopePromptMarker freewillScoredIdeaSubreason = "envelope_prompt_or_field_marker"
+	freewillIdeaSubreasonEnvelopeLabel        freewillScoredIdeaSubreason = "envelope_uppercase_label"
+)
+
 type freewillScoredIdeaParseError struct {
 	Code         freewillScoredIdeaFailureCode
 	ParsedBlocks int
+	Subreason    freewillScoredIdeaSubreason
 }
 
 func (e *freewillScoredIdeaParseError) Error() string {
@@ -1312,6 +1351,10 @@ func (e *freewillScoredIdeaParseError) Error() string {
 
 func freewillScoredIdeaFailure(code freewillScoredIdeaFailureCode, parsedBlocks int) error {
 	return &freewillScoredIdeaParseError{Code: code, ParsedBlocks: parsedBlocks}
+}
+
+func freewillScoredIdeaFailureWithSubreason(code freewillScoredIdeaFailureCode, parsedBlocks int, subreason freewillScoredIdeaSubreason) error {
+	return &freewillScoredIdeaParseError{Code: code, ParsedBlocks: parsedBlocks, Subreason: safeFreewillIdeaSubreason(subreason)}
 }
 
 func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, error) {
@@ -1366,7 +1409,7 @@ func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, e
 					return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureStructure, len(ideas))
 				}
 				if !freewillInertEnvelopeLine(line) {
-					return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureUnsafe, len(ideas))
+					return nil, false, freewillScoredIdeaFailureWithSubreason(freewillIdeaFailureUnsafe, len(ideas), freewillInertEnvelopeRejectReason(line))
 				}
 				envelopeBytes += len(line)
 				envelopeLines++
@@ -1481,7 +1524,7 @@ func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, e
 			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureShape, len(ideas))
 		}
 		if freewillIdeaContainsForbiddenAuthority(idea) {
-			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureUnsafe, len(ideas))
+			return nil, false, freewillScoredIdeaFailureWithSubreason(freewillIdeaFailureUnsafe, len(ideas), freewillIdeaSubreasonCandidateAuthority)
 		}
 		key := strings.ToLower(strings.Join(strings.Fields(idea), " "))
 		if _, exists := seen[key]; exists {
@@ -1890,7 +1933,7 @@ func (s ChatFreewillSelector) SelectCandidateChoice(ctx context.Context, input F
 		choice, err = parseFreewillCandidateChoice(response.Content, ids)
 	}
 	if err != nil {
-		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("choice", response, s.Model, "invalid_choice", 0, 0, true))
+		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("choice", response, s.Model, "invalid_choice", "", 0, 0, true))
 		return FreewillCandidateChoice{}, evidence, &SchemaCorrectionError{Role: RolePlanner, Code: "invalid_choice"}
 	}
 	return choice, evidence, nil
@@ -2054,20 +2097,22 @@ func (s ChatFreewillSelector) selectFreewillFlashIdeas(ctx context.Context, inpu
 		return freewill.Selection{}, FreewillSelectionEvidence{}, err
 	}
 	if len(response.ToolCalls) != 0 {
-		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("idea", response, s.Model, "idea_tool_request", freewillIdeaMarkerCount(response.Content), 0, true))
+		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("idea", response, s.Model, "idea_tool_request", "", freewillIdeaMarkerCount(response.Content), 0, true))
 		return freewill.Selection{}, FreewillSelectionEvidence{}, &SchemaCorrectionError{Role: RolePlanner, Code: "idea_tool_request"}
 	}
 	ideas, none, err := parseFreewillFlashIdeaResponse(response.Content)
 	if err != nil {
 		category := freewillIdeaFailureStructure
 		parsedBlocks := 0
+		var subreason freewillScoredIdeaSubreason
 		var parseErr *freewillScoredIdeaParseError
 		if errors.As(err, &parseErr) {
 			category = parseErr.Code
 			parsedBlocks = parseErr.ParsedBlocks
+			subreason = parseErr.Subreason
 		}
 		code := "invalid_scored_ideas_" + string(category)
-		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("idea", response, s.Model, code, freewillIdeaMarkerCount(response.Content), parsedBlocks, true))
+		log.Printf("[FREEWILL] mapper diagnostic %s", freewillMapperDiagnostic("idea", response, s.Model, code, subreason, freewillIdeaMarkerCount(response.Content), parsedBlocks, true))
 		return freewill.Selection{}, FreewillSelectionEvidence{}, &SchemaCorrectionError{Role: RolePlanner, Code: code}
 	}
 	providerName, model := response.Provider, response.Model

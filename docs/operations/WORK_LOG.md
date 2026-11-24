@@ -3306,3 +3306,60 @@ resolve applied, partial, unknown, or unattributed child effects. FW-P3 and
 CORE-04 remain in progress, and R1/G1 remains open. Continue with a separate
 process serve recovery checkpoint if it can be bounded without granting or
 applying a real action; keep real-project provider acceptance separate.
+
+## 2026-11-23 — FW-P1/E71 bounded real-Prizm diagnostic attempts
+
+**Roadmap IDs:** FW-P1 and CTX-01–05. Local code work is based on Freewill
+integration merge `da91742acd44fd48a72e9147a7d716eec4cb6928`; this is a local
+review candidate, not a published or merged change. The implementation adds
+content-free classification for existing unsafe scored-idea rejection paths
+and a concise recovery sentence asking for a read-only review of cited
+evidence. It does not change candidate validators or authority checks.
+
+**Scope and expected behavior:** Three bounded `prizm serve` runs used
+`glm-5.3-flash:cloud`, exact project binding `prizm`, and only tracked public
+`README.md` plus the `FW-P1 — Read-only Decision Loop` section of the Freewill
+implementation roadmap. The host projected 4,091 and 767 bytes respectively
+(4,858 bytes total), above the earlier 2 KiB target but within configured
+builder caps. No private, ignored, or untracked content was selected. The
+process-only key, temporary `intention.propose: require_approval` policy, and
+disabled execution remained scoped to the isolated serve. No tools were
+registered. The projected source IDs were `project:readme` and
+`project:file:docs/architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md`. Their
+full-blob revisions were respectively
+`0857adef744eec149daabc141ce2cfbd65b67ee98c9e7bcd3f2e9d9855f9e44a` and
+`17a746336c0a68f3a4108a0c324ab4657784560f7a0d73a2bab8926032c7497d`; excerpt
+digests were respectively
+`50b4af57794050375b68823a603b3aee525dbc4c35dd4d5d5732b07a67dc2e0d` and
+`321ea4290a6008af9efa9431f2594171be2e55570b5ea38c5c631ec3bff9fe73`.
+
+**Observed:** Run `freewill-ce649c1c81ad09459a6fcf44df1bc7a0` produced three
+scored ideas and then selected sleep; its four-event durable trace does not
+persist candidate text, the chosen option, or citations, so semantic relevance
+cannot be evaluated. Runs `freewill-e28fa9aa6f095b902acc487cdd399937` and
+`freewill-a4d9c40f0d588a5fcfefadb065d1956c` each exhausted the bounded
+correction path with `invalid_scored_ideas_unsafe`. The latter emitted only
+the stable subreason `candidate_authority_phrase` for the initial attempt and
+correction. No raw model response was retained. The selected source includes
+ordinary policy language containing “tool”, which is a possible benign
+substring collision with the existing predicate; there is no evidence the
+rejected candidate used that word, so this is not established as the cause.
+The sleep run used executable SHA-256
+`996D86B1A6BB0408D5B2E6560899F6EB0D89E7B47DD5E90F5AD4F8CC1C7264BF`; the
+diagnostic run used `FDBD60763AEC79A5560E522A90C9C0F610FCC2DBAE14CD3B82273B0DCF7CCD20`.
+
+No run produced a proposal, approval, dispatch, apply, or tool event; execution
+remained disabled. The diagnostic run stopped while selecting after the
+bounded correction attempts, and the isolated service was stopped with no
+listeners remaining on its ports. No screenshot was captured because there
+was no pending proposal. A local fake-provider recovery test confirms the
+existing due-retry path can complete with safe input; this is service-level
+synthetic coverage, not a standalone `prizm serve` acceptance.
+
+**Verification and limits:** `go test ./internal/workflow/multiagent -count=1`
+passed after the diagnostic change; focused parser, recovery, and diagnostic
+tests passed after the recovery wording update. `go test ./cmd/prizm-cli -run
+'^$' -count=1` compiled the CLI test package. `git diff --check` passed. The
+real-project grounded proposal remains unproven, and FW-P1 stays in progress.
+Request independent review of the exact local commits before any publication;
+no staging or deployment occurred.
