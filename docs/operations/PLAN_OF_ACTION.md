@@ -41,6 +41,14 @@ candidates; investigate the response-contract failures before any further
 probe. Do not mark real-project grounding or visible proof complete; do not
 stage or deploy.
 
+**Independent model-free recovery check:** E70 adds a synthetic three-process
+test of missing actor-admission recovery through `FreewillWakeService.RecoverPending`.
+It verifies a durable halt without a selector call and a no-op replay after a
+second process restart. This is service-level evidence, not a standalone
+`prizm serve` recovery or full CORE-04 acceptance. Keep FW-P3/CORE-04 and R1
+recovery open; the next bounded checkpoint should exercise the served recovery
+path across process restart without approving or applying a real action.
+
 ## Previous Handoff: FW-G2/E69 composed OCI network and host-path boundary probe (2026-11-16)
 
 **Roadmap IDs:** FW-P2 and FW-G2; B1/B2 and R1/G1 remain open. Branch

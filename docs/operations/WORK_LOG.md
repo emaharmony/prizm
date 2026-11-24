@@ -3281,3 +3281,28 @@ deployment occurred.
 **Next action:** Keep CTX/real-provider grounding open. Review the failed
 scored-idea correction contract before any further bounded real-project probe;
 preserve the exact allowlist and egress scope.
+
+## 2026-11-23 — FW-P3/E70 synthetic actor-admission recovery across processes
+
+**Roadmap IDs:** FW-P3 and CORE-04; R1/G1 recovery remains a prerequisite.
+At Freewill integration HEAD `854e4bcd960b9113c8ee534ed48f197f3490e1a8`,
+added `TestFreewillRecoveryMissingAdmissionPersistsAcrossProcesses` in
+`internal/workflow/multiagent/freewill_sqlite_test.go`. A seed worker writes a
+synthetic waking run without its actor-admission record. A second OS process
+invokes `FreewillWakeService.RecoverPending` with a fake selector and verifies
+that the run is halted, execution remains disabled, the admission failure is
+durable, and the selector is not called. A third process replays recovery and
+confirms that the terminal revision and halt event are not duplicated.
+
+**Verification:** `go test -v ./internal/workflow/multiagent -run
+TestFreewillRecovery -count=1` passed all focused recovery tests, including the
+new three-process case. `gofmt` and `git diff --check` passed. The test uses
+synthetic SQLite state and makes no approval, dispatch, apply, or provider
+request.
+
+**Limits/next action:** E70 covers one no-effect actor-admission checkpoint
+through the service API; it is not a standalone `prizm serve` test and does not
+resolve applied, partial, unknown, or unattributed child effects. FW-P3 and
+CORE-04 remain in progress, and R1/G1 remains open. Continue with a separate
+process serve recovery checkpoint if it can be bounded without granting or
+applying a real action; keep real-project provider acceptance separate.
