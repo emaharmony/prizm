@@ -1325,3 +1325,56 @@ run's failures. Focused and full multiagent package tests passed, as did
 `gofmt` and `git diff --check`. Keep FW-P1 in progress. Next, independently
 review the diagnostic change and pursue a separately bounded acceptance only
 after an evidence-based fix is established.
+
+## Current Handoff: FW-P1/E76 bounded real-Prizm proposal pending approval (2026-11-24)
+
+**Roadmap IDs:** FW-P1 and CTX-01–05. The acceptance branch is based directly
+on integration `11511a20a887df6ef19e6d770f3fde10c461deb2`; the served binary
+was built from that code and has SHA-256
+`49099297D18AE5450380629518C701279BDA7786F12F20F85C7120CA266593DC`. The
+project-context source snapshot remained pinned to earlier integration
+`0a188c33cedb33a4edde71d8c0ff0772c851106f` because this probe intentionally
+recovered the original host-bound checkout and state. Before recovery, a
+copied-worktree path failed host-scope identity validation before any provider
+call; the original bound path was restored using a normal detached checkout.
+
+The single configured project scope was `prizm` with exactly three public,
+tracked Markdown sections, totaling 5,182 projected bytes: README `## Why
+Prizm Exists` (491 bytes; source `project:readme`; revision
+`0857adef744eec149daabc141ce2cfbd65b67ee98c9e7bcd3f2e9d9855f9e44a`; digest
+`8e01bec0e986ec58657474166035cf9389a90de834bbcbfc59bfd70f673db2c9`),
+`### FW-P1 — Read-only Decision Loop (first demonstrable Freewill)` (767
+bytes; source `project:file:docs/architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md`;
+revision `17a746336c0a68f3a4108a0c324ab4657784560f7a0d73a2bab8926032c7497d`;
+digest `321ea4290a6008af9efa9431f2594171be2e55570b5ea38c5c631ec3bff9fe73`),
+and `## Phase inventory` (3,924 bytes; source
+`project:file:docs/architecture/FREEWILL_POC_FEATURE_INVENTORY.md`; revision
+`27445b9f8b33cf118d8488bbd5965ab140e3bff5868ef2d478356b496c2c64f0`; digest
+`3f8560c1669a13414b3d47af87a0b3770446288d3d29219278349d2f2665bc3b`). The
+objective asked for a small next step to verify an open acceptance gap from
+cited current evidence and allowed sleep when unsupported. The model was
+`glm-5.3-flash:cloud`; proposal required approval, execution was disabled, and
+the selector had no tools.
+
+Run `freewill-2afadab8dd659e7bd441eb7b2698f6db` resumed through normal
+same-state startup recovery. At attempt 3/recovery count 2, it emitted three
+decision-only candidates, selected one, and created pending approval
+`appr_01M8651XVF0B9XY2ZR1VN4Z0F6`. The selected proposal is a single separately
+reviewed read-only acceptance on the real Prizm repository to verify that
+candidate selection records a proposal rather than sleep. Its cited scope is
+the documented open real-project semantic-acceptance gap; its rationale says
+the check is small and directly verifies that gap, while uncertainty notes
+previous sleep/safety-rejection outcomes. The persisted selection manifest
+binds the three sources listed above. The trace contains `selection.committed`
+and `approval.proposed`; no grant, dispatch, apply, tool event, or approval
+decision occurred. Aggregate usage was 2,294 tokens. The code path performs
+idea generation followed by candidate choice, but per-phase provider usage is
+not persisted; the two-call count is therefore code-path inferred, not a
+separately measured phase count.
+
+The dashboard screenshot is embedded in the E76 work-log entry. The owned
+service was stopped and its loopback listeners were absent afterward. This is
+one pending proposal on one real project after earlier bounded failures; it
+does not establish repeatability, dedupe closure, full FW-P1 acceptance, or
+execution behavior. Keep FW-P1 in progress. No further Cloud call, approval,
+dispatch, apply, staging, or deployment is part of this handoff.
