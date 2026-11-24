@@ -1274,3 +1274,23 @@ captured because no proposal was pending. Treat this as one bounded, source-
 cited model no-op, not successful proposal grounding or visual acceptance.
 FW-P1 remains in progress; no further Cloud call, staging, or deployment is
 authorized by this result.
+
+## Current Handoff: FW-P3/E73 accepted-child ambiguous recovery checkpoint (2026-11-24)
+
+**Roadmap IDs:** FW-P3 and CORE-04; B1/R1-G1 remains open. At integration
+baseline `0a188c33cedb33a4edde71d8c0ff0772c851106f`, the existing synthetic
+CLI fixture now runs `freewillServeRuntime.recoverPending` in two distinct
+test-binary processes against the same SQLite state. The first process
+persists `recovery_uncertain` / `child_mutation_possible`; the second leaves
+the parent revision and child revision/event count unchanged. The child stays
+nonterminal with unresolved mutation evidence; exactly one uncertainty event
+and zero dispatching/dispatched events are observed.
+
+**Evidence and limits:** The full `go test ./cmd/prizm-cli -count=1` suite and
+the focused process-boundary test passed. This uses a synthetic accepted parent
+record, temporary SQLite/run directories, and `unavailableRoleRunner`; it is
+not a standalone `prizm serve` restart, live approval, dispatched child, or
+evidence that the possible external mutation did not occur. The checkpoint
+proves durable quarantine and no blind replay while evidence is ambiguous.
+CORE-04 remains in progress; broaden only to a distinct bounded recovery gap,
+preserving host evidence requirements and real-provider gates.
