@@ -340,13 +340,19 @@ func assertFreewillRunHasNoAuthorityEvents(t *testing.T, ctx context.Context, ru
 			if wakeClaims != 1 || selectionStarts != 1 {
 				t.Fatalf("decision-only wake has incomplete persisted trace: wake_claimed=%d selection_started=%d selection_committed=%d", wakeClaims, selectionStarts, selectionCommits)
 			}
-			return
+			pending, err := runtime.store.PendingEvents(ctx, runID, 100)
+			if err != nil {
+				t.Fatalf("query durable wake outbox: %v", err)
+			}
+			if len(pending) == 0 {
+				return
+			}
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("decision-only wake trace query canceled before selection commit: %v", ctx.Err())
+			t.Fatalf("decision-only wake trace/outbox wait canceled before settling: %v", ctx.Err())
 		case <-deadline.C:
-			t.Fatalf("decision-only wake did not publish selection commit within 5s: wake_claimed=%d selection_started=%d selection_committed=%d", wakeClaims, selectionStarts, selectionCommits)
+			t.Fatalf("decision-only wake trace/outbox did not settle within 5s: wake_claimed=%d selection_started=%d selection_committed=%d", wakeClaims, selectionStarts, selectionCommits)
 		case <-ticker.C:
 		}
 	}
