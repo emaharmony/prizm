@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -329,6 +330,63 @@ func TestFreewillRecoverPendingQuarantinesAcceptedChildWithPossibleMutation(t *t
 	if _, err := store.Create(ctx, parent, nil); err != nil {
 		t.Fatalf("create accepted parent: %v", err)
 	}
+	// Reopen recovery in independent test-binary processes: first persist the
+	// ambiguous-mutation quarantine, then prove a fresh process cannot replay it.
+	if err := events.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	processResult := func(mode string) freewillMutationRecoveryProcessResult {
+		t.Helper()
+		resultPath := filepath.Join(root, "process-"+mode+".json")
+		command := exec.Command(os.Args[0], "-test.run=^TestFreewillAcceptedMutationRecoveryProcessWorker$")
+		command.Env = append(os.Environ(), "PRIZM_FW_MUTATION_RECOVERY_MODE="+mode,
+			"PRIZM_FW_MUTATION_RECOVERY_ROOT="+root, "PRIZM_FW_MUTATION_RECOVERY_RUN_DIR="+runDir,
+			"PRIZM_FW_MUTATION_RECOVERY_DB="+dbPath, "PRIZM_FW_MUTATION_RECOVERY_PARENT="+parentRunID,
+			"PRIZM_FW_MUTATION_RECOVERY_CHILD="+childRunID, "PRIZM_FW_MUTATION_RECOVERY_RESULT="+resultPath)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s recovery worker failed: %v\n%s", mode, err, output)
+		}
+		payload, err := os.ReadFile(resultPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result freewillMutationRecoveryProcessResult
+		if err := json.Unmarshal(payload, &result); err != nil {
+			t.Fatalf("decode %s worker result: %v", mode, err)
+		}
+		return result
+	}
+	recoveredProcess := processResult("recover")
+	replayedProcess := processResult("replay")
+	if recoveredProcess.PID == os.Getpid() || replayedProcess.PID == os.Getpid() || recoveredProcess.PID == replayedProcess.PID {
+		t.Fatalf("recovery did not run in distinct OS processes: parent=%d recover=%d replay=%d",
+			os.Getpid(), recoveredProcess.PID, replayedProcess.PID)
+	}
+	if recoveredProcess.Error == "" || replayedProcess.Error == "" ||
+		recoveredProcess.Status != "recovery_uncertain" || replayedProcess.Status != "recovery_uncertain" ||
+		recoveredProcess.Reason != "child_mutation_possible" || replayedProcess.Reason != "child_mutation_possible" ||
+		recoveredProcess.Revision != replayedProcess.Revision || !recoveredProcess.Unresolved || !replayedProcess.Unresolved ||
+		recoveredProcess.ChildTerminal || replayedProcess.ChildTerminal ||
+		recoveredProcess.ChildRevision != replayedProcess.ChildRevision || recoveredProcess.ChildEvents != replayedProcess.ChildEvents ||
+		recoveredProcess.RecoveryEvents != 1 || replayedProcess.RecoveryEvents != 1 ||
+		recoveredProcess.DispatchingEvents != 0 || recoveredProcess.DispatchedEvents != 0 ||
+		replayedProcess.DispatchingEvents != 0 || replayedProcess.DispatchedEvents != 0 {
+		t.Fatalf("separate-process ambiguous recovery evidence invalid: recover=%#v replay=%#v", recoveredProcess, replayedProcess)
+	}
+	store, err = multiagent.NewSQLiteDurableRunStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	events, err = event.NewSQLiteEventStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer events.Close()
 	graph, err := multiagent.CompatAdaptDefinition(multiagent.DefaultReferenceDefinition())
 	if err != nil {
 		t.Fatal(err)
@@ -597,6 +655,123 @@ func TestFreewillRecoverPendingQuarantinesAcceptedChildWithPossibleMutation(t *t
 	unchanged, err = thirdStore.Load(ctx, parentRunID)
 	if err != nil || unchanged.Revision != revision {
 		t.Fatalf("no-effect reconciliation was not idempotent: revision=%d want=%d err=%v", unchanged.Revision, revision, err)
+	}
+}
+
+type freewillMutationRecoveryProcessResult struct {
+	PID               int    `json:"pid"`
+	Error             string `json:"error"`
+	Status            string `json:"status"`
+	Reason            string `json:"reason"`
+	Revision          int64  `json:"revision"`
+	Unresolved        bool   `json:"unresolved"`
+	ChildTerminal     bool   `json:"child_terminal"`
+	ChildRevision     int64  `json:"child_revision"`
+	ChildEvents       int    `json:"child_events"`
+	RecoveryEvents    int    `json:"recovery_events"`
+	DispatchingEvents int    `json:"dispatching_events"`
+	DispatchedEvents  int    `json:"dispatched_events"`
+}
+
+func TestFreewillAcceptedMutationRecoveryProcessWorker(t *testing.T) {
+	mode := os.Getenv("PRIZM_FW_MUTATION_RECOVERY_MODE")
+	if mode == "" {
+		t.Skip("subprocess helper")
+	}
+	ctx := context.Background()
+	root := os.Getenv("PRIZM_FW_MUTATION_RECOVERY_ROOT")
+	runDir := os.Getenv("PRIZM_FW_MUTATION_RECOVERY_RUN_DIR")
+	dbPath := os.Getenv("PRIZM_FW_MUTATION_RECOVERY_DB")
+	parentRunID := os.Getenv("PRIZM_FW_MUTATION_RECOVERY_PARENT")
+	childRunID := os.Getenv("PRIZM_FW_MUTATION_RECOVERY_CHILD")
+	resultPath := os.Getenv("PRIZM_FW_MUTATION_RECOVERY_RESULT")
+	if root == "" || runDir == "" || dbPath == "" || parentRunID == "" || childRunID == "" || resultPath == "" ||
+		(mode != "recover" && mode != "replay") {
+		t.Fatal("incomplete or invalid recovery worker configuration")
+	}
+	store, err := multiagent.NewSQLiteDurableRunStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	events, err := event.NewSQLiteEventStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer events.Close()
+	graph, err := multiagent.CompatAdaptDefinition(multiagent.DefaultReferenceDefinition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := multiagent.NewDurableRuntime(graph, unavailableRoleRunner{}, store,
+		multiagent.FileRunClaimer{Root: filepath.Join(root, "claims")}, events, multiagent.DurableRuntimeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvals, err := multiagent.NewFreewillApprovalService(runtime, store,
+		approval.NewStore(runDir), policy.NewEvaluator(policy.NewRegistry()), "freewill-policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serve := &freewillServeRuntime{store: store, approvals: approvals, executionEnabled: true, runDir: runDir,
+		configPath: filepath.Join(root, "prizm.yaml")}
+	recoveryErr := serve.recoverPending(ctx)
+	if recoveryErr == nil {
+		t.Fatal("unresolved child mutation was not reported as quarantined")
+	}
+	parent, err := store.Load(ctx, parentRunID)
+	if err != nil || parent.Freewill == nil || parent.Freewill.ExecutionDispatch == nil {
+		t.Fatalf("load recovered parent: record=%#v err=%v", parent, err)
+	}
+	childUnresolved, err := freewillReferenceChildHasUnresolvedMutation(ctx, runDir, childRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childTerminal, err := freewillReferenceChildIsTerminal(ctx, runDir, childRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childManifest, err := loadReferenceManifest(runDir, childRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childRuntime, err := openInspectionReferenceRuntime(runDir, childManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childRecord, err := childRuntime.store.Load(ctx, childRunID)
+	if err != nil {
+		_ = childRuntime.close()
+		t.Fatal(err)
+	}
+	childEvents, err := childRuntime.events.Query(ctx, event.EventFilter{RunID: childRunID, Limit: 1000})
+	if err != nil {
+		_ = childRuntime.close()
+		t.Fatal(err)
+	}
+	if err := childRuntime.close(); err != nil {
+		t.Fatal(err)
+	}
+	count := func(kind string) int {
+		events, queryErr := events.Query(ctx, event.EventFilter{RunID: parentRunID, Type: kind, Limit: 10})
+		if queryErr != nil {
+			t.Fatalf("query %s events: %v", kind, queryErr)
+		}
+		return len(events)
+	}
+	result := freewillMutationRecoveryProcessResult{PID: os.Getpid(), Error: recoveryErr.Error(),
+		Status: parent.Freewill.ExecutionDispatch.Status, Reason: parent.Freewill.ExecutionDispatch.RecoveryReason,
+		Revision: parent.Revision, Unresolved: childUnresolved, ChildTerminal: childTerminal,
+		ChildRevision: childRecord.Revision, ChildEvents: len(childEvents),
+		RecoveryEvents:    count(event.EventFreewillExecutionRecoveryUncertain),
+		DispatchingEvents: count(event.EventFreewillExecutionDispatching),
+		DispatchedEvents:  count(event.EventFreewillExecutionDispatched)}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resultPath, payload, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

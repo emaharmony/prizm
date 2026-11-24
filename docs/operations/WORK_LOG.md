@@ -3477,3 +3477,35 @@ proposal was pending. No raw provider response was retained, and the run's
 candidate content is not reproduced here. E72 is one reduced-scope real-Prizm
 no-op, not proof of a real project-grounded proposal. FW-P1 remains in progress;
 no staging or deployment occurred.
+
+## 2026-11-24 — FW-P3/E73 accepted-child possible-mutation recovery across processes
+
+**Roadmap IDs:** FW-P3 and CORE-04; B1/R1-G1 recovery remains open. Starting
+from integration `0a188c33cedb33a4edde71d8c0ff0772c851106f`, extended the
+existing synthetic accepted-child/possible-mutation CLI fixture in
+`cmd/prizm-cli/freewill_recovery_dispatch_test.go`. After seeding its temporary
+SQLite and child-run state, the test closes the database handles and invokes
+the actual `freewillServeRuntime.recoverPending` path through two distinct
+test-binary processes.
+
+The first process durably records parent status
+`recovery_uncertain` with reason `child_mutation_possible`. The second process
+returns the same quarantine state and revision. Both report the child still
+nonterminal with unresolved mutation evidence, unchanged child revision and
+event count, exactly one recovery-uncertain event, and zero dispatching or
+dispatched events. Process IDs are checked against the parent and each other.
+The fixture uses only `t.TempDir()` state and `unavailableRoleRunner`; its
+approved parent record is synthetic. No real approval, provider, child action,
+or external target is involved.
+
+**Verification:** The focused process-boundary test passed, followed by the
+full `go test ./cmd/prizm-cli -count=1` suite (`ok`, 355.163s). `gofmt` and
+`git diff --check` passed. This executes a test-binary subprocess around the
+production recovery method; it is not a standalone `prizm serve` restart and
+does not prove whether the possible external mutation occurred. FW-P3 and
+CORE-04 remain in progress; unknown/applied effects and real child dispatch,
+approval transport, B1/R1-G1 remain open.
+
+**Next action:** Independent review of this scoped test and evidence update;
+retain the quarantine on ambiguous effects and do not claim full CORE-04
+completion.
