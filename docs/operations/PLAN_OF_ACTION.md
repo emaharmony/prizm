@@ -1168,3 +1168,41 @@ The E66 synthetic acceptance exercises revision A and B through two separate OS 
 **Evidence:** Synthetic run `freewill-b71289baabd79cd8028a1150383ae0b2` for `synthetic-event-board` shows one selected M1 candidate, three candidates total, `project:readme` citation, and approval pending with `execution_disabled=true`. The exact run has five persisted lifecycle events through `approval.proposed` and no decision or dispatch event. No grant, dispatch, or apply was issued. The live screenshot is [`docs/evidence/freewill/synthetic-event-board-approval-pending.png`](../evidence/freewill/synthetic-event-board-approval-pending.png), SHA-256 `37B70793267517AAF3D52143C1D1C872BAEFB7DC87D629CB17A0C99569270D11`; it shows all three candidates expanded, and excludes the Settings section. Exact-head CI run `43945568983` passed all five jobs, including Linux tests/race, Windows tests, lint, Python, and sandbox OCI. No staging or deployment occurred.
 
 **Remaining gates / next action:** This synthetic visible proof does not establish real project grounding or provider-backed semantics. R1/G1 approval/apply/verify/resume acceptance, broad FW-G2 isolation and security coverage, and recovery/cycle acceptance remain open. The run-scoped multi-agent SSE endpoint returned HTTP 404; its five-event trace was verified in the persisted synthetic event table. Continue with bounded acceptance for these gates before any staging promotion. Do not deploy.
+## Current Handoff: E71 real-Prizm selection remains unproven (2026-11-23)
+
+**Roadmap IDs:** FW-P1 and CTX-01–05. **Base:** Freewill integration merge
+`da91742acd44fd48a72e9147a7d716eec4cb6928`. Local diagnostic commits are
+`c70a30db76c9d93c2d68a3d7cd529b5208d4e590` and
+`50f4460c1fc14d69d4571ce839b8572b9108dedd`.
+
+The exact public context allowlist was README plus the `FW-P1 — Read-only
+Decision Loop` section in the tracked Freewill roadmap. The host builder
+projected 4,091 bytes and 767 bytes respectively (4,858 bytes total); this
+exceeded the earlier 2 KiB target but remained within builder caps. No private,
+ignored, or untracked content was selected. The model was
+`glm-5.3-flash:cloud`; the key was process-only, proposal policy required owner
+approval, execution was disabled, and no tools were registered.
+
+Three provider-backed runs produced no proposal. Run
+`freewill-ce649c1c81ad09459a6fcf44df1bc7a0` validated three ideas, then the
+model selected sleep; the durable trace has four events and 2,152 tokens, but
+no candidate text or citation-level choice was persisted. Run
+`freewill-e28fa9aa6f095b902acc487cdd399937` failed twice with
+`invalid_scored_ideas_unsafe` and stopped after its bounded correction. Run
+`freewill-a4d9c40f0d588a5fcfefadb065d1956c` repeated that failure with a new
+content-free diagnostic: `candidate_authority_phrase` on both the first call
+and its correction. The final run's durable trace has six events and remained
+selecting when the isolated service was stopped. No raw model text was retained.
+
+The exact cited FW-P1 source uses the ordinary term “tool” in its no-tool-side-
+effects test, while the existing authority predicate bans the substring
+`tool`. This is a plausible benign vocabulary collision, not proof that the
+model used that term. No validator or authority predicate was weakened. The
+new diagnostic emits only stable parser subreason enums; unsafe recovery now
+asks for a read-only evidence review and excludes preamble/postscript text.
+
+No run created an approval proposal, dispatch, apply, or tool event; execution
+remained disabled. No screenshot was captured because there was no pending
+proposal. Do not mark FW-P1 or real-project grounding complete. Next: independent
+review of the scoped diagnostic change and its exact-head checks; keep any
+further Cloud run bounded and separately authorized. No staging or deployment.
