@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,9 +50,16 @@ func TestE59StandaloneServeRecoversAdaptiveTaskReflectionOnceAcrossRestart(t *te
 	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("Synthetic E59 task reflection fixture."), 0600); err != nil {
 		t.Fatal(err)
 	}
+	policy := "policies:\n  - id: e59-requires-owner-review\n    description: E59 synthetic proposal-only gate.\n    match:\n      action: intention.propose\n      resource.type: intention\n      resource.name: freewill_candidate\n    decision: requires_approval\n    reason: Owner review is required for every synthetic proposal.\n"
+	if err := os.WriteFile(filepath.Join(policyDir, "e59.yaml"), []byte(policy), 0600); err != nil {
+		t.Fatal(err)
+	}
 	const ownerID, projectID, agentID = "e59-synthetic-owner", "e59-synthetic-project", "e59-synthetic-agent"
 	const firstParent, firstChild = "run_e59_parent_first", "run_e59_child_first"
-	const secondParent, secondChild = "run_e59_parent_second", "run_e59_child_second"
+	canonicalWorkspace, err := canonicalFreewillWorkspace(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
 	dbPath := filepath.Join(dataDir, "freewill.db")
 	seedE59TerminalReceipt(t, root, dbPath, runsDir, workspace, projectID, agentID, firstParent, firstChild, "first")
 	reportDigest := func(childID string) string {
@@ -59,15 +67,15 @@ func TestE59StandaloneServeRecoversAdaptiveTaskReflectionOnceAcrossRestart(t *te
 		sum := sha256.Sum256(body)
 		return hex.EncodeToString(sum[:])
 	}
-	evidenceToChild := map[string]string{
-		"sha256:" + reportDigest(firstChild):  firstChild,
-		"sha256:" + reportDigest(secondChild): secondChild,
-	}
+	evidenceToChild := map[string]string{"sha256:" + reportDigest(firstChild): firstChild}
 
 	type callCounts struct{ appraisal, reflection, followup int }
 	var callsMu sync.Mutex
 	calls := map[string]callCounts{}
+	var selectorCalls atomic.Int32
+	selectorInput := make(chan *multiagent.FreewillReflectionEvidence, 1)
 	providerFailures := make(chan string, 4)
+	var expectedSelectorReflection atomic.Pointer[multiagent.FreewillReflectionEvidence]
 	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			Messages []struct {
@@ -80,13 +88,40 @@ func TestE59StandaloneServeRecoversAdaptiveTaskReflectionOnceAcrossRestart(t *te
 			http.Error(w, "invalid local fake provider request", http.StatusBadRequest)
 			return
 		}
+		if strings.Contains(request.Messages[0].Content, "When a host prior_reflection is supplied") {
+			expected := expectedSelectorReflection.Load()
+			var input struct {
+				PriorReflection *multiagent.FreewillReflectionEvidence `json:"prior_reflection"`
+			}
+			inputWorkspace := ""
+			if err := json.Unmarshal([]byte(request.Messages[1].Content), &input); err == nil && input.PriorReflection != nil {
+				inputWorkspace, _ = canonicalFreewillWorkspace(input.PriorReflection.Workspace)
+			}
+			if input.PriorReflection == nil || expected == nil ||
+				input.PriorReflection.Binding != expected.Binding ||
+				input.PriorReflection.OwnerID != expected.OwnerID ||
+				input.PriorReflection.ProjectID != expected.ProjectID ||
+				inputWorkspace != expected.Workspace ||
+				input.PriorReflection.AgentID != expected.AgentID ||
+				input.PriorReflection.TaskID != expected.TaskID ||
+				input.PriorReflection.Alignment != expected.Alignment ||
+				input.PriorReflection.Hypothesis != expected.Hypothesis ||
+				input.PriorReflection.Uncertainty != expected.Uncertainty {
+				providerFailures <- fmt.Sprintf("post-restart selector reflection mismatch: got=%#v want=%#v", input.PriorReflection, expected)
+				http.Error(w, "reflection binding mismatch", http.StatusBadRequest)
+				return
+			}
+			selectorCalls.Add(1)
+			selectorInput <- input.PriorReflection
+			content := e51ReflectionSelectionJSON(expected.Binding.ID)
+			_ = json.NewEncoder(w).Encode(map[string]any{"model": "e59-local-fake", "done": true,
+				"message": map[string]any{"role": "assistant", "content": content}})
+			return
+		}
 		all := request.Messages[0].Content + "\n" + request.Messages[1].Content
 		task := ""
-		for _, childID := range []string{firstChild, secondChild} {
-			if strings.Contains(all, childID) {
-				task = childID
-				break
-			}
+		if strings.Contains(all, firstChild) {
+			task = firstChild
 		}
 		for evidenceID, childID := range evidenceToChild {
 			if task == "" && strings.Contains(all, evidenceID) {
@@ -180,7 +215,7 @@ func TestE59StandaloneServeRecoversAdaptiveTaskReflectionOnceAcrossRestart(t *te
 		output := &bytes.Buffer{}
 		cmd := exec.Command(binaryPath, "serve", "--config", configPath, "--port", fmt.Sprint(port))
 		cmd.Dir, cmd.Stdout, cmd.Stderr = repo, output, output
-		cmd.Env = append(os.Environ(), "TEMP="+root, "TMP="+root, "TMPDIR="+root)
+		cmd.Env = append(os.Environ(), "TEMP="+root, "TMP="+root, "TMPDIR="+root, "PRIZM_FREEWILL_EVENT_DIAGNOSTICS=1")
 		if err := cmd.Start(); err != nil {
 			t.Fatalf("start isolated prizm serve: %v", err)
 		}
@@ -242,22 +277,109 @@ func TestE59StandaloneServeRecoversAdaptiveTaskReflectionOnceAcrossRestart(t *te
 	first := startServe()
 	waitFollowUp(firstChild, first)
 	firstProof := waitForE59PersistedReflectionProof(t, ctx, dataDir, dbPath, ownerID, projectID, workspace, agentID, firstParent, firstChild, reportDigest(firstChild))
+	if firstProof.LatestReflection == nil || firstProof.LatestReflection.Binding.ID == "" ||
+		firstProof.LatestReflection.OwnerID != ownerID || firstProof.LatestReflection.ProjectID != projectID ||
+		firstProof.LatestReflection.Workspace != canonicalWorkspace || firstProof.LatestReflection.AgentID != agentID ||
+		firstProof.LatestReflection.TaskID == "" || firstProof.LatestReflection.Uncertainty == "" {
+		t.Fatalf("first process did not persist a fully scoped uncertain reflection: %#v", firstProof.LatestReflection)
+	}
+	expectedSelectorReflection.Store(firstProof.LatestReflection)
 	stopServe(first)
 	if got := countFor(firstChild); got != (callCounts{appraisal: 1, reflection: 1, followup: 1}) {
 		t.Fatalf("first process provider calls=%+v, want one appraisal/reflection/follow-up", got)
 	}
 
-	// A second terminal record acts as a recovery-completion sentinel for process B.
-	seedE59TerminalReceipt(t, root, dbPath, runsDir, workspace, projectID, agentID, secondParent, secondChild, "second")
+	// Enable the verified E54 cron trigger only for process B, so process A
+	// cannot select before producing the persisted reflection.
+	cfg.Prizm.Scheduler = orchestrator.SchedulerConfig{Enabled: true, Jobs: []orchestrator.SchedulerJobConfig{{
+		Name: "e59-synthetic-freewill-tick", Schedule: "* * * * *", Event: freewillScheduleSubject,
+		Payload: map[string]any{"source": "e59-synthetic-scheduler"}, Enabled: true,
+	}}}
+	cfg.Freewill.Scheduling = orchestrator.FreewillSchedulingConfig{Enabled: true, Schedule: "* * * * *"}
+	configBytes, err = yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, configBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Process B must load the reflection written by process A before the
+	// scheduled selector wake reaches the local fake provider.
 	second := startServe()
-	waitFollowUp(secondChild, second)
-	_ = waitForE59PersistedReflectionProof(t, ctx, dataDir, dbPath, ownerID, projectID, workspace, agentID, secondParent, secondChild, reportDigest(secondChild))
+	if second.cmd.Process.Pid == first.cmd.Process.Pid {
+		t.Fatalf("serve restart reused process id %d", second.cmd.Process.Pid)
+	}
+	if got := countFor(firstChild); got != (callCounts{appraisal: 1, reflection: 1, followup: 1}) {
+		t.Fatalf("process restart repeated reflection generation before selector wake: %+v", got)
+	}
+	assertE59NoApprovalOrEffects(t, ctx, dbPath)
+	wakeCtx, cancelWake := context.WithTimeout(ctx, 70*time.Second)
+	defer cancelWake()
+	select {
+	case got := <-selectorInput:
+		gotWorkspace := ""
+		if got != nil {
+			gotWorkspace, _ = canonicalFreewillWorkspace(got.Workspace)
+		}
+		if got == nil || got.Binding != firstProof.LatestReflection.Binding || got.OwnerID != ownerID || got.ProjectID != projectID || gotWorkspace != canonicalWorkspace || got.AgentID != agentID || got.TaskID != firstProof.LatestReflection.TaskID || got.Uncertainty != firstProof.LatestReflection.Uncertainty {
+			t.Fatalf("post-restart selector input differs from the exact persisted reflection: %#v", got)
+		}
+	case failure := <-providerFailures:
+		t.Fatal(failure)
+	case err := <-second.done:
+		t.Fatalf("serve process exited before selector wake: %v", err)
+	case <-wakeCtx.Done():
+		t.Fatalf("timed out waiting for post-restart selector wake: %v; provider_counts=%+v selector_calls=%d; durable wake snapshot: %s; serve output:\n%s", wakeCtx.Err(), countFor(firstChild), selectorCalls.Load(), e59WakeSnapshot(t, ctx, dbPath), second.output.String())
+	}
+	if got := selectorCalls.Load(); got != 1 {
+		t.Fatalf("post-restart selector calls=%d want exactly 1", got)
+	}
+	var proposed multiagent.DurableRun
+	proposalTicker := time.NewTicker(50 * time.Millisecond)
+	defer proposalTicker.Stop()
+	for proposed.Freewill == nil {
+		store, err := multiagent.OpenExistingSQLiteDurableRunStoreReadOnly(dbPath)
+		if err == nil {
+			runs, listErr := store.ListFreewillRuns(ctx, "", 100)
+			_ = store.Close()
+			if listErr == nil {
+				for _, run := range runs {
+					if run.Freewill != nil && run.Freewill.Trigger == "scheduled_tick" && run.Freewill.Lifecycle == freewill.StateApprovalPending {
+						proposed = run
+						break
+					}
+				}
+			}
+		}
+		if proposed.Freewill != nil {
+			break
+		}
+		select {
+		case failure := <-providerFailures:
+			t.Fatal(failure)
+		case err := <-second.done:
+			t.Fatalf("serve process exited before reflection proposal persisted: %v", err)
+		case <-wakeCtx.Done():
+			t.Fatalf("timed out waiting for E54 cron-triggered reflection proposal: %v; durable wake snapshot: %s; serve output:\n%s", wakeCtx.Err(), e59WakeSnapshot(t, ctx, dbPath), second.output.String())
+		case <-proposalTicker.C:
+		}
+	}
+	var reflectionCandidates int
+	for _, candidate := range proposed.Freewill.Candidates {
+		if candidate.Request.CandidateSource == freewill.SourceReflection {
+			reflectionCandidates++
+			if candidate.Request.ReflectionID != firstProof.LatestReflection.Binding.ID || candidate.Request.ReflectionRevision != firstProof.LatestReflection.Binding.Revision || candidate.Request.ReflectionSource != firstProof.LatestReflection.Binding.Source || candidate.Uncertainty == "" || candidate.CandidateID != proposed.Freewill.ChoiceID || len(candidate.Request.RequestedCapabilities) != 1 || candidate.Request.RequestedCapabilities[0] != "decision_only" {
+				t.Fatalf("durable selected candidate is not bound to the exact uncertain reflection: %#v", candidate)
+			}
+		}
+	}
+	if len(proposed.Freewill.Candidates) != 3 || reflectionCandidates != 1 || proposed.Freewill.Lifecycle != freewill.StateApprovalPending || proposed.Freewill.ApprovalReceipt == nil || proposed.Freewill.ApprovalReceipt.Decision != multiagent.FreewillApprovalPending || !proposed.Freewill.ExecutionDisabled || proposed.Freewill.ExecutionDispatch != nil {
+		t.Fatalf("selector proposal crossed the expected decision-only boundary or lacked one reflection candidate: %#v", proposed.Freewill)
+	}
+	assertE59NoEffectsAfterProposal(t, ctx, dbPath)
 	stopServe(second)
 	if got := countFor(firstChild); got != (callCounts{appraisal: 1, reflection: 1, followup: 1}) {
 		t.Fatalf("restart replay repeated first task provider calls: %+v", got)
-	}
-	if got := countFor(secondChild); got != (callCounts{appraisal: 1, reflection: 1, followup: 1}) {
-		t.Fatalf("second-process recovery provider calls=%+v, want one per bounded stage", got)
 	}
 	secondProof := readE59PersistedReflectionProof(t, ctx, dataDir, dbPath, ownerID, projectID, workspace, agentID, firstParent, firstChild, reportDigest(firstChild))
 	if firstProof.AdaptiveContent != secondProof.AdaptiveContent || firstProof.AdaptiveContentSHA256 != secondProof.AdaptiveContentSHA256 ||
@@ -265,7 +387,6 @@ func TestE59StandaloneServeRecoversAdaptiveTaskReflectionOnceAcrossRestart(t *te
 		firstProof.OutcomeEvent.Payload["report_sha256"] != secondProof.OutcomeEvent.Payload["report_sha256"] {
 		t.Fatalf("persisted first-task adaptive/receipt content changed across restart: before=%#v after=%#v", firstProof, secondProof)
 	}
-	assertE59NoApprovalOrEffects(t, ctx, dbPath)
 }
 
 func seedE59TerminalReceipt(t *testing.T, root, dbPath, runsDir, workspace, projectID, agentID, parentRunID, childRunID, suffix string) {
@@ -355,6 +476,7 @@ type e59PersistedReflectionProof struct {
 	SelfReportEntryID     string
 	BaseReflectionID      string
 	BaseReflectionContent string
+	LatestReflection      *multiagent.FreewillReflectionEvidence
 	Outcome               freewillTaskOutcome
 	OutcomeEvent          event.Event
 }
@@ -471,6 +593,10 @@ func readE59PersistedReflectionProof(t *testing.T, ctx context.Context, dataDir,
 		proof.OutcomeEvent.Payload["report_sha256"] != expectedReportSHA256 || proof.OutcomeEvent.Payload["validation_summary"] != "failed" {
 		t.Fatalf("terminal event does not match seeded receipt and persisted source refs: outcome=%#v event=%#v", proof.Outcome, proof.OutcomeEvent)
 	}
+	proof.LatestReflection, err = reflection.ReadLatestOwnerProjectReflection(ctx, ownerID, projectID, canonicalWorkspace, agentID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return proof
 }
 
@@ -491,4 +617,87 @@ func assertE59NoApprovalOrEffects(t *testing.T, ctx context.Context, dbPath stri
 			t.Fatalf("unexpected approval or effect event %s count=%d", eventType, len(rows))
 		}
 	}
+}
+
+func assertE59NoEffectsAfterProposal(t *testing.T, ctx context.Context, dbPath string) {
+	t.Helper()
+	events, err := event.NewSQLiteEventStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer events.Close()
+	for _, eventType := range []string{event.EventFreewillApprovalDecided, event.EventFreewillExecutionDispatching, event.EventFreewillExecutionDispatched,
+		event.EventMultiAgentToolDiagnostic, event.EventInteractionActionExecuted} {
+		rows, err := events.Query(ctx, event.EventFilter{Type: eventType, Limit: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 0 {
+			t.Fatalf("unexpected approval decision or effect event %s count=%d", eventType, len(rows))
+		}
+	}
+}
+
+func e59WakeSnapshot(t *testing.T, ctx context.Context, dbPath string) string {
+	t.Helper()
+	type wakeSummary struct {
+		RunID               string         `json:"run_id"`
+		Trigger             string         `json:"trigger"`
+		Phase               string         `json:"phase"`
+		RunStatus           string         `json:"run_status"`
+		Lifecycle           freewill.State `json:"lifecycle"`
+		Revision            int64          `json:"revision"`
+		SelectionAttempt    uint64         `json:"selection_attempt"`
+		SelectionFailure    string         `json:"selection_failure_code,omitempty"`
+		SelectionClass      string         `json:"selection_failure_class,omitempty"`
+		CandidateCount      int            `json:"candidate_count"`
+		ChoiceID            string         `json:"choice_id,omitempty"`
+		ExecutionDisabled   bool           `json:"execution_disabled"`
+		ExecutionDispatched bool           `json:"execution_dispatched"`
+		EventCounts         map[string]int `json:"event_counts"`
+	}
+	store, err := multiagent.OpenExistingSQLiteDurableRunStoreReadOnly(dbPath)
+	if err != nil {
+		return fmt.Sprintf("run_store_error=%v", err)
+	}
+	runs, err := store.ListFreewillRuns(ctx, "", 100)
+	_ = store.Close()
+	if err != nil {
+		return fmt.Sprintf("run_list_error=%v", err)
+	}
+	events, err := event.NewSQLiteEventStore(dbPath)
+	if err != nil {
+		return fmt.Sprintf("event_store_error=%v", err)
+	}
+	defer events.Close()
+	types := []string{event.EventFreewillWakeClaimed, event.EventFreewillSelectionStarted,
+		event.EventFreewillSelectionCommitted, event.EventFreewillSelectionRetryScheduled,
+		event.EventFreewillSelectionHalted, event.EventFreewillApprovalProposed}
+	var summaries []wakeSummary
+	for _, run := range runs {
+		if run.Freewill == nil || run.Freewill.Trigger != "scheduled_tick" {
+			continue
+		}
+		summary := wakeSummary{RunID: run.State.RunID, Trigger: run.Freewill.Trigger, Phase: string(run.Phase),
+			RunStatus: string(run.State.Status), Lifecycle: run.Freewill.Lifecycle, Revision: run.Revision,
+			SelectionAttempt: run.Freewill.SelectionAttempt, SelectionFailure: run.Freewill.SelectionFailureCode,
+			SelectionClass: run.Freewill.SelectionFailureClass, CandidateCount: len(run.Freewill.Candidates),
+			ChoiceID: run.Freewill.ChoiceID, ExecutionDisabled: run.Freewill.ExecutionDisabled,
+			ExecutionDispatched: run.Freewill.ExecutionDispatch != nil, EventCounts: map[string]int{}}
+		for _, eventType := range types {
+			rows, queryErr := events.Query(ctx, event.EventFilter{RunID: run.State.RunID, Type: eventType, Limit: 10})
+			if queryErr != nil {
+				return fmt.Sprintf("event_query_error=%v", queryErr)
+			}
+			if len(rows) > 0 {
+				summary.EventCounts[eventType] = len(rows)
+			}
+		}
+		summaries = append(summaries, summary)
+	}
+	encoded, err := json.Marshal(summaries)
+	if err != nil {
+		return fmt.Sprintf("summary_encode_error=%v", err)
+	}
+	return string(encoded)
 }

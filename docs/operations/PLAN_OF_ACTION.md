@@ -1378,3 +1378,45 @@ one pending proposal on one real project after earlier bounded failures; it
 does not establish repeatability, dedupe closure, full FW-P1 acceptance, or
 execution behavior. Keep FW-P1 in progress. No further Cloud call, approval,
 dispatch, apply, staging, or deployment is part of this handoff.
+
+## Current Handoff: FW-P5/TEL-13 E77 generated-reflection continuity (2026-11-24)
+
+**Roadmap IDs:** FW-P5, TEL-13, and FW-10. At integration `be7f4679a345e72644f1790a05a11855c8533055` (the E76 documentation-only update atop code `11511a20a887df6ef19e6d770f3fde10c461deb2`), extended the existing E59 standalone `prizm serve` fixture. Process A consumed a synthetic host-reconciled failed terminal receipt and persisted one adaptive appraisal/reflection/follow-up through the loopback fake provider. After A exited, process B started with the existing E54-style scheduled wake and read the same persisted reflection. The fake selector checked the exact binding ID/revision/source, owner, project, canonical workspace, agent, task, alignment, hypothesis, and uncertainty. The durable proposal contained three candidates; the reflection-linked candidate was selected and retained the exact host binding and `decision_only` capability. A matching synthetic policy required approval; the proposal remained pending with execution disabled and no approval decision, dispatch, tool diagnostic, or action-execution event.
+
+An earlier diagnostic run exposed a fixture expectation error, not a missing wake: run `freewill-6ecc403716cca3cd1aa5be558993f1a3` logged one wake claim, selection start, and selection commit with three candidates, then ended `denied` because this fixture had an empty policy directory. The test was waiting for an approval-pending state. Adding the narrow E54-style `intention.propose` requires-approval policy made the expected pending proposal observable; no runtime code, scope, or execution settings changed.
+
+**Verification:** The focused standalone test passed, then the full `go test ./cmd/prizm-cli -count=1` suite passed (`ok`, 322.597s). After the final decision-only, three-candidate, and no-dispatching assertions, the focused test passed again (`ok`, 40.920s). `gofmt` and `git diff --check` passed. This is synthetic continuity evidence only: the receipt and provider are test fixtures, no OCI child was executed, no real approval or external effect occurred, and one cycle does not prove stable preference or longitudinal learning. Keep FW-P5 and TEL-13 in progress. Next: independent review of the exact local commit; retain these limits and do not make a new provider call as part of this checkpoint.
+
+## Current Handoff: FW-P1/E78 pending-approval restart continuity (2026-11-24)
+
+**Roadmap IDs:** FW-P1 and CTX-01–05. This is a restart-only continuity check
+of E76 run `freewill-2afadab8dd659e7bd441eb7b2698f6db`, using the same owned
+data and original `prizm` host binding. The startup binary was built from
+code commit `11511a20a887df6ef19e6d770f3fde10c461deb2` and has SHA-256
+`49099297D18AE5450380629518C701279BDA7786F12F20F85C7120CA266593DC`. The
+persisted project-context manifest remains pinned to
+`0a188c33cedb33a4edde71d8c0ff0772c851106f`; no project context was reacquired.
+The exact allowlist and objective remain those recorded in E76.
+
+**Observed after restart:** Loopback health and read-only run/status GETs
+returned the existing single run and the same pending approval
+`appr_01M8651XVF0B9XY2ZR1VN4Z0F6`. The durable run stayed at revision 9,
+`approval_pending`, selection attempt 3 and recovery count 2, with execution
+disabled. Its approval/request fingerprint, three candidates, five-source
+manifest, and aggregate usage of 2,294 tokens remained unchanged. The event
+trace stayed at nine events with no new wake, selection, proposal, approval
+decision, grant, dispatch, apply, or tool event. The service was stopped
+after the read-only checks and its listeners were absent afterward.
+
+The host schedule is enabled but annual (`0 0 1 1 *`), the Freewill event-kind
+list is empty, and the schedule was not due during this check. The database
+had no other waking/selecting run eligible for recovery. No historical tick
+was replayed: the normal scheduler callback supplies the current time, so E78
+does not prove real-run dedupe. Existing same-minute dedupe behavior remains
+covered by the synthetic CLI regression. E78 proves only that this one
+real-project pending approval survived a same-config service restart; it does
+not prove a fresh independent wake, repeatability, or full FW-P1 acceptance.
+Keep FW-P1 in progress. The prior E76 dashboard image remains the visual
+record of the proposal before restart; E78 relies on post-restart API and
+durable-state evidence and adds no new screenshot. No new provider call,
+approval, execution, staging, or deployment is part of this handoff.
