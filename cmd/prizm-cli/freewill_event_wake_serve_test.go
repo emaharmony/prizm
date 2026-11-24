@@ -308,27 +308,46 @@ func waitForFreewillRunCount(t *testing.T, ctx context.Context, runtime *freewil
 
 func assertFreewillRunHasNoAuthorityEvents(t *testing.T, ctx context.Context, runtime *freewillServeRuntime, runID string) {
 	t.Helper()
-	stored, err := runtime.events.Query(ctx, event.EventFilter{RunID: runID, Limit: 100})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wakeClaims, selectionStarts, selectionCommits := 0, 0, 0
-	for _, evt := range stored {
-		lower := strings.ToLower(evt.Type)
-		if strings.Contains(lower, "approval") || strings.Contains(lower, "dispatch") || strings.Contains(lower, "tool.") ||
-			strings.Contains(lower, "execution") || strings.Contains(lower, "action") || strings.Contains(lower, "apply") {
-			t.Fatalf("decision-only wake emitted forbidden authority/tool event %q", evt.Type)
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		stored, err := runtime.events.Query(ctx, event.EventFilter{RunID: runID, Limit: 100})
+		if err != nil {
+			t.Fatal(err)
 		}
-		switch evt.Type {
-		case event.EventFreewillWakeClaimed:
-			wakeClaims++
-		case event.EventFreewillSelectionStarted:
-			selectionStarts++
-		case event.EventFreewillSelectionCommitted:
-			selectionCommits++
+		wakeClaims, selectionStarts, selectionCommits := 0, 0, 0
+		for _, evt := range stored {
+			lower := strings.ToLower(evt.Type)
+			if strings.Contains(lower, "approval") || strings.Contains(lower, "dispatch") || strings.Contains(lower, "tool.") ||
+				strings.Contains(lower, "execution") || strings.Contains(lower, "action") || strings.Contains(lower, "apply") {
+				t.Fatalf("decision-only wake emitted forbidden authority/tool event %q", evt.Type)
+			}
+			switch evt.Type {
+			case event.EventFreewillWakeClaimed:
+				wakeClaims++
+			case event.EventFreewillSelectionStarted:
+				selectionStarts++
+			case event.EventFreewillSelectionCommitted:
+				selectionCommits++
+			}
 		}
-	}
-	if wakeClaims != 1 || selectionStarts != 1 || selectionCommits != 1 {
-		t.Fatalf("decision-only wake has incomplete or duplicate persisted trace: wake_claimed=%d selection_started=%d selection_committed=%d", wakeClaims, selectionStarts, selectionCommits)
+		if wakeClaims > 1 || selectionStarts > 1 || selectionCommits > 1 {
+			t.Fatalf("decision-only wake has duplicate persisted trace: wake_claimed=%d selection_started=%d selection_committed=%d", wakeClaims, selectionStarts, selectionCommits)
+		}
+		if selectionCommits == 1 {
+			if wakeClaims != 1 || selectionStarts != 1 {
+				t.Fatalf("decision-only wake has incomplete persisted trace: wake_claimed=%d selection_started=%d selection_committed=%d", wakeClaims, selectionStarts, selectionCommits)
+			}
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("decision-only wake trace query canceled before selection commit: %v", ctx.Err())
+		case <-deadline.C:
+			t.Fatalf("decision-only wake did not publish selection commit within 5s: wake_claimed=%d selection_started=%d selection_committed=%d", wakeClaims, selectionStarts, selectionCommits)
+		case <-ticker.C:
+		}
 	}
 }
