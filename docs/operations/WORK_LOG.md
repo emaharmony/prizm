@@ -3632,3 +3632,99 @@ E76 is one bounded pending proposal after earlier real-Prizm failures. It does
 not establish repeatability, dedupe closure, full FW-P1 acceptance, or
 execution behavior. FW-P1 remains in progress; the proposal was not approved,
 and no dispatch, apply, staging, or deployment occurred.
+
+## 2026-11-24 — FW-P5/TEL-13 E77 generated-reflection continuity across standalone serve processes
+
+**Roadmap IDs:** FW-P5, TEL-13, and FW-10. Starting from integration
+`be7f4679a345e72644f1790a05a11855c8533055` (whose only change beyond code
+baseline `11511a20a887df6ef19e6d770f3fde10c461deb2` is the E76 documentation
+update), extended the existing E59 test in
+`cmd/prizm-cli/freewill_task_reflection_restart_serve_test.go`. It runs two
+distinct OS processes of the actual `prizm serve` binary with temporary
+SQLite/run/workspace state and a loopback fake provider. Process A receives a
+synthetic host-reconciled failed terminal receipt and produces one appraisal,
+adaptive reflection, and bounded follow-up. The test verifies the persisted
+reflection has a nonempty binding, owner/project/canonical-workspace/agent
+scope, task identity, hypothesis, and uncertainty.
+
+After A exits, process B starts with the same durable state and exact scope.
+The existing E54-style cron scheduler emits one bounded scheduled wake. The
+fake selector validates the full persisted reflection binding and evidence
+fields supplied after restart. Its three-candidate response cites that exact
+reflection ID; the durable selected candidate retains its exact ID/revision/
+source, nonempty uncertainty, and only the `decision_only` capability. A
+synthetic `intention.propose` policy requiring owner review leaves the proposal
+pending. Execution is disabled; the approval receipt remains pending, no approval
+decision/grant or dispatch is recorded, and no tool-diagnostic or action
+execution event appears.
+
+The first diagnostic attempt found a test-fixture policy omission. Run
+`freewill-6ecc403716cca3cd1aa5be558993f1a3` had one `wake.claimed`, one
+`selection.started`, one `selection.committed`, and three candidates, but its
+lifecycle was `denied` because the isolated policy directory was empty. The
+test had expected approval-pending. Adding the narrow E54-style
+requires-approval policy fixed the expectation without changing runtime code,
+scope, or execution settings. Earlier event-trigger/direct scheduler-subject
+variants were discarded; the committed fixture uses the existing E54 cron
+path only.
+
+**Verification:** The focused standalone test passed (`go test ./cmd/prizm-cli
+-run '^TestE59StandaloneServeRecoversAdaptiveTaskReflectionOnceAcrossRestart$'
+-count=1`, 12.006s). The full CLI package passed (`go test ./cmd/prizm-cli
+-count=1`, 322.597s). After adding the exact decision-only capability and
+no-dispatching and exact three-candidate assertions, the focused test passed
+again (40.920s). `gofmt` and `git diff --check` passed. This remains synthetic evidence: the terminal
+receipt and provider are test fixtures; no OCI child, real approval, governed
+action, or external effect occurred. It demonstrates one persisted adaptive
+reflection reaching a later selection across a standalone service restart;
+it does not establish stable preferences or longitudinal learning. FW-P5 and
+TEL-13 remain in progress. The next step is independent review of the exact
+local commit; no provider call, staging, or deployment is part of this work.
+
+## 2026-11-24 — FW-P1/E78 pending-approval restart continuity
+
+**Roadmap IDs:** FW-P1 and CTX-01–05. Using the unchanged E76 config and
+owned state, started the E76 CLI binary built from code commit
+`11511a20a887df6ef19e6d770f3fde10c461deb2` (SHA-256
+`49099297D18AE5450380629518C701279BDA7786F12F20F85C7120CA266593DC`). The
+host configuration remained bound to project `prizm` and the same original
+repository root, with the same three public tracked Markdown sections and
+approval-required proposal policy; execution remained disabled. The persisted
+context manifest was still pinned to
+`0a188c33cedb33a4edde71d8c0ff0772c851106f`. This check did not read or
+reacquire project context, issue a wake, or contact the selector.
+
+Before startup, the owned database contained one Freewill run and no
+`waking`/`selecting` records eligible for recovery. The existing run
+`freewill-2afadab8dd659e7bd441eb7b2698f6db` was revision 9,
+`approval_pending`, attempt 3/recovery count 2, with pending approval
+`appr_01M8651XVF0B9XY2ZR1VN4Z0F6`, three candidates, and five manifest sources
+(two host sources and the three project sources). Aggregate usage was 2,294
+tokens (1,802 prompt; 492 completion). The config's annual schedule was
+`0 0 1 1 *` and its Freewill event-kind list was empty, so no scheduled tick
+was due during this short check.
+
+After startup, loopback health and read-only run-list/status requests succeeded.
+They returned the same single run, approval ID and pending status, approval
+fingerprint `ff164654d61677ac28bf65a577850e2ca409e405208071c91dcf275fdcd5d435`,
+execution-disabled state, and aggregate usage. After stopping the owned
+process, the SQLite record remained revision 9 with the same lifecycle,
+attempt, recovery count, approval reference/fingerprint, candidate count, and
+manifest. The durable event trace remained nine events with the same counts:
+one run-created, three wake-claimed, one selection-started, two retry-scheduled,
+one selection-committed, and one approval-proposed. No approval decision,
+grant, dispatch, apply, or tool event was added. The service exited and its
+loopback listeners were absent afterward.
+
+No historical tick replay was attempted. The production scheduler callback
+uses the current time, so this is not a real-run duplicate-wake test. Existing
+synthetic coverage in
+`TestServedFreewillPendingApprovalSuppressesWakesAndGrantReleasesAdmission`
+replays a same-minute tick and verifies the run, provider-call count, and
+outbox do not change. E78 establishes one pending real-project proposal
+survived a same-config process restart; it does not establish an independent
+new wake, real-run dedupe, repeatable semantic acceptance, or full FW-P1
+completion. The proposal was not approved; no new provider request or
+execution occurred. The earlier E76 screenshot remains the visual record of
+the pending proposal before this restart: see
+`../evidence/freewill/e76-real-prizm-pending-proposal.png`.
