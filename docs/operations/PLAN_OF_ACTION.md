@@ -1206,3 +1206,71 @@ remained disabled. No screenshot was captured because there was no pending
 proposal. Do not mark FW-P1 or real-project grounding complete. Next: independent
 review of the scoped diagnostic change and its exact-head checks; keep any
 further Cloud run bounded and separately authorized. No staging or deployment.
+
+## Current Handoff: FW-P1 authority-phrase boundary follow-up (2026-11-24)
+
+**Roadmap IDs:** FW-P1 / FW-002–004 and CTX-01–05. The isolated
+`codex/freewill-authority-phrase-fix` worktree starts from exact integration
+merge `8d54bdf71482c49d0650d4f085aa411e2fc3ee3e` (tree
+`e08813e81aa917e4625d12029eb83ca5a30ab741`). The change replaces the bare
+`tool` substring denial with bounded patterns for explicit tool-use, access,
+call, dispatch, or authority phrasing. Action verbs may have up to three
+intervening words before the tool term; normal sentence punctuation and em/en
+dash after the term are accepted, while the benign hyphenated `tool-free`
+modifier remains distinguishable. Existing unrelated authority checks and
+host-owned candidate identity, scope, `decision_only` capability, and project
+action binding are unchanged.
+
+The source predicate makes “No tool side effects” a deterministic false
+positive in otherwise-valid proposal text. E71 retained no raw model response;
+this follow-up does not claim that the phrase caused any earlier provider
+rejection or establishes real-project grounding. No package boundary changed.
+
+**Validation:** Focused parser/selector regressions and the full
+`go test ./internal/workflow/multiagent -count=1` passed. The CLI test package
+compiled with `go test ./cmd/prizm-cli -run '^$' -count=1`; `gofmt` and
+`git diff --check` passed. The selector regression accepts the benign phrase
+through host binding and asserts the bound `decision_only` capability; explicit
+“use a tool”, “request tool access”, “invoke tools”, “tool call”, and existing
+shell/authorization controls remain rejected.
+
+**Remaining gates / next action:** Independent review and a separately
+coordinated bounded public-project probe remain. E71 provider output is not
+persisted, and real-project proposal grounding is unproven. No Cloud call,
+approval, dispatch, apply, staging, or deployment occurred in this follow-up.
+
+## Current Handoff: E72 public-Prizm single-wake result; proposal grounding remains unproven (2026-11-24)
+
+**Roadmap IDs:** FW-P1 and CTX-01–05. Candidate matcher commit is
+`c99227c13ca8e200191a3545d49ffc5d16c1fa2b`, based on integration
+`8d54bdf71482c49d0650d4f085aa411e2fc3ee3e`. A local binary from that commit
+was used for one fresh isolated serve; no further provider run is part of this
+acceptance slice.
+
+The exact context allowlist projected 1,258 UTF-8 bytes: `README.md` section
+`## Why Prizm Exists` (491 bytes) and
+`docs/architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md` section
+`### FW-P1 — Read-only Decision Loop (first demonstrable Freewill)` (767
+bytes). Remote context was bound to project `prizm` and that repository; no
+other files, local/private context, or project actions were included. The
+model was `glm-5.3-flash:cloud`; proposal policy required owner approval,
+execution was disabled, and the selector had no tools.
+
+Run `freewill-8b3c5c3da53a77161bc002588aa856bd` recorded the four events
+`run.created`, `wake.claimed`, `selection.started`, `selection.committed`.
+It produced three decision-only alternatives with uncertainty and source refs
+limited to the allowlist, then committed `outcome=sleep`, lifecycle
+`sleeping`, `attempt=1`, and `recovery_count=0`. The alternatives included
+checks matching explicit FW-P1 criteria for zero tool side effects and
+dedupe-keyed wake handling. Aggregate usage was 1,449 tokens. The run API had
+no selected candidate ID or pending proposal; the durable event had a sleep
+reason but no parser diagnostic. The persisted source manifest contains file
+revisions and excerpt digests, not a repository commit field; the project HEAD
+and serving build were verified locally as `c99227c...` before the wake.
+
+No approval, dispatch, apply, tool, or policy side effect occurred. The
+isolated service was stopped after the terminal event. No screenshot was
+captured because no proposal was pending. Treat this as one bounded, source-
+cited model no-op, not successful proposal grounding or visual acceptance.
+FW-P1 remains in progress; no further Cloud call, staging, or deployment is
+authorized by this result.

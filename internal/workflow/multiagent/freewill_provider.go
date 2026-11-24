@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"math/big"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1556,12 +1557,23 @@ func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, e
 
 func freewillIdeaContainsForbiddenAuthority(text string) bool {
 	lower := strings.ToLower(text)
-	for _, word := range []string{"execute", "shell", "command", "tool", "network", "http", "secret", "credential", "password", "token", "write file", "delete", "install", "ignore policy", "bypass policy", "override policy", "approve this action", "run shell", "authorize deployment", "authorize this action", "grant authorization", "grant permission", "grant access", "approve deployment"} {
+	for _, pattern := range freewillToolAuthorityPatterns {
+		if pattern.MatchString(lower) {
+			return true
+		}
+	}
+	for _, word := range []string{"execute", "shell", "command", "network", "http", "secret", "credential", "password", "token", "write file", "delete", "install", "ignore policy", "bypass policy", "override policy", "approve this action", "run shell", "authorize deployment", "authorize this action", "grant authorization", "grant permission", "grant access", "approve deployment"} {
 		if strings.Contains(lower, word) {
 			return true
 		}
 	}
 	return false
+}
+
+var freewillToolAuthorityPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`\b(?:use|uses|using|used|call|calls|calling|called|invoke|invokes|invoking|invoked|dispatch|dispatches|dispatching|dispatched|request|requests|requesting|requested|enable|enables|enabling|enabled|grant|grants|granting|granted|authorize|authorizes|authorizing|authorized)\b(?:\s+[\p{L}\p{N}_]+){0,3}\s+tools?(?:$|[\s.,;:!?)}\]"'—–])`),
+	regexp.MustCompile(`\btools?[-\s]+(?:access|permission|permissions|capability|capabilities|authority|call|calls|invocation|invocations|dispatch|execution|use)\b`),
+	regexp.MustCompile(`\b(?:access|permission|permissions|capability|capabilities|authority)\s+to\s+tools?(?:$|[\s.,;:!?)}\]"'])`),
 }
 
 var freewillScoreFactorSet = map[string]struct{}{"scope_fit": {}, "feasibility": {}, "impact": {}, "novelty": {}, "readiness": {}}

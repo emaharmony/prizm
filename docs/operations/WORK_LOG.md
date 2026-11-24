@@ -3363,3 +3363,117 @@ tests passed after the recovery wording update. `go test ./cmd/prizm-cli -run
 real-project grounded proposal remains unproven, and FW-P1 stays in progress.
 Request independent review of the exact local commits before any publication;
 no staging or deployment occurred.
+
+## 2026-11-24 — FW-P1/E71 host phrase-boundary regression
+
+**Roadmap IDs:** FW-P1 / FW-002–004 and CTX-01–05. The isolated branch
+`codex/freewill-authority-phrase-fix` is based on exact integration merge
+`8d54bdf71482c49d0650d4f085aa411e2fc3ee3e`, tree
+`e08813e81aa917e4625d12029eb83ca5a30ab741`. A static review found the generic
+case-insensitive substring `tool` rejected the harmless text “No tool side
+effects.” The filter now detects explicit tool-use and tool-authority phrases
+at word boundaries. All other existing phrase checks and host-side identity,
+scope, decision-only capability, and action binding remain unchanged.
+
+**Regression and evidence:** The full fake-provider selector path accepts a
+candidate title and rationale containing “no tool side effects” and continues
+to assert host-bound scope and `decision_only`. Parser rejection cases cover
+“use a tool”, “request tool access”, “invoke tools”, and “tool call”, alongside
+existing execute-shell, authorize-deployment, and grant-authorization cases.
+No raw model text was retained from E71, so this records a host-side false
+positive and does not attribute the earlier live rejections to that phrase.
+
+**Verification:** Focused `TestFreewillFlashSelectorUsesModelScoresAndBindsHostFields`
+and `TestFreewillFlashScoredIdeasRejectMissingOrInvalidEvidence` passed;
+`go test ./internal/workflow/multiagent -count=1` passed; the CLI package
+compiled with `go test ./cmd/prizm-cli -run '^$' -count=1`; `gofmt` and
+`git diff --check` passed. No provider call, approval, dispatch, apply,
+staging, or deployment occurred. FW-P1 real-project grounding remains
+unproven; independent review is the next gate.
+
+## 2026-11-24 — FW-P1/E71 phrase-matcher review refinement
+
+**Roadmap IDs:** FW-P1 / FW-002–004 and CTX-01–05. Follow-up to the local
+host phrase-boundary fix based on exact integration merge
+`8d54bdf71482c49d0650d4f085aa411e2fc3ee3e`. Independent review identified
+valid explicit-use forms the first bounded matcher missed. The action-verb
+pattern now permits up to three intervening words before `tool`/`tools` and
+accepts ordinary sentence punctuation, including an em/en dash, after the term.
+It still requires the action verb and tool phrase at word boundaries; bare
+`tool` remains allowed, including the benign `tool-free` control. Tool access,
+invoke/call/dispatch/authority patterns and other original authority checks
+remain blocked. Host identity, scope, decision-only capability, and project
+action binding are unchanged.
+
+**Verification:** Regressions cover “No tool side effects” in title and
+rationale through the full fake-provider selector and host binding; “Use the
+configured tool”, “Use a powerful tool”, plural tools, em-dash punctuation,
+tool access (space and hyphen), “invoke tools”, and “tool call” remain rejected;
+“Use a tool-free review” is accepted. Existing execute-shell, authorize-
+deployment, and grant-authorization cases remain rejected. Focused parser and
+selector tests passed; `go test ./internal/workflow/multiagent -count=1` passed
+(85.883s); CLI package compile via `go test ./cmd/prizm-cli -run '^$' -count=1`
+passed; `gofmt` and `git diff --check` passed.
+
+No raw E71 model response was retained, so this does not attribute the prior
+live rejection to the phrase or establish real-project grounding. No provider
+call, approval, dispatch, apply, staging, or deployment occurred; independent
+review remains the next gate.
+
+## 2026-11-24 — FW-P1/E72 public-Prizm single-wake no-op
+
+**Roadmap IDs:** FW-P1 and CTX-01–05. Candidate matcher commit
+`c99227c13ca8e200191a3545d49ffc5d16c1fa2b` is based on integration
+`8d54bdf71482c49d0650d4f085aa411e2fc3ee3e`. The isolated serving binary was
+built from that commit; SHA-256
+`9ABAE99ABC5B418B8365DEC77F326902705703C282A9EAC5CFE81928A9A3FEBB`.
+
+**Expected:** One bounded wake would either produce a cited, reviewable FW-P1
+proposal held for owner approval, or take the documented sleep path if the
+allowlisted sources did not justify a next check. Execution and tools would
+remain disabled. The objective was: “Identify a small, evidence-backed and
+reviewable next check for Prizm Freewill's FW-P1 acceptance criteria, if the
+cited docs justify one. Propose only when there is enough evidence; otherwise
+sleep.” No approval or project mutation was authorized.
+
+**Scope:** Project `prizm` was bound to the isolated Prizm source worktree at
+the verified HEAD above. The only Cloud-projected Markdown was `README.md` at
+`## Why Prizm Exists` and
+`docs/architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md` at
+`### FW-P1 — Read-only Decision Loop (first demonstrable Freewill)`: 491 and
+767 UTF-8 bytes respectively, 1,258 total. The source IDs were `project:readme`
+and `project:file:docs/architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md`; full
+blob revisions were respectively
+`0857adef744eec149daabc141ce2cfbd65b67ee98c9e7bcd3f2e9d9855f9e44a` and
+`17a746336c0a68f3a4108a0c324ab4657784560f7a0d73a2bab8926032c7497d`; excerpt
+digests were respectively
+`8e01bec0e986ec58657474166035cf9389a90de834bbcbfc59bfd70f673db2c9` and
+`321ea4290a6008af9efa9431f2594171be2e55570b5ea38c5c631ec3bff9fe73`. The
+run manifest bound the exact project and objective and recorded
+`project_context_egress_allowed=true`. No other files or local/private context
+were projected. Model was `glm-5.3-flash:cloud`; `intention.propose` required
+owner approval, execution was disabled, and no selector tools were registered.
+
+**Observed:** One schedule message triggered run
+`freewill-8b3c5c3da53a77161bc002588aa856bd`. Its persisted trace is
+`run.created` → `wake.claimed` → `selection.started` → `selection.committed`.
+The completed selection had three alternatives, all `decision_only`, all with
+uncertainty, and basis refs limited to the two configured IDs. Their themes
+included a read-only check for the explicit no-tool-side-effects criterion and
+a check for dedupe-keyed wake handling. The run committed `outcome=sleep`,
+lifecycle `sleeping`, `attempt=1`, and `recovery_count=0`, with 1,449 aggregate
+prompt/completion tokens. A sleep reason was persisted; no candidate choice ID
+or parser diagnostic was recorded. The run API did not expose a pending
+proposal. This supports a completed no-op but does not establish proposal-level
+semantic acceptance. The manifest records full-file revisions and excerpt
+digests, but no repository commit field; HEAD was independently verified before
+the wake.
+
+No correction wake was sent. No approval proposal, grant, dispatch, apply,
+tool, or other policy side effect occurred. Execution stayed disabled. The
+service was stopped after the terminal event; its loopback and embedded-bus
+listeners were absent afterward. No screenshot was captured because no
+proposal was pending. No raw provider response was retained, and the run's
+candidate content is not reproduced here. E72 is one reduced-scope real-Prizm
+no-op, not proof of a real project-grounded proposal. FW-P1 remains in progress;
+no staging or deployment occurred.
