@@ -1420,3 +1420,40 @@ Keep FW-P1 in progress. The prior E76 dashboard image remains the visual
 record of the proposal before restart; E78 relies on post-restart API and
 durable-state evidence and adds no new screenshot. No new provider call,
 approval, execution, staging, or deployment is part of this handoff.
+
+## Current Handoff: OPS-04/E79 served pending-revision continuity (2026-11-24)
+
+**Roadmap IDs:** OPS-04, P3, and P6. The reviewed E79 code tree is
+`7145df74ace171ab7a49315aaabb73cc1449e1eb`, restacked on merged integration
+`b0102cd30cdb71627052d1c72fb0752424ace7dc`. E79 extends the E35 standalone
+serve harness with reusable test-only process start/stop helpers, preserving
+its repository working directory, and adds an actual loopback HTTP
+process-boundary check.
+
+The test creates a valid synthetic approved parent and accepted child using
+the existing E28 fixture setup. The child is paused at its separate pending
+patch approval. The durable parent record is loaded by standalone `prizm
+serve`; owner-authenticated HTTP creates a promise revision proposal, while
+the effective promise remains at revision 1 and the proposal remains pending.
+After stopping process A and starting process B with the same temporary state,
+the API response is unchanged. Both served checkpoints verify the existing
+parent approval receipt/reference/fingerprint, approved request, lifecycle,
+accepted child ID/status binding, paused child, pending patch approval, and
+unchanged source fixture. No approval decision, dispatch, tool diagnostic, or
+action execution event is emitted by the served scenario.
+
+This is synthetic evidence. The prior grant and child dispatch are created
+only in the E28 fixture; the served scenario does not grant the promise
+proposal or child patch approval. The child runtime remains in the test
+process, so E79 does not prove child-runtime restart or post-restart resume.
+No patch is applied, no OCI or external provider is used, and no real project
+or external service is changed. OPS-04 remains partial; P3/P6, B1, and broader
+R1/G1 acceptance remain open. Do not infer safe continuation for other
+workflows from this one fixture.
+
+**Verification:** After the final helper correction, the E79 focused test
+passed (8.90s). The affected E35 served API test passed (7.17s), and the E28
+same-process governed-child continuation passed (19.00s). `gofmt` and
+`git diff --check` passed. Next:
+independent review of the exact restacked E79 code and documentation. No
+publish, approval, deployment, or provider call is part of this handoff.

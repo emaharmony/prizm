@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -26,6 +27,58 @@ import (
 )
 
 const e27SyntheticToken = "e27-local-synthetic-bearer"
+
+type e27ServeProcess struct {
+	cmd    *exec.Cmd
+	done   chan error
+	output *bytes.Buffer
+}
+
+func e27StartServe(t *testing.T, ctx context.Context, binaryPath, configPath, workingDir, tempDir string, port int, base string, processes *[]e27ServeProcess) e27ServeProcess {
+	t.Helper()
+	cmd := exec.Command(binaryPath, "serve", "--config", configPath, "--port", strconv.Itoa(port))
+	cmd.Dir = workingDir
+	cmd.Env = append(os.Environ(), "TEMP="+tempDir, "TMP="+tempDir, "TMPDIR="+tempDir)
+	output := &bytes.Buffer{}
+	cmd.Stdout, cmd.Stderr = output, output
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start standalone prizm serve: %v", err)
+	}
+	p := e27ServeProcess{cmd: cmd, done: make(chan error, 1), output: output}
+	*processes = append(*processes, p)
+	go func() { p.done <- cmd.Wait() }()
+	if !e27WaitHealth(ctx, base, p.done) {
+		t.Fatalf("serve did not become healthy; process pid %d; output: %s", cmd.Process.Pid, strings.TrimSpace(output.String()))
+	}
+	return p
+}
+
+func e27StopServe(t *testing.T, p e27ServeProcess) {
+	t.Helper()
+	if p.cmd.ProcessState != nil {
+		return
+	}
+	_ = p.cmd.Process.Kill()
+	select {
+	case <-p.done:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("serve process %d did not exit", p.cmd.Process.Pid)
+	}
+}
+
+func e27CleanupServeProcesses(t *testing.T, processes []e27ServeProcess) {
+	t.Helper()
+	for _, p := range processes {
+		if p.cmd.ProcessState == nil {
+			_ = p.cmd.Process.Kill()
+			select {
+			case <-p.done:
+			case <-time.After(10 * time.Second):
+				t.Errorf("cleanup failed waiting for serve")
+			}
+		}
+	}
+}
 
 func TestE35StandaloneServedPromisePrincipalBinding(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -103,48 +156,13 @@ func TestE35StandaloneServedPromisePrincipalBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := fmt.Sprintf("http://127.0.0.1:%d", port+1)
-	type process struct {
-		cmd  *exec.Cmd
-		done chan error
+	var processes []e27ServeProcess
+	start := func() e27ServeProcess {
+		return e27StartServe(t, ctx, binaryPath, configPath, root, work, port, base, &processes)
 	}
-	var processes []process
-	start := func() process {
-		cmd := exec.Command(binaryPath, "serve", "--config", configPath, "--port", strconv.Itoa(port))
-		cmd.Dir = root
-		cmd.Env = append(os.Environ(), "TEMP="+work, "TMP="+work, "TMPDIR="+work)
-		if err := cmd.Start(); err != nil {
-			t.Fatalf("start standalone prizm serve: %v", err)
-		}
-		p := process{cmd: cmd, done: make(chan error, 1)}
-		processes = append(processes, p)
-		go func() { p.done <- cmd.Wait() }()
-		if !e27WaitHealth(ctx, base, p.done) {
-			t.Fatalf("serve did not become healthy; process pid %d", cmd.Process.Pid)
-		}
-		return p
-	}
-	stop := func(p process) {
-		if p.cmd.ProcessState != nil {
-			return
-		}
-		_ = p.cmd.Process.Kill()
-		select {
-		case <-p.done:
-		case <-time.After(10 * time.Second):
-			t.Fatalf("serve process %d did not exit", p.cmd.Process.Pid)
-		}
-	}
+	stop := func(p e27ServeProcess) { e27StopServe(t, p) }
 	t.Cleanup(func() {
-		for _, p := range processes {
-			if p.cmd.ProcessState == nil {
-				_ = p.cmd.Process.Kill()
-				select {
-				case <-p.done:
-				case <-time.After(10 * time.Second):
-					t.Errorf("cleanup failed waiting for serve")
-				}
-			}
-		}
+		e27CleanupServeProcesses(t, processes)
 	})
 	queryValues := url.Values{"owner_id": {"synthetic-owner"}, "project_id": {"e27-project"}, "workspace": {workspace}, "agent_id": {"e27-selector"}}
 	query := queryValues.Encode()

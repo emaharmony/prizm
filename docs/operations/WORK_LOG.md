@@ -3728,3 +3728,45 @@ completion. The proposal was not approved; no new provider request or
 execution occurred. The earlier E76 screenshot remains the visual record of
 the pending proposal before this restart: see
 `../evidence/freewill/e76-real-prizm-pending-proposal.png`.
+
+## 2026-11-24 — OPS-04/E79 served pending-promise continuity
+
+**Roadmap IDs:** OPS-04, P3, and P6. The reviewed E79 test code tree is
+`7145df74ace171ab7a49315aaabb73cc1449e1eb`, restacked on merged integration
+`b0102cd30cdb71627052d1c72fb0752424ace7dc`. It extracts the E35 served
+process start/stop helper, preserving the repository working directory, and adds
+`TestE79ServedPendingPromiseRevisionPreservesApprovedChildAcrossRestart`.
+
+The test creates a bounded synthetic Git workspace and uses the existing E28
+fixture flow to create a valid approved parent, one accepted child, and one
+separate pending child patch approval. The child is paused before any patch is
+applied. Its durable parent run record is made available to the actual
+standalone `prizm serve` binary. Process A serves the promise owner API; an
+authenticated HTTP proposal remains pending while current promise revision 1
+is unchanged. After A is stopped, process B starts from the same temporary
+state and returns the exact same pending promise response.
+
+Before/after assertions preserve the parent approval receipt, reference,
+fingerprint, candidate request, lifecycle, accepted child dispatch and child
+ID. The synthetic child remains paused and its separate patch approval remains
+pending; the source fixture stays `base`. The served scenario records no
+approval decision, dispatching/dispatched, tool diagnostic, or action
+execution event. The E28 grant/dispatch exist only as synthetic fixture setup;
+the served processes never grant the promise proposal or the child patch
+approval. The child runtime itself remains open in the test process, so child
+restart/resume behavior is not tested.
+
+**Verification:** E79 passed with
+`go test ./cmd/prizm-cli -run '^TestE79ServedPendingPromiseRevisionPreservesApprovedChildAcrossRestart$' -count=1 -v`
+(`PASS`, 8.90s) after the helper's working-directory preservation correction.
+`TestE35StandaloneServedPromisePrincipalBinding` passed (7.17s) and
+`TestE28PendingPromiseRevisionPreservesAuthorizedGovernedWork` passed
+(19.00s). `gofmt` and `git diff --check` passed. The test used temporary local
+state, loopback HTTP and embedded NATS; no OCI, external provider, real
+approval, patch application, or external write occurred. This demonstrates
+only served promise-pending continuity plus preservation of this synthetic
+prior authorization identity. It does not prove child-runtime restart,
+post-restart continuation, broader OPS-04 acceptance, or FW-P3/P6 completion.
+Those roadmap rows remain in progress. Next, obtain independent review of
+the exact restacked E79 code/docs; no publish or provider call is authorized
+by this checkpoint.
