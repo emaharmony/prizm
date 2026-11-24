@@ -1294,3 +1294,34 @@ evidence that the possible external mutation did not occur. The checkpoint
 proves durable quarantine and no blind replay while evidence is ambiguous.
 CORE-04 remains in progress; broaden only to a distinct bounded recovery gap,
 preserving host evidence requirements and real-provider gates.
+
+## Current Handoff: FW-P1/E74 current public-Prizm provider failure (2026-11-24)
+
+**Roadmap IDs:** FW-P1 and CORE-04; the real project-grounded proposal gate
+remains open. At integration base `645e0f4bf076a0e8c5dd46ebe575e86b47b79e91`,
+the bounded public-Prizm context comprised three exact tracked Markdown
+sections (5,182 projected bytes) from the README, FW-P1 roadmap, and phase
+inventory. A neutral objective asked for a small next step to verify an open
+acceptance gap using cited evidence, with sleep allowed when unsupported. The
+isolated serve used `glm-5.3-flash:cloud`, approval-required proposal policy,
+execution disabled, and no registered tools.
+
+**Observed result:** One scheduled wake created run
+`freewill-2afadab8dd659e7bd441eb7b2698f6db`. The initial selection and one
+same-state `RecoverPending` startup recovery call both ended in
+`invalid_scored_ideas_idea_shape`; privacy-safe metadata recorded three idea
+markers, zero parsed blocks, invalid JSON, and `parser_subreason=unspecified`
+for each. The run remained `selecting` after attempt 2 with schema-correction
+failure and no selected candidate. No candidate-level source citations or
+proposal were persisted. No approval, dispatch, apply, or tool effect occurred;
+no screenshot exists because there was no proposal. Both owned service
+processes and listeners were stopped. No additional provider call is
+authorized by this checkpoint.
+
+The accompanying bounded diagnostic only partitions existing idea-shape
+rejections into content-free enum categories; it does not change validation,
+normalize provider text, or establish which specific predicate caused this
+run's failures. Focused and full multiagent package tests passed, as did
+`gofmt` and `git diff --check`. Keep FW-P1 in progress. Next, independently
+review the diagnostic change and pursue a separately bounded acceptance only
+after an evidence-based fix is established.

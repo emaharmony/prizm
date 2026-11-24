@@ -548,8 +548,8 @@ func parseFreewillFlashIdeasJSON(content string) ([]freewillScoredIdea, bool, er
 	for _, idea := range candidates {
 		idea.Idea = normalizeFreewillIdeaWhitespace(idea.Idea)
 		idea.Rationale = strings.TrimSpace(idea.Rationale)
-		if !validFreewillIdeaLength(idea.Idea) || strings.ContainsAny(idea.Idea, "{}[]\\") || strings.Contains(idea.Idea, "://") || strings.Contains(idea.Idea, "..") {
-			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureShape, len(seenIdeas))
+		if subreason := freewillIdeaShapeSubreason(idea.Idea); subreason != freewillIdeaSubreasonUnspecified {
+			return nil, false, freewillScoredIdeaFailureWithSubreason(freewillIdeaFailureShape, len(seenIdeas), subreason)
 		}
 		if freewillIdeaContainsForbiddenAuthority(idea.Idea) {
 			return nil, false, freewillScoredIdeaFailureWithSubreason(freewillIdeaFailureUnsafe, len(seenIdeas), freewillIdeaSubreasonCandidateAuthority)
@@ -664,6 +664,24 @@ func normalizeFreewillIdeaWhitespace(value string) string {
 
 func validFreewillIdeaLength(value string) bool {
 	return len(value) > 0 && len(value) <= 160 && utf8.RuneCountInString(value) <= 160
+}
+
+// freewillIdeaShapeSubreason distinguishes bounded, content-free rejection
+// categories while preserving the same fail-closed shape predicate.
+func freewillIdeaShapeSubreason(idea string) freewillScoredIdeaSubreason {
+	if !validFreewillIdeaLength(idea) {
+		return freewillIdeaSubreasonCandidateLength
+	}
+	if strings.ContainsAny(idea, "{}[]\\") {
+		return freewillIdeaSubreasonCandidateBrackets
+	}
+	if strings.Contains(idea, "://") {
+		return freewillIdeaSubreasonCandidateURL
+	}
+	if strings.Contains(idea, "..") {
+		return freewillIdeaSubreasonCandidateTraversal
+	}
+	return freewillIdeaSubreasonUnspecified
 }
 
 // normalizeFreewillLabeledIdeaFields reorders only the known, bounded labels
@@ -904,7 +922,9 @@ func safeFreewillIdeaSubreason(value freewillScoredIdeaSubreason) freewillScored
 	case freewillIdeaSubreasonCandidateAuthority, freewillIdeaSubreasonEnvelopeAuthority,
 		freewillIdeaSubreasonEnvelopeSize, freewillIdeaSubreasonEnvelopeControl,
 		freewillIdeaSubreasonEnvelopePath, freewillIdeaSubreasonEnvelopePromptMarker,
-		freewillIdeaSubreasonEnvelopeLabel:
+		freewillIdeaSubreasonEnvelopeLabel, freewillIdeaSubreasonCandidateLength,
+		freewillIdeaSubreasonCandidateBrackets, freewillIdeaSubreasonCandidateURL,
+		freewillIdeaSubreasonCandidateTraversal:
 		return value
 	default:
 		return freewillIdeaSubreasonUnspecified
@@ -1332,6 +1352,10 @@ const (
 const (
 	freewillIdeaSubreasonUnspecified          freewillScoredIdeaSubreason = "unspecified"
 	freewillIdeaSubreasonCandidateAuthority   freewillScoredIdeaSubreason = "candidate_authority_phrase"
+	freewillIdeaSubreasonCandidateLength      freewillScoredIdeaSubreason = "candidate_idea_length"
+	freewillIdeaSubreasonCandidateBrackets    freewillScoredIdeaSubreason = "candidate_idea_brackets_or_escape"
+	freewillIdeaSubreasonCandidateURL         freewillScoredIdeaSubreason = "candidate_idea_url_marker"
+	freewillIdeaSubreasonCandidateTraversal   freewillScoredIdeaSubreason = "candidate_idea_traversal_marker"
 	freewillIdeaSubreasonEnvelopeAuthority    freewillScoredIdeaSubreason = "envelope_authority_phrase"
 	freewillIdeaSubreasonEnvelopeSize         freewillScoredIdeaSubreason = "envelope_size_limit"
 	freewillIdeaSubreasonEnvelopeControl      freewillScoredIdeaSubreason = "envelope_control_character"
@@ -1521,8 +1545,8 @@ func parseFreewillScoredIdeaLines(content string) ([]freewillScoredIdea, bool, e
 			}
 			i++
 		}
-		if !validFreewillIdeaLength(idea) || strings.ContainsAny(idea, "{}[]\\") || strings.Contains(idea, "://") || strings.Contains(idea, "..") {
-			return nil, false, freewillScoredIdeaFailure(freewillIdeaFailureShape, len(ideas))
+		if subreason := freewillIdeaShapeSubreason(idea); subreason != freewillIdeaSubreasonUnspecified {
+			return nil, false, freewillScoredIdeaFailureWithSubreason(freewillIdeaFailureShape, len(ideas), subreason)
 		}
 		if freewillIdeaContainsForbiddenAuthority(idea) {
 			return nil, false, freewillScoredIdeaFailureWithSubreason(freewillIdeaFailureUnsafe, len(ideas), freewillIdeaSubreasonCandidateAuthority)

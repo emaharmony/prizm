@@ -1292,7 +1292,7 @@ func TestFreewillScoredIdeaFailuresHaveSafeCategoriesAndAccurateCounts(t *testin
 		{name: "empty response", content: "", code: "count", markers: 0, parsed: 0},
 		{name: "oversize response", content: strings.Repeat("x", 4097), code: "size", markers: 0, parsed: 0},
 		{name: "one marker", content: "IDEA: Map project dependencies\nSCORE: 72\nRATIONALE: This maps direct dependencies and identifies risky coupling for a bounded review.", code: "count", markers: 1, parsed: 1},
-		{name: "overlong idea shape", content: strings.Replace(block1, "IDEA: Map project dependencies", "IDEA: "+strings.Repeat("x", 161), 1), code: "idea_shape", markers: 1, parsed: 0},
+		{name: "overlong idea shape", content: strings.Replace(block1, "IDEA: Map project dependencies", "IDEA: "+strings.Repeat("x", 161), 1), code: "idea_shape", subreason: freewillIdeaSubreasonCandidateLength, markers: 1, parsed: 0},
 		{name: "duplicate idea", content: block1 + strings.Replace(block2, "IDEA: Document service boundaries", "IDEA: Map project dependencies", 1) + block3, code: "duplicate", markers: 3, parsed: 1},
 		{name: "three markers with malformed third score", content: block1 + block2 + strings.Replace(block3, "SCORE: 61", "SCORE: high", 1), code: "score", markers: 3, parsed: 2},
 		{name: "case-sensitive field", content: strings.Replace(block1+block2+block3, "SCORE: 72", "score: 72", 1), code: "structure", markers: 3, parsed: 0},
@@ -1340,6 +1340,45 @@ func TestFreewillMapperDiagnosticIncludesOnlySafeParserSubreason(t *testing.T) {
 	unknown := freewillMapperDiagnostic("idea", provider.ChatGenerateResponse{}, "synthetic", "invalid_scored_ideas_unsafe", freewillScoredIdeaSubreason(privateMarker), 3, 1, true)
 	if !strings.Contains(unknown, "parser_subreason=unspecified") || strings.Contains(unknown, privateMarker) {
 		t.Fatalf("mapper diagnostic accepted an unrecognized subreason: %s", unknown)
+	}
+}
+
+func TestFreewillIdeaShapeSubreasonsAreContentFreeAcrossProtocols(t *testing.T) {
+	cases := []struct {
+		name      string
+		idea      string
+		subreason freewillScoredIdeaSubreason
+	}{
+		{name: "length", idea: strings.Repeat("x", 161), subreason: freewillIdeaSubreasonCandidateLength},
+		{name: "brackets", idea: "Review [the scope]", subreason: freewillIdeaSubreasonCandidateBrackets},
+		{name: "url", idea: "Review https://example", subreason: freewillIdeaSubreasonCandidateURL},
+		{name: "traversal marker", idea: "Review .. scope", subreason: freewillIdeaSubreasonCandidateTraversal},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			line := "IDEA: " + tc.idea + "\nSCORE: 72\nFACTORS: scope_fit\n" +
+				"RATIONALE: This bounded review checks the cited project acceptance evidence.\n" +
+				"BASIS_REFS: NONE\nUNCERTAINTY: The supplied excerpt may not settle the question."
+			jsonContent, err := json.Marshal(map[string]any{"candidates": []any{
+				map[string]any{"idea": tc.idea, "score": 72, "factors": []string{"scope_fit"}, "rationale": "This bounded review checks the cited project acceptance evidence.", "basis_refs": []string{}, "uncertainty": "The supplied excerpt may not settle the question."},
+				map[string]any{"idea": "Review documented acceptance", "score": 65, "factors": []string{"feasibility"}, "rationale": "This bounded review checks the cited project acceptance evidence.", "basis_refs": []string{}, "uncertainty": "The supplied excerpt may not settle the question."},
+				map[string]any{"idea": "Check persisted trace", "score": 61, "factors": []string{"readiness"}, "rationale": "This bounded review checks the cited project acceptance evidence.", "basis_refs": []string{}, "uncertainty": "The supplied excerpt may not settle the question."},
+			}, "sleep": false})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for protocol, content := range map[string]string{"line": line, "json": string(jsonContent)} {
+				_, _, parseErr := parseFreewillFlashIdeaResponse(content)
+				var failure *freewillScoredIdeaParseError
+				if !errors.As(parseErr, &failure) || failure.Code != freewillIdeaFailureShape || failure.Subreason != tc.subreason {
+					t.Fatalf("%s shape classification=%#v want idea_shape/%s", protocol, failure, tc.subreason)
+				}
+				diagnostic := freewillMapperDiagnostic("idea", provider.ChatGenerateResponse{Content: content}, "synthetic", "invalid_scored_ideas_idea_shape", failure.Subreason, freewillIdeaMarkerCount(content), failure.ParsedBlocks, true)
+				if !strings.Contains(diagnostic, "parser_subreason="+string(tc.subreason)) || strings.Contains(diagnostic, tc.idea) {
+					t.Fatalf("%s diagnostic did not retain only content-free classification: %s", protocol, diagnostic)
+				}
+			}
+		})
 	}
 }
 

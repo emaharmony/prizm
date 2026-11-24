@@ -3509,3 +3509,63 @@ approval transport, B1/R1-G1 remain open.
 **Next action:** Independent review of this scoped test and evidence update;
 retain the quarantine on ambiguous effects and do not claim full CORE-04
 completion.
+
+## 2026-11-24 — FW-P1/E74 current public-Prizm provider failure
+
+**Roadmap IDs:** FW-P1 and CORE-04. Based on integration
+`645e0f4bf076a0e8c5dd46ebe575e86b47b79e91`, prepared an isolated served probe
+against only three exact, public, tracked Markdown sections from the current
+Prizm README, FW-P1 implementation roadmap, and Freewill phase inventory. The
+builder preflight verified the FW-P1 in-progress status and blocker in the
+bounded excerpt. It projected 5,182 bytes total: 491 bytes for README source
+`project:readme`, 767 bytes for the FW-P1 roadmap source, and 3,924 bytes for
+the phase inventory source. Their commit pin was
+`0a188c33cedb33a4edde71d8c0ff0772c851106f`; source revisions/digests were
+verified by the host builder. Exact selections were README `## Why Prizm
+Exists` (`project:readme`, revision
+`0857adef744eec149daabc141ce2cfbd65b67ee98c9e7bcd3f2e9d9855f9e44a`, digest
+`8e01bec0e986ec58657474166035cf9389a90de834bbcbfc59bfd70f673db2c9`); roadmap
+`### FW-P1 — Read-only Decision Loop (first demonstrable Freewill)`
+(`project:file:docs/architecture/FREEWILL_IMPLEMENTATION_ROADMAP.md`, revision
+`17a746336c0a68f3a4108a0c324ab4657784560f7a0d73a2bab8926032c7497d`, digest
+`321ea4290a6008af9efa9431f2594171be2e55570b5ea38c5c631ec3bff9fe73`); and
+inventory `## Phase inventory`
+(`project:file:docs/architecture/FREEWILL_POC_FEATURE_INVENTORY.md`, revision
+`27445b9f8b33cf118d8488bbd5965ab140e3bff5868ef2d478356b496c2c64f0`, digest
+`3f8560c1669a13414b3d47af87a0b3770446288d3d29219278349d2f2665bc3b`). The
+objective was to find a small next step to verify an open acceptance gap
+using cited current evidence, allowing sleep if unsupported. No candidate
+answer or action was supplied.
+
+The service used exact model `glm-5.3-flash:cloud`, an isolated data root,
+approval-required `intention.propose`, execution disabled, and zero registered
+tools. The built binary SHA-256 was
+`2A805BBFCF8782C669F4B42A89BFCD219DB68AEBAAC7E466122FE22F3D7F8DC3`. A single
+scheduled wake created run `freewill-2afadab8dd659e7bd441eb7b2698f6db`. On
+the first provider call, the durable trace recorded
+`invalid_scored_ideas_idea_shape`, followed by `selection.retry_scheduled`
+with schema-correction recovery. After the run became due, the service was
+stopped and restarted against the same state to exercise normal
+`RecoverPending`; the second provider call again recorded
+`invalid_scored_ideas_idea_shape`. Both privacy-safe diagnostics reported
+three idea markers, zero parsed blocks, invalid JSON, and
+`parser_subreason=unspecified`; raw provider text was not retained. The run
+remained `selecting` at attempt 2 with no selected candidate and no persisted
+source manifest, candidate citation, or proposal. No screenshot, approval,
+grant, dispatch, apply, or tool event/effect occurred. No second scheduled
+wake was sent. Both owned serve processes and their listeners were stopped;
+the run was left nonterminal at the bounded call cap.
+
+The accompanying code change adds content-free enum subreasons for existing
+idea length, bracket/escape, URL-marker, and traversal-marker rejection
+predicates on JSON and line-parser paths. It does not relax predicates or
+normalize text. The live run's `unspecified` diagnostic does not identify the
+specific rejection cause, so this change is diagnostic only and is not
+claimed to fix provider output or prove semantic grounding.
+
+**Verification:** Focused Freewill diagnostic tests passed. The full
+`go test ./internal/workflow/multiagent -count=1` package run passed after
+updating the expected safe enum in the overlength fixture. `gofmt` and
+`git diff --check` passed. FW-P1 remains in progress; independent review is
+required before publication, and no further Cloud call is part of this
+checkpoint.
