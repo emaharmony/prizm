@@ -939,3 +939,14 @@ The bridge exposes a pathless `sandbox_propose_artifact` tool only to the opted-
 **Review follow-up (2026-11-05):** sandbox patch generation now rejects invalid UTF-8 and Unicode control characters other than tab, CR, and LF; regressions cover invalid UTF-8 without NUL and a control byte. The bridge feature flag now selects `sandbox_propose_artifact` consistently across the role prompt, allowed tool list, LoopRunner prerequisite, expected deliverable, and corrective turn. It removes `apply_patch_proposal` from that lane's tool descriptions while default workflow and NATS behavior remain unchanged. Focused sandbox, subagent, multiagent, and CLI tests passed; the ExecuteAgent/LoopRunner test persisted and resolved the pathless proposal through the proposal resolver.
 
 **Risk/next action:** the workflow bridge is locally committed in three logical commits and remains unpublished. Independent security rereview found no actionable P1/P2 findings. Await explicit authorization before publication; then require exact-head CI and the existing real OCI conformance gate. Keep R1/G1 and served Freewill acceptance open; do not start the service or apply an approval as part of this slice.
+
+
+### Creator VOD mock adapter (2026-11-23)
+
+- Roadmap R1 and R4. Stage 1 exercises typed admission, durable dispatch
+  reconciliation and QA release with the existing Prizm checkpoint and outbox.
+  The OpenShorts plugin imports through Prizm's existing MCP configuration and owns its state.
+- Run the scoped verification from the isolated checkout with
+  `go test ./plugins/openshorts/... -count=1 -v`.
+- Next approved stage needs the v8 compositor, a source calibration reference,
+  and the Pentakewl rubric. See the Stage 1 contract for boundaries and rollback.
